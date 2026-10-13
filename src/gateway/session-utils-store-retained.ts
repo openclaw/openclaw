@@ -1,11 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { QualifiedSessionEntryAccessTarget } from "../config/sessions/session-accessor.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import type { SessionMember } from "../config/sessions/session-membership-facts.types.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
-import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
+import type { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,
@@ -17,6 +24,13 @@ import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-age
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
+
+export type GatewaySessionStoreSelection = {
+  logicalStorePath: string;
+  env: NodeJS.ProcessEnv;
+  target: QualifiedSessionEntryAccessTarget;
+  source: NonNullable<SessionEntryWorkerRead["preparedSource"]>;
+};
 
 export function captureGatewaySessionReadSource(
   database: { agentId: string; path: string },
@@ -32,12 +46,78 @@ export function captureGatewaySessionReadSource(
     : undefined;
 }
 
+/** Only a complete direct selection can outlive discovery without absence queries. */
+export function captureGatewaySessionStoreSelection(
+  inventory: ReturnType<typeof prepareSessionStoreTargetInventory>,
+  target: GatewaySessionStoreTargetWithStore,
+  requestedKey: string,
+): GatewaySessionStoreSelection | undefined {
+  const source = target.capturedReadSource;
+  const databaseIdentity = source?.databaseIdentity;
+  const paths = inventory.paths.get(target.agentId);
+  const key = parseAgentSessionKey(target.canonicalKey);
+  // This selection has no alternate source or key whose absence needs a later read.
+  return source &&
+    typeof databaseIdentity === "string" &&
+    source.agentId === target.agentId &&
+    target.store[target.canonicalKey]?.incognito !== true &&
+    target.store[target.canonicalKey] &&
+    key &&
+    key.rest !== "global" &&
+    key.rest !== "unknown" &&
+    target.storeKeys.length === 1 &&
+    target.storeKeys[0] === target.canonicalKey &&
+    listAgentIds(inventory.config).includes(target.agentId) &&
+    !inventory.registryDiscovery &&
+    paths &&
+    paths.configured === paths.default &&
+    resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId ===
+      target.agentId &&
+    inventory.candidates.every(
+      (candidate) => !candidate.scope && candidate.physicalPath === source.path,
+    )
+    ? {
+        logicalStorePath: target.storePath,
+        env: inventory.env,
+        target: {
+          keyFormat: "agent-qualified",
+          agentId: target.agentId,
+          canonicalKey: target.canonicalKey,
+          requestedKey,
+          storeKey: target.canonicalKey,
+          storeKeys: [...target.storeKeys],
+          storePath: source.path,
+          readSource: { ...source },
+        },
+        source: {
+          ...source,
+          databaseIdentity,
+          assertCurrent() {
+            assertExistingDatabaseIdentity(
+              source.path,
+              `file:${databaseIdentity}`,
+              source.databaseBirthtime,
+            );
+            for (const candidate of inventory.candidates) {
+              assertSessionStoreReadCandidate(candidate.path, inventory.candidates);
+            }
+          },
+        },
+      }
+    : undefined;
+}
+
 /** Re-read one already-qualified durable target without repeating logical discovery. */
 export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
   target: QualifiedSessionEntryAccessTarget;
   logicalStorePath: string;
   env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
+  preparedSource?: SessionEntryWorkerRead["preparedSource"];
+  readOptions?: Pick<
+    SessionEntryWorkerRead,
+    "projection" | "snapshotFields" | "lifecycleSessionKey"
+  >;
   consume: (
     target: GatewaySessionStoreTargetWithStore,
     membership: ReadonlyMap<string, readonly SessionMember[]>,
@@ -72,20 +152,21 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
           // Worker admission resolves the physical database from the logical store path.
           // The qualified target retains that selected database separately as readSource.
           storePath: params.logicalStorePath,
+          preparedSource: params.preparedSource,
           sessionKeys: params.target.storeKeys,
           lifecycleSessionKey: params.target.storeKey,
           projection: "full",
           includeMembers: params.includeMembership,
           includeAuthorization: true,
+          ...params.readOptions,
           env: params.env,
         },
       ],
       ([owner]) => {
         const selected = owner!;
-        const capturedReadSource = captureGatewaySessionReadSource(
-          selected.database,
-          selected.result.databaseIdentity,
-        );
+        const capturedReadSource =
+          selected.result.source ??
+          captureGatewaySessionReadSource(selected.database, selected.result.databaseIdentity);
         const assertCurrent = () => {
           if (changed) {
             throw new GatewaySessionFactsChangedDuringReadError();
@@ -182,6 +263,11 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
               storeKeys: [sessionKey],
               store: read.entry ? { [sessionKey]: read.entry } : {},
               readSource: { agentId: actor.agentId, path: actor.path },
+              capturedReadSource: {
+                agentId: actor.agentId,
+                path: actor.path,
+                databaseIdentity: actor.identity.incarnation,
+              },
             },
             params.includeMembership ? new Map([[sessionKey, members]]) : new Map(),
             assertCurrent,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { Mock } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./app-server/client-runtime.js";
@@ -60,6 +61,7 @@ export async function withCodexNativeThreadToolFixture(
       await run({ root, sessionFile, client });
     } finally {
       client.close();
+      await closeOpenClawAgentDatabasesAsync();
     }
   });
 }

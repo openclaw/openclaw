@@ -174,7 +174,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
-): ModelCallStreamOptions {
+): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;

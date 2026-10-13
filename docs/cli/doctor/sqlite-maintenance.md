@@ -196,7 +196,17 @@ inode or modification time differs. `--session-sqlite recover` records its curre
 identity in the existing receipt, including when no failed migration manifest exists.
 If the database file was replaced, recovery first verifies retained transcript
 content against the current SQLite database before rebinding the receipt. Doctor
-also verifies formatting-only index changes against the recorded source hash and
+preserves a receipt bound to a different database in the migration ledger when
+that verification fails, records why it was superseded, and checks retained
+originals through the historical importer. The foreign receipt cannot certify or
+block the live database. Current session settings and known archive/deletion state
+remain authoritative; unindexed conversations with an unambiguous agent owner are
+recovered as archived sessions. Missing originals are named with the database they
+could not recover into. Preserve the reported files and restore unavailable
+originals from a verified backup, then rerun `openclaw doctor --fix`. This warning
+alone does not prevent the updater from restarting the Gateway.
+
+Doctor also verifies formatting-only index changes against the recorded source hash and
 changed transcripts against complete canonical history. Verified content refreshes
 the receipt without overwriting current session settings or resurrecting deleted
 history. Changed index values and other unverifiable plugin inputs move to the protected

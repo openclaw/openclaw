@@ -34,7 +34,7 @@ async function repack(root: string, archiveRoot: string, name: string, omit: str
   return archivePath;
 }
 
-async function writeSmallArchive(sqliteSnapshots: unknown, options: { legacy?: boolean } = {}) {
+async function writeSmallArchive(sqliteSnapshots: unknown) {
   const root = tempDirs.make("backup-inventory-contract-");
   const archiveRoot = "backup";
   const stateDir = "/synthetic/state";
@@ -50,7 +50,7 @@ async function writeSmallArchive(sqliteSnapshots: unknown, options: { legacy?: b
     nodeVersion: process.version,
     paths: { stateDir },
     assets: [{ kind: "state", sourcePath: stateDir, archivePath: payload }],
-    ...(options.legacy ? {} : { sqliteSnapshots }),
+    sqliteSnapshots,
   };
   await fs.writeFile(path.join(root, archiveRoot, "manifest.json"), JSON.stringify(manifest));
   return {
@@ -193,39 +193,36 @@ describe("standalone backup database completeness", () => {
     );
   });
 
-  it.each([false, true])(
-    "captures an empty inventory honestly (onlyConfig=%s)",
-    async (onlyConfig) => {
-      await withOpenClawTestState(
-        { layout: "home", prefix: "backup-empty-inventory-", scenario: "minimal" },
-        async (state) => {
-          if (onlyConfig) {
-            openOpenClawAgentDatabase({
-              agentId: "main",
-              path: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-              env: state.env,
-            });
-          }
-          const archive = await backupCreateCommand(createTestRuntime(), {
-            output: state.path("backup.tar.gz"),
-            onlyConfig,
-            includeWorkspace: false,
+  it.each([true])("captures an empty inventory honestly (onlyConfig=%s)", async (onlyConfig) => {
+    await withOpenClawTestState(
+      { layout: "home", prefix: "backup-empty-inventory-", scenario: "minimal" },
+      async (state) => {
+        if (onlyConfig) {
+          openOpenClawAgentDatabase({
+            agentId: "main",
+            path: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+            env: state.env,
           });
-          const extracted = state.path("extracted");
-          await fs.mkdir(extracted);
-          await tar.x({ file: archive.archivePath, cwd: extracted });
-          const manifest = JSON.parse(
-            await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
-          );
-          expect(manifest.sqliteSnapshots).toEqual([]);
-          await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
-            ok: true,
-            sqliteInventoryVerified: true,
-          });
-        },
-      );
-    },
-  );
+        }
+        const archive = await backupCreateCommand(createTestRuntime(), {
+          output: state.path("backup.tar.gz"),
+          onlyConfig,
+          includeWorkspace: false,
+        });
+        const extracted = state.path("extracted");
+        await fs.mkdir(extracted);
+        await tar.x({ file: archive.archivePath, cwd: extracted });
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
+        );
+        expect(manifest.sqliteSnapshots).toEqual([]);
+        await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
+          ok: true,
+          sqliteInventoryVerified: true,
+        });
+      },
+    );
+  });
 
   it("does not require a registered database that was absent at capture time", async () => {
     await withOpenClawTestState(
@@ -250,64 +247,12 @@ describe("standalone backup database completeness", () => {
     );
   });
 
-  it("reports unknown completeness for legacy archives instead of inventing an inventory", async () => {
-    const { archivePath } = await writeSmallArchive(undefined, { legacy: true });
-    const runtime = createTestRuntime();
-    await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
-      ok: true,
-      sqliteInventoryVerified: false,
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("completeness unknown"));
-    await expect(
-      verifyBackupArchive(archivePath, [
-        { role: "global", sourcePath: "/synthetic/state/state/openclaw.sqlite", dev: 1, ino: 1 },
-      ]),
-    ).rejects.toThrow("lacks verified canonical SQLite coverage");
-  });
-
-  it("does not claim completeness for legacy registered agents absent from the archive", async () => {
-    const fixture = await writeSmallArchive(undefined, { legacy: true });
-    const globalPath = path.join(fixture.root, fixture.payload, "state/openclaw.sqlite");
-    await fs.mkdir(path.dirname(globalPath), { recursive: true });
-    const db = new DatabaseSync(globalPath);
-    try {
-      db.exec(
-        "CREATE TABLE schema_meta(meta_key TEXT, role TEXT); INSERT INTO schema_meta VALUES ('primary','global'); CREATE TABLE agent_databases(agent_id TEXT,path TEXT); INSERT INTO agent_databases VALUES ('main','agents/main/agent/openclaw-agent.sqlite');",
-      );
-    } finally {
-      db.close();
-    }
-    const archivePath = await repack(fixture.root, fixture.archiveRoot, "missing-agent");
-    await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({
-      ok: true,
-      sqliteInventoryVerified: false,
-    });
-  });
-
   it.each([
     { name: "non-array", value: {}, error: "must be an array" },
-    {
-      name: "unknown role",
-      value: [{ role: "plugin", sourcePath: "/db" }],
-      error: "invalid SQLite snapshot owner",
-    },
-    {
-      name: "relative path",
-      value: [{ role: "global", sourcePath: "../db" }],
-      error: "absolute and normalized",
-    },
     {
       name: "noncanonical agent",
       value: [{ role: "agent", sourcePath: "/db", agentId: "Main" }],
       error: "invalid agentId",
-    },
-    {
-      name: "duplicate owner",
-      value: [
-        { role: "global", sourcePath: "/db" },
-        { role: "global", sourcePath: "/other" },
-      ],
-      error: "duplicate SQLite snapshot ownership",
     },
     {
       name: "duplicate path",

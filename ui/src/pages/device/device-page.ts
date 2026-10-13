@@ -40,12 +40,11 @@ type CookieSyncEdits = {
 const pendingCookieSyncEdits = new WeakMap<NativeDeviceSettingsCapability, CookieSyncEdits>();
 
 function retainCookieSyncEdits(capability: NativeDeviceSettingsCapability): CookieSyncEdits {
-  const existing = pendingCookieSyncEdits.get(capability);
-  if (existing) {
-    return existing;
+  let edits = pendingCookieSyncEdits.get(capability);
+  if (!edits) {
+    edits = { domains: null, targetProfile: null };
+    pendingCookieSyncEdits.set(capability, edits);
   }
-  const edits: CookieSyncEdits = { domains: null, targetProfile: null };
-  pendingCookieSyncEdits.set(capability, edits);
   return edits;
 }
 
@@ -233,10 +232,6 @@ class DevicePage extends OpenClawLightDomElement {
     const sync = browser.cookieSync;
     const pending = capability ? pendingCookieSyncEdits.get(capability) : undefined;
     const domains = pending?.domains ?? sync?.domains ?? [];
-    const addDomain = () => {
-      this.updateDomains((current) => [...current, this.newDomain]);
-      this.newDomain = "";
-    };
     return html`
       ${renderSettingsSection(
         { title: t("configPage.deviceSettings.chromeExtension") },
@@ -328,7 +323,8 @@ class DevicePage extends OpenClawLightDomElement {
                       class="device-domain-entry"
                       @submit=${(event: Event) => {
                         event.preventDefault();
-                        addDomain();
+                        this.updateDomains((current) => [...current, this.newDomain]);
+                        this.newDomain = "";
                       }}
                     >
                       <input

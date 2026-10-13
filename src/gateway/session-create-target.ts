@@ -1,13 +1,19 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/runs.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { sessionEntryCommitGuardOptions } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
+import type {
+  CreatedGatewaySession,
+  CreateGatewaySessionParams,
+} from "./session-create-service.types.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { unavailableSessionRequest } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
@@ -115,4 +121,29 @@ export async function readSessionCreateTarget(
   );
   assertCurrent();
   return result;
+}
+
+export async function finalizeSessionCreateTarget(
+  target: Pick<CreatedGatewaySession, "key" | "storePath">,
+  expectedEntry: InternalSessionEntry,
+  commitGuard: CreateGatewaySessionParams["commitGuard"],
+): Promise<InternalSessionEntry> {
+  const finalized = await patchSessionEntryCore(
+    { sessionKey: target.key, storePath: target.storePath },
+    (current) => {
+      if (!isDeepStrictEqual(current, expectedEntry)) {
+        throw new Error(`created session ${target.key} changed before finalization`);
+      }
+      return { initializationPending: undefined };
+    },
+    {
+      preserveActivity: true,
+      requireWriteSuccess: true,
+      ...sessionEntryCommitGuardOptions(commitGuard),
+    },
+  );
+  if (!finalized) {
+    throw new Error(`created session ${target.key} disappeared before finalization`);
+  }
+  return finalized;
 }

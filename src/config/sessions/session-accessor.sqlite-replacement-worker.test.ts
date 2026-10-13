@@ -18,6 +18,7 @@ import {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import {
   onSessionIdentityMutation,
@@ -38,6 +39,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   readCommittedSessionEntryCache,
@@ -151,34 +153,29 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       execution: { status: "running", startedAt: 1 },
     };
     let finalGrant = false;
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.publication) &&
-            request.facts.publication.kind === "session-entry-replacements"
-          ) {
-            finalGrant = true;
-            // Bypass host publication to model a foreign commit before the worker resumes.
-            shared.db
-              .prepare(
-                "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-              )
-              .run(
-                child.runId,
-                child.childSessionKey,
-                child.requesterSessionKey,
-                child.createdAt,
-                JSON.stringify(child),
-              );
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.publication) &&
+        request.facts.publication.kind === "session-entry-replacements"
+      ) {
+        finalGrant = true;
+        // Bypass host publication to model a foreign commit before the worker resumes.
+        shared.db
+          .prepare(
+            "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            child.runId,
+            child.childSessionKey,
+            child.requesterSessionKey,
+            child.createdAt,
+            JSON.stringify(child),
+          );
+      }
+      callback(request, grant);
+    });
     try {
       const error = await applySessionEntryExactReplacements({
         storePath: database.path,
@@ -195,7 +192,10 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       expect(finalGrant).toBe(true);
       expect(error).toMatchObject({
         code: "outcome-unknown",
-        cause: { message: "Session subagent facts changed before commit" },
+        cause: {
+          name: "SqliteSessionMutationConflictError",
+          operationLabel: "session maintenance",
+        },
       });
       expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("before");
     } finally {
@@ -339,6 +339,17 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       entry: projectSessionSharingEntry(original),
       membership: new Set(["member"]),
     });
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${identity}`,
+      sessionKey,
+      entry: original,
+      matches(_before, after) {
+        if (after?.visibility === "read-only") {
+          throw new Error("Synthetic comparison unavailable after COMMIT");
+        }
+        return true;
+      },
+    });
     const reader = new OpenClawAgentDatabaseReadOnlyScope();
     let readerDatabase: DatabaseSync | undefined;
     reader.read(
@@ -355,33 +366,39 @@ it("publishes committed sharing and reader invalidation before observers, and ro
           visibility: sharing.readCurrent()?.entry?.visibility,
           membership: [...(sharing.readCurrent()?.membership ?? [])],
           cache: readerDatabase && readCommittedSessionEntryCache(readerDatabase),
+          predicateCurrent: predicate.isCurrent(),
         });
       }
     });
     try {
-      await applySessionEntryExactReplacements({
+      const publicationFailure = await applySessionEntryExactReplacements({
         storePath: database.path,
         sessionKeys: [sessionKey],
         update: ([row]) => ({
           result: undefined,
           replacements: [{ sessionKey, entry: { ...row!.entry, visibility: "read-only" } }],
         }),
-      });
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("read-only");
+      expect(publicationFailure).toBeUndefined();
       expect(observed).toEqual([
-        { visibility: "read-only", membership: ["member"], cache: undefined },
+        {
+          visibility: "read-only",
+          membership: ["member"],
+          cache: undefined,
+          predicateCurrent: false,
+        },
       ]);
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let current = true;
-      const admitted = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              current = false;
-            }
-            return callback(request, grant);
-          }, attachment),
-        );
+      const admitted = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          current = false;
+        }
+        return callback(request, grant);
+      });
       const followup = vi.fn();
       const move = () =>
         applySessionEntryCanonicalReplacements({
@@ -422,6 +439,7 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     } finally {
       stop();
       sharing.release();
+      predicate.release();
       reader.close();
     }
   });
@@ -548,18 +566,13 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
       update: () => ({ result: undefined }),
       afterCommitted: followup,
     });
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const hook = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            current = false;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const hook = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "transaction") {
+        current = false;
+      }
+      callback(request, grant);
+    });
     try {
       await expect(
         applySessionEntryCanonicalReplacements({

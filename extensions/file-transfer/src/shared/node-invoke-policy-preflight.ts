@@ -126,23 +126,14 @@ export async function validateDirFetchEntries(input: {
 
   const entries: string[] = [];
   for (const entry of input.entries) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      await audit({
-        canonicalPath: input.canonicalPath,
-        decision: "denied:policy",
-        errorCode: invalidCode,
-        reason: "entry is not a non-empty string",
-      });
-      return policyDeniedResult({
-        op: input.op,
-        code: invalidCode,
-        message: `directory ${input.phase} entry is invalid: entry is not a non-empty string`,
-        details: { path: input.canonicalPath, reason: "entry is not a non-empty string" },
-      });
-    }
-    const entryValidation = validateDirFetchPreflightEntry(entry);
+    const hasName = typeof entry === "string" && entry.length > 0;
+    const entryValidation = hasName
+      ? validateDirFetchPreflightEntry(entry)
+      : { ok: false as const, reason: "entry is not a non-empty string" };
     if (!entryValidation.ok) {
-      const candidate = joinRemotePolicyPath(input.canonicalPath, entry);
+      const candidate = hasName
+        ? joinRemotePolicyPath(input.canonicalPath, entry)
+        : input.canonicalPath;
       await audit({
         canonicalPath: candidate,
         decision: "denied:policy",
@@ -152,7 +143,7 @@ export async function validateDirFetchEntries(input: {
       return policyDeniedResult({
         op: input.op,
         code: invalidCode,
-        message: `directory ${input.phase} entry ${entry} is invalid: ${entryValidation.reason}`,
+        message: `directory ${input.phase} entry${hasName ? ` ${entry}` : ""} is invalid: ${entryValidation.reason}`,
         details: { path: candidate, reason: entryValidation.reason },
       });
     }

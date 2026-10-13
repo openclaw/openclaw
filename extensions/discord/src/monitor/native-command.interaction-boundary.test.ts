@@ -5,6 +5,8 @@ import {
   InteractionResponseType,
   InteractionType,
 } from "discord-api-types/v10";
+import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
@@ -25,7 +27,6 @@ import {
   createDiscordModelPickerFallbackButton,
   createDiscordNativeCommand,
 } from "./native-command.js";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const GUILD = "100000000000000001";
@@ -109,12 +110,12 @@ function createHarness() {
   );
   vi.spyOn(pickerPreferences, "readDiscordModelPickerRecentModels").mockResolvedValue([]);
   const dispatch = vi
-    .spyOn(nativeCommandRuntime, "dispatchChannelInboundTurn")
+    .spyOn(channelInbound, "dispatchChannelInboundTurn")
     .mockImplementation(async () => {
       throw new Error("Unexpected agent turn");
     });
   const status = vi
-    .spyOn(nativeCommandRuntime, "resolveDirectStatusReplyForSession")
+    .spyOn(commandStatus, "resolveDirectStatusReplyForSession")
     .mockImplementation(async ({ sessionKey }) => ({ text: `Status for ${sessionKey}` }));
   return {
     client,

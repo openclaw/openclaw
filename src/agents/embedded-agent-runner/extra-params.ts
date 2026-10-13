@@ -106,6 +106,7 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetentionStreamOptions = SimpleStreamOptions & {
+  streaming?: boolean;
   cachedContent?: string;
   topP?: number;
   frequencyPenalty?: number;
@@ -287,6 +288,9 @@ function createStreamFnWithExtraParams(
     if (typeof extraParams[key] === "number") {
       streamParams[key] = extraParams[key];
     }
+  }
+  if (typeof extraParams.streaming === "boolean") {
+    streamParams.streaming = extraParams.streaming;
   }
   const maxTokens = resolveMaxTokensParam(extraParams);
   if (maxTokens !== undefined) {

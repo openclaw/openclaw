@@ -118,7 +118,7 @@ export async function resolveSystemRunExecArgv(params: {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
   authorizationPlan: ExecAuthorizationPlan | undefined;
 }): Promise<string[] | null> {
-  let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  const execArgv = params.plannedAllowlistArgv ?? params.argv;
   if (
     params.security !== "allowlist" ||
     params.policy.approvedByAsk ||
@@ -132,46 +132,35 @@ export async function resolveSystemRunExecArgv(params: {
   if (transportKind === "opaque") {
     return null;
   }
-  if (params.isWindows && params.segments.length === 1) {
+  if (params.isWindows) {
     // Exact-path matches stay bound to the resolved executable, while the bare
     // wildcard contract can still authorize unresolved Windows commands.
-    const plannedArgv = resolvePlannedSegmentArgv(
-      expectDefined(params.segments[0], "segments entry at 0"),
-    );
-    if (!plannedArgv) {
-      return null;
-    }
-    execArgv = plannedArgv;
+    return params.segments.length === 1
+      ? resolvePlannedSegmentArgv(expectDefined(params.segments[0], "segments entry at 0"))
+      : execArgv;
   }
-  if (!params.isWindows) {
-    if (
-      transportKind !== "parseable" ||
-      !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
-    ) {
-      return execArgv;
-    }
-    if (!params.authorizationPlan) {
-      return null;
-    }
-    const rebuilt = buildAuthorizedShellCommandFromPlan({
-      plan: params.authorizationPlan,
-      mode: "safeBins",
-      segmentSatisfiedBy: params.segmentSatisfiedBy,
-    });
-    if (!rebuilt.ok || !rebuilt.command) {
-      return null;
-    }
-    const rewrittenArgv = replacePosixShellInlineCommand({
-      argv: params.argv,
-      oldCommand: params.shellCommand,
-      nextCommand: rebuilt.command,
-    });
-    if (!rewrittenArgv) {
-      return null;
-    }
-    execArgv = rewrittenArgv;
+  if (
+    transportKind !== "parseable" ||
+    !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
+  ) {
+    return execArgv;
   }
-  return execArgv;
+  if (!params.authorizationPlan) {
+    return null;
+  }
+  const rebuilt = buildAuthorizedShellCommandFromPlan({
+    plan: params.authorizationPlan,
+    mode: "safeBins",
+    segmentSatisfiedBy: params.segmentSatisfiedBy,
+  });
+  if (!rebuilt.ok || !rebuilt.command) {
+    return null;
+  }
+  return replacePosixShellInlineCommand({
+    argv: params.argv,
+    oldCommand: params.shellCommand,
+    nextCommand: rebuilt.command,
+  });
 }
 
 function resolvePosixShellInlineCommandTransportKind(
@@ -234,18 +223,14 @@ function replacePosixShellInlineCommand(params: {
   if (token === undefined) {
     return null;
   }
+  if (!token.endsWith(params.oldCommand)) {
+    return null;
+  }
+  // Combined shell flags can leave the inline command in a suffix of the same argv token.
   const rewritten = [...params.argv];
-  if (token === params.oldCommand) {
-    rewritten[absoluteValueIndex] = params.nextCommand;
-    return rewritten;
-  }
-  if (token.endsWith(params.oldCommand)) {
-    // Combined shell flags can leave the inline command in a suffix of the same argv token.
-    rewritten[absoluteValueIndex] =
-      token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
-    return rewritten;
-  }
-  return null;
+  rewritten[absoluteValueIndex] =
+    token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
+  return rewritten;
 }
 
 /** Mark truncated output in stderr when possible, otherwise stdout. */

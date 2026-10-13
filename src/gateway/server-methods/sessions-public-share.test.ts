@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +17,6 @@ import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import * as profileReads from "../../state/user-profile-reads.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -222,34 +220,24 @@ describe("world-readable session publication management", () => {
     "session.members.listEvidence",
     "session.visibility.set",
   ] as const)(
-    "rejects a foreign owner change before %s uses the fresh stored row",
+    "rejects a worker-committed generation change before %s uses the fresh stored row",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await createSession();
         await closeOpenClawAgentDatabasesAsync();
-        const database = openOpenClawAgentDatabase(scope);
-        // Projection admission is worker-owned; admit this reader before the raw metadata edit.
+        expect(
+          (await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0],
+        ).toBe(true);
         expect(loadSessionEntry(scope)?.createdActor?.id).toBe("owner");
-        const changeOwner = () => {
-          // Foreign commits change fresh reader snapshots without publishing resident facts.
-          const writer = new DatabaseSync(database.path);
-          try {
-            expect(
-              writer
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', 'other') WHERE session_key = ?",
-                )
-                .run(scope.sessionKey).changes,
-            ).toBe(1);
-          } finally {
-            writer.close();
-          }
-        };
+        const resetSession = () =>
+          upsertSessionEntryCore(scope, {
+            sessionId: "replacement-generation",
+          });
         if (method !== "session.members.listEvidence") {
           const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
           vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
             async (operation, params) => {
-              changeOwner();
+              await resetSession();
               return run(operation, params);
             },
           );
@@ -257,7 +245,7 @@ describe("world-readable session publication management", () => {
           const list = profileReads.listProfiles;
           vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
             const profiles = await list();
-            changeOwner();
+            await resetSession();
             return profiles;
           });
         }
@@ -268,11 +256,10 @@ describe("world-readable session publication management", () => {
                 ...scope,
                 ...(method === "session.visibility.set" ? { visibility: "shared" } : {}),
               }),
-        ).rejects.toThrow(
-          `session ownership changed before sharing ${method === "session.members.listEvidence" ? "read" : "mutation"}`,
-        );
+        ).rejects.toThrow("Session access facts are unavailable");
         const entry = loadSessionEntry(scope);
-        expect(entry?.createdActor?.id).toBe("other");
+        expect(entry?.sessionId).toBe("replacement-generation");
+        expect(entry?.createdActor?.id).toBe("owner");
         expect(entry?.publicShare).toBeUndefined();
       });
     },
@@ -282,22 +269,14 @@ describe("world-readable session publication management", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await createSession();
       await closeOpenClawAgentDatabasesAsync();
-      const database = openOpenClawAgentDatabase(scope);
-      // Keep the foreign edit on an admitted reader, independently of worker projection setup.
+      expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
+        true,
+      );
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
         async (operation, params) => {
-          const writer = new DatabaseSync(database.path);
-          try {
-            writer
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.visibility', 'draft') WHERE session_key = ?",
-              )
-              .run(scope.sessionKey);
-          } finally {
-            writer.close();
-          }
+          await upsertSessionEntryCore(scope, { visibility: "draft" });
           return run(operation, params);
         },
       );
@@ -309,35 +288,20 @@ describe("world-readable session publication management", () => {
   });
 
   it.each([false, true])(
-    "rechecks a foreign owner change during codec preparation (foreign grant: %s)",
-    async (foreignGrant) => {
+    "rechecks a worker-committed generation change during codec preparation (restored grant: %s)",
+    async (restoredGrant) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await createSession();
         await setPublic(true);
         const grant = expectDefined(loadSessionEntry(scope)?.publicShare, "published grant");
-        if (foreignGrant) {
+        if (restoredGrant) {
           await setPublic(false);
         }
-        const database = openOpenClawAgentDatabase(scope);
-        const editForeignRow = (field: string, value: unknown) => {
-          const writer = new DatabaseSync(database.path);
-          try {
-            expect(
-              writer
-                .prepare(
-                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, json(?)) WHERE session_key = ?",
-                )
-                .run(field, JSON.stringify(value), scope.sessionKey).changes,
-            ).toBe(1);
-          } finally {
-            writer.close();
-          }
-        };
-        if (foreignGrant) {
+        if (restoredGrant) {
           const list = profileReads.listProfiles;
           vi.spyOn(profileReads, "listProfiles").mockImplementationOnce(async () => {
             const profiles = await list();
-            editForeignRow("$.publicShare", grant);
+            await upsertSessionEntryCore(scope, { publicShare: grant });
             return profiles;
           });
         }
@@ -345,14 +309,16 @@ describe("world-readable session publication management", () => {
         vi.spyOn(publicSessionTokens, "loadPublicSessionShareTokenCodec").mockImplementationOnce(
           async (options) => {
             const codec = await loadCodec(options);
-            editForeignRow("$.createdActor.id", "other");
+            await upsertSessionEntryCore(scope, {
+              sessionId: "replacement-generation",
+            });
             return codec;
           },
         );
         await expect(call("session.members.listEvidence", scope)).rejects.toThrow(
-          "session ownership changed before sharing read",
+          "Session access facts are unavailable",
         );
-        expect(loadSessionEntry(scope)?.createdActor?.id).toBe("other");
+        expect(loadSessionEntry(scope)?.sessionId).toBe("replacement-generation");
       });
     },
   );

@@ -12,11 +12,9 @@ import { runSqliteIntegrityCheckSync } from "../infra/sqlite-integrity.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { reconstructAgentDeletionJournal } from "./agent-deletion-journal-recovery.js";
-import {
-  beginAgentDeletionJournal,
-  prepareAgentDeletionPathFence,
-} from "./agent-deletion-journal.js";
+import { prepareAgentDeletionPathFence } from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,

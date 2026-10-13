@@ -49,7 +49,10 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
-import { registerRawChildRestoreOwnershipTest } from "./subagent-orphan-recovery.raw-owner.test-support.js";
+import {
+  registerAbsentChildRestoreOwnershipTest,
+  registerRawChildRestoreOwnershipTest,
+} from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -78,6 +81,8 @@ vi.mock("../../../gateway/session-utils.fs.js", () => ({
 }));
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
+
+registerAbsentChildRestoreOwnershipTest();
 
 it.each(["durable", "incognito"] as const)(
   "classifies missing %s storage for recovery without creating its database",
@@ -898,7 +903,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     rotateAgentEventLifecycleGeneration();
     await initSubagentRegistry();
     await activateGatewayRuntime();
-    await Promise.resolve();
+    await fixture.settle();
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
@@ -928,7 +933,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     rotateAgentEventLifecycleGeneration();
     await initSubagentRegistry();
     await activateGatewayRuntime();
-    await Promise.resolve();
+    await fixture.settle();
     await testing.sweepOnceForTests();
 
     const restoredAgain = subagentRuns.get(runId);

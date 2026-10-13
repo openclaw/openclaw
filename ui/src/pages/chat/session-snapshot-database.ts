@@ -141,30 +141,11 @@ export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null
   }
 }
 
-export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): Promise<void> {
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    return;
-  }
-  try {
-    await new Promise<void>((resolve) => {
-      const transaction = database.transaction(
-        [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
-        "readwrite",
-      );
-      transaction.addEventListener("complete", () => resolve());
-      transaction.addEventListener("error", () => resolve());
-      transaction.addEventListener("abort", () => resolve());
-      transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
-      transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
-    });
-  } catch {
-  } finally {
-    database.close();
-  }
-}
-
-export async function deleteSessionSnapshotScope(prefix: string): Promise<void> {
+export async function deleteSessionSnapshotEntries(
+  key: string,
+  match: "key" | "prefix",
+): Promise<void> {
+  const byPrefix = match === "prefix";
   const database = await openSessionSnapshotDatabase();
   if (!database) {
     return;
@@ -176,23 +157,32 @@ export async function deleteSessionSnapshotScope(prefix: string): Promise<void> 
         "readwrite",
       );
       for (const event of ["complete", "error", "abort"]) {
-        transaction.addEventListener(event, () => resolve(), { once: true });
+        transaction.addEventListener(event, () => resolve(), byPrefix ? { once: true } : undefined);
       }
       for (const name of [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME]) {
         const store = transaction.objectStore(name);
+        if (!byPrefix) {
+          store.delete(key);
+          continue;
+        }
         const request = store.openKeyCursor();
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) {
             return;
           }
-          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(prefix)) {
+          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(key)) {
             store.delete(cursor.primaryKey);
           }
           cursor.continue();
         };
       }
     });
+  } catch (error) {
+    // Scope clearing reports setup failures; single-record invalidation is best effort.
+    if (byPrefix) {
+      throw error;
+    }
   } finally {
     database.close();
   }

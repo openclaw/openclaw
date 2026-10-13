@@ -85,19 +85,13 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const clearStreamingWatchdog = () => {
-    if (streamingWatchdogTimer) {
-      clearTimeout(streamingWatchdogTimer);
-      streamingWatchdogTimer = null;
-    }
+    clearTimeout(streamingWatchdogTimer ?? undefined);
+    streamingWatchdogTimer = null;
     streamingWatchdogRunId = null;
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
-    const pending = pendingTerminalLifecycleErrors.get(runId);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending);
+    clearTimeout(pendingTerminalLifecycleErrors.get(runId));
     pendingTerminalLifecycleErrors.delete(runId);
   };
 
@@ -107,9 +101,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
-    for (const timer of pendingTerminalLifecycleErrors.values()) {
-      clearTimeout(timer);
-    }
+    pendingTerminalLifecycleErrors.forEach(clearTimeout);
     pendingTerminalLifecycleErrors.clear();
     btw.clear();
     clearStreamingWatchdog();
@@ -119,9 +111,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     if (streamingWatchdogMs <= 0) {
       return;
     }
-    if (streamingWatchdogTimer) {
-      clearTimeout(streamingWatchdogTimer);
-    }
+    clearTimeout(streamingWatchdogTimer ?? undefined);
     streamingWatchdogRunId = runId;
     streamingWatchdogTimer = setTimeout(() => {
       streamingWatchdogTimer = null;

@@ -420,22 +420,26 @@ export function talkEventTypes(broadcast: ReturnType<typeof vi.fn>): string[] {
   });
 }
 
-type ParkedNativeTask = NativePluginFixture &
-  Awaited<ReturnType<typeof connectNativeSession>> & {
-    activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
-    abortOwned: ReturnType<typeof vi.fn<() => void>>;
-    queueMessage: ReturnType<
-      typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
-    >;
-    settleBackend: () => Promise<void>;
-  };
+type ConnectedNativePluginFixture = NativePluginFixture &
+  Awaited<ReturnType<typeof connectNativeSession>>;
+
+type ParkedNativeTask = ConnectedNativePluginFixture & {
+  activeRun: RunEmbeddedAgentParams & { abortSignal: AbortSignal };
+  abortOwned: ReturnType<typeof vi.fn<() => void>>;
+  queueMessage: ReturnType<
+    typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>
+  >;
+  settleBackend: () => Promise<void>;
+};
 
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  ...embedded: [] | [session: AgentSession, finish: () => void]
+  ...embedded:
+    | []
+    | [session: AgentSession, finish: () => void, prepared?: ConnectedNativePluginFixture]
 ): Promise<void> {
-  const [embeddedSession, finishEmbeddedSession] = embedded;
+  const [embeddedSession, finishEmbeddedSession, preparedFixture] = embedded;
   const releaseBackend = createDeferredCore();
   const registered =
     createDeferredCore<
@@ -606,7 +610,7 @@ export async function withParkedNativeTask(
     // Let the real consult owner release registration and finish its provider result.
     await nextEventLoopTurn();
   };
-  await withNativePlugin(async (fixture) => {
+  const runInFixture = async (fixture: NativePluginFixture) => {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
@@ -630,7 +634,7 @@ export async function withParkedNativeTask(
         return claim;
       });
     try {
-      const session = await connectNativeSession(fixture);
+      const session = preparedFixture ?? (await connectNativeSession(fixture));
       const readiness = Promise.race([registered.promise, failed.promise]);
       const send = session.socket.send.bind(session.socket);
       const observeCompletion = vi.spyOn(session.socket, "send").mockImplementation((payload) => {
@@ -683,7 +687,12 @@ export async function withParkedNativeTask(
         }
       }
     }
-  });
+  };
+  if (preparedFixture) {
+    await runInFixture(preparedFixture);
+  } else {
+    await withNativePlugin(runInFixture);
+  }
 }
 
 export function installNativePluginTestHooks() {

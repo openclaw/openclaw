@@ -11,6 +11,10 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./agent-tools.policy.js";
+import {
+  resolveDelegatedExecutionToolPolicy,
+  type DelegatedToolPolicy,
+} from "./delegated-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
@@ -39,6 +43,9 @@ type RequesterToolPolicyResolution = {
   senderPolicy?: SandboxToolPolicy;
   subagentPolicy?: SandboxToolPolicy;
   inheritedToolPolicy?: SandboxToolPolicy;
+  /** Full ancestor ceiling retained by descendants and completion, even when execution differs. */
+  inheritedToolPolicyForSpawn?: SandboxToolPolicy;
+  delegatedToolPolicy?: DelegatedToolPolicy;
   inheritedToolPolicySource?: "sender";
   subagentStore?: SessionCapabilityStore;
 };
@@ -78,14 +85,18 @@ type RequesterToolPolicyParams = {
 
 function policyFromEnvelope(
   envelope: ReturnType<typeof resolvePersistedSubagentToolPolicyEnvelope>,
+  completion = false,
 ): SandboxToolPolicy | undefined {
   if (!envelope) {
     return undefined;
   }
-  return envelope.inheritedToolAllow.length > 0 || envelope.inheritedToolDeny.length > 0
+  const deny = completion
+    ? (envelope.delegatedToolPolicy?.requesterDeny ?? envelope.inheritedToolDeny)
+    : envelope.inheritedToolDeny;
+  return envelope.inheritedToolAllow.length > 0 || deny.length > 0
     ? {
         ...(envelope.inheritedToolAllow.length > 0 ? { allow: envelope.inheritedToolAllow } : {}),
-        ...(envelope.inheritedToolDeny.length > 0 ? { deny: envelope.inheritedToolDeny } : {}),
+        ...(deny.length > 0 ? { deny } : {}),
       }
     : undefined;
 }
@@ -99,6 +110,8 @@ function resolveDelegatedPolicy(
       delegated: true;
       source: Exclude<RequesterToolPolicySource, "current-request">;
       policy?: SandboxToolPolicy;
+      policyForSpawn?: SandboxToolPolicy;
+      delegatedToolPolicy?: DelegatedToolPolicy;
       inheritedToolPolicySource?: "sender";
     } {
   const provenance = normalizeInputProvenance(params.inputProvenance);
@@ -165,6 +178,7 @@ function resolveDelegatedPolicy(
           entry.inheritedToolAllow.toSorted(),
           entry.inheritedToolDeny.toSorted(),
           entry.inheritedToolPolicySource,
+          entry.delegatedToolPolicy?.requesterDeny.toSorted(),
         ]);
       if (
         !envelope ||
@@ -173,11 +187,36 @@ function resolveDelegatedPolicy(
         return { delegated: false };
       }
     }
+    const targetEnvelope = resolvePersistedSubagentToolPolicyEnvelope(params.sessionKey, {
+      cfg: config,
+      store: subagentStore,
+    });
+    const targetExecutionPolicy = targetEnvelope
+      ? resolveDelegatedExecutionToolPolicy({ config, ...targetEnvelope })
+      : undefined;
+    const completionPolicy = policyFromEnvelope(envelope, true);
+    const targetFloor = targetEnvelope?.delegatedToolPolicy
+      ? (targetExecutionPolicy ?? policyFromEnvelope(targetEnvelope))
+      : undefined;
+    const completionDeny = [...(completionPolicy?.deny ?? []), ...(targetFloor?.deny ?? [])];
     return envelope
       ? {
           delegated: true,
           source: "completion-handoff",
-          policy: policyFromEnvelope(envelope),
+          policy: completionDeny.length
+            ? { ...completionPolicy, deny: completionDeny }
+            : completionPolicy,
+          ...(targetEnvelope?.delegatedToolPolicy
+            ? {
+                policyForSpawn: {
+                  ...completionPolicy,
+                  deny: [...(completionPolicy?.deny ?? []), ...targetEnvelope.inheritedToolDeny],
+                },
+                delegatedToolPolicy: targetExecutionPolicy
+                  ? targetEnvelope.delegatedToolPolicy
+                  : undefined,
+              }
+            : {}),
           inheritedToolPolicySource: envelope.inheritedToolPolicySource,
         }
       : { delegated: false };
@@ -190,10 +229,16 @@ function resolveDelegatedPolicy(
     if (ownEnvelope) {
       // Senderless child and trusted-operator resumes keep the spawn-time requester snapshot.
       // Later toolsBySender edits are non-retroactive; current non-sender restrictions layer later.
+      const executionPolicy = resolveDelegatedExecutionToolPolicy({
+        config: params.config,
+        ...ownEnvelope,
+      });
       return {
         delegated: true,
         source: "persisted-child",
-        policy: policyFromEnvelope(ownEnvelope),
+        policy: executionPolicy ?? policyFromEnvelope(ownEnvelope),
+        delegatedToolPolicy: executionPolicy ? ownEnvelope.delegatedToolPolicy : undefined,
+        policyForSpawn: policyFromEnvelope(ownEnvelope),
         inheritedToolPolicySource: ownEnvelope.inheritedToolPolicySource,
       };
     }
@@ -248,6 +293,8 @@ export function resolveRequesterToolPolicies(
       requesterPolicySource: delegatedPolicy.source,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
+      inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
+      delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
       inheritedToolPolicySource: delegatedPolicy.inheritedToolPolicySource,
       subagentStore,
     };

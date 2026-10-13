@@ -4,11 +4,7 @@ import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engi
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  listMemoryEntryOrigins,
-  listMemorySessionTombstones,
-  recordMemoryEntryOrigins,
-} from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { observeMemoryForgetWorker } from "./memory-forget-fault.test-support.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
@@ -16,6 +12,7 @@ import {
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget worker settlement", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -115,7 +112,7 @@ describe("memory forget worker settlement", () => {
         expect(nativeReports).toEqual([
           { tombstoneInserts: 1, sourceDeletes: failResult === "forget.purge" ? 1 : 0 },
         ]);
-        const tombstones = await listMemorySessionTombstones({ agentId: "main" });
+        const tombstones = readMemoryForgetTombstonesForTest({ agentId: "main" });
         expect(tombstones).toEqual([
           {
             sessionId: "target",
@@ -135,7 +132,7 @@ describe("memory forget worker settlement", () => {
         expect(state.derived()).toEqual({ chunks: [], sources: [], cache: [] });
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.retained);
         expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-        expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual(tombstones);
       } finally {
         restore();
       }
@@ -214,7 +211,7 @@ describe("memory forget worker settlement", () => {
         expect(state.optionalTables()).toEqual(
           refusal === "schema commit" ? [] : [{ name: "memory_session_tombstones" }],
         );
-        expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
         expect(state.derived()).toEqual(before);
         expect(state.revision()).toEqual(beforeRevision);
         expect(await fs.readFile(state.memoryPath, "utf8")).toBe(state.content);
@@ -228,7 +225,7 @@ describe("memory forget worker settlement", () => {
         expect(await fs.readFile(state.memoryPath, "utf8")).toContain(
           "Keep the unrelated amber fact.",
         );
-        expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
+        expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject([
           { sessionId: "target", reason: "forgotten" },
         ]);
         expect(state.db.prepare("PRAGMA user_version").get()).toEqual(version);

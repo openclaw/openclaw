@@ -50,6 +50,7 @@ import {
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
+import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./settings.ts";
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import type { ShellLayoutController } from "./shell-layout-traits.ts";
@@ -128,7 +129,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
-  const watchUpdateProgress = callbacks.watchUpdateProgress;
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
@@ -232,8 +232,14 @@ export function renderApplicationShell(host: ShellViewHost) {
     params: {},
     sessionScope: true,
   });
-  const openNewSession = callbacks.requestOpenNewSession;
   const uiSettings = context.theme.settings;
+  // Unknown profile preferences are not absence. Keep the first shell paint
+  // image-free so a saved None choice cannot download artwork before hydration.
+  const profileId = gatewaySnapshot.selfUser?.id;
+  const backgroundReady =
+    gatewayConnected &&
+    (!profileId ||
+      resolveProfileAppearancePrefs(context.gateway.connection.gatewayUrl, profileId) !== null);
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
@@ -261,11 +267,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
-      watchUpdateProgress,
+      watchUpdateProgress: callbacks.watchUpdateProgress,
       onOpenPalette: host.openPalette,
       onRetryConnect: callbacks.retryGateway,
       onToggleSidebar: callbacks.toggleSidebar,
-      onOpenNewSession: openNewSession,
+      onOpenNewSession: callbacks.requestOpenNewSession,
       onUpdateSidebarEntries: callbacks.updateSidebarEntries,
       onPairMobile: callbacks.openDevicePairSetup,
       onNavigate: host.navigate,
@@ -379,6 +385,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       } ${shellConnectionStatus ? "shell--connection-status" : ""} ${
         floatingSidebarAttentionVisible(floatingUpdateCard) ? "shell--floating-attention" : ""
       } ${host.navResizing ? "shell--nav-resizing" : ""}"
+      ?data-background-managed=${!backgroundReady || uiSettings.background !== undefined}
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
@@ -443,7 +450,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   label: t("chat.runControls.newSession"),
                   showShortcut: true,
                   disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                  onOpen: openNewSession,
+                  onOpen: callbacks.requestOpenNewSession,
                 })}
                 <openclaw-tooltip
                   .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
@@ -511,6 +518,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       <main
         id="control-ui-main"
         class="content ${chatLikeRoute ? "content--chat" : ""} ${
+          activeRoute === "new-session" ? "content--new-session" : ""
+        } ${
           activeRoute === "custodian" ? "content--custodian" : ""
         } ${activeRoute === "workboard" ? "content--workboard" : ""} ${
           pageActionsBlocked ? "content--actions-blocked" : ""

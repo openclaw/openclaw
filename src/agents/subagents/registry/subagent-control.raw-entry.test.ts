@@ -20,7 +20,11 @@ import { clearCommandLane, enqueueCommandInLane } from "../../../process/command
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
@@ -324,16 +328,32 @@ it("numbers watched raw children independently and keeps their completion owner"
   const { children, send } = await prepareWatchedRawChildren();
   expect.soft(getSubagentRunByRunId("main-1")?.generation).toBe(1);
   expect.soft(getSubagentRunByRunId("research-2")?.generation).toBe(1);
-  const { storePath } = children.get("main")!;
+  const { storePath, parentKey } = children.get("main")!;
   const scope = { agentId: "main", storePath, sessionKey: "global" };
   const entry = loadSessionEntry(scope)!;
-  // Retained completion custody also permits followups after the spawn link changes.
-  await replaceSessionEntry(scope, { ...entry, spawnedBy: "agent:main:dashboard:other" });
-  expect((await send("main", "main-next-turn")).details).toMatchObject({ status: "accepted" });
+  const otherParentKey = "agent:main:dashboard:other";
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: otherParentKey,
+    defaultSessionId: "main-other-parent",
+  });
+  // Retained completion custody survives a valid spawn-link change, not a missing ancestor.
+  await replaceSessionEntry(scope, {
+    ...entry,
+    spawnedBy: otherParentKey,
+    parentSessionKey: otherParentKey,
+    parentSessionId: "main-other-parent",
+  });
+  const sent = await send("main", "main-next-turn");
+  expect(sent.details, JSON.stringify(sent.details)).toMatchObject({ status: "accepted" });
   expect(getSubagentRunByRunId("main-3")).toMatchObject({
     childAgentId: "main",
     generation: 2,
+    requesterAgentId: "main",
+    requesterSessionKey: parentKey,
     requesterTurnRunId: "main-next-turn",
+    completionRequesterSessionId: "main-parent",
   });
   expect(getSubagentRunByRunId("research-2")).toMatchObject({
     generation: 1,
@@ -344,12 +364,24 @@ it("numbers watched raw children independently and keeps their completion owner"
 
 it("steers its watched raw child while another agent has a newer row", async () => {
   const { send } = await prepareWatchedRawChildren();
-  const queueMessage = vi.fn(async () => {});
-  const handle = createEmbeddedRunHandle({ runId: "main-1", queueMessage });
+  const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async () => {});
+  const handle: EmbeddedAgentQueueHandle = {
+    ...createEmbeddedRunHandle({ runId: "main-1", queueMessage }),
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (text, options, assertCurrent) => {
+        assertCurrent();
+        await queueMessage(text, options);
+      },
+    },
+  };
   setActiveEmbeddedRun("main-global", handle, "global", undefined, "main");
   try {
-    expect((await send("main", "main-turn", "steer")).details).toMatchObject({
+    const sent = await send("main", "main-turn", "steer");
+    expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
       status: "accepted",
+      targetDisposition: "steered",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");

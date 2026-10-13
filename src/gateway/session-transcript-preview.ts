@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
 import { readRecentSessionTranscriptHistoryEvents } from "../config/sessions/session-accessor.sqlite-history-events.js";
@@ -21,14 +20,17 @@ import {
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import {
-  readBoundedSessionPreviewItems,
+  readSessionDisplayPreviewItems,
   readBoundedSessionPreviewItemsAsync,
 } from "./session-transcript-preview-reader.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
@@ -119,7 +121,10 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    return readSessionDisplayPreviewItems(readScope, maxItems, maxChars);
+    const transcript = resolveSessionTranscriptReadTarget(readScope);
+    return readSessionDisplayPreviewItems(maxItems, maxChars, (limits) =>
+      readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(transcript), limits),
+    );
   }
   // Qualify the key with the bound logical agent without discovering the physical store again.
   const entryValidationKey = target.entryValidationScope
@@ -155,7 +160,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
 }
 
 function readSessionModelPreviewItems(
-  target: ReturnType<typeof captureSessionTranscriptTargetBinding>,
+  target: CapturedSessionTranscriptTargetBinding,
   maxItems: number,
   maxChars: number,
 ): Promise<SessionPreviewItem[]> {
@@ -176,29 +181,6 @@ function readSessionModelPreviewItems(
         "model-context",
       ),
       hasOlderEvents: truncated,
-    };
-  });
-}
-
-function readSessionDisplayPreviewItems(
-  scope: SessionTranscriptReadScope,
-  maxItems: number,
-  maxChars: number,
-): SessionPreviewItem[] {
-  const target = resolveSessionTranscriptReadTarget(scope);
-  return readBoundedSessionPreviewItems(maxItems, (maxEvents, maxBytes) => {
-    const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), {
-      maxBytes,
-      maxLines: maxEvents,
-      maxMessages: maxEvents,
-    });
-    return {
-      items: buildSessionPreviewItems(
-        page.events.map((entry) => asOptionalRecord(entry.event)?.message),
-        maxItems,
-        maxChars,
-      ),
-      hasOlderEvents: page.totalMessages > page.events.length,
     };
   });
 }

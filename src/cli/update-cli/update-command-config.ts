@@ -481,31 +481,25 @@ async function readPostCoreSourceConfigFile(
       };
     }
     const authored = parsed.parsed as OpenClawConfig;
-    return {
-      sourceConfig: options?.configPath
-        ? resolvePreUpdateSourceConfigFromAuthored(authored, options.configPath)
-        : authored,
-      authoredConfig: authored,
-    };
+    let resolvedSourceConfig = authored;
+    if (options?.configPath) {
+      try {
+        const withIncludes = resolveConfigIncludes(authored, options.configPath, undefined, {
+          allowedRoots: resolveIncludeRoots(process.env),
+        });
+        const resolved = resolveConfigEnvVars(withIncludes, process.env, {
+          onMissing: () => undefined,
+        });
+        if (isRecord(resolved)) {
+          resolvedSourceConfig = resolved as OpenClawConfig;
+        }
+      } catch {
+        // A legacy authored handoff still supplies recovery input when includes cannot resolve.
+      }
+    }
+    return { sourceConfig: resolvedSourceConfig, authoredConfig: authored };
   } catch {
     return undefined;
-  }
-}
-
-function resolvePreUpdateSourceConfigFromAuthored(
-  authoredConfig: OpenClawConfig,
-  configPath: string,
-): OpenClawConfig {
-  try {
-    const withIncludes = resolveConfigIncludes(authoredConfig, configPath, undefined, {
-      allowedRoots: resolveIncludeRoots(process.env),
-    });
-    const resolved = resolveConfigEnvVars(withIncludes, process.env, {
-      onMissing: () => undefined,
-    });
-    return isRecord(resolved) ? (resolved as OpenClawConfig) : authoredConfig;
-  } catch {
-    return authoredConfig;
   }
 }
 

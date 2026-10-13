@@ -41,6 +41,41 @@ title: "Thinking levels"
   - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 and GLM-5.3 are the exceptions. GLM-5.2 exposes `/think off|low|high|max` with an `off` default, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`. GLM-5.3 exposes `/think low|high|max` with a `max` default, maps `off`, `minimal`, and `low` to `reasoning_effort: "low"`, `medium` and `high` to `"high"`, and `xhigh`, `adaptive`, and `max` to `"max"`.
   - Moonshot API Kimi K3 (`moonshot/kimi-k3`) always thinks at `max`, sends `reasoning_effort: "max"`, omits the K2 `thinking` field and fixed sampling overrides, and preserves K3-supported tool choices. Kimi Code K3 (`kimi/k3` and `kimi/k3-256k`) exposes the full `/think` ladder with a `high` default: `off` sends `thinking.type: "disabled"`, `minimal`/`low` map to low effort, `medium`/`high`/`adaptive` to high effort, and `xhigh`/`max` to max effort. Kimi Code refs also include `kimi/kimi-for-coding` and `kimi/kimi-for-coding-highspeed`. Kimi K2.7 Code (`moonshot/kimi-k2.7-code` and `moonshot/kimi-k2.7-code-highspeed`) always thinks, exposes only `on`, and omits both outbound `thinking` and `reasoning_effort`. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When K2 thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
+## Custom OpenAI-compatible endpoints
+
+For custom providers using `api: "openai-completions"`, a model marked
+`reasoning: true` sends `reasoning_effort` when thinking is enabled without needing
+`compat.supportsReasoningEffort: true`. An explicit
+`compat.supportsReasoningEffort: false` on the model disables this control. This
+default also applies to existing custom configurations after upgrading. If an
+endpoint rejects `reasoning_effort`, the request error points to that opt-out.
+
+Advanced levels such as `xhigh` and `max` require a model declaration or mapping
+before the CLI accepts them. Use `compat.supportedReasoningEfforts` to declare the
+endpoint's accepted values, and `compat.reasoningEffortMap` or `thinkingLevelMap`
+to map thinking levels to those values. Requested enabled efforts are clamped to
+a declared ladder. Sending a level does not guarantee that the server or model
+distinguishes it from other levels: some models offer only binary thinking, and
+some servers ignore the field.
+
+`/think off` omits `reasoning_effort` by default on custom routes, because many
+servers accept only `low`, `medium`, and `high`. Omission leaves the server's own
+default in effect and does not guarantee zero reasoning. If the endpoint accepts
+`none` to disable thinking, declare it explicitly on the model:
+
+```json5 validate=false
+{
+  reasoning: true,
+  compat: {
+    supportedReasoningEfforts: ["none", "low", "medium", "high"],
+    reasoningEffortMap: { off: "none" },
+  },
+}
+```
+
+These defaults apply to custom routes. Bundled provider plugins retain their
+provider-specific thinking contracts, including native Ollama's `think` control.
+
 ## Resolution order
 
 1. Inline directive on the message (applies only to that message).
@@ -153,13 +188,14 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. In `on`, the preview hands off to the saved reasoning; in `stream`, it disappears when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
 
-Malformed local-model reasoning tags are handled conservatively. Closed `<think>...</think>` blocks stay hidden on normal replies, and unclosed reasoning after already visible text is also hidden. If a reply is fully wrapped in a single unclosed opening tag and would otherwise deliver as empty text, OpenClaw removes the malformed opening tag and delivers the remaining text.
+Malformed local-model reasoning tags are handled conservatively. Closed `<think>...</think>` blocks stay hidden on normal replies, and unclosed reasoning after already visible text is also hidden. If a reply ends normally and is fully wrapped in a single unclosed opening tag and would otherwise deliver as empty text, OpenClaw removes the malformed opening tag and delivers the remaining text. A Chat Completions stream that reaches its output token limit or reports an error does not recover unfinished reasoning as answer text. If the token limit leaves no visible answer, OpenClaw reports that the model reached its output token limit before generating an answer.
 
 ## Related
 
@@ -175,7 +211,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 ## Web chat UI
 
 - Model, thinking-level, and fast-mode overrides can be changed in an existing session with `operator.write`; administrator access is not required for these three controls. Read-only clients cannot change them.
-- These are session preferences for subsequent turns, not a promise to change an already-running model call. The composer disables the controls while a reply is running and while a model change is being applied.
+- Model and thinking controls remain available while a message is sending, preparing, or streaming. They display the chosen session preference; saving a change does not interrupt or change an already-executing turn. Ordinary queued messages that have not started use the latest saved preference, while explicit per-message overrides keep their existing precedence.
+- While a model change is being applied, model and effort controls remain disabled until the new model's supported settings arrive. Fast mode remains disabled during an active reply.
 - The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
 - Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
 - Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.

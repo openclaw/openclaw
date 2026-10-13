@@ -1,4 +1,4 @@
-import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session.js";
+import { resolveClientVoiceAgentSessionId } from "../../talk/client-voice-session-read.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 

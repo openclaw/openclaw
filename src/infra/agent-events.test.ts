@@ -609,3 +609,38 @@ test("retains independent nested cursors while new callbacks join both emissions
     "new-global:outer",
   ]);
 });
+
+test("captures runtime delivery before listeners and independently for nested emissions", () => {
+  let owner = {};
+  const seen: string[] = [];
+  const capture = () => {
+    const original = owner;
+    return () => owner === original;
+  };
+  onAgentEvent((event) => {
+    if (event.data.text === "outer") {
+      owner = {};
+      onAgentRuntimeEvent((next) => seen.push(`late:${String(next.data.text)}`), capture);
+      emit("run", "lifecycle", { phase: "end", text: "inner" });
+    }
+  });
+  onAgentRuntimeEvent((event) => seen.push(`original:${String(event.data.text)}`), capture);
+  emit("run", "lifecycle", { phase: "end", text: "outer" });
+  expect(seen).toEqual(["original:inner", "late:inner"]);
+});
+
+test.each(["capture", "delivery"])("isolates runtime %s failures from other listeners", (phase) => {
+  const blocked = vi.fn();
+  const seen = captureEvents();
+  onAgentRuntimeEvent(blocked, () => {
+    const fail = () => {
+      throw new Error("retired registration");
+    };
+    return phase === "capture" ? fail() : fail;
+  });
+  const later = captureEvents();
+  expect(emit("run")).toBe(true);
+  expect(blocked).not.toHaveBeenCalled();
+  expect(seen).toHaveLength(1);
+  expect(later).toHaveLength(1);
+});

@@ -211,7 +211,7 @@ export async function withGatewaySessionEntry<T>(
     session: ReturnType<typeof loadGatewaySessionEntry>,
     membership: ReadonlyMap<
       string,
-      readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[]
+      readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[]
     >,
     assertSourceCurrent: () => void,
   ) => T,

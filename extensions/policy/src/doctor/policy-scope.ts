@@ -4,7 +4,11 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PolicyAgentWorkspaceEvidence, PolicyToolPostureEvidence } from "../policy-state.js";
+import type {
+  PolicyAgentWorkspaceEvidence,
+  PolicyDataHandlingEvidence,
+  PolicyToolPostureEvidence,
+} from "../policy-state.js";
 import { getPolicyPath } from "../policy-value.js";
 import {
   POLICY_RULE_METADATA,
@@ -15,38 +19,26 @@ import { policyShapeFinding } from "./shape-helpers.js";
 import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
 import { ocPathSegment } from "./utils.js";
 
-export function scopedWorkspaceAgentMatches(
-  entry: PolicyAgentWorkspaceEvidence,
-  policyAgentId: string,
-  entries: readonly PolicyAgentWorkspaceEvidence[],
-): boolean {
-  if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
-    return true;
-  }
-  return entry.scope === "defaults" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
-}
+type ScopedAgentEvidence =
+  | PolicyAgentWorkspaceEvidence
+  | PolicyToolPostureEvidence
+  | PolicyDataHandlingEvidence;
 
-export function scopedToolAgentMatches(
-  entry: PolicyToolPostureEvidence,
+export function scopedAgentEvidenceMatches(
+  entry: ScopedAgentEvidence,
   policyAgentId: string,
-  entries: readonly PolicyToolPostureEvidence[],
+  entries: readonly ScopedAgentEvidence[],
+  inheritedEntry: boolean,
 ): boolean {
-  if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
-    return true;
-  }
-  return entry.scope === "global" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
-}
-
-function hasScopedAgentEvidence(
-  entries: readonly (PolicyAgentWorkspaceEvidence | PolicyToolPostureEvidence)[],
-  kind: PolicyAgentWorkspaceEvidence["kind"] | PolicyToolPostureEvidence["kind"],
-  policyAgentId: string,
-): boolean {
-  return entries.some(
-    (candidate) =>
-      candidate.scope === "agent" &&
-      candidate.kind === kind &&
-      scopedAgentIdMatches(candidate.agentId, policyAgentId),
+  return (
+    scopedAgentIdMatches(entry.agentId, policyAgentId) ||
+    (inheritedEntry &&
+      !entries.some(
+        (candidate) =>
+          candidate.scope === "agent" &&
+          candidate.kind === entry.kind &&
+          scopedAgentIdMatches(candidate.agentId, policyAgentId),
+      ))
   );
 }
 
@@ -97,7 +89,7 @@ export function policyHasRules(
     (section !== "auth" &&
       section !== "gateway" &&
       section !== "secrets" &&
-      agentScopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay)))
+      scopedPolicyOverlays(policy).some(([, overlay]) => hasRules(overlay)))
   );
 }
 
@@ -113,7 +105,7 @@ type ChannelScopedPolicyTarget = {
   readonly overlay: Record<string, unknown>;
 };
 
-function agentScopedPolicyOverlays(
+export function scopedPolicyOverlays(
   policy: unknown,
 ): readonly (readonly [string, Record<string, unknown>])[] {
   if (!isRecord(policy) || !isRecord(policy.scopes)) {
@@ -125,35 +117,34 @@ function agentScopedPolicyOverlays(
 }
 
 export function agentScopedPolicyTargets(policy: unknown): readonly AgentScopedPolicyTarget[] {
-  const targets: AgentScopedPolicyTarget[] = [];
-  for (const [scopeName, overlay] of agentScopedPolicyOverlays(policy)) {
-    if (!Array.isArray(overlay.agentIds)) {
-      continue;
-    }
-    for (const rawAgentId of overlay.agentIds) {
-      if (typeof rawAgentId !== "string" || rawAgentId.trim() === "") {
-        continue;
-      }
-      targets.push({ scopeName, agentId: normalizeAgentId(rawAgentId), overlay });
-    }
-  }
-  return targets;
+  return scopedPolicyOverlays(policy).flatMap(([scopeName, overlay]) =>
+    normalizePolicySelectorValues(overlay.agentIds, "agentIds").map((agentId) => ({
+      scopeName,
+      agentId,
+      overlay,
+    })),
+  );
 }
 
 export function channelScopedPolicyTargets(policy: unknown): readonly ChannelScopedPolicyTarget[] {
-  const targets: ChannelScopedPolicyTarget[] = [];
-  for (const [scopeName, overlay] of agentScopedPolicyOverlays(policy)) {
-    if (!Array.isArray(overlay.channelIds)) {
-      continue;
-    }
-    for (const rawChannelId of overlay.channelIds) {
-      if (typeof rawChannelId !== "string" || rawChannelId.trim() === "") {
-        continue;
-      }
-      targets.push({ scopeName, channelId: normalizePolicyChannelId(rawChannelId), overlay });
-    }
-  }
-  return targets;
+  return scopedPolicyOverlays(policy).flatMap(([scopeName, overlay]) =>
+    normalizePolicySelectorValues(overlay.channelIds, "channelIds").map((channelId) => ({
+      scopeName,
+      channelId,
+      overlay,
+    })),
+  );
+}
+
+export function normalizePolicySelectorValues(
+  value: unknown,
+  selector: PolicyScopeSelectorKind,
+): readonly string[] {
+  return Array.isArray(value)
+    ? value
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+        .map(selector === "agentIds" ? normalizeAgentId : normalizePolicyChannelId)
+    : [];
 }
 
 type ScopedPolicyField = {
@@ -176,13 +167,11 @@ export function duplicateScopedPolicyFieldFinding(
       ...params,
       selector: "agentIds",
       selectorLabel: "agent",
-      normalize: normalizeAgentId,
     }) ??
     duplicateScopedFieldFinding(scopes, {
       ...params,
       selector: "channelIds",
       selectorLabel: "channel",
-      normalize: normalizePolicyChannelId,
     })
   );
 }
@@ -195,7 +184,6 @@ function duplicateScopedFieldFinding(
     readonly policy: Record<string, unknown>;
     readonly selector: PolicyScopeSelectorKind;
     readonly selectorLabel: string;
-    readonly normalize: (value: string) => string;
   },
 ): HealthFinding | undefined {
   const seen = new Map<
@@ -209,16 +197,11 @@ function duplicateScopedFieldFinding(
     if (!isRecord(overlay)) {
       continue;
     }
-    const selectorValues = overlay[params.selector];
-    if (!Array.isArray(selectorValues)) {
-      continue;
-    }
     const fields = scopedPolicyFields(scopeName, overlay, params.selector);
-    for (const rawSelectorValue of selectorValues) {
-      if (typeof rawSelectorValue !== "string" || rawSelectorValue.trim() === "") {
-        continue;
-      }
-      const selectorValue = params.normalize(rawSelectorValue);
+    for (const selectorValue of normalizePolicySelectorValues(
+      overlay[params.selector],
+      params.selector,
+    )) {
       for (const field of fields) {
         const topLevelValue = getPolicyPath(params.policy, field.metadata.policyPath);
         if (
@@ -234,14 +217,10 @@ function duplicateScopedFieldFinding(
         }
         const key = `${selectorValue}\0${field.propertyPath}`;
         const previous = seen.get(key);
-        if (previous !== undefined) {
-          if (isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)) {
-            seen.set(key, {
-              propertyPath: `scopes.${scopeName}.${field.propertyPath}`,
-              field,
-            });
-            continue;
-          }
+        if (
+          previous !== undefined &&
+          !isPolicyValueAtLeastAsStrict(field.metadata, field.value, previous.field.value)
+        ) {
           return policyShapeFinding(
             params.policyPath,
             `oc://${params.policyDocName}/${field.targetPath}`,
@@ -259,7 +238,7 @@ function duplicateScopedFieldFinding(
   return undefined;
 }
 
-function scopedPolicyFields(
+export function scopedPolicyFields(
   scopeName: string,
   overlay: Record<string, unknown>,
   selector: PolicyScopeSelectorKind,

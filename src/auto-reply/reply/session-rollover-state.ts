@@ -25,6 +25,7 @@ export function resolveReplySessionRolloverState(
     ttsAuto: entry.ttsAuto,
     responseUsage: entry.responseUsage,
     ...selectSessionModelOverride(preservedSelection),
+    communication: preservedSelection.communication,
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
@@ -32,6 +33,7 @@ export function resolveReplySessionRolloverState(
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
     category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
     pendingDeliveryNotice: entry.pendingDeliveryNotice,

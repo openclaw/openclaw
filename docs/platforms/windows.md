@@ -188,6 +188,12 @@ Scheduler's **End** action terminates the Gateway and its descendants. After
 updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
 
+For pnpm global installs, new launchers use the verified stable
+`node_modules/openclaw` link so package replacement does not invalidate them.
+If an older launcher already points at a deleted package generation, run
+`openclaw gateway install --force` from the current installation to rewrite
+`gateway.cmd`. Without `--force`, a registered task can be left unchanged.
+
 Reinstalling a managed Scheduled Task stops and settles its previous process
 before publishing and starting the replacement. This also applies when both
 installations use Node or only the service arguments change. Status verifies

@@ -1,3 +1,4 @@
+import { scheduleAbsoluteDeadline } from "../../utils/absolute-deadline.js";
 import { PLATFORM_SEND_OWNER_LEASE_MS } from "../delivery-queue-sqlite-claim.kernel.js";
 
 const PLATFORM_SEND_OWNER_HEARTBEAT_MS = Math.floor(PLATFORM_SEND_OWNER_LEASE_MS / 3);
@@ -37,18 +38,17 @@ export async function startDeliveryProducerLease(params: {
   const lost = new AbortController();
   let stopResult: Promise<void> | undefined;
   let pendingRenewal: Promise<void> | undefined;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   const abortLost = (cause?: unknown): void => {
     if (!stopResult && !lost.signal.aborted) {
       lost.abort(lostProducerLeaseError(params.id, cause));
     }
   };
   const scheduleExpiry = (): void => {
-    if (expiryTimer) {
-      clearTimeout(expiryTimer);
-    }
-    expiryTimer = setTimeout(() => abortLost(), Math.max(1, confirmedExpiresAt - Date.now()));
-    expiryTimer.unref?.();
+    cancelExpiry?.();
+    cancelExpiry = scheduleAbsoluteDeadline(confirmedExpiresAt, () => abortLost(), undefined, {
+      unref: true,
+    });
   };
   const renew = async (): Promise<void> => {
     if (stopResult || lost.signal.aborted) {
@@ -90,9 +90,7 @@ export async function startDeliveryProducerLease(params: {
       if (!stopResult) {
         stopResult = pendingRenewal ?? Promise.resolve();
         clearInterval(heartbeat);
-        if (expiryTimer) {
-          clearTimeout(expiryTimer);
-        }
+        cancelExpiry?.();
       }
       return stopResult;
     },

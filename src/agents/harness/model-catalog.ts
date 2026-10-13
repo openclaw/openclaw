@@ -205,6 +205,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
+    const includesProvider = params.includesProvider;
+    const outsideScope = ({ provider }: { provider: string }) =>
+      includesProvider !== undefined && !includesProvider(provider);
     let listedRows: readonly ModelCatalogEntry[];
     let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
@@ -229,18 +232,32 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       if (!isCurrent()) {
         return params.snapshot;
       }
+      const failedProviders = new Set(
+        [
+          ...scopedProviders,
+          ...[...result.entries, ...result.routeVariants]
+            .filter((entry) => entry.nativeRuntime === runtime && !outsideScope(entry))
+            .map((entry) => entry.provider),
+        ].map(normalizeProvider),
+      );
+      if (result === params.snapshot) {
+        result = { ...params.snapshot };
+      }
+      result.nativeProviderOutcomes = replaceRuntimeScope<ProviderCatalogOutcome>(
+        result.nativeProviderOutcomes,
+        runtime,
+        [...failedProviders].map((provider) => ({ provider, status: "unavailable" })),
+        outsideScope,
+      );
       params.onError?.(error, scopedProviders);
       continue;
     }
     if (!isCurrent()) {
       return params.snapshot;
     }
-    const includesProvider = params.includesProvider;
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
-    const outsideScope = ({ provider }: { provider: string }) =>
-      includesProvider !== undefined && !includesProvider(provider);
     const nativeProviderOutcomes = replaceRuntimeScope(
       result.nativeProviderOutcomes,
       runtime,
@@ -337,9 +354,30 @@ export function isPreparedNativeModelCatalogReady(params: {
   input: PreparedModelRuntimeInput;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   snapshot: ModelCatalogSnapshot;
-  selection: PreparedNativeModelSelection;
+  selection?: PreparedNativeModelSelection;
+  catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
+  if (!selection) {
+    return (
+      params.catalogAcquired === true &&
+      snapshot.routeVariants.every((entry) => {
+        const runtime = entry.nativeRuntime;
+        return (
+          !runtime ||
+          (snapshot.nativeProviderOutcomes &&
+            Object.hasOwn(snapshot.nativeProviderOutcomes, runtime) &&
+            snapshot.nativeProviderOutcomes[runtime]?.some(
+              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
+            )) ||
+          isPreparedNativeModelCatalogReady({
+            ...params,
+            selection: { provider: entry.provider, modelId: entry.id, runtime },
+          })
+        );
+      })
+    );
+  }
   if (
     ![...snapshot.entries, ...snapshot.routeVariants].some(
       (entry) =>

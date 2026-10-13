@@ -227,9 +227,12 @@ describe("Memory Core legacy owner", () => {
 
   beforeEach(async () => {
     // Memory Core's registered runtime owns session-hit authorization, unmodified.
-    const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-      "../../../extensions/memory-core/runtime-api.js",
-    );
+    const { createMemoryRuntime } = await vi.importActual<{
+      createMemoryRuntime: (host: {
+        runInBackgroundContext: <T>(run: () => T) => T;
+      }) => MemoryPluginRuntime;
+    }>("../../../extensions/memory-core/runtime-api.js");
+    const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     config = {
       agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
       tools: { sessions: { visibility: "agent" } },

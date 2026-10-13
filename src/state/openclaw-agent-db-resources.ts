@@ -18,6 +18,8 @@ export type OpenClawAgentDatabaseAsyncResource = {
   path: string;
   revoke: () => void;
   close: () => Promise<void>;
+  /** A native executor retains its database lease until dependent readers and publications settle. */
+  retireAfterResources?: true;
 };
 export type OpenClawAgentDatabaseReadCandidateResource = Omit<
   OpenClawAgentDatabaseAsyncResource,
@@ -253,12 +255,36 @@ export async function drainAgentDatabaseResources<T>(
   closeNative: () => Promise<T>,
 ): Promise<T> {
   return withAgentDatabaseCloseFence(selection, async () => {
-    const results = await Promise.allSettled(revokeAgentDatabaseResources(selection));
+    const selected = [...new Set([...resources.active, ...resources.closing.keys()])].filter(
+      (resource) => matchesAgentDatabaseClose(selection, resource),
+    );
+    const nativeOwners = selected.filter((resource) => resource.retireAfterResources);
+    for (const resource of nativeOwners) {
+      // Retain exact failed-close custody before revocation can cause another admission.
+      if (!resources.closing.has(resource)) {
+        resources.closing.set(resource, undefined);
+      }
+      resource.revoke();
+    }
+    const results = await Promise.allSettled(
+      selected
+        .filter((resource) => !resource.retireAfterResources)
+        .map((resource) => closeAgentDatabaseResource(resource)),
+    );
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Agent database resource drainage failed");
+    }
+    const nativeResults = await Promise.allSettled(
+      nativeOwners.map((resource) => closeAgentDatabaseResource(resource)),
+    );
+    const nativeErrors = nativeResults.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (nativeErrors.length > 0) {
+      throw new AggregateError(nativeErrors, "Agent database native retirement failed");
     }
     return closeNative();
   });

@@ -27,7 +27,6 @@ import {
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
@@ -457,8 +456,6 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     });
-    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userDate = formatDateStamp(Date.now(), userTimezone);
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
     const promptMode = promptPolicyRestricted
       ? "minimal"
@@ -536,8 +533,6 @@ export async function buildPreparedCompactionRuntime(
         messageToolHints,
         sandboxInfo,
         tools: promptTools,
-        userTimezone,
-        userDate,
         contextFiles,
         bootstrapTruncationNotice,
         activeProjectKeys,

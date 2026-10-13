@@ -13,14 +13,13 @@ import {
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { clearSessionLifecycleQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
-  forkSessionAtMessage,
   listSessionBranches,
-  rewindSessionToMessage,
-  switchSessionBranch,
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import { forkSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -31,7 +30,11 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import {
+  captureSessionUpstreamLinkReadSource,
+  prepareSessionUpstreamLink,
+  readCurrentSessionUpstreamLink,
+} from "../../sessions/session-upstream-links-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -42,6 +45,8 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
+import type { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
@@ -146,44 +151,56 @@ async function listBranches(
     allowMetadataChanges: true,
   });
   try {
-    const current = loadAccessorSessionEntryForGatewayTarget({
-      key: sessionKey,
-      cfg,
-      agentId: requestedAgent.agentId,
-      projection: "list",
-    });
-    if (
-      !current.entry?.sessionId ||
-      readSessionUpstreamLink(current.canonicalKey, current.target.agentId)
-    ) {
-      // Fresh and upstream-owned sessions have no local branches. Only the
-      // mutating siblings treat those states as errors.
-      respond(true, { branches: [] }, undefined);
-      return;
-    }
-    const result = await listSessionBranches({
-      agentId: current.target.agentId,
-      sessionKey: current.canonicalKey,
-      sessionStoreKey: current.sessionStoreKey,
-      storePath: current.storePath,
-    });
-    read?.assertCurrent();
-    if (result.status !== "ok") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          {
-            "missing-session": "session not found",
-            "unsupported-storage": "session transcript storage does not support branch listing",
-            failed: "failed to list session branches",
-          }[result.status],
-        ),
-      );
-      return;
-    }
-    respond(true, { branches: result.branches }, undefined);
+    await withGatewaySessionEntryReadOnly(
+      {
+        key: sessionKey,
+        cfg,
+        agentId: requestedAgent.agentId,
+        excludeInternalEffects: true,
+        projection: "list",
+      },
+      async (current, assertCurrent) => {
+        const upstreamLink = current.entry?.sessionId
+          ? await prepareSessionUpstreamLink(
+              captureSessionUpstreamLinkReadSource(),
+              current.canonicalKey,
+              current.agentId,
+            )
+          : undefined;
+        assertCurrent();
+        read?.assertCurrent();
+        if (!current.entry?.sessionId || upstreamLink) {
+          // Fresh and upstream-owned sessions have no local branches. Only the
+          // mutating siblings treat those states as errors.
+          respond(true, { branches: [] }, undefined);
+          return;
+        }
+        const result = await listSessionBranches({
+          agentId: current.agentId,
+          sessionKey: current.canonicalKey,
+          sessionStoreKey: current.canonicalKey,
+          storePath: current.storePath,
+        });
+        assertCurrent();
+        read?.assertCurrent();
+        if (result.status !== "ok") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+              {
+                "missing-session": "session not found",
+                "unsupported-storage": "session transcript storage does not support branch listing",
+                failed: "failed to list session branches",
+              }[result.status],
+            ),
+          );
+          return;
+        }
+        respond(true, { branches: result.branches }, undefined);
+      },
+    );
   } finally {
     read?.release();
   }
@@ -195,6 +212,43 @@ async function mutateSessionAtMessage(
   },
   action: MessageCutAction,
 ): Promise<void> {
+  const { params, respond, context } = options;
+  const sessionKey = params.sessionKey.trim();
+  const cfg = context.getRuntimeConfig();
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
+  if (!requestedAgent.ok) {
+    respond(false, undefined, requestedAgent.error);
+    return;
+  }
+  return withGatewaySessionEntryReadOnly(
+    { key: sessionKey, cfg, agentId: requestedAgent.agentId, excludeInternalEffects: true },
+    async (initial, assertSourceCurrent) =>
+      mutatePreparedSessionAtMessage({
+        options,
+        action,
+        cfg,
+        requestedAgentId: requestedAgent.agentId,
+        initial,
+        assertSourceCurrent,
+      }),
+  );
+}
+
+async function mutatePreparedSessionAtMessage({
+  options,
+  action,
+  cfg,
+  requestedAgentId,
+  initial,
+  assertSourceCurrent,
+}: {
+  options: Parameters<typeof mutateSessionAtMessage>[0];
+  action: MessageCutAction;
+  cfg: OpenClawConfig;
+  requestedAgentId: string;
+  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  assertSourceCurrent: () => void;
+}): Promise<void> {
   const { params, respond, context, client } = options;
   const reject = (message: string, code: ErrorCode = ErrorCodes.INVALID_REQUEST) =>
     respond(false, undefined, errorShape(code, message));
@@ -205,19 +259,15 @@ async function mutateSessionAtMessage(
   };
   const sessionKey = params.sessionKey.trim();
   const entryId = ("leafEntryId" in params ? params.leafEntryId : params.entryId).trim();
-  const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey, params.agentId);
-  if (!requestedAgent.ok) {
-    respond(false, undefined, requestedAgent.error);
-    return;
-  }
   const loadCurrent = () =>
-    loadAccessorSessionEntryForGatewayTarget({
-      key: sessionKey,
-      cfg,
-      agentId: requestedAgent.agentId,
-    });
-  const initial = loadCurrent();
+    withGatewaySessionEntryReadOnly(
+      { key: sessionKey, cfg, agentId: requestedAgentId, excludeInternalEffects: true },
+      async (current) => {
+        assertSourceCurrent();
+        commitGuard();
+        return current;
+      },
+    );
   if (!initial.entry?.sessionId) {
     reject(`session not found: ${sessionKey}`);
     return;
@@ -236,22 +286,20 @@ async function mutateSessionAtMessage(
     const creationError = authorizeGatewaySessionCreation({
       cfg,
       client,
-      agentId: initial.target.agentId,
+      agentId: initial.agentId,
     });
     if (creationError) {
       respond(false, undefined, creationError);
       return;
     }
   }
+  const assertMutationCurrent = () => {
+    assertSourceCurrent();
+    commitGuard();
+  };
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
-  const initialUpstreamLink = readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId);
-  // Only fork may cross to an upstream-owned conversation (it creates a new thread).
-  // Rewind and switch would mutate the shared upstream history in place; fail closed.
-  if (initialUpstreamLink && action !== "fork") {
-    reject(EXTERNAL_CONVERSATION_ERROR);
-    return;
-  }
+  const upstreamContext = captureSessionUpstreamLinkReadSource();
   const initialPlacementError = resolveSessionWorkerPlacementMutationError({
     action,
     context,
@@ -262,11 +310,15 @@ async function mutateSessionAtMessage(
     reject(initialPlacementError.message);
     return;
   }
+  const preparedUpstreamLink =
+    action === "fork"
+      ? await prepareSessionUpstreamLink(upstreamContext, initial.canonicalKey, initial.agentId)
+      : undefined;
+  assertMutationCurrent();
 
   const lifecycleIdentities = [
     sessionKey,
     initial.canonicalKey,
-    initial.sessionStoreKey,
     initialSessionId,
     initialLifecycleRevision,
   ];
@@ -276,7 +328,7 @@ async function mutateSessionAtMessage(
     requestedKey: sessionKey,
     canonicalKey: initial.canonicalKey,
     sessionId: initialSessionId,
-    agentId: requestedAgent.agentId,
+    agentId: requestedAgentId,
     defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
     signal: options.signal,
   });
@@ -286,10 +338,13 @@ async function mutateSessionAtMessage(
     scope: initial.storePath,
     identities: lifecycleIdentities,
     prepare: async () => {
-      const current = loadCurrent();
+      const current = await loadCurrent();
       targetStillCurrent =
         current.entry?.sessionId === initialSessionId &&
-        current.entry.lifecycleRevision === initialLifecycleRevision;
+        current.entry.lifecycleRevision === initialLifecycleRevision &&
+        current.storePath === initial.storePath &&
+        current.canonicalKey === initial.canonicalKey &&
+        current.agentId === initial.agentId;
       if (!targetStillCurrent) {
         return;
       }
@@ -307,14 +362,14 @@ async function mutateSessionAtMessage(
           requestedKey: sessionKey,
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
-          agentId: requestedAgent.agentId,
+          agentId: requestedAgentId,
           defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
         }).active;
     },
     run: async () => {
       // A queued sharing mutation can revoke participation without rotating the source identity.
       // Revalidate under the shared lifecycle fence before delegating or writing history.
-      commitGuard();
+      assertMutationCurrent();
       if (!targetStillCurrent) {
         reject(`Session ${sessionKey} changed; retry ${action}.`);
         return;
@@ -328,10 +383,13 @@ async function mutateSessionAtMessage(
         );
         return;
       }
-      const current = loadCurrent();
+      const current = await loadCurrent();
       if (
         current.entry?.sessionId !== initialSessionId ||
-        current.entry.lifecycleRevision !== initialLifecycleRevision
+        current.entry.lifecycleRevision !== initialLifecycleRevision ||
+        current.storePath !== initial.storePath ||
+        current.canonicalKey !== initial.canonicalKey ||
+        current.agentId !== initial.agentId
       ) {
         reject(`Session ${sessionKey} changed; retry ${action}.`);
         return;
@@ -339,7 +397,8 @@ async function mutateSessionAtMessage(
       if (rejectInitializing(current.entry.initializationPending)) {
         return;
       }
-      const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
+      upstreamContext.assertCurrent();
+      const upstreamLink = preparedUpstreamLink;
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {
         const message = archived
@@ -360,7 +419,7 @@ async function mutateSessionAtMessage(
       }
       const targetKey =
         action === "fork"
-          ? buildDashboardSessionKey(current.target.agentId, {
+          ? buildDashboardSessionKey(current.agentId, {
               incognito:
                 current.entry.incognito === true || isIncognitoSessionKey(current.canonicalKey),
             })
@@ -382,16 +441,17 @@ async function mutateSessionAtMessage(
         upstreamLink && upstreamForkHarness
           ? createUpstreamForkCurrentGuard({
               client,
-              commitGuard,
+              commitGuard: assertMutationCurrent,
               context,
               forkHarness: upstreamForkHarness,
               link: upstreamLink,
-              requestedAgentId: requestedAgent.agentId,
+              requestedAgentId,
               sessionKey,
               source: current,
               targetKey,
+              upstreamContext,
             })
-          : { assertCurrent: commitGuard, assertRollbackCurrent: commitGuard };
+          : { assertCurrent: assertMutationCurrent, assertRollbackCurrent: assertMutationCurrent };
       if (upstreamForkHarness) {
         try {
           upstreamForkGuard.assertCurrent();
@@ -410,7 +470,7 @@ async function mutateSessionAtMessage(
                 targetKey,
                 sandbox,
                 source: {
-                  agentId: current.target.agentId,
+                  agentId: current.agentId,
                   sessionId: initialSessionId,
                   sessionKey: current.canonicalKey,
                   storePath: current.storePath,
@@ -461,7 +521,7 @@ async function mutateSessionAtMessage(
         );
         emitSessionsChanged(context, {
           sessionKey: upstreamFork.key,
-          agentId: requestedAgent.agentId,
+          agentId: requestedAgentId,
           reason: "fork",
         });
         return;
@@ -471,7 +531,7 @@ async function mutateSessionAtMessage(
           ? prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
-              targetAgentId: current.target.agentId,
+              targetAgentId: current.agentId,
               sessionKey: targetKey,
               sandboxRequired: sandbox === "required",
             })
@@ -489,12 +549,47 @@ async function mutateSessionAtMessage(
             source: ReturnType<typeof captureOpenClawStateWorkerContext>;
           }
         | undefined;
-      const mutationParams = {
-        agentId: current.target.agentId,
-        commitGuard,
+      const repositoryEntrySource = captureSessionEntryMetadataRead({
+        agentId: current.agentId,
         sessionKey: current.canonicalKey,
-        sessionStoreKey: current.sessionStoreKey,
         storePath: current.storePath,
+      });
+      const readRepositoryEntry = (key: string) => {
+        if (repositoryEntrySource) {
+          if (key === current.canonicalKey) {
+            return repositoryEntrySource.readCurrent();
+          }
+          return captureSessionEntryMetadataRead({
+            agentId: current.agentId,
+            sessionKey: key,
+            storePath: current.storePath,
+          })?.readCurrent();
+        }
+        return loadAccessorSessionEntryForGatewayTarget({
+          key,
+          cfg,
+          agentId: current.agentId,
+        }).entry;
+      };
+      const mutationParams = {
+        agentId: current.agentId,
+        commitGuard: assertMutationCurrent,
+        sessionKey: current.canonicalKey,
+        sessionStoreKey: current.canonicalKey,
+        storePath: current.storePath,
+      };
+      const upstreamChanged = new SessionMutationAuthorizationChangedError(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          action === "fork" ? "Session changed; retry fork." : EXTERNAL_CONVERSATION_ERROR,
+        ),
+      );
+      const assertLocalUpstreamCurrent = () => {
+        if (
+          readCurrentSessionUpstreamLink(upstreamContext, current.canonicalKey, current.agentId)
+        ) {
+          throw upstreamChanged;
+        }
       };
       try {
         if (action === "fork" && current.entry.repositoryWorkspaceId) {
@@ -507,9 +602,9 @@ async function mutateSessionAtMessage(
           }
           const assertRepositoryOwnerCurrent = () => {
             repositorySource.admission.assertCurrent();
-            commitGuard();
+            assertMutationCurrent();
             if (
-              source.agentId !== current.target.agentId ||
+              source.agentId !== current.agentId ||
               source.sessionKey !== current.canonicalKey ||
               preparedSource.current()?.revision !== source.revision
             ) {
@@ -518,11 +613,8 @@ async function mutateSessionAtMessage(
           };
           const assertRepositoryCurrent = () => {
             assertRepositoryOwnerCurrent();
-            const sourceEntry = loadAccessorSessionEntryForGatewayTarget({
-              key: current.canonicalKey,
-              cfg,
-              agentId: current.target.agentId,
-            }).entry;
+            assertLocalUpstreamCurrent();
+            const sourceEntry = readRepositoryEntry(current.canonicalKey);
             if (
               sourceEntry?.sessionId !== initialSessionId ||
               sourceEntry.lifecycleRevision !== initialLifecycleRevision ||
@@ -534,7 +626,7 @@ async function mutateSessionAtMessage(
           assertRepositoryCurrent();
           const forked = await forkSessionRepositoryWorkspace({
             sourceWorkspaceId: current.entry.repositoryWorkspaceId,
-            agentId: current.target.agentId,
+            agentId: current.agentId,
             sessionKey: targetKey,
             assertCurrent: assertRepositoryCurrent,
           });
@@ -554,16 +646,20 @@ async function mutateSessionAtMessage(
           forkWorkspace: forkWorkspace?.value,
           creation: { ...creation, sandbox },
         };
-        result = await (action === "fork"
-          ? forkRepository
-            ? forkSessionAtMessageWithPreconditions(forkParams, expectedState, {
-                sourceRepositoryWorkspaceId: forkRepository.sourceWorkspaceId,
-              })
-            : forkSessionAtMessage(forkParams, expectedState)
-          : action === "rewind"
-            ? rewindSessionToMessage({ ...mutationParams, entryId }, expectedState)
-            : switchSessionBranch({ ...mutationParams, leafEntryId: entryId }, expectedState));
+        result = await mutateSessionAtMessageWithPreconditions(
+          action === "fork" ? forkParams : { ...mutationParams, entryId },
+          action,
+          expectedState,
+          {
+            sourceRepositoryWorkspaceId: forkRepository?.sourceWorkspaceId,
+            assertUpstreamCurrent: assertLocalUpstreamCurrent,
+          },
+        );
       } catch (error) {
+        if (error === upstreamChanged) {
+          respond(false, undefined, upstreamChanged.error);
+          return;
+        }
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
@@ -576,12 +672,7 @@ async function mutateSessionAtMessage(
       } finally {
         if (forkRepository) {
           const { workspaceId, store, source } = forkRepository;
-          const forkEntry = () =>
-            loadAccessorSessionEntryForGatewayTarget({
-              key: targetKey,
-              cfg,
-              agentId: current.target.agentId,
-            }).entry;
+          const forkEntry = () => readRepositoryEntry(targetKey);
           if (forkEntry()?.repositoryWorkspaceId !== workspaceId) {
             await store.delete({
               workspaceId,
@@ -626,7 +717,7 @@ async function mutateSessionAtMessage(
       if (action !== "fork") {
         clearSessionLifecycleQueues({
           keys: lifecycleIdentities,
-          agentId: current.target.agentId,
+          agentId: current.agentId,
           sessionKey: current.canonicalKey,
           sessionId: initialSessionId,
           // History is committed; settling its original queues must finish after revocation.
@@ -635,7 +726,7 @@ async function mutateSessionAtMessage(
       } else {
         await recordSessionCreated(cfg, {
           sessionKey: result.key,
-          agentId: current.target.agentId,
+          agentId: current.agentId,
           entry: result.entry,
         });
       }
@@ -654,7 +745,7 @@ async function mutateSessionAtMessage(
       );
       emitSessionsChanged(context, {
         sessionKey: action === "fork" ? result.key : current.canonicalKey,
-        agentId: requestedAgent.agentId,
+        agentId: requestedAgentId,
         reason: action === "switch" ? "branch-switch" : action,
       });
     },

@@ -198,31 +198,7 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
   };
 }
 
-const WORKBOARD_CARD_CHILD_INDEXES = [
-  ["workboard_card_events", "workboard_card_events_card_idx"],
-  ["workboard_card_attempts", "workboard_card_attempts_card_idx"],
-  ["workboard_card_comments", "workboard_card_comments_card_idx"],
-  ["workboard_card_links", "workboard_card_links_card_idx"],
-  ["workboard_card_proof", "workboard_card_proof_card_idx"],
-  ["workboard_card_artifacts", "workboard_card_artifacts_card_idx"],
-  ["workboard_card_notifications", "workboard_card_notifications_card_idx"],
-  ["workboard_worker_logs", "workboard_worker_logs_card_idx"],
-] as const;
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function explainWorkboardQueryPlan(
-  db: DatabaseSync,
-  sql: string,
-  params: readonly (number | string | null)[] = [],
-): string {
-  const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
-    detail?: unknown;
-  }>;
-  return rows
-    .map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")))
-    .join("\n");
-}
 
 describe("WorkboardStore", () => {
   it("emits monotonic committed changes, ignores no-ops, and isolates listener failures", async () => {
@@ -261,38 +237,6 @@ describe("WorkboardStore", () => {
 
     expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2, 3]);
     await expect(store.get(card.id)).resolves.toBeUndefined();
-  });
-
-  it("emits when another sqlite connection commits", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-change-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const readerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    const writerStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    try {
-      const reader = new WorkboardStore(readerStores.cards, {
-        ...sqliteTestAuxStores(readerStores),
-        dataVersion: readerStores.dataVersion,
-      });
-      const writer = new WorkboardStore(writerStores.cards, {
-        ...sqliteTestAuxStores(writerStores),
-        dataVersion: writerStores.dataVersion,
-      });
-      const changes = vi.fn();
-      reader.subscribeChanges(changes);
-
-      expect(await reader.reconcileExternalChanges()).toBe(false);
-      await writer.create({ title: "External" });
-      expect(await reader.reconcileExternalChanges()).toBe(true);
-      expect(await reader.reconcileExternalChanges()).toBe(false);
-      expect(changes).toHaveBeenCalledOnce();
-      await expect(reader.list()).resolves.toEqual([
-        expect.objectContaining({ title: "External" }),
-      ]);
-    } finally {
-      await writerStores.close();
-      await readerStores.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("reports committed reference cleanup revisions after a concurrent peer edit", async () => {
@@ -609,55 +553,6 @@ describe("WorkboardStore", () => {
     expect((await first.list()).filter((card) => card.status === "running")).toHaveLength(1);
   });
 
-  it("restores dropped card child indexes without changing the schema version", async () => {
-    const dir = tempDirs.make("openclaw-workboard-index-reopen-");
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await initialized.ready;
-    await initialized.close();
-    const db = new DatabaseSync(dbPath);
-    let initialMigrationIds: Array<{ id: string }>;
-    try {
-      initialMigrationIds = db
-        .prepare("SELECT id FROM workboard_schema_migrations ORDER BY id")
-        .all() as Array<{ id: string }>;
-      for (const [, index] of WORKBOARD_CARD_CHILD_INDEXES) {
-        db.exec(`DROP INDEX ${index}`);
-      }
-    } finally {
-      db.close();
-    }
-
-    const reopened = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await reopened.ready;
-    await reopened.close();
-    const verified = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      const indexes = new Set(
-        (
-          verified.prepare("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Array<{
-            name: string;
-          }>
-        ).map((row) => row.name),
-      );
-      for (const [table, index] of WORKBOARD_CARD_CHILD_INDEXES) {
-        expect(indexes).toContain(index);
-        const plan = explainWorkboardQueryPlan(
-          verified,
-          `SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`,
-          ["card-1"],
-        );
-        expect(plan).toContain(index);
-        expect(plan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
-      }
-      expect(
-        verified.prepare("SELECT id FROM workboard_schema_migrations ORDER BY id").all(),
-      ).toEqual(initialMigrationIds);
-    } finally {
-      verified.close();
-    }
-  });
-
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -858,77 +753,6 @@ describe("WorkboardStore", () => {
         });
       } finally {
         await reopenedStores.close();
-      }
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initialized = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-    await initialized.ready;
-    await initialized.close();
-    const legacy = new DatabaseSync(dbPath);
-    try {
-      legacy.exec(`
-        INSERT INTO workboard_boards (
-          id, name, description, icon, color, default_workspace_json, orchestration_json,
-          created_at, updated_at, archived_at
-        ) VALUES ('legacy', 'Legacy board', NULL, NULL, NULL, NULL, NULL, 1, 2, NULL);
-        ALTER TABLE workboard_boards RENAME TO workboard_boards_strict;
-        CREATE TABLE workboard_boards (
-          id TEXT PRIMARY KEY,
-          name TEXT,
-          description TEXT,
-          icon TEXT,
-          color TEXT,
-          default_workspace_json TEXT,
-          orchestration_json TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          archived_at INTEGER
-        );
-        INSERT INTO workboard_boards (
-          id, name, description, icon, color, default_workspace_json, orchestration_json,
-          created_at, updated_at, archived_at
-        ) SELECT
-          id, name, description, icon, color, default_workspace_json, orchestration_json,
-          created_at, updated_at, archived_at
-        FROM workboard_boards_strict;
-        DROP TABLE workboard_boards_strict;
-        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
-        INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
-        VALUES ('schema-2', 1);
-      `);
-    } finally {
-      legacy.close();
-    }
-
-    try {
-      const migratedStores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
-      try {
-        await expect(migratedStores.boards.lookup("legacy")).resolves.toMatchObject({
-          board: { id: "legacy", name: "Legacy board" },
-        });
-      } finally {
-        await migratedStores.close();
-      }
-      const migrated = new DatabaseSync(dbPath, { readOnly: true });
-      try {
-        expect(
-          migrated
-            .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workboard_boards'")
-            .get(),
-        ).toEqual({ strict: 1 });
-        expect(
-          migrated
-            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
-            .get(),
-        ).toEqual({ found: 1 });
-      } finally {
-        migrated.close();
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

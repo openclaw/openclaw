@@ -178,7 +178,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       params.identity,
       {
         config: params.selection.cfg,
-        assertCurrent: () => admission?.assertSourceCurrent(),
+        assertCurrent: admission?.assertSourceCurrent,
         signal: params.abortSignal,
       },
       () => runEmbeddedAgentEntryInternal(params),

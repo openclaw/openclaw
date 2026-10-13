@@ -6,7 +6,7 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import { Command, CommandWithSubcommands } from "./commands.js";
+import { Command, CommandWithSubcommands, type CommandOptions } from "./commands.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
 import {
   attachRestMock,
@@ -291,7 +291,7 @@ describe("dispatchInteraction", () => {
     class OptionAutocompleteCommand extends Command {
       override name = "choose";
       override description = "Choose";
-      override options = [
+      override options: CommandOptions = [
         {
           name: "model",
           description: "Model",

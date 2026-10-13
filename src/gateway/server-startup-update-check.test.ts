@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -9,6 +12,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
+
+vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
+  applyRemoteModelCatalogUpdate: vi.fn(),
+}));
 
 type UpdateCheckStartupParams = Parameters<typeof createDeferredGatewayUpdateCheck>[0];
 type UpdateCheck = Awaited<ReturnType<UpdateCheckStartupParams["createUpdateCheck"]>>;
@@ -52,6 +60,7 @@ describe("deferred Gateway update-check lifecycle", () => {
       scheduler,
       createUpdateCheck: () => defaultUpdateCheck,
       getConfig: () => ({}),
+      getPluginRegistry: () => undefined,
       log: { info: vi.fn(), warn: vi.fn() },
       isNixMode: false,
       broadcastToConnIds: vi.fn(),
@@ -306,5 +315,30 @@ describe("deferred Gateway update-check lifecycle", () => {
       initialization.resolve(await defaultUpdateCheck.initialize());
       await (stopping ?? result.stop());
     }
+  });
+
+  it("adopts scheduled remote catalogs inside the live Gateway registry scope", async () => {
+    // Prepared rebuilds borrow unchanged plugin instances only from this scope's registry;
+    // without it every external plugin is captured again after startup.
+    const gatewayRegistry = createEmptyPluginRegistry();
+    let adoptedIn: unknown;
+    vi.mocked(applyRemoteModelCatalogUpdate).mockImplementation(async () => {
+      adoptedIn = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return "published";
+    });
+    let applyRemoteCatalogUpdate: ((signal: AbortSignal) => Promise<unknown>) | undefined;
+    await startUpdateCheck({
+      getPluginRegistry: () => gatewayRegistry,
+      createUpdateCheck: (params) => {
+        applyRemoteCatalogUpdate = params.applyRemoteCatalogUpdate;
+        return defaultUpdateCheck;
+      },
+    });
+    await waitForGatewayTestState(() => expect(applyRemoteCatalogUpdate).toBeDefined());
+
+    await expect(applyRemoteCatalogUpdate!(new AbortController().signal)).resolves.toBe(
+      "published",
+    );
+    expect(adoptedIn).toBe(gatewayRegistry);
   });
 });

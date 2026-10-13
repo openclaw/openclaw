@@ -12,7 +12,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  asOptionalObjectRecord,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,7 +35,7 @@ import {
   drainThreadBindingAccountOperations,
   drainThreadBindingMutations,
   shouldPersistAnyBindingState,
-  snapshotThreadBindingJson,
+  snapshotThreadBindingMetadata,
 } from "./thread-bindings.persistence.js";
 import { createThreadBindingSessionAdapter } from "./thread-bindings.session-adapter.js";
 import {
@@ -194,9 +193,8 @@ function createLoadedThreadBindingManager(
       }
       if (!rest) {
         try {
-          const cfg = resolveCurrentCfg();
           rest = createDiscordRestClient({
-            cfg,
+            cfg: resolveCurrentCfg(),
             accountId,
             token: resolveCurrentToken(),
           }).rest;
@@ -301,15 +299,13 @@ function createLoadedThreadBindingManager(
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => getBinding(threadId)?.record,
     getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
-    listBySessionKey: (targetSessionKey) => {
-      const ids = resolveBindingIdsForSession({
+    listBySessionKey: (targetSessionKey) =>
+      resolveBindingIdsForSession({
         targetSessionKey,
         accountId,
-      });
-      return ids
+      })
         .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
-        .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
-    },
+        .filter((entry): entry is ThreadBindingRecord => Boolean(entry)),
     listBindings: () =>
       [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
     touchThreadSync: (input) => {
@@ -355,9 +351,7 @@ function createLoadedThreadBindingManager(
     bindTarget: async (input) => {
       const bindParams = {
         ...input,
-        metadata: asOptionalObjectRecord(
-          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
-        ),
+        metadata: snapshotThreadBindingMetadata(input),
       };
       return runOwnedMutation(async () => {
         const assertCurrent = bindParams.assertCurrent;
@@ -613,6 +607,5 @@ function createLoadedThreadBindingManager(
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {
-  const normalized = normalizeAccountId(accountId);
-  return MANAGERS_BY_ACCOUNT_ID.get(normalized) ?? null;
+  return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
 }

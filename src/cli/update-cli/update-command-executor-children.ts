@@ -210,16 +210,12 @@ export function createChildOwner(params: {
               ].map((owner) => [owner.key, owner]),
             ).values(),
           ];
+          const candidateSpawnerKey =
+            candidateParent.key === slot?.parent.key ? slot.spawner.key : candidateParent.key;
           const candidateChildIndex =
             candidateParent.key === original.key
               ? 0
-              : parents.findIndex(
-                  (owner) =>
-                    owner.key ===
-                    (candidateParent.key === slot?.parent.key
-                      ? slot.spawner.key
-                      : candidateParent.key),
-                );
+              : parents.findIndex((owner) => owner.key === candidateSpawnerKey);
           const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent, slot)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(

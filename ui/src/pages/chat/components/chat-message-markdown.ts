@@ -104,13 +104,12 @@ export function resolveMessageActionDetails(
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
-  const markdown =
-    role === "assistant" || role === "user" || pendingInput ? visibleMarkdown : undefined;
+  const isConversationMessage = role === "assistant" || role === "user";
+  const markdown = isConversationMessage || pendingInput ? visibleMarkdown : undefined;
   const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);
   const replyText = onReply && !pendingInput ? truncateUtf16Safe(copyMarkdown, 500) : "";
   const sourceMessageId = persistedMessageEntryId(message);
-  const reactionMessageId =
-    (role === "user" || role === "assistant") && !pendingInput ? sourceMessageId : null;
+  const reactionMessageId = isConversationMessage && !pendingInput ? sourceMessageId : null;
   if (!copyMarkdown && !markdown && !replyText && !fullMessage && !reactionMessageId) {
     return null;
   }

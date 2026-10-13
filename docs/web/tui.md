@@ -94,6 +94,9 @@ The model picker opens immediately, showing a checking state if no models are kn
 In Gateway mode, it reuses the selected agent's last known list while refreshing in the
 background. Catalog changes update an open picker without clearing its search or
 moving its highlighted choice when that model is still present.
+It lists the current model and each provider's
+[recommended models](/concepts/recommended-models) first. Choose **All models (N)**
+to show the rest; typing a search always matches every model.
 
 ## Questions
 

@@ -475,24 +475,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
-    if (session.isChild && shouldHandleNavigationClick(event)) {
-      event.preventDefault();
-      this.clearSessionSelection();
-      this.selectSession(session.key);
+    if (
+      session.isChild
+        ? !shouldHandleNavigationClick(event)
+        : event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+    ) {
       return;
     }
-    if (session.isChild || event.defaultPrevented || event.button !== 0) {
-      return;
-    }
-    if (event.metaKey || event.ctrlKey) {
-      return;
-    }
-    if (event.shiftKey) {
+    if (!session.isChild && event.shiftKey) {
       event.preventDefault();
       this.extendSessionSelection(session.key);
       return;
     }
-    if (event.altKey) {
+    if (!session.isChild && event.altKey) {
       event.preventDefault();
       this.toggleSessionSelected(session.key);
       return;

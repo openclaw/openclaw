@@ -40,3 +40,8 @@ export {
 
 export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
+export {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
+export { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";

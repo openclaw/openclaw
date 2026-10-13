@@ -28,6 +28,7 @@ import {
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
 import { normalizeTelegramButtonStyle, resolveTelegramInlineButtons } from "./button-types.js";
+import { normalizeControlUiBasePath } from "./control-ui-base-path.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -47,18 +48,10 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type PendingMessage = {
-  chatId: string;
-  messageId: string;
-};
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
-type TelegramFinalDelivery = {
-  text: string;
-};
-
 type TelegramExecApprovalHandlerDeps = {
   sendTyping?: typeof sendTypingTelegram;
   sendMessage?: typeof sendMessageTelegram;
@@ -99,8 +92,9 @@ function buildPendingPayload(params: {
     const origin = resolveGatewayPublicOrigin(params.cfg);
     const reviewUrl =
       origin && params.cfg.gateway?.controlUi?.enabled !== false
-        ? `${origin}${normalizeTelegramControlUiBasePath(
-            params.cfg.gateway?.controlUi?.basePath,
+        ? `${origin}${normalizeControlUiBasePath(
+            params.cfg.gateway?.controlUi?.basePath?.trim() ?? "",
+            "one",
           )}/approve/${encodeURIComponent(params.request.id)}`
         : undefined;
     const lines = [
@@ -160,9 +154,9 @@ function buildPendingPayload(params: {
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
-  PendingMessage,
+  { chatId: string; messageId: string },
   never,
-  TelegramFinalDelivery
+  { text: string }
 >({
   eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
@@ -312,12 +306,3 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
 });
-
-function normalizeTelegramControlUiBasePath(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed || trimmed === "/") {
-    return "";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}

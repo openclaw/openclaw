@@ -57,12 +57,10 @@ class HoverMarqueeDirective extends AsyncDirective {
       marqueeFrame = undefined;
     }
     this.stop();
-    this.observer?.disconnect();
-    this.observer = undefined;
-    this.contentObserver?.disconnect();
-    this.contentObserver = undefined;
-    this.visibilityObserver?.disconnect();
-    this.visibilityObserver = undefined;
+    for (const key of ["observer", "contentObserver", "visibilityObserver"] as const) {
+      this[key]?.disconnect();
+      this[key] = undefined;
+    }
     this.visible = false;
     this.motion?.removeEventListener("change", this.schedule);
     for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {

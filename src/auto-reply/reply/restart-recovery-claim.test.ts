@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -16,9 +15,9 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as entryPatch from "../../config/sessions/session-entry-patch.js";
-import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
@@ -28,7 +27,10 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import {
+  isAgentRunStaleLifecycleError,
+  isRestartRecoveryClaimChangedError,
+} from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -618,64 +620,127 @@ describe("createReplyRestartRecoveryClaimController", () => {
     ]);
   });
 
-  it("preserves a foreign source claim that changes after acknowledged-input adoption preparation", async () => {
-    const fixture = await createAcknowledgedClaim();
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
-      agentId: fixture.scope.agentId,
-    }).path;
-    const foreign = new DatabaseSync(databasePath);
-    const patch = entryPatch.patchSessionEntryInWorker;
-    const intervened = vi.fn();
-    const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
-      if (
-        params.selection.kind !== "target" ||
-        params.selection.target.canonicalKey !== fixture.scope.sessionKey
-      ) {
-        return patch(params);
+  it.each([
+    { stage: "admission", change: "metadata" },
+    { stage: "admission", change: "source-claim" },
+    { stage: "cleanup", change: "metadata" },
+    { stage: "cleanup", change: "source-claim" },
+  ] as const)(
+    "checks foreign $change changes in the $stage writer without another preparation",
+    async ({ stage, change }) => {
+      const fixture = await createAcknowledgedClaim();
+      if (stage === "cleanup") {
+        await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
       }
-      return patch({
-        ...params,
-        async prepare(snapshot) {
-          const prepared = await params.prepare(snapshot);
-          assert(prepared);
-          foreign
-            .prepare(
-              `UPDATE session_nodes SET entry_json =
-               json_set(entry_json, '$.restartRecoveryDeliverySourceRunId', 'foreign-source')
-               WHERE session_key = ?`,
-            )
-            .run(fixture.scope.sessionKey);
-          intervened();
-          return prepared;
-        },
-      });
-    });
-    try {
-      await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toBeInstanceOf(
-        SqliteSessionMutationConflictError,
-      );
-      expect(intervened).toHaveBeenCalledOnce();
-      expect(
+      const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
+        agentId: fixture.scope.agentId,
+      }).path;
+      const foreign = new DatabaseSync(databasePath);
+      const patch = entryPatch.patchSessionEntryInWorker;
+      const prepare = vi.fn();
+      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+        if (
+          params.selection.kind !== "target" ||
+          params.selection.target.canonicalKey !== fixture.scope.sessionKey
+        ) {
+          return patch(params);
+        }
         foreign
           .prepare(
-            `SELECT status,
+            `UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?)
+           WHERE session_key = ?`,
+          )
+          .run(
+            change === "metadata" ? "$.model" : "$.restartRecoveryDeliverySourceRunId",
+            change === "metadata" ? "foreign-model" : "foreign-source",
+            fixture.scope.sessionKey,
+          );
+        return patch({
+          ...params,
+          prepare: (...args) => {
+            prepare();
+            return params.prepare(...args);
+          },
+        });
+      });
+      try {
+        const outcome = await (
+          stage === "cleanup"
+            ? fixture.controller.clear()
+            : fixture.controller.admitUserTurn(fixture.recorder)
+        ).catch((error: unknown) => error);
+        if (change === "metadata") {
+          expect(outcome).toBe(stage === "cleanup" ? undefined : "admitted");
+          expect(fixture.current().model).toBe("foreign-model");
+        } else if (stage === "admission") {
+          expect(isRestartRecoveryClaimChangedError(outcome)).toBe(true);
+        } else {
+          expect(outcome).toBeUndefined();
+        }
+        expect(spy).toHaveBeenCalledOnce();
+        expect(prepare).not.toHaveBeenCalled();
+        expect(
+          foreign
+            .prepare(
+              `SELECT status,
               json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
               json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId,
               json_extract(entry_json, '$.restartRecoveryDeliveryRequestFingerprint') AS fingerprint
              FROM session_nodes WHERE session_key = ?`,
-          )
-          .get(fixture.scope.sessionKey),
-      ).toEqual({
-        status: null,
-        runId: "recovery-run",
-        sourceRunId: "foreign-source",
-        fingerprint: "acknowledged-fingerprint",
+            )
+            .get(fixture.scope.sessionKey),
+        ).toEqual({
+          status: null,
+          runId: stage === "cleanup" && change === "metadata" ? null : "recovery-run",
+          sourceRunId:
+            change === "source-claim"
+              ? "foreign-source"
+              : stage === "cleanup"
+                ? null
+                : fixture.sourceTurnId,
+          fingerprint:
+            stage === "admission" && change === "source-claim" ? "acknowledged-fingerprint" : null,
+        });
+      } finally {
+        spy.mockRestore();
+        foreign.close();
+      }
+    },
+  );
+
+  it.each(["session", "lifecycle"] as const)(
+    "does not install a replacement %s after refused claim cleanup",
+    async (replacement) => {
+      const fixture = await createAcknowledgedClaim();
+      await fixture.controller.admitUserTurn(fixture.recorder);
+      const original = structuredClone(fixture.current());
+      const successor = {
+        ...original,
+        ...(replacement === "session" ? { sessionId: "successor-session" } : {}),
+        lifecycleRevision: "successor-generation",
+      };
+      const patch = entryPatch.patchSessionEntryInWorker;
+      let storedSuccessor: InternalSessionEntry | undefined;
+      const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+        // The released synchronous writer can replace the row after host admission.
+        replaceSessionEntrySync(fixture.scope, successor);
+        storedSuccessor = structuredClone(fixture.read());
+        return patch(params);
       });
-    } finally {
-      spy.mockRestore();
-      foreign.close();
-    }
-  });
+      try {
+        await fixture.controller.clear();
+        expect(spy).toHaveBeenCalledOnce();
+        expect(fixture.current()).toEqual(original);
+        expect(storedSuccessor).toMatchObject({
+          sessionId: successor.sessionId,
+          lifecycleRevision: successor.lifecycleRevision,
+        });
+        expect(fixture.read()).toEqual(storedSuccessor);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const storePath = path.join(tempDirs.make("openclaw-reply-admission-"), "sessions.json");

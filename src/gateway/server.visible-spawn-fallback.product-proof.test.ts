@@ -521,7 +521,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           const childRequests = provider.requests
             .slice(requestOffset)
             .filter((request) => request.child);
-          expect(terminal.status, JSON.stringify(provider.requests)).toBe(
+          expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
             scenario.backup ? "ok" : "error",
           );
           expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");

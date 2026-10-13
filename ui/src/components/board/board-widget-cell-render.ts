@@ -151,40 +151,33 @@ export function renderBoardDisabledPlugin(options: {
   `;
 }
 
-export function renderBoardWidgetError(error: unknown, onRetry?: () => void): TemplateResult {
-  const message = formatUiError(error);
+export function renderBoardWidgetError(
+  error: unknown,
+  options: { onRetry?: () => void; action?: boolean; inline?: boolean } = {},
+): TemplateResult {
   return html`
-    <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
-      <strong>${t("board.widget.errorTitle")}</strong>
-      <span>${t("board.widget.errorDetail")}</span>
+    <div
+      class=${`board-widget__error${options.action ? ` ${options.inline ? "board-widget__error--inline" : ""}` : ""}`}
+      role="alert"
+      data-test-id=${options.action ? "board-widget-action-error" : "board-widget-error"}
+    >
+      <strong
+        >${t(options.action ? "board.widget.actionErrorTitle" : "board.widget.errorTitle")}</strong
+      >
+      <span
+        >${t(options.action ? "board.widget.actionErrorDetail" : "board.widget.errorDetail")}</span
+      >
       <details>
         <summary>${t("board.widget.errorShow")}</summary>
-        <code>${message}</code>
+        <code>${options.action ? error : formatUiError(error)}</code>
       </details>
       ${
-        onRetry
-          ? html`<button class="btn btn--small" type="button" @click=${onRetry}>
+        options.onRetry
+          ? html`<button class="btn btn--small" type="button" @click=${options.onRetry}>
               ${t("board.widget.retry")}
             </button>`
           : nothing
       }
-    </div>
-  `;
-}
-
-export function renderBoardWidgetActionError(error: string, inline = false): TemplateResult {
-  return html`
-    <div
-      class=${`board-widget__error ${inline ? "board-widget__error--inline" : ""}`}
-      role="alert"
-      data-test-id="board-widget-action-error"
-    >
-      <strong>${t("board.widget.actionErrorTitle")}</strong>
-      <span>${t("board.widget.actionErrorDetail")}</span>
-      <details>
-        <summary>${t("board.widget.errorShow")}</summary>
-        <code>${error}</code>
-      </details>
     </div>
   `;
 }

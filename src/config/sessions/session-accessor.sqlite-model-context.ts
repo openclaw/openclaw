@@ -3,10 +3,8 @@ import { sql, type AliasableExpression } from "kysely";
 import {
   iterateSessionContextEntries,
   iterateSessionContextMessages,
-  projectSessionEntryMessage,
 } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
-  classifyToolUseResultPairing,
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
@@ -31,14 +29,26 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import {
+  assertSessionTranscriptContextAnchorInDatabase,
+  type TranscriptSourceAuthority,
+} from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  readWithCanonicalSessionAdmission,
+} from "./session-canonical-key.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
+import {
+  selectBoundedModelRequests,
+  type ContextEntry,
+  type ModelContextRequest,
+} from "./session-model-context-window.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -56,13 +66,7 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-type ContextEntry = SessionTreeEntry & { seq: number };
 export type { SessionModelContextLimits } from "./session-history-read.types.js";
-type ModelContextRequest = {
-  entry: ContextEntry;
-  omitCheckpoint: boolean;
-  toolResultOmission?: string;
-};
 type TranscriptContextSnapshot = {
   header: TranscriptEvent;
   entries: ContextEntry[];
@@ -76,49 +80,13 @@ type TranscriptContextSnapshot = {
 
 const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
 
-function assertContextAnchor(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
-  through: TranscriptEntryAnchor,
-): void {
-  if (
-    resolved.agentId !== through.agentId ||
-    resolved.sessionId !== through.sessionId ||
-    resolved.sessionKey !== through.sessionKey ||
-    database.path !== through.storePath
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Completed-turn anchor belongs to another transcript",
-    );
-  }
-  const current = readActiveTranscriptEntryAnchorInTransaction({
-    database,
-    resolved: { ...resolved, sessionKey: through.sessionKey },
-    entryId: through.entryId,
-  });
-  if (
-    !current ||
-    (["generation", "rawSeq", "effectiveParentId", "activeMessagePosition"] as const).some(
-      (field) => current[field] !== through[field],
-    )
-  ) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
-  }
-}
-
 /** Later appends are allowed; rewriting or removing the accepted turn is not. */
 export function validateSessionTranscriptContextAnchor(
   scope: SessionTranscriptReadScope,
   through: TranscriptEntryAnchor,
+  expectedAuthority?: TranscriptSourceAuthority,
 ): void {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => assertContextAnchor(database, resolved, through),
-    toDatabaseOptions(resolved),
-  );
-  if (!result.found) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript no longer exists");
-  }
+  validateDetachedSessionTranscriptContext(scope, { through, expectedAuthority });
 }
 
 /** Unadmitted context retains the prefix captured by its original read snapshot. */
@@ -126,17 +94,7 @@ export function validateSessionTranscriptContextVersion(
   scope: SessionTranscriptReadScope,
   version: SessionTranscriptContextVersion | undefined,
 ): void {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(database.db, () =>
-        validateContextVersion(database, resolved.sessionId, version, "prefix"),
-      ),
-    toDatabaseOptions(resolved),
-  );
-  if (!result.found && version !== undefined) {
-    throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
-  }
+  validateDetachedSessionTranscriptContext(scope, { version });
 }
 
 function validateContextVersion(
@@ -206,16 +164,42 @@ export function validateSessionTranscriptContextAdmission(
   if (!admission) {
     return;
   }
+  validateDetachedSessionTranscriptContext(scope, { admission });
+}
+
+type TranscriptContextValidation = {
+  version?: SessionTranscriptContextVersion;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  through?: TranscriptEntryAnchor;
+  expectedAuthority?: TranscriptSourceAuthority;
+};
+
+/** Released validators share admission; only multi-statement version reads need a snapshot. */
+function validateDetachedSessionTranscriptContext(
+  scope: SessionTranscriptReadScope,
+  validation: TranscriptContextValidation,
+): void {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = runWithSessionTranscriptReadFence(admission, () =>
-    withOpenClawAgentDatabaseReadOnly(
-      (database) => resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
-      toDatabaseOptions(resolved),
-    ),
-  );
-  if (!result.found || !result.value) {
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const validate = () => {
+      if (validation.expectedAuthority) {
+        assertCanonicalSqliteSessionKeysCurrent(database);
+      }
+      validateSessionTranscriptContextInDatabase(database, resolved, validation, "prefix");
+    };
+    return validation.through
+      ? readWithCanonicalSessionAdmission(database, validate)
+      : validation.admission
+        ? validate()
+        : runSqliteDeferredTransactionSync(database.db, validate);
+  }, toDatabaseOptions(resolved));
+  if (!result.found && (validation.through || validation.admission || validation.version)) {
     throw new SessionTranscriptReadFenceError(
-      "Current-turn transcript admission is no longer readable",
+      validation.admission
+        ? "Current-turn transcript admission is no longer readable"
+        : validation.through
+          ? "Completed-turn transcript no longer exists"
+          : "Session transcript changed during context read",
     );
   }
 }
@@ -224,11 +208,7 @@ export function validateSessionTranscriptContextAdmission(
 export function validateSessionTranscriptContextInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
-  validation: {
-    version?: SessionTranscriptContextVersion;
-    admission?: UserTurnTranscriptAdmissionReceipt;
-    through?: TranscriptEntryAnchor;
-  },
+  validation: TranscriptContextValidation,
   consistency: "exact" | "prefix" = "exact",
 ): void {
   const { version, admission, through } = validation;
@@ -246,147 +226,13 @@ export function validateSessionTranscriptContextInDatabase(
     validateContextVersion(database, resolved.sessionId, version, consistency);
   }
   if (through) {
-    assertContextAnchor(database, resolved, through);
-  }
-}
-
-/** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
-function selectBoundedModelRequests(
-  requests: ModelContextRequest[],
-  readSizes: TranscriptContextSnapshot["readModelEntrySizes"],
-  limits: SessionModelContextLimits,
-): ModelContextRequest[] {
-  const boundary = requests.find(
-    ({ entry }) => entry.type === "compaction" || entry.type === "reset",
-  );
-  const candidates = requests.filter((request) => request !== boundary);
-  const sizingCandidates = candidates.slice(-limits.maxEvents);
-  const sizes = readSizes(boundary ? [boundary, ...sizingCandidates] : sizingCandidates);
-  let bytes = boundary ? sizes.get(boundary.entry)! : 0;
-  let events = boundary ? 1 : 0;
-  if (bytes > limits.maxBytes || events > limits.maxEvents) {
-    throw new RangeError("Required session context boundary exceeds the model-context limit");
-  }
-  let cut = candidates.length;
-  for (const request of sizingCandidates.toReversed()) {
-    const size = sizes.get(request.entry)!;
-    if (bytes + size > limits.maxBytes || events + 1 > limits.maxEvents) {
-      break;
-    }
-    bytes += size;
-    events += 1;
-    cut -= 1;
-  }
-  if (cut === 0) {
-    return requests;
-  }
-  const messages = candidates.flatMap(({ entry }) => {
-    const message = entry.type === "message" ? entry.message : projectSessionEntryMessage(entry);
-    return message ? [message] : [];
-  });
-  const positions = new Map<AgentMessage, number>();
-  for (const [index, { entry }] of candidates.entries()) {
-    if (entry.type === "message") {
-      positions.set(entry.message, index);
-    }
-  }
-  const original = classifyToolUseResultPairing(messages);
-  const owners = new Map<AgentMessage, AgentMessage>();
-  // Occurrence ownership, including displaced results, forbids cuts through a tool frame.
-  // Frames are ordered by their assistant, so advancing the cut needs only one pass.
-  for (const frame of original.frames) {
-    const start = positions.get(frame.assistant)!;
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        owners.set(occurrence.sourceResult, frame.assistant);
-        const end = positions.get(occurrence.sourceResult)!;
-        if (start < cut && cut <= end) {
-          cut = end + 1;
-        }
-      }
-    }
-  }
-  let selected = candidates.slice(cut);
-  if (selected.length === 0 && limits.toolResultOverflow === "omit") {
-    // Retain the newest historical request and close its suffix over displaced results.
-    // The currently admitted user is supplied separately by native runtime callers.
-    let start = candidates.findLastIndex(
-      ({ entry }) => entry.type === "message" && entry.message.role === "user",
-    );
-    if (start < 0) {
-      start = candidates.length - 1;
-    }
-    for (const frame of original.frames.toReversed()) {
-      if (
-        frame.occurrences.some(
-          ({ sourceResult }) => sourceResult && positions.get(sourceResult)! >= start,
-        )
-      ) {
-        start = Math.min(start, positions.get(frame.assistant)!);
-      }
-    }
-    const required = candidates.slice(start);
-    if (required.length + (boundary ? 1 : 0) <= limits.maxEvents) {
-      const requiredSizes = readSizes(boundary ? [boundary, ...required] : required);
-      let requiredBytes = [...requiredSizes.values()].reduce((total, size) => total + size, 0);
-      const omissions = required.flatMap((request) => {
-        const { entry } = request;
-        if (entry.type !== "message" || entry.message.role !== "toolResult") {
-          return [];
-        }
-        const message = entry.message;
-        return [
-          {
-            ...request,
-            toolResultOmission:
-              `Tool result body omitted from this bounded context: ${JSON.stringify(message.toolName)} ` +
-              `(call ${JSON.stringify(message.toolCallId)}), original model-context event ${requiredSizes.get(entry)!} bytes. ` +
-              "The full result remains in the session transcript. Do not infer its outcome or repeat the operation from this notice.",
-          },
-        ];
-      });
-      const omittedSizes = readSizes(omissions);
-      const savings = (request: ModelContextRequest) =>
-        requiredSizes.get(request.entry)! - omittedSizes.get(request.entry)!;
-      const replacements = new Map<ContextEntry, ModelContextRequest>();
-      for (const omission of omissions.toSorted((a, b) => savings(b) - savings(a))) {
-        if (requiredBytes <= limits.maxBytes) {
-          break;
-        }
-        const saved = savings(omission);
-        if (saved > 0) {
-          replacements.set(omission.entry, omission);
-          requiredBytes -= saved;
-        }
-      }
-      if (requiredBytes <= limits.maxBytes) {
-        selected = required.map((request) => replacements.get(request.entry) ?? request);
-      }
-    }
-  }
-  if (selected.length === 0) {
-    throw new RangeError(
-      "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
+    assertSessionTranscriptContextAnchorInDatabase(
+      database,
+      resolved,
+      through,
+      validation.expectedAuthority,
     );
   }
-  const selectedMessages = selected.flatMap(({ entry }) =>
-    entry.type === "message" ? [entry.message] : [],
-  );
-  // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
-  const selectedOwners = new Map<AgentMessage, AgentMessage>();
-  for (const frame of classifyToolUseResultPairing(selectedMessages).frames) {
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        selectedOwners.set(occurrence.sourceResult, frame.assistant);
-      }
-    }
-  }
-  for (const message of selectedMessages) {
-    if (message.role === "toolResult" && owners.get(message) !== selectedOwners.get(message)) {
-      throw new RangeError("Session context limit would change tool-result ownership");
-    }
-  }
-  return boundary ? [boundary, ...selected] : selected;
 }
 
 function modelContextBatchSql(requests: readonly ModelContextRequest[]) {
@@ -541,7 +387,7 @@ function withTranscriptContextSnapshot<T>(
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
-            assertContextAnchor(database, resolved, through);
+            assertSessionTranscriptContextAnchorInDatabase(database, resolved, through);
           }
           const base = db
             .selectFrom("transcript_events")

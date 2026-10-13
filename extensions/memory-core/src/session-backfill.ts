@@ -8,7 +8,7 @@ import {
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -95,19 +95,13 @@ async function listSessionBackfillSources(params: {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
-  const forgottenSessionIds = new Set(
-    (await listMemorySessionTombstones({ agentId: params.agentId })).map(
-      (entry) => entry.sessionId,
-    ),
-  );
+  const forgottenSessionIds = await findForgottenMemorySessionIds({
+    agentId: params.agentId,
+    sessionIds: corpus.map((entry) => entry.sessionId),
+  });
   const candidates = corpus
-    .map(sessionIngestionSourceFromCorpus)
-    .filter(
-      (entry): entry is SessionIngestionSource =>
-        entry !== null &&
-        !entry.buildOptions.generatedByDreamingNarrative &&
-        !entry.buildOptions.generatedByCronRun,
-    );
+    .map((entry) => sessionIngestionSourceFromCorpus(entry, "backfill"))
+    .filter((entry) => entry !== null);
   const excludedReasons = sessionExclusionReasons(
     candidates,
     params.admissionPolicy,
@@ -202,15 +196,12 @@ async function collectSessionBackfillCandidates(params: {
 function mergeSessionBackfillFileProgress(params: {
   current: Record<string, SessionIngestionFileState>;
   scans: SessionBackfillScan[];
-  selectedDays: Array<{ candidates: SessionIngestionCandidate[] }>;
+  selectedHashes: ReadonlySet<string>;
 }): Record<string, SessionIngestionFileState> {
-  const selectedHashes = new Set(
-    params.selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
-  );
   const files = { ...params.current };
   for (const scan of params.scans) {
     const firstUnselected = scan.candidates.find(
-      (candidate) => !selectedHashes.has(candidate.hash),
+      (candidate) => !params.selectedHashes.has(candidate.hash),
     );
     const progressStops = [
       scan.scannedEndIndex,
@@ -523,7 +514,7 @@ async function executeSessionBackfillBatchCore(
       files: mergeSessionBackfillFileProgress({
         current: state.files,
         scans: collected.scans,
-        selectedDays,
+        selectedHashes,
       }),
       seenMessages: trimTrackedSessionScopes(nextSeenMessages),
     });

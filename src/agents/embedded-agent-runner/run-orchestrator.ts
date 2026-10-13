@@ -128,7 +128,7 @@ export function runEmbeddedAgent(
       prepared.runSessionTarget,
       {
         config: prepared.params.config,
-        assertCurrent: () => prepared.params.preparedRunAdmission?.assertSourceCurrent(),
+        assertCurrent: prepared.params.preparedRunAdmission?.assertSourceCurrent,
         signal: prepared.params.abortSignal,
       },
       () => runEmbeddedAgentForSession(prepared),

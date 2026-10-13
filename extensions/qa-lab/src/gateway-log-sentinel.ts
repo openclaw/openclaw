@@ -46,7 +46,7 @@ type GatewayLogSentinelScanOptions = {
   ignoreKinds?: readonly GatewayLogSentinelKind[];
 };
 
-type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
+type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text" | "qaImpact"> & {
   test: (line: string) => boolean;
 };
 
@@ -56,7 +56,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bbefore_(?:prompt_build|tool_call)\b/iu.test(line) &&
       /\b(?:crash(?:ed)?|exception|failed|failure|error)\b/iu.test(line),
@@ -66,7 +65,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "qa-harness-bug",
     owner: "plugin",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcontracts\.tools\b/iu.test(line) &&
       /\b(?:missing|invalid|registration|register|manifest|contract|schema|declare|error)\b/iu.test(
@@ -78,7 +76,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex app-server\b.*\btimed out\b|\btimed out\b.*\bcodex app-server\b/iu.test(line),
   },
@@ -87,7 +84,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "codex-runtime",
     productImpact: "P1",
-    qaImpact: "P0",
     test: (line) =>
       /\bcodex_app_server\b.*\b(?:stalled|no progress|progress stalled)\b|\b(?:stalled|no progress|progress stalled)\b.*\bcodex_app_server\b/iu.test(
         line,
@@ -98,7 +94,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "product-bug",
     owner: "openclaw-cron",
     productImpact: "P2",
-    qaImpact: "P0",
     test: (line) =>
       /\bcron\b/iu.test(line) &&
       (/\bmodel allowlist\b/iu.test(line) ||
@@ -110,7 +105,6 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     verdict: "environment-blocked",
     owner: "environment",
     productImpact: "P4",
-    qaImpact: "P0",
     test: (line) =>
       /\b(?:quota exceeded|insufficient_quota|subscription exhausted|no active subscription|billing hard limit|usage limit)\b/iu.test(
         line,
@@ -264,16 +258,13 @@ export function scanGatewayLogSentinels(
     if (!text) {
       continue;
     }
-    for (const rule of GATEWAY_LOG_SENTINEL_RULES) {
-      if (!rule.test(text)) {
+    for (const { test, ...finding } of GATEWAY_LOG_SENTINEL_RULES) {
+      if (!test(text)) {
         continue;
       }
       findings.push({
-        kind: rule.kind,
-        verdict: rule.verdict,
-        owner: rule.owner,
-        productImpact: rule.productImpact,
-        qaImpact: rule.qaImpact,
+        ...finding,
+        qaImpact: "P0",
         line: lineOffset + index + 1,
         text,
       });

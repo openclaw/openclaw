@@ -50,6 +50,25 @@ function selectProgressCardMetadata(
   );
 }
 
+function clearProgressCardInTransaction(
+  db: DatabaseSync,
+  sessionKey: string,
+  previous: StoredProgressCardMetadata,
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<ProgressCardDatabase>(db)
+      .updateTable("session_progress_cards")
+      .set({
+        markdown: null,
+        steps_json: null,
+        revision: previous.revision + 1,
+        updated_at: Date.now(),
+      })
+      .where("session_key", "=", sessionKey),
+  );
+}
+
 function rowToProgressCard(row: StoredProgressCardRow): ProgressCard | null {
   const steps = row.steps_json ? readStoredSteps(row.steps_json) : undefined;
   if (!row.markdown && !steps?.length) {
@@ -95,10 +114,19 @@ export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): P
 
 /** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
 export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
-  if (!tableExists(db, "session_progress_cards") || !selectProgressCardMetadata(db, sessionKey)) {
+  if (!tableExists(db, "session_progress_cards")) {
     return false;
   }
-  writeSessionProgressCard(db, sessionKey, {});
+  const previous = selectProgressCardMetadata(db, sessionKey);
+  if (!previous) {
+    return false;
+  }
+  if (db.isTransaction) {
+    clearProgressCardInTransaction(db, sessionKey, previous);
+  } else {
+    // Standalone callers must reread after write admission; the reset owner already holds it.
+    writeSessionProgressCard(db, sessionKey, {});
+  }
   return true;
 }
 
@@ -147,18 +175,7 @@ export function writePreparedSessionProgressCard(
         previous = selectProgressCardMetadata(db, sessionKey);
       }
       if (previous) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("session_progress_cards")
-            .set({
-              markdown: null,
-              steps_json: null,
-              revision: previous.revision + 1,
-              updated_at: Date.now(),
-            })
-            .where("session_key", "=", sessionKey),
-        );
+        clearProgressCardInTransaction(db, sessionKey, previous);
       }
       return { cleared: true };
     }

@@ -16,11 +16,13 @@ import {
   replaceTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayMetadataCloseFixture } from "../server-close.metadata.test-support.js";
 import {
@@ -130,14 +132,43 @@ describe("durable transcript mirror corrections", () => {
       await withFixture(async (fixture) => {
         const before = fixture.snapshot();
         const hostSql = observeHostDataSql();
+        const retirementEntered = createDeferred();
+        const releaseRetirement = createDeferred();
+        let following: Promise<void> | undefined;
+        const waitForWriter = () => {
+          following ??= runOpenClawAgentWriteAdmission(
+            {
+              agentId: fixture.scope.agentId,
+              env: fixture.scope.env,
+              path: fixture.scope.storePath,
+            },
+            () => {},
+          );
+          retirementEntered.resolve();
+          return Promise.race([following, releaseRetirement.promise]);
+        };
+        const close = vi
+          .spyOn(historyLane.pool, "closeResources")
+          .mockImplementation(waitForWriter);
+        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+        const correcting = fixture[kind]();
         try {
-          const result = await fixture[kind]();
+          const result = await Promise.race([
+            correcting,
+            retirementEntered.promise.then(() => {
+              throw new Error("Correction reader cleanup waits on its own queued writer");
+            }),
+          ]);
           expect(kind === "source" ? result : [result]).toMatchObject([{ messageId: "selected" }]);
           const executions = hostSql.calls
             .slice(1)
             .reduce((count, call) => count + call.mock.calls.length, 0);
           expect(hostSql.queries, `MAIN ${kind}: ${executions} SQL executions`).toEqual([]);
         } finally {
+          releaseRetirement.resolve();
+          await Promise.allSettled([correcting, following]);
+          close.mockRestore();
+          rotate.mockRestore();
           hostSql.restore();
         }
         const after = fixture.snapshot();

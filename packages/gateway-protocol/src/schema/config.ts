@@ -130,6 +130,24 @@ const UpdateImmutableInstallSchema = closedObject({
   currentSha: ImmutableGenerationSha,
   currentPath: NonEmptyString,
   activationEnabled: Type.Optional(Type.Boolean()),
+  releaseRetention: Type.Optional(
+    closedObject({
+      version: Type.Literal(1),
+      mode: Type.Literal("inspect"),
+      keepVerifiedGenerations: Type.Literal(3),
+      pins: Type.Array(closedObject({ sha: ImmutableGenerationSha, identity: NonEmptyString })),
+      generations: Type.Array(
+        closedObject({
+          sha: ImmutableGenerationSha,
+          path: NonEmptyString,
+          identity: NonEmptyString,
+          buildDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+          publishedRevision: Type.Integer({ minimum: 0 }),
+          verifiedRevision: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+        }),
+      ),
+    }),
+  ),
   activation: Type.Optional(
     closedObject({
       operationId: ImmutableOperationId,
@@ -149,6 +167,8 @@ const UpdateImmutableInstallSchema = closedObject({
       ]),
       previousSha: ImmutableGenerationSha,
       candidateSha: ImmutableGenerationSha,
+      failure: Type.Optional(NonEmptyString),
+      recoveryCommand: Type.Optional(NonEmptyString),
     }),
   ),
   lastActivation: Type.Optional(
@@ -157,6 +177,14 @@ const UpdateImmutableInstallSchema = closedObject({
       outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
       selectedSha: ImmutableGenerationSha,
       verifiedAtMs: Type.Integer({ minimum: 0 }),
+      gateway: Type.Optional(
+        closedObject({
+          pid: Type.Integer({ minimum: 1 }),
+          bootId: NonEmptyString,
+          version: NonEmptyString,
+          buildId: NonEmptyString,
+        }),
+      ),
     }),
   ),
   prepared: Type.Optional(

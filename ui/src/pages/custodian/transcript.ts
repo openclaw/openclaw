@@ -1,6 +1,5 @@
 import type {
   SystemAgentChatHistoryResult,
-  SystemAgentChatHistoryTurn,
   SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
@@ -271,9 +270,22 @@ export class CustodianTranscriptLoader {
   ): Promise<{ messages: CustodianMessage[]; nextMessageId: number } | null> {
     this.clearRecovery();
     const result = await this.read(client, epoch, isCurrent);
-    return result?.ok && isCurrent()
-      ? createCustodianTranscriptMessages(result.turns, firstMessageId)
-      : null;
+    if (!result?.ok || !isCurrent()) {
+      return null;
+    }
+    let nextMessageId = firstMessageId;
+    const messages = result.turns.map((turn) => ({
+      id: nextMessageId++,
+      role: turn.role,
+      text:
+        turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
+          ? t("custodian.sensitiveReply")
+          : turn.text,
+      at: turn.at,
+      question: null,
+      step: null,
+    }));
+    return { messages, nextMessageId };
   }
 }
 
@@ -284,36 +296,6 @@ export class CustodianTranscriptLoader {
  * same display text live sensitive replies use.
  */
 const SERVER_SENSITIVE_MASK = "<redacted secret>";
-
-function createCustodianTranscriptMessages(
-  turns: readonly SystemAgentChatHistoryTurn[],
-  firstMessageId: number,
-): { messages: CustodianMessage[]; nextMessageId: number } {
-  let nextMessageId = firstMessageId;
-  const messages = turns.map((turn) => ({
-    id: nextMessageId++,
-    role: turn.role,
-    text:
-      turn.role === "user" && turn.text === SERVER_SENSITIVE_MASK
-        ? t("custodian.sensitiveReply")
-        : turn.text,
-    at: turn.at,
-    question: null,
-    step: null,
-  }));
-  return { messages, nextMessageId };
-}
-
-function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterId: number | null) {
-  return message.id === boundaryAfterId
-    ? renderChatDivider({
-        kind: "divider",
-        key: "custodian-earlier",
-        label: t("custodian.earlier"),
-        timestamp: message.at,
-      })
-    : nothing;
-}
 
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
@@ -345,7 +327,16 @@ export function renderCustodianTranscriptEntry(params: {
           })
         : nothing
     }
-    ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
+    ${
+      params.message.id === params.boundaryAfterId
+        ? renderChatDivider({
+            kind: "divider",
+            key: "custodian-earlier",
+            label: t("custodian.earlier"),
+            timestamp: params.message.at,
+          })
+        : nothing
+    }
     ${
       params.showQuestion && question
         ? html`<div class="custodian__option-card">

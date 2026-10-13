@@ -205,26 +205,25 @@ export function renderAgentCron(params: {
         `,
       },
       html`
-        ${renderSettingsRow({
-          title: t("common.enabled"),
-          control: renderSettingsValue(
-            params.status
-              ? params.status.enabled
-                ? t("common.yes")
-                : t("common.no")
-              : t("common.na"),
-          ),
-        })}
-        ${renderSettingsRow({
-          title: t("agents.cronPanel.jobs"),
-          control: renderSettingsValue(params.scopedTotal ?? t("common.na")),
-        })}
-        ${renderSettingsRow({
-          title: t("agents.cronPanel.nextWake"),
-          control: renderSettingsValue(
-            formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
-          ),
-        })}
+        ${(
+          [
+            [
+              t("common.enabled"),
+              params.status
+                ? params.status.enabled
+                  ? t("common.yes")
+                  : t("common.no")
+                : t("common.na"),
+            ],
+            [t("agents.cronPanel.jobs"), params.scopedTotal ?? t("common.na")],
+            [
+              t("agents.cronPanel.nextWake"),
+              formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
+            ],
+          ] as const
+        ).map(([title, value]) =>
+          renderSettingsRow({ title, control: renderSettingsValue(value) }),
+        )}
       `,
     )}
     ${renderSettingsSection(

@@ -155,19 +155,7 @@
 }
 
 .cron-refresh--loading svg {
-  animation: cron-refresh-spin 0.9s linear infinite;
-}
-
-@keyframes cron-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cron-refresh--loading svg {
-    animation: none;
-  }
+  animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 .cron-filter-popover {
@@ -303,7 +291,7 @@
 }
 
 .cron-table__state--running svg {
-  animation: cron-state-spin 1s linear infinite;
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 .cron-table__state--error {
@@ -314,13 +302,8 @@
   color: var(--muted);
 }
 
-@keyframes cron-state-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
+  .cron-refresh--loading svg,
   .cron-table__state--running svg {
     animation: none;
   }

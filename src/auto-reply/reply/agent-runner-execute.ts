@@ -179,6 +179,7 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
       ...context,
+      replyOperation,
       pendingUserEntryId: preflightAdmission?.entryId,
       promptForEstimate: followupRun.prompt,
       sessionEntry: activeSessionEntry,

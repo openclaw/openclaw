@@ -425,7 +425,15 @@ export async function renderLoginGate(
   return gateway;
 }
 
-async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+export async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  if (lastError === null) {
+    // Auth failure can render the gate while startup still owns the connecting splash.
+    await page.waitForFunction(
+      () =>
+        document.querySelector<HTMLElement & { startupPending: boolean }>("openclaw-app")
+          ?.startupPending === false,
+    );
+  }
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
     const app = document.querySelector<

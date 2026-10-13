@@ -72,7 +72,7 @@ export function* selectAcpSessionRowsByKeys(
       registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
     } else if (
       cached.schema !== revision.schema ||
-      cached.dataVersion !== revision.dataVersion ||
+      cached.writeRevision !== revision.writeRevision ||
       cached.mutationRevision !== revision.mutationRevision
     ) {
       Object.assign(cached, revision);
@@ -92,7 +92,7 @@ export function* selectAcpSessionRowsByKeys(
     }
   }
   // Read the whole cohort on a miss: mixing retained and new rows would give
-  // callers a different view if a foreign commit occurs during this request.
+  // callers a different view if another writer commits during this request.
   for (let index = 0; index < keys.length; index += 500) {
     const cohort = keys.slice(index, index + 500);
     const rows =
@@ -105,7 +105,7 @@ export function* selectAcpSessionRowsByKeys(
               .selectAll()
               .where("session_key", "in", sqliteStringSet(cohort)),
           ).rows;
-    if (revision && cached) {
+    if (revision && cached && getSqliteReadOperationRevision(db) === revision) {
       if (cached.rows.size + cohort.length > MAX_RETAINED_ACP_SESSION_ROWS) {
         cached.rows.clear();
       }

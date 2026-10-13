@@ -40,12 +40,9 @@ vi.mock("openai", () => ({
               }
             },
           });
-          const iterable = createIterable();
-          return Object.assign(iterable, {
-            withResponse: async () => ({
-              data: createIterable(),
-              response: { status: 200, headers: new Headers({ "x-request-id": "req-parity" }) },
-            }),
+          return Object.assign(Promise.resolve(createIterable()), {
+            asResponse: async () =>
+              new Response(null, { status: 200, headers: { "x-request-id": "req-parity" } }),
           });
         },
       },

@@ -5,6 +5,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
+import { localWorkspacePublication } from "./local-workspace-publication.js";
 import {
   mutateLocalWorkspaceProjection,
   type LocalWorkspaceMutation,
@@ -32,10 +33,15 @@ export const localWorkspaceOperations = {
       ({ db }) => {
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases);
         assertWorktreeRegistryPredicates(db, input.predicates);
-        const row = mutateLocalWorkspaceProjection(db, input.id, input.mutation);
+        const { result: row, receipt } = localWorkspacePublication.capture(db, () =>
+          mutateLocalWorkspaceProjection(db, input.id, input.mutation),
+        );
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
-        deferSqliteWorkerCommitReceipt(db, input.receipt);
+        deferSqliteWorkerCommitReceipt(db, {
+          operationId: input.receipt,
+          receipt: localWorkspacePublication.bound(receipt),
+        });
         return row;
       },
       { database: open() },

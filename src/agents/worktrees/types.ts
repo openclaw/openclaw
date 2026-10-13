@@ -5,6 +5,7 @@ import type {
   WorktreesRemoveResult,
   WorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
@@ -89,6 +90,7 @@ export type WorktreeLeaseSet = {
 /** Explicit worker authority replaces the native guard, including predicate-only authority. */
 export type WorktreeWorkerAuthority = {
   leaseSet?: WorktreeLeaseSet;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
   predicates?: readonly WorktreeRegistryPredicate[];
 };
@@ -98,7 +100,7 @@ export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" |
 };
 
 type WorktreeSourceCurrent = {
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   workerAuthority?: Omit<WorktreeWorkerAuthority, "leaseSet">;
   /** Checkout custody for rollback within this callback, independent of caller/source freshness. */
   assertCheckoutCurrent?: () => void;

@@ -124,7 +124,7 @@ function makeRecoveryInput(
     }),
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory(),
-      assertActive: vi.fn(),
+      assertActive: vi.fn<() => void>(),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),

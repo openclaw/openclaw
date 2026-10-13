@@ -40,6 +40,7 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
@@ -164,7 +165,7 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           isFinalFallbackAttempt: params.isFinalFallbackAttempt,
           abortSignal: params.runAbortSignal,
-          trigger: turn.isHeartbeat ? "heartbeat" : "user",
+          trigger: resolveReplyRunTrigger(turn),
           inputProvenance: turn.followupRun.run.inputProvenance,
         },
         provider: params.cliExecutionProvider,

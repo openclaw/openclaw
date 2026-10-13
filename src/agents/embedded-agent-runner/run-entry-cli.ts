@@ -3,6 +3,7 @@ import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
@@ -32,7 +33,7 @@ export function withAdmittedCliCandidate(
   run: (candidate: {
     sessionEntry: SessionEntry | undefined;
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>;
-    assertSettlementCurrent: () => void;
+    assertSettlementCurrent: SessionSourceAssertion;
     settleResult: (settlement: CliCandidateSettlement) => Promise<EmbeddedAgentRunResult>;
   }) => Promise<EmbeddedAgentRunResult>,
 ): Promise<EmbeddedAgentRunResult> {

@@ -35,14 +35,14 @@ export function resolveHeartbeatSessionKey(
     agentId: resolvedAgentId,
     env,
   });
-  const mainSession = (suppressOriginatingContext = false) => ({
-    sessionKey: mainSessionKey,
+  const selectSession = (sessionKey = mainSessionKey, suppressOriginatingContext = false) => ({
+    sessionKey,
     storePath,
     suppressOriginatingContext,
   });
 
   if (scope === "global") {
-    return mainSession();
+    return selectSession();
   }
 
   const resolveCandidate = (requestKey: string) => {
@@ -69,37 +69,31 @@ export function resolveHeartbeatSessionKey(
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    return mainSession(true);
+    return selectSession(mainSessionKey, true);
   }
 
   const forcedCanonical = forced ? resolveCandidate(forced) : undefined;
   if (forcedCanonical) {
-    return {
-      sessionKey:
-        resolveMainScopedEventSessionKey({
-          cfg,
-          sessionKey: forcedCanonical,
-          agentId: resolvedAgentId,
-        }) ?? forcedCanonical,
-      storePath,
-      suppressOriginatingContext: false,
-    };
+    return selectSession(
+      resolveMainScopedEventSessionKey({
+        cfg,
+        sessionKey: forcedCanonical,
+        agentId: resolvedAgentId,
+      }) ?? forcedCanonical,
+    );
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return mainSession();
+    return selectSession();
   }
 
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return mainSession();
+    return selectSession();
   }
 
-  const canonical = resolveCandidate(trimmed);
-  return canonical
-    ? { sessionKey: canonical, storePath, suppressOriginatingContext: false }
-    : mainSession();
+  return selectSession(resolveCandidate(trimmed) || mainSessionKey);
 }
 
 /** The heartbeat's event queue session and its stored row. */
@@ -129,6 +123,13 @@ export async function resolveHeartbeatSession(
   };
 }
 
+function isHeartbeatSessionOf(sessionKey: string, baseSessionKey: string): boolean {
+  return (
+    sessionKey.startsWith(baseSessionKey) &&
+    /^(:heartbeat)+$/.test(sessionKey.slice(baseSessionKey.length))
+  );
+}
+
 function resolveIsolatedHeartbeatSessionKey(params: {
   agentId: string;
   sessionKey: string;
@@ -143,50 +144,33 @@ function resolveIsolatedHeartbeatSessionKey(params: {
       agentId: params.agentId,
       requestKey: "global:heartbeat",
     });
-    const suffix = params.sessionKey.slice(isolatedSessionKey.length);
     if (
       params.sessionKey === "global" ||
       (storedBaseSessionKey === "global" &&
         (params.sessionKey === isolatedSessionKey ||
-          (params.sessionKey.startsWith(isolatedSessionKey) && /^(:heartbeat)+$/.test(suffix))))
+          isHeartbeatSessionOf(params.sessionKey, isolatedSessionKey)))
     ) {
       return { isolatedSessionKey, isolatedBaseSessionKey: "global" };
     }
   }
-  if (storedBaseSessionKey) {
-    const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
-    if (
-      params.sessionKey.startsWith(storedBaseSessionKey) &&
-      suffix.length > 0 &&
-      /^(:heartbeat)+$/.test(suffix)
-    ) {
-      return {
-        isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
-        isolatedBaseSessionKey: storedBaseSessionKey,
-      };
-    }
-  }
-
   // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
   // The guard on configuredSessionKey ensures we do not strip a legitimate single
   // `:heartbeat` suffix that is part of the user-configured base key itself
   // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
   // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
   // must be treated as a new base rather than an existing isolated key.
-  const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
-  if (
-    params.sessionKey.startsWith(params.configuredSessionKey) &&
-    /^(:heartbeat)+$/.test(configuredSuffix) &&
+  let isolatedBaseSessionKey = params.sessionKey;
+  if (storedBaseSessionKey && isHeartbeatSessionOf(params.sessionKey, storedBaseSessionKey)) {
+    isolatedBaseSessionKey = storedBaseSessionKey;
+  } else if (
+    isHeartbeatSessionOf(params.sessionKey, params.configuredSessionKey) &&
     !params.configuredSessionKey.endsWith(":heartbeat")
   ) {
-    return {
-      isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
-      isolatedBaseSessionKey: params.configuredSessionKey,
-    };
+    isolatedBaseSessionKey = params.configuredSessionKey;
   }
   return {
-    isolatedSessionKey: `${params.sessionKey}:heartbeat`,
-    isolatedBaseSessionKey: params.sessionKey,
+    isolatedSessionKey: `${isolatedBaseSessionKey}:heartbeat`,
+    isolatedBaseSessionKey,
   };
 }
 
@@ -252,15 +236,9 @@ export function resolveStaleHeartbeatIsolatedSessionKey(params: {
   if (params.sessionKey === params.isolatedSessionKey) {
     return undefined;
   }
-  const suffix = params.sessionKey.slice(params.isolatedBaseSessionKey.length);
-  if (
-    params.sessionKey.startsWith(params.isolatedBaseSessionKey) &&
-    suffix.length > 0 &&
-    /^(:heartbeat)+$/.test(suffix)
-  ) {
-    return params.sessionKey;
-  }
-  return undefined;
+  return isHeartbeatSessionOf(params.sessionKey, params.isolatedBaseSessionKey)
+    ? params.sessionKey
+    : undefined;
 }
 
 export async function restoreHeartbeatUpdatedAt(params: {

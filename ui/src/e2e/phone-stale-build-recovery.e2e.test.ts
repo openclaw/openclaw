@@ -522,6 +522,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [actions]),
         );
         await actions.tap();
+        await page.getByRole("menuitem", { name: "Session settings", exact: true }).tap();
         const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignment.waitFor();
         await assignment.tap();

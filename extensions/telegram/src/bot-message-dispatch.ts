@@ -346,7 +346,7 @@ export const dispatchTelegramMessage = async (
   // ingress watchdog. Never enter the reply pipeline after that owner has
   // already fenced this attempt; the canonical spool row will retry it.
   if (isDispatchSuperseded()) {
-    status.finalizeInBackground({ outcome: "cancelled" }, "cancelled finalize");
+    status.finalizeInBackground("cancelled", "cancelled finalize");
     return { kind: "completed" };
   }
   if (status.controller && !isRoomEvent) {
@@ -381,7 +381,7 @@ export const dispatchTelegramMessage = async (
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done" }, "finalize");
+      status.finalizeInBackground("done", "finalize");
     }
     return { kind: "completed" };
   }
@@ -463,7 +463,7 @@ export const dispatchTelegramMessage = async (
       : null);
 
   if (status.controller && !hasVisibleResponse && !intentionalNoResponse) {
-    status.finalizeInBackground({ outcome: "error" }, "error finalize");
+    status.finalizeInBackground("error", "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -486,16 +486,13 @@ export const dispatchTelegramMessage = async (
   });
   if (status.controller) {
     status.finalizeInBackground(
-      {
-        outcome:
-          turn.agentRunFailed ||
-          turn.dispatchError != null ||
-          turn.previewLifecycle.finalFailed ||
-          (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
-          sentFallback
-            ? "error"
-            : "done",
-      },
+      turn.agentRunFailed ||
+        turn.dispatchError != null ||
+        turn.previewLifecycle.finalFailed ||
+        (turn.previewLifecycle.finalDelivered && !turn.previewLifecycle.finalSucceeded) ||
+        sentFallback
+        ? "error"
+        : "done",
       "finalize",
     );
   }

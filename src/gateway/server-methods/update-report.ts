@@ -222,18 +222,21 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         title: prepared.title,
       };
     } else {
-      const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
-        publicationMode,
-        hasCurrentAuthority: hasCurrentReportAuthority,
-        validateCurrentAttempt: async () => {
-          const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
-          if (currentInput?.attemptId !== params.attemptId) {
-            return false;
-          }
-          const currentPrepared = await prepareUpdateFailureReport(currentInput);
-          return currentPrepared.previewDigest === prepared.previewDigest;
-        },
-      });
+      // Accepted publication and cleanup settle even when the connection retires during transport.
+      const submitted = await context.trackExecution(() =>
+        submitUpdateFailureReport(prepared, params.previewDigest, {
+          publicationMode,
+          hasCurrentAuthority: hasCurrentReportAuthority,
+          validateCurrentAttempt: async () => {
+            const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
+            if (currentInput?.attemptId !== params.attemptId) {
+              return false;
+            }
+            const currentPrepared = await prepareUpdateFailureReport(currentInput);
+            return currentPrepared.previewDigest === prepared.previewDigest;
+          },
+        }),
+      );
       if (submitted.status === "stale") {
         respond(false, undefined, {
           code: "INVALID_REQUEST",

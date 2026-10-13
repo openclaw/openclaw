@@ -351,20 +351,17 @@ export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
 ): void {
-  for (const [providerId, provider] of modelProviders(cfg)) {
-    if (provider.api === "openai") {
-      provider.api = "openai-completions";
-      changes.push(
-        `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
-      );
+  const migrateApi = (owner: Record<string, unknown>, path: string) => {
+    if (owner.api === "openai") {
+      owner.api = "openai-completions";
+      changes.push(`Moved ${path}.api "openai" → "openai-completions".`);
     }
+  };
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    migrateApi(provider, path);
     for (const [index, model] of providerModels(provider)) {
-      if (model.api === "openai") {
-        model.api = "openai-completions";
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
-        );
-      }
+      migrateApi(model, `${path}.models[${index}]`);
     }
   }
 }

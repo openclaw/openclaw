@@ -422,7 +422,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
-  it("stages the app-local VC runtime only after the fresh CPU ZIP cannot start", async () => {
+  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mocks.execFile.mockImplementation(
@@ -433,6 +433,19 @@ describe("ensureLlamaServerInstalled", () => {
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
         calls.push({ command, args, timeout: options.timeout });
+        // Measured Metal initialization took 23 seconds even for an installed runtime.
+        if (options.timeout !== undefined && options.timeout < 23_000) {
+          callback(
+            Object.assign(new Error("version initialization timed out"), {
+              cmd: [command, ...args].join(" "),
+              killed: true,
+              signal: "SIGTERM" as const,
+            }),
+            "",
+            "",
+          );
+          return;
+        }
         void Promise.all(
           runtime.files.map((file) => fs.stat(path.join(path.dirname(command), file.target))),
         )
@@ -460,8 +473,8 @@ describe("ensureLlamaServerInstalled", () => {
     ).toEqual([
       { published: false, args: ["--version"], timeout: 120_000 },
       { published: false, args: ["--version"], timeout: 120_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
-      { published: true, args: ["--version"], timeout: 15_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
+      { published: true, args: ["--version"], timeout: 120_000 },
     ]);
     expect(await fs.readFile(command, "utf8")).toBe("server");
     for (const file of runtime.files) {
@@ -659,7 +672,7 @@ describe("ensureLlamaServerInstalled", () => {
         expect(commandCalls).toEqual([
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
-          { args: ["--version"], timeout: 15_000 },
+          { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);
       } else {

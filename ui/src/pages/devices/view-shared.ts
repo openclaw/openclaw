@@ -1,12 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { deviceIcons } from "../../components/icons-devices.ts";
 import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
 
 type NodeTargetOption = {
@@ -158,5 +159,18 @@ export function renderDeviceTile(icon: TemplateResult) {
     <div class="device-entry__tile" aria-hidden="true">
       <span class="device-entry__tile-icon">${icon}</span>
     </div>
+  `;
+}
+
+export function renderDeviceIdentityFacts(id: string, remoteIp?: string) {
+  return html`
+    <dt class="settings-row__desc">${t("devices.inventory.deviceIdLabel")}</dt>
+    <dd class="settings-row__value settings-row__value--mono" title=${id}>${id}</dd>
+    ${
+      remoteIp
+        ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
+            <dd class="settings-row__value settings-row__value--mono">${remoteIp}</dd>`
+        : nothing
+    }
   `;
 }

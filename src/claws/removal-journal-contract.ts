@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentDeletionSessionStoreSafetyInput } from "../agents/agent-delete-session-store-safety.worker-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import type { AgentDeletionJournalTransport } from "../state/agent-deletion-journal-transport.js";
@@ -87,6 +88,7 @@ export type ClawRemovalJournalWorkerInput = {
   nonce: string;
   request: ClawRemovalJournalRequest;
   config: OpenClawConfig;
+  sessionStoreSafety: AgentDeletionSessionStoreSafetyInput | null;
 };
 
 export type ClawRemovalJournalGateway = (

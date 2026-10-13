@@ -166,40 +166,26 @@ export class PlivoProvider implements VoiceCallProvider {
     let providerResponseBody: string;
 
     // Special flows that exist only to return Plivo XML (no events).
-    if (flow === "xml-speak") {
-      const pending = callId ? this.pendingSpeakByCallId.get(callId) : undefined;
+    if (flow === "xml-speak" || flow === "xml-listen") {
+      const speaks = flow === "xml-speak";
+      const pendingSpeak = speaks && callId ? this.pendingSpeakByCallId.get(callId) : undefined;
+      const pendingListen = !speaks && callId ? this.pendingListenByCallId.get(callId) : undefined;
+      const language = speaks ? pendingSpeak?.locale : pendingListen?.language;
       if (callId) {
-        this.pendingSpeakByCallId.delete(callId);
+        (speaks ? this.pendingSpeakByCallId : this.pendingListenByCallId).delete(callId);
       }
-
       const actionUrl =
-        pending?.listenAfterPlayback && callId ? this.buildActionUrl(ctx, callId) : null;
-      providerResponseBody = pending
-        ? actionUrl
-          ? PlivoProvider.xmlGetInputSpeech({
-              text: pending.text,
-              language: pending.locale,
-              actionUrl,
-            })
-          : PlivoProvider.xmlKeepAlive(
-              `  <Speak language="${escapeXml(pending.locale || "en-US")}">${escapeXml(pending.text)}</Speak>\n`,
-            )
-        : PlivoProvider.xmlKeepAlive();
-    } else if (flow === "xml-listen") {
-      const pending = callId ? this.pendingListenByCallId.get(callId) : undefined;
-      if (callId) {
-        this.pendingListenByCallId.delete(callId);
-      }
-
-      const actionUrl = this.buildActionUrl(ctx, callId);
-
+        !speaks || (pendingSpeak?.listenAfterPlayback && callId)
+          ? this.buildActionUrl(ctx, callId)
+          : null;
       providerResponseBody =
         actionUrl && callId
-          ? PlivoProvider.xmlGetInputSpeech({
-              actionUrl,
-              language: pending?.language,
-            })
-          : PlivoProvider.xmlKeepAlive();
+          ? PlivoProvider.xmlGetInputSpeech({ text: pendingSpeak?.text, language, actionUrl })
+          : pendingSpeak
+            ? PlivoProvider.xmlKeepAlive(
+                `  <Speak language="${escapeXml(language || "en-US")}">${escapeXml(pendingSpeak.text)}</Speak>\n`,
+              )
+            : PlivoProvider.xmlKeepAlive();
     } else {
       const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
       event = this.normalizeEvent(parsed, callId, dedupeKey);

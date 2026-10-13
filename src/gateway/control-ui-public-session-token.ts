@@ -101,6 +101,18 @@ function derivePublicSessionTokenKey(identity: DeviceIdentity): Buffer {
   }
 }
 
+/** Validate the exact encoded claims before a publication grant becomes durable. */
+export function encodePublicSessionShareLocator(locator: PublicSessionShareLocator): Buffer {
+  if (!isValidLocator(locator) || !hasExactKeys(locator, PUBLIC_SESSION_LOCATOR_KEYS)) {
+    throw new Error("invalid public session locator");
+  }
+  const plaintext = Buffer.from(JSON.stringify({ v: 1, ...locator }), "utf8");
+  if (plaintext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
+    throw new Error("public session locator exceeds the maximum length");
+  }
+  return plaintext;
+}
+
 /** Creates a domain-separated opaque-locator codec from one durable Gateway identity. */
 function createPublicSessionShareTokenCodec(
   identity: DeviceIdentity,
@@ -108,13 +120,7 @@ function createPublicSessionShareTokenCodec(
   const key = derivePublicSessionTokenKey(identity);
   return {
     mint(locator) {
-      if (!isValidLocator(locator) || !hasExactKeys(locator, PUBLIC_SESSION_LOCATOR_KEYS)) {
-        throw new Error("invalid public session locator");
-      }
-      const plaintext = Buffer.from(JSON.stringify({ v: 1, ...locator }), "utf8");
-      if (plaintext.byteLength > PUBLIC_SESSION_TOKEN_MAX_PLAINTEXT_BYTES) {
-        throw new Error("public session locator exceeds the maximum length");
-      }
+      const plaintext = encodePublicSessionShareLocator(locator);
       const nonce = randomBytes(PUBLIC_SESSION_TOKEN_NONCE_BYTES);
       const cipher = createCipheriv(PUBLIC_SESSION_TOKEN_CIPHER, key, nonce);
       cipher.setAAD(PUBLIC_SESSION_TOKEN_AAD);

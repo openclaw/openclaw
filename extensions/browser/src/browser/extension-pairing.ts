@@ -61,35 +61,26 @@ export async function buildBrowserExtensionPairing(params: {
   const relayPort = profile?.cdpPort ?? resolved.extensionRelayDefaultPort;
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
-  if (gateway) {
-    const relayUrl = buildGatewayExtensionRelayUrl(gateway);
-    relayUrl.searchParams.set("gateway", gateway);
-    return {
-      pairingString: `${relayUrl.toString()}#${token}`,
-      relayPort,
-      topology: "direct-remote",
-    };
-  }
-
   const configuredRemote =
-    params.cfg.gateway?.mode === "remote" ? params.cfg.gateway.remote?.url?.trim() : "";
-  if (!configuredRemote && params.cfg.gateway?.tls?.enabled === true) {
+    !gateway && params.cfg.gateway?.mode === "remote" ? params.cfg.gateway.remote?.url?.trim() : "";
+  if (!gateway && !configuredRemote && params.cfg.gateway?.tls?.enabled === true) {
     throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
   }
-  const gatewayHint = configuredRemote || `ws://127.0.0.1:${resolveGatewayPort(params.cfg)}`;
+  const gatewayHint =
+    gateway || configuredRemote || `ws://127.0.0.1:${resolveGatewayPort(params.cfg)}`;
   // Native local bootstrap needs the Gateway to wake Browser control. Manual
   // local pairing and browser nodes target an already-running host relay.
   const relayUrl =
-    !configuredRemote && params.localTransport === "gateway"
+    gateway || (!configuredRemote && params.localTransport === "gateway")
       ? buildGatewayExtensionRelayUrl(gatewayHint)
       : new URL(`ws://127.0.0.1:${relayPort}/extension`);
-  if (params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
+  if (!gateway && params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
     relayUrl.searchParams.set("profile", params.profile);
   }
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,
     relayPort,
-    topology: configuredRemote ? "browser-node" : "local",
+    topology: gateway ? "direct-remote" : configuredRemote ? "browser-node" : "local",
   };
 }

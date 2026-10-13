@@ -78,7 +78,7 @@ describe("system prompt series", () => {
     const result = prepareSessionSystemPrompt({
       state: getEmbeddedSessionPromptState(id),
       routeKey: route,
-      systemPrompt: `${prefix}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`,
+      systemPrompt: prefix.trimEnd(),
       entries,
     });
     result.commit();
@@ -112,6 +112,33 @@ describe("system prompt series", () => {
     expect(project(base).update?.content).toContain("## Added\n(removed)");
   });
 
+  it("keeps both prompt digests stable across disposed turns with skill, memory, and date changes", async () => {
+    const entries: SessionEntry[] = [];
+    let first: string | undefined;
+    sessionIds.add("system-series");
+    for (let turn = 0; turn < 30; turn++) {
+      using lease = retainEmbeddedSessionPromptState("system-series");
+      const prompt = `## Skills\nskill-${turn}\n## Project Context\nmemory-${turn}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-${turn}`;
+      const prepared = prepareSessionSystemPrompt({
+        state: lease.state,
+        routeKey,
+        systemPrompt: prompt,
+        entries,
+      });
+      first ??= prepared.systemPrompt;
+      expect(prepared.systemPrompt).toBe(first);
+      if (turn > 0) {
+        expect(prepared.restart).toBe(false);
+        expect(prepared.update?.content).toContain(`skill-${turn}`);
+        expect(prepared.update?.content).toContain(`memory-${turn}`);
+        expect(prepared.update?.content).toContain(`day-${turn}`);
+        expect(prepared.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+      }
+      prepared.commit();
+      await persist(entries);
+    }
+  });
+
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
     const next = project("Second.\n## File\nChanged.\n## File\nTwo.");
@@ -126,6 +153,31 @@ describe("system prompt series", () => {
     expect(project("Second.").update?.content.match(/## File\n\(removed\)/g)).toEqual([
       "## File\n(removed)",
     ]);
+  });
+
+  it("checkpoints permission-only changes across restored turns without repeating them", async () => {
+    const entries: SessionEntry[] = [];
+    const first = project(base);
+    await persist(entries);
+    const notice = "## Permission change\nThe workspace is now read-only.";
+    const withNotice = `${base.trimEnd()}\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`;
+    for (const prompt of [withNotice, base, withNotice]) {
+      clearEmbeddedSessionPromptStates(["system-series"]);
+      const prepared = project(prompt, entries);
+      expect(prepared.systemPrompt).toBe(first.systemPrompt);
+      expect(prepared.update?.content).toBe(
+        prompt === base
+          ? undefined
+          : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${notice}`,
+      );
+      const checkpoints = entries.length;
+      await persist(entries);
+      expect(entries).toHaveLength(checkpoints + 1);
+      clearEmbeddedSessionPromptStates(["system-series"]);
+      expect(project(prompt, entries).update).toBeUndefined();
+      await persist(entries);
+      expect(entries).toHaveLength(checkpoints + 1);
+    }
   });
 
   it("retries an unpersisted update after cancellation or a failed checkpoint write", async () => {
@@ -182,12 +234,12 @@ describe("system prompt series", () => {
 
     beginSessionSystemPrompt({ state, routeKey, enabled: true, entries });
     const restored = project(base, entries);
-    expect(restored.restart).toBe(true);
-    expect(restored.systemPrompt).toBe(`${base.trimEnd()}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`);
-    expect(restored.update).toBeUndefined();
+    expect(restored.restart).toBe(false);
+    expect(restored.systemPrompt).toBe(base.trimEnd());
+    expect(restored.update?.content).toContain("## Changed\nOld.");
     await persist(entries);
     expect(entries.at(-1)).toMatchObject({
-      data: { restart: true, renderedPrefix: base.trimEnd() },
+      data: { restart: false, renderedPrefix: base.trimEnd() },
     });
   });
 
@@ -268,9 +320,7 @@ describe("system prompt series", () => {
       };
       const prepared = prepareSessionSystemPrompt(input);
       expect(prepared.restart).toBe(true);
-      expect(prepared.systemPrompt).toBe(
-        `${changed.trimEnd()}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`,
-      );
+      expect(prepared.systemPrompt).toBe(`${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`);
       expect(prepared.update).toMatchObject({
         content: notice,
         details: { kind: "prompt-update", turnScoped: false },
@@ -295,7 +345,7 @@ describe("system prompt series", () => {
   });
 
   it.each([false, true])(
-    "restores the pinned series only on a matching effective hash (changed=%s)",
+    "restores the pinned series and delivers intervening changes (changed=%s)",
     async (mismatch) => {
       const entries: SessionEntry[] = [];
       const first = project(base);
@@ -306,8 +356,12 @@ describe("system prompt series", () => {
       expect(entries).toHaveLength(2);
       clearEmbeddedSessionPromptStates(["system-series"]);
       const resumed = project(mismatch ? base : changed, entries);
-      expect(resumed.restart).toBe(mismatch);
-      expect(resumed.update).toBeUndefined();
+      expect(resumed.restart).toBe(false);
+      if (mismatch) {
+        expect(resumed.update?.content).toContain("## Changed\nOld.");
+      } else {
+        expect(resumed.update).toBeUndefined();
+      }
       expect(resumed.systemPrompt).toBe(first.systemPrompt);
       if (!mismatch) {
         await persist(entries);

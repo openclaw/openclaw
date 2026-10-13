@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../../lib/sqlite-transcript-payload.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const retained = "published update keeps π \0 雪";
 const event = JSON.stringify({
@@ -80,6 +81,18 @@ export function seedPublishedDriverSessionSources(state) {
   }
 }
 
+function readTranscript(database, id) {
+  const rows = database
+    .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
+      FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
+    .all(id);
+  return rows.map((row) => ({
+    rowid: row.rowid,
+    seq: row.seq,
+    event: readSqliteTranscriptPayload(row),
+  }));
+}
+
 function inspectImportedSession(database, agentId) {
   const entry = database
     .prepare("SELECT current_session_id FROM session_nodes WHERE session_key=?")
@@ -89,15 +102,7 @@ function inspectImportedSession(database, agentId) {
     bootstrapSessionId,
     "Published Doctor did not import the session",
   );
-  const rows = database
-    .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
-      FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
-    .all(bootstrapSessionId);
-  const transcript = rows.map((row) => ({
-    rowid: row.rowid,
-    seq: row.seq,
-    event: readSqliteTranscriptPayload(row),
-  }));
+  const transcript = readTranscript(database, bootstrapSessionId);
   assert.equal(transcript.length, 1, "Published Doctor did not import the transcript");
   assert.deepEqual(JSON.parse(transcript[0].event), bootstrapHeader);
   return { sessionId: entry.current_session_id, transcript };
@@ -161,10 +166,8 @@ export function seedPublishedDriverLegacySqlite(state) {
 
 /** Independent SQLite reads preserve the baseline/candidate storage contract. */
 export function inspectPublishedDriverSqlite(state, expectedMode) {
-  const observations = [];
-  for (const target of publishedDriverSqliteTargets(state)) {
-    const database = new DatabaseSync(target.path, { readOnly: true });
-    try {
+  return publishedDriverSqliteTargets(state).map((target) =>
+    readDatabase(target.path, (database) => {
       const mode = database.prepare("PRAGMA auto_vacuum").get().auto_vacuum;
       assert.equal(mode, expectedMode, `${target.path} reclamation mode`);
       assert.equal(database.prepare("PRAGMA integrity_check").get().integrity_check, "ok");
@@ -214,15 +217,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
             session_id: sessionId,
           },
         ]);
-        const rows = database
-          .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
-          FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
-          .all(sessionId);
-        transcript = rows.map((row) => ({
-          rowid: row.rowid,
-          seq: row.seq,
-          event: readSqliteTranscriptPayload(row),
-        }));
+        transcript = readTranscript(database, sessionId);
         assert.deepEqual(transcript, [
           { rowid: 40, seq: 0, event: reclamationHeader },
           { rowid: 41, seq: 7, event },
@@ -260,7 +255,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           "Transcript FTS rows and row-map identities differ",
         );
       }
-      observations.push({
+      return {
         observedAt: new Date().toISOString(),
         path: target.path,
         role: target.role,
@@ -299,12 +294,9 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           : undefined,
         integrity: "ok",
         foreignKeyFailures: [],
-      });
-    } finally {
-      database.close();
-    }
-  }
-  return observations;
+      };
+    }),
+  );
 }
 
 export function assertPublishedDriverReclaimed(before, after) {

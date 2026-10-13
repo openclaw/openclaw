@@ -9,6 +9,7 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -214,21 +215,17 @@ it.each(["resolve", "deny"] as const)(
       },
     });
     let transactions = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transactions += 1;
-            if (transactions === 1) {
-              connection.abort();
-            }
-          } else if (request.stage === "commit" && transactions === 2) {
-            invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transactions += 1;
+        if (transactions === 1) {
+          connection.abort();
+        }
+      } else if (request.stage === "commit" && transactions === 2) {
+        invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
+      }
+      return admit(request, grant);
+    });
     resultDelivery.wrapRefusal = true;
     expect(await invocation.invoke()).toMatchObject({ ok: false });
     expect(transactions).toBe(2);

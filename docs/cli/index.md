@@ -101,6 +101,10 @@ scripts can report the in-flight run. Failure messages are sanitized. Human-read
 diagnostics may also be written to stderr, so scripts should parse stdout and still
 check the exit status.
 
+Onboarding and setup failures retain `phase` and the top-level `message` beside
+the envelope. Use `error.message` for the shared failure description and `phase`
+for onboarding-specific recovery.
+
 ## Color palette
 
 OpenClaw uses a lobster palette for CLI output:

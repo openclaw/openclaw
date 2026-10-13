@@ -226,13 +226,14 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
 
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
   it.each([
-    ["stable", false, "2026.7.33", undefined],
-    ["stable", true, "2026.7.33", "2026.7.33"],
-    ["beta", false, "2026.8.1-beta.3", "beta"],
-    ["extended-stable", false, "2026.7.33", "2026.7.33"],
+    ["stable", false, "2026.7.33", undefined, false],
+    ["stable", false, "2026.7.33", "2026.7.33", true],
+    ["stable", true, "2026.7.33", "2026.7.33", false],
+    ["beta", false, "2026.8.1-beta.3", "beta", false],
+    ["extended-stable", false, "2026.7.33", "2026.7.33", false],
   ] as const)(
-    "resolves declared ClawHub defaults on %s (bound: %s, core: %s)",
-    (updateChannel, versionBoundToCore, coreVersion, selector) => {
+    "resolves ClawHub defaults: channel=%s, bound=%s, core=%s, selector=%s, preferCore=%s",
+    (updateChannel, versionBoundToCore, coreVersion, selector, preferCoreVersion) => {
       for (const spec of ["clawhub:@openclaw/discord", "clawhub:@openclaw/discord@latest"]) {
         const installSpec = selector ? `clawhub:@openclaw/discord@${selector}` : spec;
         expect(
@@ -242,11 +243,14 @@ describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
             officialPackageName: "@openclaw/discord",
             coreVersion,
             versionBoundToCore,
+            preferCoreVersion,
           }),
         ).toEqual({
           installSpec,
           recordSpec: spec,
-          ...(updateChannel === "beta" ? { fallbackSpec: spec, fallbackLabel: installSpec } : {}),
+          ...(updateChannel === "beta" || (updateChannel === "stable" && preferCoreVersion)
+            ? { fallbackSpec: spec, fallbackLabel: installSpec }
+            : {}),
         });
       }
     },
@@ -270,15 +274,18 @@ describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
     },
   );
 
-  it("does not rewrite ClawHub on extended-stable", () => {
-    expect(
-      resolveClawHubInstallSpecsForUpdateChannel({
-        spec: "clawhub:@openclaw/discord",
-        updateChannel: "extended-stable",
-      }),
-    ).toEqual({
-      installSpec: "clawhub:@openclaw/discord",
-      recordSpec: "clawhub:@openclaw/discord",
-    });
-  });
+  it.each(["stable", "extended-stable"] as const)(
+    "does not rewrite non-official ClawHub on %s",
+    (updateChannel) => {
+      expect(
+        resolveClawHubInstallSpecsForUpdateChannel({
+          spec: "clawhub:@openclaw/discord",
+          updateChannel,
+        }),
+      ).toEqual({
+        installSpec: "clawhub:@openclaw/discord",
+        recordSpec: "clawhub:@openclaw/discord",
+      });
+    },
+  );
 });

@@ -185,14 +185,11 @@ describe("Codex registration settlement", () => {
     expect(state.rows.size).toBe(0);
   });
 
-  it.for(["deleted", "retained"])("joins delayed cleanup, leaving a %s fact", async (mode) => {
+  it("joins delayed cleanup, retaining the fact when deletion fails", async () => {
     const deletion = createDeferred<void>();
-    state.delete.mockImplementation(async (key) => {
+    state.delete.mockImplementation(async () => {
       await deletion.promise;
-      if (mode === "retained") {
-        throw new Error("database unavailable");
-      }
-      state.rows.delete(key);
+      throw new Error("database unavailable");
     });
     const spawned = child();
     const { registered } = await startRegistration(spawned);
@@ -207,7 +204,7 @@ describe("Codex registration settlement", () => {
     expect(state.rows.size).toBe(1);
     deletion.resolve();
     await closing;
-    expect(state.rows.size).toBe(mode === "retained" ? 1 : 0);
+    expect(state.rows.size).toBe(1);
   });
 
   it.for(["revoked", "commit failure"])(

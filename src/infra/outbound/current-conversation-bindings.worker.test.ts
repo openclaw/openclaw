@@ -17,10 +17,15 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { requireNodeSqlite } from "../node-sqlite.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../sqlite-worker-contract.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import { createAccountScopedConversationBindingManager } from "./account-scoped-conversation-bindings.js";
 import { resolveBoundDeliveryDestination } from "./bound-delivery-router.js";
 import {
+  bindCurrentConversationRecordAsync,
+  listCurrentConversationBindingRecordsBySessionsAsync,
+  removeCurrentConversationBindingsAsync,
   inspectCurrentConversationBindingRecordAsync,
   readCurrentConversationBindingSelectionAsync,
   readGenericCurrentConversationBindingSelectionAsync,
@@ -29,6 +34,7 @@ import {
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
 import { updateCurrentConversationBindingRecordInDatabase } from "./current-conversation-bindings.kernel.js";
+import { currentConversationBindingPublication } from "./current-conversation-bindings.publication.js";
 import { conversationBindingOperations } from "./current-conversation-bindings.worker.js";
 import { expectedCurrentSessionBinding } from "./session-binding-native-selection.js";
 import {
@@ -39,6 +45,10 @@ import {
   type SessionBindingAdapter,
 } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
+
+type CurrentConversationBindingPublication = Parameters<
+  Parameters<typeof currentConversationBindingPublication.subscribe>[0]
+>[0];
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -270,16 +280,12 @@ it.each(["transaction", "commit"] as const)(
       const row = db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?");
       const before = row.get(current.bindingId);
       let active = true;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              active = false;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          active = false;
+        }
+        admit(request, grant);
+      });
       await expect(
         touchCurrentConversationBindingRecordAsync(
           { conversation: current.conversation, bindingId: current.bindingId, at: 99 },
@@ -389,21 +395,17 @@ it.each([
           const before = query.get(bound.bindingId);
           expect(before).toBeDefined();
           let retirements = 0;
-          const createAdmission = admission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (admit, attachment) =>
-              createAdmission((request, grant) => {
-                if (request.stage === stage) {
-                  retirements += 1;
-                  if (manager) {
-                    manager.stop();
-                  } else {
-                    setActivePluginRegistry(createTestRegistry([]));
-                  }
-                }
-                admit(request, grant);
-              }, attachment),
-          );
+          probe.admission(admission, (request, grant, admit) => {
+            if (request.stage === stage) {
+              retirements += 1;
+              if (manager) {
+                manager.stop();
+              } else {
+                setActivePluginRegistry(createTestRegistry([]));
+              }
+            }
+            admit(request, grant);
+          });
           await expect(
             resolveBoundDeliveryDestination({
               targetSessionKey: bound.targetSessionKey,
@@ -464,6 +466,9 @@ it.each(["replaced", "removed", "expired", "malformed"] as const)(
               open: () => database,
               write: (operation, options) =>
                 runOpenClawStateWriteTransaction(operation, { database, env }, options),
+              writeAdmitted: () => {
+                throw new Error("Conversation bindings retain their custom admission");
+              },
               stateOptions: () => {
                 // This existing context callback runs after prefetch and before BEGIN.
                 expect(database.db.isTransaction).toBe(false);
@@ -593,16 +598,12 @@ it.each(["transaction", "commit"] as const)(
         targetKind: "session",
       });
       let active = true;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              active = false;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          active = false;
+        }
+        admit(request, grant);
+      });
       await expect(
         service.bind({
           conversation,
@@ -660,3 +661,167 @@ it.each(["bind", "unbind"] as const)(
     });
   },
 );
+
+it("delivers committed worker bind, touch and batch-expiry facts before their replies", async () => {
+  await withOpenClawTestState({ label: "binding-worker-receipts" }, async () => {
+    const original = record("receipt-worker");
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
+      publications.push(publication),
+    );
+    try {
+      const bound = await bindCurrentConversationRecordAsync({ record: original });
+      expect(bound).toMatchObject(original);
+      expect(publications).toHaveLength(1);
+      expect([...publications[0]!.receipt.facts.values()]).toEqual([
+        { kind: "postimage", value: bound },
+      ]);
+      const touched = await touchCurrentConversationBindingRecordAsync({
+        conversation: original.conversation,
+        bindingId: original.bindingId,
+        at: 50,
+      });
+      expect(touched?.metadata?.lastActivityAt).toBe(50);
+      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([
+        { kind: "postimage", value: touched },
+      ]);
+      const expired = ["expired-one", "expired-two"].map((id) =>
+        Object.assign(record(id), { expiresAt: 1 }),
+      );
+      for (const value of expired) {
+        updateCurrentConversationBindingRecord(value.conversation, () => value);
+      }
+      publications.length = 0;
+      expect(
+        await listCurrentConversationBindingRecordsBySessionsAsync(
+          [original.targetSessionKey],
+          original.conversation,
+        ),
+      ).toEqual([[touched]]);
+      expect(publications).toHaveLength(1);
+      expect([...publications[0]!.receipt.facts.values()]).toEqual([
+        { kind: "absent" },
+        { kind: "absent" },
+      ]);
+      expect(publications[0]!.sessionKeys).toEqual([original.targetSessionKey]);
+      expect(
+        await removeCurrentConversationBindingsAsync({ conversation: original.conversation }),
+      ).toEqual([touched]);
+      expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+it("cannot restore a newer native deletion when a committed worker receipt arrives late", async () => {
+  await withOpenClawTestState({ label: "binding-late-receipt" }, async () => {
+    const original = record("late-receipt");
+    updateCurrentConversationBindingRecord(original.conversation, () => original);
+    const observe = admission.observeSqliteWorkerCommittedFacts;
+    vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+      (owner, listener) => {
+        observe(owner, (receipt) => {
+          updateCurrentConversationBindingRecord(original.conversation, () => null);
+          listener(receipt);
+        });
+      },
+    );
+    const publications: CurrentConversationBindingPublication[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribe((publication) =>
+      publications.push(publication),
+    );
+    try {
+      await touchCurrentConversationBindingRecordAsync({
+        conversation: original.conversation,
+        bindingId: original.bindingId,
+        at: 20,
+      });
+      expect(await inspectCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+      expect(publications).toHaveLength(2);
+      expect([...publications[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+      expect([...publications[1]!.receipt.facts.values()]).toEqual([{ kind: "unknown" }]);
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+it("retires binding coverage after unknown native settlement", async () => {
+  await withOpenClawTestState({ label: "binding-unknown-settlement" }, async () => {
+    const original = record("unknown-settlement");
+    const nativeOutcomes: string[] = [];
+    const outcomes: string[] = [];
+    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((...args) => {
+      const owner = createAdmission(...args);
+      const finish = owner.finish.bind(owner);
+      owner.finish = () => {
+        finish();
+        const settled = owner.settlement;
+        if (settled?.committed && settled.kind === "completed") {
+          nativeOutcomes.push(settled.kind);
+          // Preserve the real commit receipt while simulating an uncertain terminal observation.
+          vi.spyOn(owner, "settlement", "get").mockReturnValue({ ...settled, kind: "unknown" });
+        }
+      };
+      return owner;
+    });
+    const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
+      if ("kind" in change && change.kind === "settled") {
+        outcomes.push(change.outcome ?? "missing");
+      }
+    });
+    try {
+      await bindCurrentConversationRecordAsync({ record: original });
+      expect(await inspectCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
+        original,
+      );
+      expect(nativeOutcomes).toEqual(["completed"]);
+      expect(outcomes.at(-1)).toBe("unknown");
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+it("commits oversized expiry batches and retires binding coverage before replying", async () => {
+  await withOpenClawTestState({ label: "binding-large-expiry-receipt" }, async () => {
+    // Short record IDs keep only the real conversation keys responsible for receipt overflow.
+    const suffix = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 16);
+    for (let index = 0; index < 17; index++) {
+      const expired = record(`${index}:${suffix}`);
+      expired.bindingId = `expired-${index}`;
+      expired.expiresAt = 1;
+      updateCurrentConversationBindingRecord(expired.conversation, () => expired);
+    }
+    const { db } = openOpenClawStateDatabase();
+    expect(db.prepare("SELECT count(*) AS count FROM current_conversation_bindings").get()).toEqual(
+      { count: 17 },
+    );
+    const events: string[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
+      if ("kind" in change) {
+        events.push(change.kind);
+      }
+    });
+    try {
+      const outcome = await listCurrentConversationBindingRecordsBySessionsAsync(
+        ["agent:main:current"],
+        { channel: "fixture", accountId: "default" },
+      ).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      events.push("reply");
+      expect(
+        db.prepare("SELECT count(*) AS count FROM current_conversation_bindings").get(),
+      ).toEqual({ count: 0 });
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.value).toEqual([[]]);
+      expect(events).toEqual(["pending", "unknown", "settled", "reply"]);
+    } finally {
+      unsubscribe();
+    }
+  });
+});

@@ -21,9 +21,9 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
+import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
-import { admitQueuedMessageForSession } from "../pages/chat/chat-queue.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";

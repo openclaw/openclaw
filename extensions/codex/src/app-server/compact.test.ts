@@ -183,7 +183,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result).toMatchObject({
       ok: false,
       compacted: false,
-      reason: expect.stringContaining("Codex session generation is no longer current"),
+      reason: expect.stringContaining("Codex session execution policy changed"),
     });
     expect(bindingStore.read(current)).toEqual(binding);
   });

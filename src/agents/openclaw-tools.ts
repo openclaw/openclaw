@@ -24,6 +24,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
@@ -140,15 +141,20 @@ export async function createOpenClawToolsWithPreparation(
   const webSearchConfigured =
     captured.webSearchEnabled === false || captured.config?.tools?.web?.search?.enabled === false
       ? undefined
-      : await prepareWebSearchConfiguration({
-          config: captured.config,
-          agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
-          authStore: captured.authProfileStore,
-          ...(captured.authProfileStoreSource !== undefined
-            ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
-            : {}),
-          runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
-        });
+      : await prepareWebSearchConfiguration(
+          {
+            config: captured.config,
+            agentDir: captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
+            authStore: captured.authProfileStore,
+            ...(captured.authProfileStoreSource !== undefined
+              ? { resolveAuthProfileStoreSource: () => captured.authProfileStoreSource === true }
+              : {}),
+            runtimeWebSearch: getActiveRuntimeWebToolsMetadataFromState()?.search,
+          },
+          shared.reader
+            ? (agentDir) => hasAnyAuthProfileStoreSourceAsync(agentDir, shared.reader)
+            : undefined,
+        );
   shared.assertCurrent();
   captured.assertInvocationCurrent?.();
   return createOpenClawTools(captured, delegated, webSearchConfigured);

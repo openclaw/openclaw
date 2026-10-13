@@ -11,10 +11,7 @@ import {
   isRetryableUnadoptedChatClaim,
   normalizeMainSessionRecoveryRunFences,
 } from "../../config/sessions/restart-recovery-state.js";
-import {
-  applySessionEntryReplacements,
-  listSessionEntriesReadOnly,
-} from "../../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
@@ -30,6 +27,7 @@ import {
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   hasCompletedMainSessionRecoveryOutcome,
@@ -150,6 +148,10 @@ export async function markRestartAbortedMainSessions(params: {
 
   const storeTargets = new Map<string, RestartRecoveryStoreTarget>();
   const addStoreTarget = (target: RestartRecoveryStoreTarget) => {
+    // Volatile admissions belong to this process and cannot survive its restart.
+    if (resolveExplicitIncognitoAgentSqliteTarget(target.storePath, target)) {
+      return;
+    }
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     });
@@ -181,7 +183,7 @@ export async function markRestartAbortedMainSessions(params: {
     const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = listSessionEntriesReadOnly({ ...target, projection: "list", clone: false })
+    const sessionKeys = (await readSessionEntrySummariesInWorker(target))
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(

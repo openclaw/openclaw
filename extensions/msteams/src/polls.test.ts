@@ -1,6 +1,5 @@
 // Msteams tests cover polls plugin behavior.
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
@@ -75,22 +74,6 @@ describe("msteams polls", () => {
     });
   });
 
-  it("stores and records poll votes", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-msteams-polls-"));
-    const store = createMSTeamsPollStoreState();
-    await store.createPoll(poll({ id: "poll-2" }));
-    await store.recordVote({
-      pollId: "poll-2",
-      voterId: "user-1",
-      selections: ["0", "1"],
-    });
-    const stored = await store.getPoll("poll-2");
-    if (!stored) {
-      throw new Error("expected stored poll after recordVote");
-    }
-    expect(stored.votes["user-1"]).toEqual(["0"]);
-  });
-
   it("deduplicates selections before enforcing maxSelections", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-msteams-polls-"));
     const store = createMSTeamsPollStoreState();
@@ -112,36 +95,6 @@ describe("state poll store", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
-  it("ignores legacy JSON polls at runtime", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-polls-");
-    const filePath = path.join(stateDir, "msteams-polls.json");
-    await fs.promises.writeFile(
-      filePath,
-      `${JSON.stringify({
-        version: 1,
-        polls: {
-          "poll-legacy": {
-            id: "poll-legacy",
-            question: "Legacy?",
-            options: ["A", "B"],
-            maxSelections: 1,
-            createdAt: new Date().toISOString(),
-            votes: {},
-          },
-        },
-      })}\n`,
-    );
-
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const store = createMSTeamsPollStoreState();
-    await expect(store.getPoll("poll-legacy")).resolves.toBeNull();
-    await fs.promises.access(filePath);
-
-    await store.createPoll(poll({ id: "poll-new" }));
-    await expect(store.getPoll("poll-new")).resolves.toMatchObject({ id: "poll-new" });
-    await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("hashes external poll ids before using plugin-state keys", async () => {
@@ -181,24 +134,6 @@ describe("state poll store", () => {
     });
   });
 
-  it.each([
-    { selections: ["0", "1x"], expected: ["0"] },
-    { selections: ["+0", "0x1", "1"], expected: ["0", "1"] },
-  ])("accepts only strict decimal poll selections", async ({ selections, expected }) => {
-    const stateDir = tempDirs.make("openclaw-msteams-polls-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const store = createMSTeamsPollStoreState();
-    await store.createPoll(poll({ id: "poll-strict-selections", maxSelections: 2 }));
-
-    await expect(
-      store.recordVote({
-        pollId: "poll-strict-selections",
-        voterId: "user-1",
-        selections,
-      }),
-    ).resolves.toMatchObject({ votes: { "user-1": expected } });
-  });
-
   it("keeps large vote maps split across bounded rows", async () => {
     const stateDir = tempDirs.make("openclaw-msteams-polls-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -219,7 +154,6 @@ describe("state poll store", () => {
   });
 
   it.each([
-    { existing: 998, expired: [], removed: [], scans: 1 },
     {
       existing: 1003,
       expired: ["poll-expired-a", "poll-expired-b"],

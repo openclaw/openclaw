@@ -50,10 +50,6 @@ export function beginOAuthRefreshObservation(params: {
       const existing = refresh.targets.get(key);
       const target = existing?.current ? existing : createRefreshTarget();
       refresh.targets.set(key, target);
-      return () => {
-        target.current = false;
-        target.retired.resolve();
-      };
     },
     beginSettlement: () => {
       refresh.settling = true;

@@ -26,6 +26,8 @@ import {
 } from "../../state/openclaw-agent-goal-operations-schema.js";
 import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
+  SessionGoalManagementInput,
+  SessionGoalManagementCommit,
   SessionGoalOperation,
   SessionGoalOperationLookup,
   SessionGoalOperationResult,
@@ -47,7 +49,14 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  captureIncognitoSessionOperation,
+  publishIncognitoSessionEntry,
+} from "./session-incognito-binding.js";
+import {
+  acceptSessionSourceValidation,
   composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
 import { mergeSessionEntry, type SessionEntry, type SessionGoal } from "./types.js";
@@ -59,14 +68,6 @@ const validateReceipt = lazyCompile<SessionGoalOperationResult>(SessionsGoalMuta
 const OPERATION_VALIDITY_MS = 24 * 60 * 60 * 1000;
 const OPERATION_FUTURE_SKEW_MS = 5 * 60 * 1000;
 const MAX_SESSION_RECEIPTS = 4096;
-
-export type SessionGoalManagementInput = {
-  sessionKey: string;
-  expectedSessionId: string;
-  operation: Exclude<SessionGoalOperation, { action: "start" }> & {
-    action: "edit" | "pause" | "block" | "complete" | "clear";
-  };
-};
 
 export { SessionGoalOperationError } from "./goals-operations.types.js";
 
@@ -298,6 +299,79 @@ export async function mutateSessionGoal(
       assertCurrent?: SessionSourceAssertion;
     },
 ): Promise<SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry }> {
+  const incognito = captureIncognitoSessionOperation(options);
+  if (incognito) {
+    const { actor, admissionSignal } = incognito;
+    const input = structuredClone({
+      sessionKey: resolveSqliteScope({ ...options, agentId: actor.agentId, storePath: actor.path })
+        .sessionKey,
+      expectedSessionId: options.expectedSessionId,
+      operation: options.operation,
+    });
+    return actor.sessions.withSharedState(async () => {
+      const source = await prepareSessionSourceAuthority(options.assertCurrent);
+      try {
+        if (
+          source.nativeSource ||
+          source.hasOpaqueCheck ||
+          source.checks.some(
+            ({ predicate }) =>
+              predicate.source.path !== actor.path ||
+              predicate.source.agentId !== actor.agentId ||
+              predicate.source.databaseIdentity !== actor.identity.incarnation,
+          )
+        ) {
+          throw new Error(
+            "Incognito Goal mutations require source authority prepared for their actor",
+          );
+        }
+        const authority = {
+          assertCurrent() {
+            incognito.authority.assertCurrent();
+            (source.assertPreparedCurrent ?? source.assertCurrent)();
+          },
+        };
+        admissionSignal?.throwIfAborted();
+        const committed = await actor.sessions.transcript(
+          authority,
+          {
+            type: "session.goal.mutate",
+            input: {
+              ...input,
+              sessionId: input.expectedSessionId,
+              fence: {},
+              sources: source.checks.map(({ predicate }) => predicate),
+            },
+          },
+          undefined,
+          undefined,
+          (result) => {
+            if ("refusedOwnerSource" in result) {
+              return;
+            }
+            const { previous, sessionEntry } = result;
+            if (sessionEntry) {
+              publishIncognitoSessionEntry(actor, input.sessionKey, previous, sessionEntry);
+            }
+          },
+          undefined,
+          (_refused, validation) => {
+            acceptSessionSourceValidation(source, validation);
+            authority.assertCurrent();
+          },
+        );
+        if ("refusedOwnerSource" in committed) {
+          const refused = committed.refusedOwnerSource;
+          source.checks[refused.index]?.refuse(refused.facts);
+          throw new Error("Goal source refusal omitted its prepared assertion");
+        }
+        const { previous: _previous, ...result } = committed;
+        return result;
+      } finally {
+        await releaseSessionSourceAuthorities([source]);
+      }
+    });
+  }
   const resolved = captureLifecycleDatabaseScope(resolveSqliteScope(options));
   const databaseOptions = toDatabaseOptions(resolved);
   const input = structuredClone({
@@ -355,7 +429,7 @@ export async function mutateSessionGoal(
 export function mutateSessionGoalInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionGoalManagementInput,
-): SessionTranscriptTurnMutationResult & { sessionEntry?: SessionEntry; previous?: SessionEntry } {
+): SessionGoalManagementCommit {
   const fresh = readSessionEntryRow(database, input.sessionKey);
   const replay = readSessionGoalOperationReceipt(
     database.db,

@@ -1,14 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   CLAW_PACKAGE_LIFECYCLE_LEASE_SCOPE,
   clawPackageLifecycleLeaseKey,
 } from "../state/claw-package-lifecycle-lease-key.js";
-import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
+import {
+  withClawPackageDeletionLease,
+  withClawPackageLifecycleLease,
+} from "../state/claw-package-lifecycle-lease.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { acquireOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -100,6 +106,53 @@ function persisted(ref: PersistedClawPackageRef) {
 }
 
 describe("Claw provenance worker writes", () => {
+  it("retains both package and deletion owners and rejects a replaced deletion journal", async () => {
+    const ref = packageFixture();
+    await withAgentDeletion(
+      ref.agentId,
+      async (begin) => {
+        const deletion = await begin({
+          agentId: ref.agentId,
+          workspaceDir: "/synthetic/workspace",
+          agentDir: `/synthetic/agents/${ref.agentId}`,
+          sessionsDir: `/synthetic/agents/${ref.agentId}/sessions`,
+          deleteFiles: false,
+        });
+        await withClawPackageDeletionLease(
+          { kind: "plugin", source: ref.source, ref: ref.ref },
+          deletion,
+          async (lease) => {
+            const sql = observeMainThreadSql();
+            sql.calibrate();
+            let pending: PersistedClawPackageRef;
+            try {
+              pending = await claimClawPackageRefStatus(ref, "pending", {
+                ...options,
+                lease,
+                deletion,
+                nowMs: 2,
+              });
+              sql.expectIdle();
+            } finally {
+              sql.restore();
+            }
+            beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" }, options);
+            await expect(
+              claimClawPackageRefStatus(pending, "failed", {
+                ...options,
+                lease,
+                deletion,
+                nowMs: 3,
+              }),
+            ).rejects.toThrow("no longer owns");
+          },
+        );
+      },
+      options,
+    );
+    expect(persisted(ref)).toEqual([{ ...ref, status: "pending", updatedAtMs: 2 }]);
+  });
+
   it.each(["plugin", "skill"] as const)(
     "commits %s status without executing SQLite on the caller thread",
     async (kind) => {
@@ -171,15 +224,11 @@ describe("Claw provenance worker writes", () => {
     "rolls back a package claim when caller authority retires at %s admission",
     async (stage) => {
       const ref = packageFixture();
-      const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       let retired = false;
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          originalAdmission((request, grant) => {
-            retired ||= request.stage === stage;
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, admit) => {
+        retired ||= request.stage === stage;
+        admit(request, grant);
+      });
       const error = new Error("Package removal owner retired.");
       await withPackageLease(ref, async (lease) => {
         await expect(

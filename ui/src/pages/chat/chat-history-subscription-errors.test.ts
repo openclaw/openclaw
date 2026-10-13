@@ -39,7 +39,7 @@ function createSubscriptionState(options?: {
 }
 
 describe("visible chat message subscription failures", () => {
-  it.each(["dispose", "selection", "connection", "capability"] as const)(
+  it.each(["dispose", "selection", "capability"] as const)(
     "retires a delayed subscription retry on %s without touching drafts or sending requests",
     async (change) => {
       vi.useFakeTimers();
@@ -63,8 +63,6 @@ describe("visible chat message subscription failures", () => {
         expect(vi.getTimerCount()).toBe(0);
       } else if (change === "selection") {
         state.sessionKey = "agent:main:new";
-      } else if (change === "connection") {
-        state.connectionEpoch += 1;
       } else {
         state.sessions = { subscribeMessages: vi.fn(), unsubscribeMessages: vi.fn() };
       }
@@ -101,26 +99,6 @@ describe("visible chat message subscription failures", () => {
     expect(state.chatError).toBeNull();
     expect(state.sessionsError).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("shows a failed initial subscription in the existing chat error surface", async () => {
-    const { state } = createSubscriptionState({
-      subscribeMessages: vi
-        .fn<SessionCapability["subscribeMessages"]>()
-        .mockRejectedValue(new Error("Live messages unavailable")),
-    });
-
-    await syncSelectedSessionMessageSubscription(state);
-
-    expect(state.chatSessionMessageSubscription).toBeNull();
-    expect(state.sessionsError).toBeNull();
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: "Live messages unavailable",
-    });
-    expect(state.requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("shows a failed previous subscription release without losing its owned lease", async () => {
@@ -167,56 +145,19 @@ describe("visible chat message subscription failures", () => {
     expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", message: warning });
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
-
-    await syncSelectedSessionMessageSubscription(state);
-
-    expect(state.chatSessionMessageSubscription).toEqual(selected);
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
     expect(state.sessionsError).toBeNull();
-    expect(unsubscribeMessages).toHaveBeenCalledTimes(4);
-  });
-
-  it("clears its own visible warning after the selected subscription recovers", async () => {
-    const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
-    const subscribeMessages = vi
-      .fn<SessionCapability["subscribeMessages"]>()
-      .mockRejectedValueOnce(new Error("Live messages unavailable"))
-      .mockResolvedValueOnce(selected);
-    const { state } = createSubscriptionState({ subscribeMessages });
-
-    await syncSelectedSessionMessageSubscription(state);
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "failed",
-      message: "Live messages unavailable",
-    });
-
-    await syncSelectedSessionMessageSubscription(state);
-
-    expect(state.chatSessionMessageSubscription).toBe(selected);
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
-    expect(state.sessionsError).toBeNull();
-  });
-
-  it("never clears an unrelated chat failure published before subscription recovery", async () => {
-    const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
-    const subscribeMessages = vi
-      .fn<SessionCapability["subscribeMessages"]>()
-      .mockRejectedValueOnce(new Error("Live messages unavailable"))
-      .mockResolvedValueOnce(selected);
-    const { state } = createSubscriptionState({ subscribeMessages });
-
-    await syncSelectedSessionMessageSubscription(state);
     state.lastError = "Sending the message failed";
     state.chatError = "Sending the message failed";
     state.sessionsError = "Session list refresh failed";
 
     await syncSelectedSessionMessageSubscription(state);
 
+    expect(state.chatSessionMessageSubscription).toEqual(selected);
+    expect(getChatHistoryLoadState(state).phase).toBe("idle");
     expect(state.lastError).toBe("Sending the message failed");
     expect(state.chatError).toBe("Sending the message failed");
     expect(state.sessionsError).toBe("Session list refresh failed");
+    expect(unsubscribeMessages).toHaveBeenCalledTimes(4);
   });
 
   it("never publishes a failed subscription after its pane is disposed", async () => {

@@ -831,13 +831,11 @@ export function createAuthProfileStoreRuntime(
       return runAuthProfileWriteTransaction(
         params.agentDir,
         (database, owner) => {
-          const latestStore = loadPersistedAuthProfileStore(params.agentDir, {
-            ...resolvePersistedLoadOptions(params.options),
-            database,
-          }) ?? {
-            version: AUTH_STORE_VERSION,
-            profiles: {},
-          };
+          const latestStore =
+            loadPersistedAuthProfileStore(params.agentDir, {
+              ...resolvePersistedLoadOptions(params.options),
+              database,
+            }) ?? createEmptyAuthProfileStore();
           let changed = false;
           for (const [profileId, credential] of changedProfiles) {
             const previous = params.store.profiles[profileId];
@@ -1325,15 +1323,17 @@ export function createAuthProfileStoreRuntime(
         ...loadPersistedAuthProfileState(persistenceAgentDir, database),
       },
     };
-    const localStore = buildLocalAuthProfileStoreForSave({
-      getScopedSharedAuthStore,
-      listRuntimeExternalAuthProfiles,
-      owner,
-      store,
-      agentDir: persistenceAgentDir,
-      options,
-      persistedStores,
-    });
+    const buildLocalStore = (saveOptions = options) =>
+      buildLocalAuthProfileStoreForSave({
+        getScopedSharedAuthStore,
+        listRuntimeExternalAuthProfiles,
+        owner,
+        store,
+        agentDir: persistenceAgentDir,
+        options: saveOptions,
+        persistedStores,
+      });
+    const localStore = buildLocalStore();
     const existingRaw = readPersistedAuthProfileStoreRaw(persistenceAgentDir, database);
     const { payload, statePayload, publication } = prepareAuthProfileStoreMutation({
       existingRaw,
@@ -1348,15 +1348,7 @@ export function createAuthProfileStoreRuntime(
     const { credentialsChanged, stateChanged } = publication;
     const suppliedRuntimeStore = publishFromSuppliedStore
       ? markRuntimePersistedProfiles(
-          buildLocalAuthProfileStoreForSave({
-            getScopedSharedAuthStore,
-            listRuntimeExternalAuthProfiles,
-            owner,
-            store,
-            agentDir: persistenceAgentDir,
-            options: { ...options, filterExternalAuthProfiles: false },
-            persistedStores,
-          }),
+          buildLocalStore({ ...options, filterExternalAuthProfiles: false }),
           localStore,
         )
       : undefined;

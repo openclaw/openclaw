@@ -1,5 +1,6 @@
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -22,9 +23,15 @@ export function shouldPersistBindingMutations(): boolean {
   return shouldPersistAnyBindingState() || THREAD_BINDINGS_STATE.loadedPersistentBindings;
 }
 
-export function snapshotThreadBindingJson(value: unknown): unknown {
+function snapshotThreadBindingJson(value: unknown): unknown {
   const serialized = JSON.stringify(value);
   return serialized ? JSON.parse(serialized) : undefined;
+}
+
+export function snapshotThreadBindingMetadata(input: { metadata?: Record<string, unknown> }) {
+  return asOptionalObjectRecord(
+    snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
+  );
 }
 
 function toPersistedBindingRecord(record: ThreadBindingRecord): ThreadBindingRecord {

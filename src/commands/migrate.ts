@@ -12,6 +12,7 @@ import { redactMigrationPlan, summarizeMigrationItems } from "../plugin-sdk/migr
 import { withPluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
 import type {
   MigrationApplyResult,
+  MigrationItem,
   MigrationPlan,
   MigrationProviderPlugin,
 } from "../plugins/types.js";
@@ -39,12 +40,8 @@ import type {
   MigrateDefaultOptions,
 } from "./migrate/types.js";
 
-function hasPlannedAuthCredentialItem(plan: MigrationPlan): boolean {
-  return plan.items.some(
-    (item) =>
-      item.status === "planned" &&
-      (item.kind === "auth" || item.kind === "secret" || item.sensitive === true),
-  );
+function isAuthCredentialItem(item: MigrationItem): boolean {
+  return item.kind === "auth" || item.kind === "secret" || item.sensitive === true;
 }
 
 function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions>(opts: T): T {
@@ -72,20 +69,10 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
   if (!shouldPromptForAuthCredentials(opts)) {
     return await migratePlanCommand(runtime, resolveDefaultIncludeSecrets(opts), provider);
   }
-  let plan = await migratePlanCommand(
-    runtime,
-    {
-      ...opts,
-      includeSecrets: false,
-      suppressPlanLog: true,
-    },
-    provider,
-  );
-  if (
-    plan.items.some(
-      (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
-    )
-  ) {
+  const scan = (includeSecrets: boolean) =>
+    migratePlanCommand(runtime, { ...opts, includeSecrets, suppressPlanLog: true }, provider);
+  let plan = await scan(false);
+  if (plan.items.some(isAuthCredentialItem)) {
     // Rescan with secrets only after explicit consent.
     const includeSecrets = await confirm({
       message: stylePromptMessage("Do you want to migrate your auth credentials as well?"),
@@ -97,15 +84,7 @@ async function createInteractiveMigrationPlanWithAuthPrompt(
       throw new Error("unreachable");
     }
     if (includeSecrets) {
-      plan = await migratePlanCommand(
-        runtime,
-        {
-          ...opts,
-          includeSecrets: true,
-          suppressPlanLog: true,
-        },
-        provider,
-      );
+      plan = await scan(true);
     }
   }
   if (!opts.suppressPlanLog) {
@@ -193,24 +172,35 @@ async function promptCodexMigrationSelection(
 async function confirmInteractiveMigrationPlan(
   runtime: RuntimeEnv,
   plan: MigrationPlan,
-  opts: MigrateCommonOptions & { yes?: boolean },
-): Promise<{ plan: MigrationPlan; apply: boolean }> {
+  opts: MigrateApplyOptions,
+): Promise<{ plan: MigrationPlan; applyOpts?: MigrateApplyOptions }> {
   const skillSelectedPlan = await promptCodexMigrationSelection(runtime, plan, opts, "skills");
   const selectedPlan =
     skillSelectedPlan &&
     (await promptCodexMigrationSelection(runtime, skillSelectedPlan, opts, "plugins"));
   if (!selectedPlan) {
-    return { plan, apply: false };
+    return { plan };
   }
   if (selectedPlan.providerId === "codex" && !hasSelectedCodexMigrationWork(selectedPlan)) {
     logNoCodexSelection(runtime, selectedPlan);
-    return { plan: selectedPlan, apply: false };
+    return { plan: selectedPlan };
   }
   const apply = await promptYesNo("Apply this migration now?", false);
   if (!apply) {
     runtime.log("Migration cancelled.");
+    return { plan: selectedPlan };
   }
-  return { plan: selectedPlan, apply };
+  return {
+    plan: selectedPlan,
+    applyOpts: {
+      ...opts,
+      yes: true,
+      includeSecrets:
+        opts.includeSecrets ??
+        selectedPlan.items.some((item) => item.status === "planned" && isAuthCredentialItem(item)),
+      preflightPlan: selectedPlan,
+    },
+  };
 }
 
 function hasSelectedCodexMigrationWork(plan: MigrationPlan): boolean {
@@ -365,28 +355,17 @@ export async function migrateApplyCommand(
       {
         ...opts,
         provider: providerId,
-        json: opts.json,
       },
       provider,
     );
     if (opts.json) {
       return plan;
     }
-    const { plan: selectedPlan, apply } = await confirmInteractiveMigrationPlan(
-      runtime,
-      plan,
-      opts,
-    );
-    if (!apply) {
-      return selectedPlan;
+    const confirmed = await confirmInteractiveMigrationPlan(runtime, plan, opts);
+    if (!confirmed.applyOpts) {
+      return confirmed.plan;
     }
-    applyOpts = {
-      ...opts,
-      provider: providerId,
-      yes: true,
-      includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
-      preflightPlan: selectedPlan,
-    };
+    applyOpts = { ...confirmed.applyOpts, provider: providerId };
   }
   return await runMigrationApply({
     runtime,
@@ -444,19 +423,12 @@ export async function migrateDefaultCommand(
       runtime.log("Re-run with --yes to apply this migration non-interactively.");
       return plan;
     }
-    const { plan: selectedPlan, apply } = await confirmInteractiveMigrationPlan(
-      runtime,
-      plan,
-      opts,
-    );
-    if (!apply) {
-      return selectedPlan;
+    const confirmed = await confirmInteractiveMigrationPlan(runtime, plan, opts);
+    if (!confirmed.applyOpts) {
+      return confirmed.plan;
     }
-    plan = selectedPlan;
-    applyOpts = {
-      ...opts,
-      includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
-    };
+    plan = confirmed.plan;
+    applyOpts = confirmed.applyOpts;
   }
   return await migrateApplyCommand(
     runtime,

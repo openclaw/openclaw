@@ -63,22 +63,15 @@ export function createChannelSecretTargetRegistryEntries(params: {
   account?: readonly (string | ChannelSecretTargetPathSpec)[];
   channel?: readonly (string | ChannelSecretTargetPathSpec)[];
 }): SecretTargetRegistryEntry[] {
-  return [
-    ...(params.account ?? []).map((spec) =>
+  const entriesForScope = (scope: "account" | "channel") =>
+    (params[scope] ?? []).map((spec) =>
       buildChannelSecretTargetRegistryEntry({
         channelKey: params.channelKey,
-        scope: "account",
+        scope,
         spec,
       }),
-    ),
-    ...(params.channel ?? []).map((spec) =>
-      buildChannelSecretTargetRegistryEntry({
-        channelKey: params.channelKey,
-        scope: "channel",
-        spec,
-      }),
-    ),
-  ];
+    );
+  return [...entriesForScope("account"), ...entriesForScope("channel")];
 }
 
 type ChannelSecretCollectorParams = {

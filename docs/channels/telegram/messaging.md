@@ -79,6 +79,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
 
+    In default `progress` mode, `/verbose on` sends separate tool summaries and `/verbose full` also sends completed tool output. An explicit `toolProgress: false` wins over `/verbose`; `streaming.mode: "off"` also suppresses these diagnostics.
+
     Keep answer-preview edits but hide tool-progress lines:
 
     ```json
@@ -198,6 +200,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     When reply threading is enabled and the original text/caption is available, OpenClaw adds a native quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units; longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     `off` disables implicit reply threading only; explicit `[[reply_to_*]]` tags are still honored.
+
+    In partial streaming mode, a final reply that targets a different message replaces the preview instead of editing it in place. Telegram does not allow edits to change a message's reply target.
 
   </Accordion>
 

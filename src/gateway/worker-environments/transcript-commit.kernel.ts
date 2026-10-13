@@ -1,10 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManagerCore } from "../../agents/sessions/session-manager-core.js";
-import type {
-  SessionTranscriptContextVersion,
-  SessionTranscriptWriteScope,
-} from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -16,37 +13,20 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-
-export type CommittedAgentMessage = Extract<
-  AgentMessage,
-  { role: "assistant" | "toolResult" | "user" | "custom" }
-> & { idempotencyKey: string };
-type AppliedTranscriptMessage = {
-  appended: boolean;
-  message: AgentMessage;
-  messageId: string;
-  messageSeq?: number;
-};
-export type ApplyTranscriptCommitResult =
-  | { ok: true; messages: AppliedTranscriptMessage[]; lifecycleRevision: string | undefined }
-  | { ok: false; reason: "invalid-batch" | "session-not-attached" | "stale-base-leaf" };
+import type {
+  AppliedTranscriptMessage,
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "./transcript-commit.types.js";
 type PersistedCommitResolution =
   | { kind: "ambiguous" | "missing" }
   | { kind: "found"; messages: AppliedTranscriptMessage[] };
-export type TranscriptCommitInput = {
-  scope: Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
-  lifecycleRevision: string | undefined;
-  requestedBaseLeafId: string | null;
-  recoverPersistedBatch: boolean;
-  messages: readonly CommittedAgentMessage[];
-  cwd: string;
-};
 export type PreparedTranscriptCommit = {
   result: ApplyTranscriptCommitResult;
   version?: SessionTranscriptContextVersion;

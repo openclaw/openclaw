@@ -126,27 +126,24 @@ export async function spawnNodeTerminalPty(
       fail(new Error("Invalid terminal worker message"));
       return;
     }
-    if (message.type === "boot") {
+    if (message.type === "boot" || message.type === "prepared") {
       try {
         beforeSpawn?.();
-        send({ type: initiateSpawn ? "prepare" : "start", params });
-      } catch (error) {
-        fail(toErrorObject(error, "PTY launch denied"));
-      }
-    } else if (message.type === "prepared") {
-      try {
-        beforeSpawn?.();
-        if (!initiateSpawn) {
-          throw new Error("Terminal launch authority is unavailable");
+        if (message.type === "boot") {
+          send({ type: initiateSpawn ? "prepare" : "start", params });
+        } else {
+          if (!initiateSpawn) {
+            throw new Error("Terminal launch authority is unavailable");
+          }
+          // Rejection already joins helper exit, IPC close, and output EOF in finish().
+          initiateSpawn(
+            () => send({ type: "launch" }),
+            ready.promise.then(
+              () => {},
+              () => {},
+            ),
+          );
         }
-        // Rejection already joins helper exit, IPC close, and output EOF in finish().
-        initiateSpawn(
-          () => send({ type: "launch" }),
-          ready.promise.then(
-            () => {},
-            () => {},
-          ),
-        );
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));
       }

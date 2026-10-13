@@ -134,16 +134,14 @@ function registerMatrixVerificationSummaryCommand(
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixVerificationCommandOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: () =>
+      await cli.runMatrixCliAccountCommand(options, {
+        run: ({ accountId, cfg }) =>
           params.run(
             id,
             { accountId, cfg, ...matrixCliVerificationDmLookupOptions(options) },
             options,
           ),
-        onText: (summary) => {
-          cli.printAccountLabel(accountId);
+        onText: (summary, _verbose, accountId) => {
           cli.printMatrixVerificationSummary(summary);
           params.afterText?.(summary, accountId, options);
         },
@@ -213,13 +211,9 @@ export function registerMatrixVerificationCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (options: cli.MatrixCliOptions) => {
-      const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-      await cli.runMatrixCliCommand(options, {
-        run: () => verification.listMatrixVerifications({ accountId, cfg }),
-        onText: (summaries) => {
-          cli.printAccountLabel(accountId);
-          cli.printMatrixVerificationSummaries(summaries);
-        },
+      await cli.runMatrixCliAccountCommand(options, {
+        run: ({ accountId, cfg }) => verification.listMatrixVerifications({ accountId, cfg }),
+        onText: cli.printMatrixVerificationSummaries,
         errorPrefix: "Verification listing failed",
       });
     });
@@ -251,9 +245,8 @@ export function registerMatrixVerificationCommands(root: Command): void {
           roomId?: string;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: () => {
+        await cli.runMatrixCliAccountCommand(options, {
+          run: ({ accountId, cfg }) => {
             if (
               options.ownUser === true &&
               (options.userId || options.deviceId || options.roomId)
@@ -271,8 +264,7 @@ export function registerMatrixVerificationCommands(root: Command): void {
               roomId: options.roomId,
             });
           },
-          onText: (summary) => {
-            cli.printAccountLabel(accountId);
+          onText: (summary, _verbose, accountId) => {
             cli.printMatrixVerificationSummary(summary);
             printMatrixVerificationRequestGuidance(summary, accountId);
           },
@@ -389,17 +381,15 @@ export function registerMatrixVerificationCommands(root: Command): void {
           includeRecoveryKey?: boolean;
         },
       ) => {
-        const { accountId, cfg } = cli.resolveMatrixCliAccountContext(options.account);
-        await cli.runMatrixCliCommand(options, {
-          run: () =>
+        await cli.runMatrixCliAccountCommand(options, {
+          run: ({ accountId, cfg }) =>
             verification.getMatrixVerificationStatus({
               accountId,
               cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,
               ...(options.allowDegradedLocalState === true ? { readiness: "none" as const } : {}),
             }),
-          onText: (status, verbose) => {
-            cli.printAccountLabel(accountId);
+          onText: (status, verbose, accountId) => {
             cli.printVerificationStatus(status, verbose, accountId);
           },
           shouldFail: (status) => status.serverDeviceKnown === false,

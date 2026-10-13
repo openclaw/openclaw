@@ -1236,33 +1236,32 @@ describe("google transport stream", () => {
     }
   });
 
-  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      buildSseResponse([
-        {
-          candidates: [
-            {
-              content: {
-                parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
-              },
-              finishReason: "MAX_TOKENS",
-            },
+  it.each(["MAX_TOKENS", "CONTINUATION"])(
+    "preserves %s when the partial response contains a function call",
+    async (finishReason) => {
+      const functionCall = { name: "lookup", args: { q: "hello" } };
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          { candidates: [{ content: { parts: [{ functionCall }] }, finishReason }] },
+        ]),
+      );
+
+      const result = await runGeminiStreamResult({
+        context: {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            { name: "lookup", description: "Look up a value", parameters: { type: "object" } },
           ],
-        },
-      ]),
-    );
+        } as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
+        options: { apiKey: "gemini-api-key" },
+      });
 
-    const result = await runGeminiStreamResult({
-      context: {
-        messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        tools: [{ name: "lookup", description: "Look up a value", parameters: { type: "object" } }],
-      } as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
-      options: { apiKey: "gemini-api-key" },
-    });
-
-    expect(result.stopReason).toBe("length");
-    expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
-  });
+      expect(result.stopReason).toBe("length");
+      expect(result.content).toEqual([
+        expect.objectContaining({ type: "toolCall", name: "lookup" }),
+      ]);
+    },
+  );
 
   it("strips redundant google provider prefixes from Gemini API model paths", async () => {
     guardedFetchMock.mockResolvedValueOnce(

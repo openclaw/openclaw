@@ -271,6 +271,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       maxHistoryBytes: params.maxHistoryBytes,
       responseHistoryBytes: params.responseHistoryBytes,
       effectiveMaxChars: params.effectiveMaxChars,
+      toolResultMaxChars: params.toolResultMaxChars,
       offset: params.offset,
       messageId: params.messageId,
       ...(params.pageCursor ? { pageCursor: { ...params.pageCursor } } : {}),

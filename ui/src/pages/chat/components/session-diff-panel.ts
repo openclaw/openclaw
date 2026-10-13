@@ -210,13 +210,12 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         this.collapsedPaths = new Set();
         return;
       case "toggle-wrap":
-        this.wrap = !this.wrap;
+      case "toggle-split": {
+        const preference = action.kind === "toggle-wrap" ? "wrap" : "split";
+        this[preference] = !this[preference];
         savePreferences({ split: this.split, wrap: this.wrap });
         return;
-      case "toggle-split":
-        this.split = !this.split;
-        savePreferences({ split: this.split, wrap: this.wrap });
-        return;
+      }
       case "scope":
         // Scope identity drives the Task, so reselecting the active scope must stay a no-op.
         if (JSON.stringify(action.value) !== JSON.stringify(this.scope)) {
@@ -366,20 +365,17 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       return;
     }
     const fileLines = await this.loadFileLines(view);
-    if (!fileLines || !this.diffTask.value?.views.includes(view)) {
+    const expanded =
+      fileLines && this.diffTask.value?.views.includes(view)
+        ? expandSessionDiffGap(parsed.lines, line.gap, fileLines, direction, (count) =>
+            t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+          )
+        : null;
+    if (expanded) {
+      parsed.lines = expanded;
+    } else {
       this.unavailableFileText.add(view);
-      this.requestUpdate();
-      return;
     }
-    const expanded = expandSessionDiffGap(parsed.lines, line.gap, fileLines, direction, (count) =>
-      t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-    );
-    if (!expanded) {
-      this.unavailableFileText.add(view);
-      this.requestUpdate();
-      return;
-    }
-    parsed.lines = expanded;
     this.requestUpdate();
   }
 
@@ -388,7 +384,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     if (!gap || !this.canExpandGaps(view)) {
       return line.text;
     }
-    const chunkCount = gap.count <= 25 ? gap.count : Math.min(20, gap.count);
+    const chunkCount = gap.count <= 25 ? gap.count : 20;
     return html`<span class="session-diff__gap-controls">
       ${(
         [

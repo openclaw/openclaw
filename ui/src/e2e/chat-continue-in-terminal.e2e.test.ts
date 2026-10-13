@@ -51,8 +51,7 @@ const sharedManagementActions = [
   "Pin session",
   "Mark as unread",
   "Rename…",
-  "Assign to…",
-  "Icon & color",
+  "Session settings",
   "Fork conversation",
   "Copy",
   "Open in",
@@ -122,6 +121,11 @@ suite.define(() => {
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await openSessionMenuSubmenu(page, "Session settings");
+        for (const label of ["Assign to…", "Icon & color"]) {
+          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
+        }
+        await page.keyboard.press("ArrowLeft");
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
@@ -212,6 +216,11 @@ suite.define(() => {
         for (const label of compactManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await dropdown.getByRole("menuitem", { name: "Session settings", exact: true }).click();
+        for (const label of ["Assign to…", "Icon & color"]) {
+          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
+        }
+        await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
         await page.screenshot({
           animations: "disabled",
           fullPage: true,

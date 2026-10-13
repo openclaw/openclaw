@@ -204,19 +204,19 @@ async function finalizeMemorySearchToolQuery(params: {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
   const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  // A pending chunking upgrade on an otherwise matching index degrades to
+  // A pending format upgrade on an otherwise matching corpus degrades to
   // keyword-only results instead of pausing memory search; every other
   // mismatch still withholds all candidates. Keyword results still need a
   // usable FTS index — the manager's fallback requires the same, so without
   // it there is no retrieval path and the tool must keep the paused
   // diagnostic instead of reporting a successful empty search.
-  const chunkingUpgradeKeywordOnly =
+  const formatUpgradeKeywordOnly =
     pausedIndexIdentity?.status === "mismatched" &&
     pausedIndexIdentity.owner === "openclaw" &&
-    pausedIndexIdentity.code === "chunking_version" &&
-    pausedIndexIdentity.chunkingVersionOnly === true &&
+    (pausedIndexIdentity.chunkingVersionOnly === true ||
+      pausedIndexIdentity.lexicalCompatible === true) &&
     Boolean(status.fts?.enabled && status.fts?.available);
-  if (pausedIndexIdentity && !chunkingUpgradeKeywordOnly) {
+  if (pausedIndexIdentity && !formatUpgradeKeywordOnly) {
     return {
       searchStartedAt: startedAt,
       status,

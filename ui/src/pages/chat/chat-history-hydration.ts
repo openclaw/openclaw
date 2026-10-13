@@ -235,7 +235,7 @@ export async function hydrateChatHistory(
         currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
       });
-      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
+      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null, response.sessionInfo);
       recordTiming("applied", {
         messageCount: response.messages.length,
         visibleMessageCount: response.messages.length,
@@ -325,7 +325,7 @@ export async function hydrateChatHistory(
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
-    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null, res.sessionInfo);
     if (
       state.reconnectResumeSessionId &&
       state.reconnectResumeSessionId !== state.currentSessionId
@@ -368,15 +368,18 @@ export async function hydrateChatHistory(
         liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
       const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
       const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
+      const reconcileToolStream = (replaced: boolean, preserveStreamSegments: boolean) => {
+        if (replaced) {
+          maybeResetToolStream(state, { preserveStreamSegments });
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+        }
+      };
       if (!hasVisibleStream || historyReplacedStream) {
         if (state.chatRunId && historyReplacedStream) {
           retainPersistedStreamPrefix(state);
         }
-        if (liveToolStreamReplaced) {
-          maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
-        } else {
-          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
-        }
+        reconcileToolStream(liveToolStreamReplaced, state.chatRunId !== null);
         if (!state.chatRunId) {
           state.chatStream = null;
           state.chatStreamStartedAt = null;
@@ -411,11 +414,7 @@ export async function hydrateChatHistory(
         if (!res.inFlightRun) {
           pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
         }
-        if (historyReplacedToolStream) {
-          maybeResetToolStream(state, { preserveStreamSegments: true });
-        } else {
-          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
-        }
+        reconcileToolStream(historyReplacedToolStream, true);
       }
     }
 

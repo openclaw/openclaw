@@ -148,6 +148,7 @@ function createHistoryPageReader<Options, Result>(
     reader: SessionTranscriptReader,
     target: SessionTranscriptReadScope,
     options: Options,
+    signal?: AbortSignal,
   ) => Promise<Result>,
 ) {
   return async (
@@ -161,7 +162,7 @@ function createHistoryPageReader<Options, Result>(
     const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope, signal);
     if (incognito) {
       const result = await incognito.consume(scope, (readers) =>
-        readActor(readers, scope, options),
+        readActor(readers, scope, options, signal),
       );
       signal?.throwIfAborted();
       return result;
@@ -258,14 +259,18 @@ export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
 
 export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,
-  (read, target, options) => read({ kind: "message-page", params: { target, options } }),
-  (reader, scope, options) => reader.readSessionMessagesPageWithStatsAsync(scope, options),
+  (read, target, options, signal) =>
+    read({ kind: "message-page", params: { target, options } }, signal),
+  (reader, scope, options, signal) =>
+    reader.readSessionMessagesPageWithStatsAsync(scope, options, signal),
 );
 
 export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync,
-  (read, target, options) => read({ kind: "around-id", params: { target, options } }),
-  (reader, scope, options) => reader.readSessionMessagesAroundIdWithStatsAsync(scope, options),
+  (read, target, options, signal) =>
+    read({ kind: "around-id", params: { target, options } }, signal),
+  (reader, scope, options, signal) =>
+    reader.readSessionMessagesAroundIdWithStatsAsync(scope, options, signal),
 );
 
 export function readSessionTranscriptSummaryAsync<Query extends SessionTranscriptSummaryQuery>(
@@ -337,13 +342,14 @@ export async function readSessionMessageByIdAsync(
   scope: SessionTranscriptReadScope,
   messageId: string,
   options?: Parameters<typeof sessionTranscriptReader.readSessionMessageByIdAsync>[2],
-  suppliedIncognito?: IncognitoSessionHistoryReader,
+  signal?: AbortSignal,
 ) {
-  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryReader(scope);
+  signal?.throwIfAborted();
+  const incognito = captureIncognitoSessionHistoryReader(scope, signal);
   if (incognito) {
     const captured = options ? structuredClone(options) : undefined;
     return incognito.consume(scope, (readers) =>
-      readers.readSessionMessageByIdAsync(scope, messageId, captured),
+      readers.readSessionMessageByIdAsync(scope, messageId, captured, signal),
     );
   }
   const target = captureHistoryReadScope(scope);
@@ -353,10 +359,13 @@ export async function readSessionMessageByIdAsync(
   const capturedOptions = options ? structuredClone(options) : undefined;
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
-  return readSessionHistoryPageInWorker({
-    kind: "message-by-id",
-    params: { target, messageId, options: capturedOptions },
-  });
+  return readSessionHistoryPageInWorker(
+    {
+      kind: "message-by-id",
+      params: { target, messageId, options: capturedOptions },
+    },
+    signal,
+  );
 }
 
 export { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";

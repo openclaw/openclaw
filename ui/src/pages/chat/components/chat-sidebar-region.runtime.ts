@@ -284,12 +284,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     if (tab.favicon) {
       return html`<img class="tabstrip-tab__favicon" src=${tab.favicon} alt="" />`;
     }
-    let hostname = "";
-    try {
-      hostname = tab.url ? new URL(tab.url).hostname : "";
-    } catch {
-      // Blank and incomplete URLs keep the panel's fallback icon.
-    }
+    const hostname = tab.url ? URL.parse(tab.url)?.hostname : "";
     const favicon =
       hostname && this.fetchFavicon
         ? readLinkFavicon(hostname, this.fetchFavicon, this.refreshHostedTabs)

@@ -324,7 +324,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
+    ? interaction.rawData.member.roles.slice()
     : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,

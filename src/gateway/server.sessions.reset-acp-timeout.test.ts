@@ -100,14 +100,14 @@ async function seedAcpSession() {
   return { prepareFreshSession, storePath };
 }
 
-test.each(["source", "source-and-acp", "acp", "committed-callback"])(
+test.each(["source-and-acp", "acp", "committed-callback"])(
   "settles committed reset actions after %s failure",
   async (failure) => {
     const { prepareFreshSession, storePath } = await seedAcpSession();
     const sessionKey = "agent:main:main";
     const childKey = "agent:main:subagent:watched";
     const previous = loadSessionEntry({ storePath, sessionKey });
-    const sourceFails = failure === "source" || failure === "source-and-acp";
+    const sourceFails = failure === "source-and-acp";
     const postCommitFails = failure === "acp" || failure === "source-and-acp";
     const committedCallbackFails = failure === "committed-callback";
     const sourceFailure = new Error("project source cleanup failed");

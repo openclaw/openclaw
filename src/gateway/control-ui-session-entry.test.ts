@@ -82,6 +82,7 @@ describe("protected canonical session handoff", () => {
     );
     const opened = await request();
     expect(opened.serveApp).toHaveBeenCalledWith(canonical, expect.any(Function));
+    expect(opened.setHeader).toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
     const isCurrent = opened.serveApp.mock.calls[0]?.[1];
     current.mockReturnValue(false);
     expect(isCurrent?.()).toBe(false);
@@ -94,6 +95,7 @@ describe("protected canonical session handoff", () => {
     const opened = await request();
     expect(opened.res.statusCode).toBe(303);
     expect(opened.setHeader).toHaveBeenCalledWith("Location", canonical);
+    expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
   });
   it.each(["token", "password"] as const)(
     "keeps explicit %s login on the existing app login gate",
@@ -104,6 +106,7 @@ describe("protected canonical session handoff", () => {
       });
       const opened = await request(entry, mode);
       expect(opened.serveApp).toHaveBeenCalledWith(canonical);
+      expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
       const probe = await request(`${entry}&probe=1`, mode);
       expect(probe.res.statusCode).toBe(401);
       expect(probe.serveApp).not.toHaveBeenCalled();

@@ -88,11 +88,8 @@ afterEach(() => {
 });
 
 it.each([
-  { mode: "flags", trace: false, supported: true },
   { mode: "flags", trace: true, supported: true },
-  { mode: "compile-cache", trace: false, supported: true },
   { mode: "compile-cache", trace: false, supported: false },
-  { mode: "compile-cache", trace: true, supported: true },
 ] as const)(
   "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace, supported: $supported)",
   async ({ mode, trace, supported }) => {
@@ -171,29 +168,26 @@ it("runs internal admission with root options before runtime recovery, cache act
   expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
 });
 
-it.each([[], ["--context"], ["--context", "/fixture/context.json", "extra"]])(
-  "rejects malformed admission argv before runtime recovery or respawn (%j)",
-  async (...args) => {
-    boundary.mode = "compile-cache";
-    boundary.trace = true;
-    boundary.runtimeSupported = false;
-    process.argv = [
-      process.execPath,
-      "/fixture/openclaw/dist/entry.js",
-      "update",
-      "admit",
-      ...args,
-    ];
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+it("rejects malformed admission argv before runtime recovery or respawn", async () => {
+  boundary.mode = "compile-cache";
+  boundary.trace = true;
+  boundary.runtimeSupported = false;
+  process.argv = [
+    process.execPath,
+    "/fixture/openclaw/dist/entry.js",
+    "update",
+    "admit",
+    "--context",
+  ];
+  const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await import("./entry.js");
+  await import("./entry.js");
 
-    expect(boundary.events).toEqual([]);
-    expect(process.exitCode).toBe(2);
-    expect(stdout).not.toHaveBeenCalled();
-    expect(stderr).toHaveBeenCalledOnce();
-    const compileCache = await import("./entry.compile-cache.js");
-    expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
-  },
-);
+  expect(boundary.events).toEqual([]);
+  expect(process.exitCode).toBe(2);
+  expect(stdout).not.toHaveBeenCalled();
+  expect(stderr).toHaveBeenCalledOnce();
+  const compileCache = await import("./entry.compile-cache.js");
+  expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
+});

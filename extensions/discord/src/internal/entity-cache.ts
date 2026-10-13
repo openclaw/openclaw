@@ -91,13 +91,10 @@ export class DiscordEntityCache {
         this.entries.delete(`user:${user.id}`);
       }
     } else {
-      this.deleteId(kind, kind === "guild-emojis" ? raw.guild_id : raw.id);
-    }
-  }
-
-  private deleteId(prefix: string, id: unknown): void {
-    if (typeof id === "string") {
-      this.entries.delete(`${prefix}:${id}`);
+      const id = kind === "guild-emojis" ? raw.guild_id : raw.id;
+      if (typeof id === "string") {
+        this.entries.delete(`${kind}:${id}`);
+      }
     }
   }
 

@@ -174,6 +174,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           config: scenario.config ?? {},
           agentId: "main",
           sessionId: "session:transport-drop",
+          // This fixture owns no durable session, including under a frozen retry clock.
+          sessionPersistence: "detached",
           runId: "run:transport-drop",
           onAgentEvent,
         },

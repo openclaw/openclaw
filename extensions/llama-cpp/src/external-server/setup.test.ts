@@ -22,9 +22,9 @@ const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
 const removeProviderAuthProfilesWithLockMock = vi.hoisted(() => vi.fn());
 const upsertAuthProfileWithLockMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  upsertAuthProfileWithLock: upsertAuthProfileWithLockMock,
+vi.mock("openclaw/plugin-sdk/provider-auth-api-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-api-key")>()),
+  upsertAuthProfileWithLockOrThrow: upsertAuthProfileWithLockMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -229,7 +229,7 @@ describe("llama-server setup", () => {
     removeProviderAuthProfilesWithLockMock.mockReset();
     removeProviderAuthProfilesWithLockMock.mockResolvedValue({ version: 1, profiles: {} });
     upsertAuthProfileWithLockMock.mockReset();
-    upsertAuthProfileWithLockMock.mockResolvedValue({ version: 1, profiles: {} });
+    upsertAuthProfileWithLockMock.mockResolvedValue(undefined);
   });
 
   it("does not present a managed localService as an existing-server candidate", async () => {

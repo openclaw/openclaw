@@ -69,21 +69,18 @@ function rejectsOAuthRefreshGenerationReplacement(params: {
   ) {
     return false;
   }
-  let supersedes = false;
+  let supersedes: boolean;
   if (isDeepStrictEqual(params.current, params.observed)) {
-    if (
+    supersedes =
       !params.allowOAuthGenerationReplacement &&
       params.current !== undefined &&
-      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current))
-    ) {
-      supersedes =
-        params.current.type !== "oauth" ||
+      !(params.current.type === "oauth" && isOAuthRefreshFence(params.current)) &&
+      (params.current.type !== "oauth" ||
         !isSameOAuthRefreshGeneration({
           profileId: params.profileId,
           left: params.current,
           right: params.incoming,
-        });
-    }
+        }));
   } else if (params.observed === undefined) {
     supersedes = params.current !== undefined;
   } else {

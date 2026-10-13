@@ -312,7 +312,7 @@ Notes:
 
 - This applies only to DM channel creation (`/api/v4/channels/direct`), not every Mattermost API call.
 - Retries use exponential backoff with jitter and apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
-- 4xx client errors other than `429` are treated as permanent and are not retried.
+- 4xx client errors other than `429` are treated as permanent and are not retried, even if reading the error response body fails. Diagnostics retain the HTTP status when the response body is unavailable.
 
 ## Preview streaming
 

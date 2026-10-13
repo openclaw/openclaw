@@ -88,11 +88,7 @@ export function renderChatGoal(
   const usage = formatGoalUsage(goal);
   const expanded = state.goalExpandedId === goal.id;
   const showActions = actions.canAct && Boolean(actions.onGoalAction);
-  const canResume =
-    goal.status === "paused" ||
-    goal.status === "blocked" ||
-    goal.status === "usage_limited" ||
-    goal.status === "budget_limited";
+  const canResume = ["paused", "blocked", "usage_limited", "budget_limited"].includes(goal.status);
   const pauseReason = canResume && !expanded ? goal.lastStatusNote : undefined;
   const toggleExpanded = () => {
     state.goalExpandedId = expanded ? null : goal.id;

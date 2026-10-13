@@ -150,7 +150,6 @@ describe("cron run receipt settlement", () => {
       const { storePath } = await makeStorePath();
       const context = new AsyncLocalStorage<"caller" | "scheduler">();
       const observed: Array<string | undefined> = [];
-      let schedulerEntries = 0;
       const runPayload = async () => {
         await Promise.resolve();
         observed.push(context.getStore());
@@ -163,10 +162,7 @@ describe("cron run receipt settlement", () => {
         log: logger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
-        runSchedulerOwned: (run) => {
-          schedulerEntries += 1;
-          return context.run("scheduler", run);
-        },
+        runSchedulerOwned: (run) => context.run("scheduler", run),
         onEvent: (event) => {
           if (event.action === "started" || event.action === "finished") {
             observed.push(`${event.action}:${context.getStore()}`);
@@ -221,9 +217,9 @@ describe("cron run receipt settlement", () => {
           expect(outcome).toEqual(source === "startup" ? undefined : { ok: true, ran: true });
           expect(context.getStore()).toBe("caller");
         });
-        const owner = source === "manual" ? "caller" : "scheduler";
-        expect(observed).toEqual([`started:${owner}`, owner, `finished:${owner}`]);
-        expect(schedulerEntries).toBe(source === "manual" ? 0 : 1);
+        // Manual activation reports from the caller; execution is always scheduler-owned.
+        const startedOwner = source === "manual" ? "caller" : "scheduler";
+        expect(observed).toEqual([`started:${startedOwner}`, "scheduler", "finished:scheduler"]);
       } finally {
         service.stop();
       }

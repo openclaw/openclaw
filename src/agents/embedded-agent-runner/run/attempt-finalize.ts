@@ -16,6 +16,10 @@ import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effect
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
+import {
+  completedTurnMessageAnchor,
+  captureCompletedTurnMessageAnchor,
+} from "../../sessions/session-manager-message-anchor.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
@@ -199,6 +203,9 @@ export async function completeEmbeddedAttemptAfterTurn(
   // rewrite callback reacquires the synchronous session write boundary.
   if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
+    const terminalEntryId = attempt.onContextEngineTurnCandidate
+      ? resolveTerminalMessageEntryId(sessionManager)
+      : undefined;
     await finalizeHarnessContextEngineTurn({
       ...attempt,
       contextEngine: activeContextEngine,
@@ -212,7 +219,11 @@ export async function completeEmbeddedAttemptAfterTurn(
       turnCandidate: attempt.onContextEngineTurnCandidate
         ? {
             admission: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-            terminalEntryId: resolveTerminalMessageEntryId(sessionManager),
+            terminalEntryId,
+            [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(
+              sessionManager,
+              terminalEntryId,
+            ),
             record: attempt.onContextEngineTurnCandidate,
           }
         : undefined,
@@ -313,6 +324,10 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
     await runAgentEndSideEffectsAsync({
+      [completedTurnMessageAnchor]:
+        sourceTarget && terminalEntry && reachedPromptBoundary
+          ? captureCompletedTurnMessageAnchor(sessionManager, terminalEntry.id)
+          : undefined,
       skillExperienceReviewSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }

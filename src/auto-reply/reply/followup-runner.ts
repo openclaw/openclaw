@@ -205,6 +205,7 @@ export function createFollowupRunner(
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
+        sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
         resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
@@ -253,11 +254,14 @@ export function createFollowupRunner(
       } else if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
       } else if (
-        operation?.result?.kind === "aborted" &&
-        operation.result.code === "aborted_by_user"
+        queued.run.internalEventExecution ||
+        (operation?.result?.kind === "aborted" && operation.result.code === "aborted_by_user")
       ) {
         disposition = { kind: "consumed" };
-        completion = resolveFollowupCompletion({ kind: "aborted", reason: "user" });
+        queued.run.internalEventExecution?.onFailed?.(error);
+        completion = queued.run.internalEventExecution
+          ? { kind: "failed", error: formatErrorMessage(error) }
+          : resolveFollowupCompletion({ kind: "aborted", reason: "user" });
       } else if (disposition.kind === "consumed") {
         completion = { kind: "failed", error: formatErrorMessage(error) };
         defaultRuntime.error?.(

@@ -97,6 +97,15 @@ function catalogForPreferences(entries: Record<string, unknown>): ThemeCatalogEn
       name: definition.name,
       description: definition.description,
       ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+      ...(definition.brandName !== undefined ? { brandName: definition.brandName } : {}),
+      ...(definition.brandIcon !== undefined ? { brandIcon: definition.brandIcon } : {}),
+      ...(definition.workingIndicator !== undefined
+        ? { workingIndicator: definition.workingIndicator }
+        : {}),
+      ...(definition.lobsterdex !== undefined ? { lobsterdex: definition.lobsterdex } : {}),
+      ...(definition.communityLinks !== undefined
+        ? { communityLinks: definition.communityLinks }
+        : {}),
       ...(definition.workingPhrases !== undefined
         ? { workingPhrases: definition.workingPhrases }
         : {}),

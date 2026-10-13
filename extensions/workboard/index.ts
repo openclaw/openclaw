@@ -49,6 +49,7 @@ export default definePluginEntry({
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+      onMatched: automationNudge.nudge,
     });
     resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({
@@ -102,6 +103,7 @@ export default definePluginEntry({
           store,
           event,
           context,
+          readSessions: lifecycleSync.readSessions,
           onMatched: automationNudge.nudge,
         });
       }),

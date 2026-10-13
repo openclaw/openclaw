@@ -14,5 +14,11 @@ export function resolveCronRunErrorReason(
   if (classification?.kind === "reason") {
     return classification.reason;
   }
+  // Text-only failures without a model provider have no provider provenance.
+  // In particular, heartbeat delivery errors can contain generic HTTP 5xx
+  // wording that the model failover classifier would otherwise call a timeout.
+  if (!provider?.trim()) {
+    return undefined;
+  }
   return resolveFailoverReasonFromError(error, provider) ?? undefined;
 }

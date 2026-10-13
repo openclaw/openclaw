@@ -142,7 +142,7 @@ describe("committed agent database reads", () => {
       },
     },
   ])(
-    "rejects a committed version change to $version on the next read before borrowed and fresh reads",
+    "rejects a replacement at version $version before invoking a committed reader",
     async ({ version, expectedError }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
         const options = { agentId: "main", env };
@@ -156,6 +156,9 @@ describe("committed agent database reads", () => {
           }, options);
         expect(read()).toEqual({ found: true, value: { agent_id: "main" } });
         admitted = false;
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        fs.copyFileSync(databasePath, `${databasePath}.replacement`);
+        fs.renameSync(`${databasePath}.replacement`, databasePath);
         const writer = new DatabaseSync(databasePath);
         try {
           writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
@@ -164,7 +167,6 @@ describe("committed agent database reads", () => {
         }
         expect(read).toThrow(expect.objectContaining(expectedError));
         expect(admitted).toBe(false);
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
         expect(read).toThrow(expect.objectContaining(expectedError));
         expect(admitted).toBe(false);
       });

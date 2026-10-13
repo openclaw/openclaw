@@ -57,23 +57,20 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  const invalidate = () => {
-    loadedEpoch = -1;
-    loadGeneration += 1;
-    catalogGeneration += 1;
-    pendingLoad = null;
-    clearRetry();
-    defaultsStatus = "loading";
-    // Every invalidation publishes its generation, including back-to-back
-    // events while the previous reload is still pending.
-    host.publish({ ...host.readState() });
-  };
-
   const dispose = () => {
     loadedEpoch = -1;
     loadGeneration += 1;
     pendingLoad = null;
     clearRetry();
+  };
+
+  const invalidate = () => {
+    dispose();
+    catalogGeneration += 1;
+    defaultsStatus = "loading";
+    // Every invalidation publishes its generation, including back-to-back
+    // events while the previous reload is still pending.
+    host.publish({ ...host.readState() });
   };
 
   const publishCatalog = (

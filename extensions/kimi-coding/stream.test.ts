@@ -1,5 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Model,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { wrapKimiProviderStream } from "./stream.js";
@@ -112,27 +117,46 @@ function captureKimiPayload(
 
 describe("kimi tool-call markup wrapper", () => {
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
-    const partial = createAssistantTextMessage(KIMI_TOOL_TEXT);
-    const message = createAssistantTextMessage(KIMI_TOOL_TEXT);
-    const finalMessage = {
+    const partial: AssistantMessage = {
       role: "assistant",
+      api: KIMI_MODEL.api,
+      provider: KIMI_MODEL.provider,
+      model: KIMI_MODEL.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const message = structuredClone(partial);
+    const finalMessage: AssistantMessage = {
+      ...structuredClone(partial),
       content: [
         { type: "thinking", thinking: "Need to read the file first." },
         { type: "text", text: KIMI_TOOL_TEXT },
       ],
-      stopReason: "stop",
     };
 
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [{ type: "message_end", partial, message }],
-        resultMessage: finalMessage,
-      }) as ReturnType<StreamFn>;
+    const baseStreamFn: StreamFn = () => ({
+      async result() {
+        return finalMessage;
+      },
+      async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+        yield { type: "start", partial };
+        yield { type: "done", reason: "stop", message };
+      },
+    });
 
     const wrapped = wrapKimiStream(baseStreamFn);
-    const stream = await callKimiStream(wrapped);
+    const stream = await wrapped(KIMI_MODEL, KIMI_CONTEXT, {});
 
-    const events: unknown[] = [];
+    const events: AssistantMessageEvent[] = [];
     for await (const event of stream) {
       events.push(event);
     }
@@ -143,14 +167,18 @@ describe("kimi tool-call markup wrapper", () => {
       stopReason: "toolUse",
     };
 
-    expect(events).toEqual([
+    expect(events).toMatchObject([
       {
-        type: "message_end",
+        type: "start",
         partial: toolMessage,
+      },
+      {
+        type: "done",
+        reason: "stop",
         message: toolMessage,
       },
     ]);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       role: "assistant",
       content: [
         { type: "thinking", thinking: "Need to read the file first." },

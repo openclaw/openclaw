@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
   upsertSessionEntryCore,
@@ -10,9 +10,18 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { isActiveStoreWriter } from "../shared/store-writer-queue.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -204,21 +213,85 @@ describe("channel-final transcript mirrors", () => {
     );
   });
 
-  it("correlates only the selected active branch", async () => {
-    await append({ role: "assistant", content: "The train leaves at noon." }, "active-answer");
-    await append({ role: "assistant", content: "The train leaves at two." }, "inactive-answer");
-    await appendTranscriptEvent(scope, {
-      type: "leaf",
-      id: "select-active-answer",
-      parentId: "inactive-answer",
-      targetId: "active-answer",
-    });
+  it.each(["entry cleanup", "latest-message refusal"] as const)(
+    "correlates only the selected active branch without a writer wait during %s",
+    async (phase) => {
+      await append({ role: "assistant", content: "The train leaves at noon." }, "active-answer");
+      await append({ role: "assistant", content: "The train leaves at two." }, "inactive-answer");
+      await appendTranscriptEvent(scope, {
+        type: "leaf",
+        id: "select-active-answer",
+        parentId: "inactive-answer",
+        targetId: "active-answer",
+      });
 
-    await appendAssistantMirrorMessageByIdentity(delivery("branch-delivery"));
+      const database = openOpenClawAgentDatabase(
+        toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
+      );
+      const options = { agentId: database.agentId, path: database.path };
+      const retirementEntered = createDeferredCore();
+      const releaseRetirement = createDeferredCore();
+      let following: Promise<void> | undefined;
+      const waitForWriter = () => {
+        following ??= runOpenClawAgentWriteAdmission(options, () => {});
+        retirementEntered.resolve();
+        return Promise.race([following, releaseRetirement.promise]);
+      };
+      const holdsWriter = () => isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, database.path);
+      const close = projectionLane.pool.closeResources;
+      const rotate = historyLane.pool.rotate.bind(historyLane.pool);
+      const cleanup =
+        phase === "entry cleanup"
+          ? vi
+              .spyOn(projectionLane.pool, "closeResources")
+              .mockImplementation((key) => (holdsWriter() ? waitForWriter() : close(key)))
+          : vi
+              .spyOn(historyLane.pool, "rotate")
+              .mockImplementation(() => (holdsWriter() ? waitForWriter() : rotate()));
+      let refusedLatest = false;
+      const reads =
+        phase === "latest-message refusal"
+          ? [historyLane, targetDiscoveryLane].map(({ pool }) => {
+              const run = pool.run.bind(pool);
+              return vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+                let latest = false;
+                const result = await run(async () => {
+                  const request = typeof input === "function" ? await input() : input;
+                  latest = request.kind === "latest-active-message";
+                  return request;
+                }, controls);
+                if (latest) {
+                  refusedLatest = true;
+                  return { ok: false, error: { kind: "projection", sessionId: scope.sessionId } };
+                }
+                return result;
+              });
+            })
+          : [];
+      const appending = appendAssistantMirrorMessageByIdentity(delivery("branch-delivery"));
+      try {
+        await expect(
+          Promise.race([
+            appending,
+            retirementEntered.promise.then(() => {
+              throw new Error("Mirror reader cleanup waits on its own queued writer");
+            }),
+          ]),
+        ).resolves.toMatchObject({ ok: true });
+        expect(refusedLatest).toBe(phase === "latest-message refusal");
+      } finally {
+        releaseRetirement.resolve();
+        await Promise.allSettled([appending, following]);
+        cleanup.mockRestore();
+        for (const read of reads) {
+          read.mockRestore();
+        }
+      }
 
-    expect((await entries()).at(-1)?.message).toHaveProperty(
-      "openclawDeliveryMirror.sourceAssistantMessageId",
-      "active-answer",
-    );
-  });
+      expect((await entries()).at(-1)?.message).toHaveProperty(
+        "openclawDeliveryMirror.sourceAssistantMessageId",
+        "active-answer",
+      );
+    },
+  );
 });

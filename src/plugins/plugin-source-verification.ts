@@ -17,6 +17,7 @@ export function readPluginSourceDirectory(source: string) {
   const content = entries.map((entry) => [
     entry.name,
     entry.isSymbolicLink() ? fs.readlinkSync(path.join(source, entry.name)) : null,
+    entry.isSymbolicLink() ? fs.realpathSync(path.join(source, entry.name)) : null,
   ]);
   return {
     names: entries.map((entry) => entry.name),
@@ -29,6 +30,13 @@ export function readPluginSourceDirectory(source: string) {
 export const pluginSourceInputIdentity = (stat: fs.BigIntStats): string =>
   stat.isDirectory() ? `${stat.dev}:${stat.ino}:${stat.mode}` : pluginSourceStatIdentity(stat);
 
+/** Legacy entry selection depends on file presence and its canonical containment target. */
+export function pluginSourceFileProbe(source: string): string | undefined {
+  return fs.statSync(source, { throwIfNoEntry: false })?.isFile()
+    ? fs.realpathSync(source)
+    : undefined;
+}
+
 export type PluginSourceInput = {
   identity: string;
   contentHash: string;
@@ -37,6 +45,8 @@ export type PluginSourceInput = {
   boundary: string;
   native?: boolean;
 };
+
+export type PluginCapturedSourceFact = { source: string; input: PluginSourceInput };
 
 export function verifyPluginSourceInputs(
   inputs: ReadonlyMap<string, PluginSourceInput>,

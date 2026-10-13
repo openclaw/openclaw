@@ -172,20 +172,13 @@ export async function prepareSpawnThreadBinding(params: {
     accountId,
     kind: params.kind,
   });
-  if (!policy.enabled) {
+  if (!policy.enabled || !policy.spawnEnabled) {
+    const formatError = policy.enabled
+      ? formatThreadBindingSpawnDisabledError
+      : formatThreadBindingDisabledError;
     return {
       ok: false,
-      error: formatThreadBindingDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: params.kind,
-      }),
-    };
-  }
-  if (!policy.spawnEnabled) {
-    return {
-      ok: false,
-      error: formatThreadBindingSpawnDisabledError({
+      error: formatError({
         channel: policy.channel,
         accountId: policy.accountId,
         kind: params.kind,

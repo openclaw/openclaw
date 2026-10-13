@@ -165,6 +165,16 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+If the app-server connection is lost before the turn completes, the conversation
+retains a visible failure outcome even when Codex already sent commentary or
+partial output. Reloading the Control UI or opening the conversation on another
+client preserves that outcome. The live error and saved notice both explain
+that the task may still be running and tell you to check the conversation before
+trying again. The original error remains in diagnostic details.
+Check any command's effects before retrying: a
+lost connection does not prove that its work stopped. A later turn can reconnect
+to the app-server normally.
+
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the

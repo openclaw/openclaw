@@ -104,17 +104,31 @@ async function readProcessHeldCliHistoryQuery(
   assertCurrent();
   const result = await runProcessHeldHistoryTask(
     history,
-    async (value) => {
-      signal?.throwIfAborted();
+    async (value, { signal: requestSignal }) => {
+      requestSignal.throwIfAborted();
       assertCurrent();
       // SAFETY: The paired worker constructs this closed protocol; the host fixes and validates the source target.
       const request = value as Request;
       const readResult =
         request.kind === "page"
-          ? await readers.readSessionMessagesPageWithStatsAsync(scope, request.options)
+          ? await readers.readSessionMessagesPageWithStatsAsync(
+              scope,
+              request.options,
+              requestSignal,
+            )
           : request.kind === "around"
-            ? await readers.readSessionMessagesAroundIdWithStatsAsync(scope, request.options)
-            : await readers.readSessionMessageByIdAsync(scope, request.messageId, request.options);
+            ? await readers.readSessionMessagesAroundIdWithStatsAsync(
+                scope,
+                request.options,
+                requestSignal,
+              )
+            : await readers.readSessionMessageByIdAsync(
+                scope,
+                request.messageId,
+                request.options,
+                requestSignal,
+              );
+      requestSignal.throwIfAborted();
       if (readResult === undefined) {
         throw new Error("Unsupported process-held history request");
       }

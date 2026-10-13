@@ -13,10 +13,7 @@ import {
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
-import {
-  copyConfigResolutionFacts,
-  copyConfigResolutionFactsExcept,
-} from "../config/resolution-facts.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
@@ -317,39 +314,33 @@ export async function prepareGatewayServerBootstrap(input: {
       "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
-  const resolvedStartupAuthOverride = startupAuthOverride
-    ? (Object.fromEntries(
-        (
-          [
-            "mode",
-            "token",
-            "password",
-            "allowTailscale",
-            "rateLimit",
-            "trustedProxy",
-          ] as const satisfies readonly (keyof GatewayAuthConfig)[]
-        ).flatMap((key) => {
-          if (startupAuthOverride[key] === undefined) {
-            return [];
-          }
-          if ((key === "token" || key === "password") && isSecretRef(startupAuthOverride[key])) {
-            return [];
-          }
-          const resolvedValue = cfgAtStart.gateway?.auth?.[key];
-          return resolvedValue === undefined ? [] : [[key, structuredClone(resolvedValue)]];
-        }),
-      ) as GatewayAuthConfig)
-    : undefined;
-  const startupAuthSecretRefOverride = startupAuthOverride
-    ? {
-        ...(isSecretRef(startupAuthOverride.token)
-          ? { token: structuredClone(startupAuthOverride.token) }
-          : {}),
-        ...(isSecretRef(startupAuthOverride.password)
-          ? { password: structuredClone(startupAuthOverride.password) }
-          : {}),
+  let resolvedStartupAuthOverride: GatewayAuthConfig | undefined;
+  let startupAuthSecretRefOverride: GatewayAuthConfig | undefined;
+  if (startupAuthOverride) {
+    resolvedStartupAuthOverride = {};
+    startupAuthSecretRefOverride = {};
+    for (const key of [
+      "mode",
+      "token",
+      "password",
+      "allowTailscale",
+      "rateLimit",
+      "trustedProxy",
+    ] as const) {
+      const override = startupAuthOverride[key];
+      if (override === undefined) {
+        continue;
       }
-    : undefined;
+      if ((key === "token" || key === "password") && isSecretRef(override)) {
+        startupAuthSecretRefOverride[key] = structuredClone(override);
+        continue;
+      }
+      const resolvedValue = cfgAtStart.gateway?.auth?.[key];
+      if (resolvedValue !== undefined) {
+        Object.assign(resolvedStartupAuthOverride, { [key]: structuredClone(resolvedValue) });
+      }
+    }
+  }
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
@@ -387,23 +378,12 @@ export async function prepareGatewayServerBootstrap(input: {
     copyConfigResolutionFacts(runtimeConfig, withOrigins);
     return withOrigins;
   };
-  const applyReloadableGatewayAuthRefs = (config: OpenClawConfig): OpenClawConfig => {
-    if (!startupAuthSecretRefOverride?.token && !startupAuthSecretRefOverride?.password) {
-      return config;
-    }
-    const next = {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        auth: mergeGatewayAuthConfig(config.gateway?.auth, startupAuthSecretRefOverride),
-      },
-    };
-    copyConfigResolutionFactsExcept(config, next, [
-      ...(startupAuthSecretRefOverride.token !== undefined ? ["gateway.auth.token"] : []),
-      ...(startupAuthSecretRefOverride.password !== undefined ? ["gateway.auth.password"] : []),
-    ]);
-    return next;
-  };
+  const applyReloadableGatewayAuthRefs = (config: OpenClawConfig): OpenClawConfig =>
+    startupAuthSecretRefOverride?.token || startupAuthSecretRefOverride?.password
+      ? applyGatewayAuthOverridesForStartupPreflight(config, {
+          auth: startupAuthSecretRefOverride,
+        })
+      : config;
   const prepareReloadCandidate = async (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;

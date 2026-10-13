@@ -145,7 +145,7 @@ export function renderChannels(props: ChannelsProps) {
             onToggleMultiselect: (value) => props.wizardHost.toggleMultiselect(value),
             textValue: props.wizardHost.textValue,
             secretVisible: props.wizardHost.secretVisible,
-            onTextInput: (value) => props.wizardHost.setTextValue(value),
+            onTextInput: (value) => (props.wizardHost.textValue = value),
             onToggleSecretVisibility: () => props.wizardHost.toggleSecretVisibility(),
             onAnswer: (value) => props.wizardHost.answer(value),
             onClose: () => props.wizardHost.close(),

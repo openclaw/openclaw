@@ -120,16 +120,34 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         }
       }
     };
-  const prepareAcquisition = (params: PreparedAcquisitionParams) => {
+  const prepareAcquisition = (
+    params: PreparedAcquisitionParams,
+    configReloadAtAdmission: SessionMcpConfigPublication | undefined,
+  ) => {
     const fullConfig = loadSessionMcpConfig({ ...params, logDiagnostics: false });
     const partition = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
     // Full-set names stay stable when only some requester connections resolve.
     const { safeServerNamesByServer } = fullConfig;
+    const requester = params.requester;
     return {
       fullConfig,
       ...partition,
       safeServerNamesByServer,
-      requester: params.requester,
+      requester,
+      acquireRequester: () =>
+        requester
+          ? materializeRequesterScopedRuntime({
+              ...params,
+              configReloadAtAdmission,
+              mcpServers: fullConfig.loaded.mcpServers,
+              oauthRequesterServerNames: partition.oauthRequesterServerNames,
+              resolverRequesterServerNames: partition.resolverRequesterServerNames,
+              scopedNameSet: new Set(partition.requesterScopedServerNames),
+              safeServerNamesByServer,
+              requesterSenderId: requester.senderId,
+              runtimeKey: requester.runtimeKey,
+            })
+          : undefined,
     };
   };
   const materializeRequesterScopedRuntime = async (
@@ -177,14 +195,12 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
 
       const {
-        fullConfig,
         staticServers,
         requesterScopedServerNames,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
         safeServerNamesByServer,
         requester,
-      } = prepareAcquisition(params);
+        acquireRequester,
+      } = prepareAcquisition(params, configReloadAtAdmission);
 
       const leases: SessionMcpRuntimeLease[] = [];
       try {
@@ -203,23 +219,10 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
           return staticLease;
         }
         const parts = Object.keys(staticServers).length > 0 ? [staticLease.runtime] : [];
-        const scopedNameSet = new Set(requesterScopedServerNames);
-        if (requester) {
-          const lease = await materializeRequesterScopedRuntime({
-            ...params,
-            configReloadAtAdmission,
-            mcpServers: fullConfig.loaded.mcpServers,
-            oauthRequesterServerNames,
-            resolverRequesterServerNames,
-            scopedNameSet,
-            safeServerNamesByServer,
-            requesterSenderId: requester.senderId,
-            runtimeKey: requester.runtimeKey,
-          });
-          if (lease) {
-            leases.push(lease);
-            parts.push(lease.runtime);
-          }
+        const requesterLease = requester ? await acquireRequester() : undefined;
+        if (requesterLease) {
+          leases.push(requesterLease);
+          parts.push(requesterLease.runtime);
         }
         return {
           runtime:
@@ -255,11 +258,10 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       const {
         fullConfig,
         requesterScopedServerNames,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
         safeServerNamesByServer,
         requester,
-      } = prepareAcquisition(params);
+        acquireRequester,
+      } = prepareAcquisition(params, configReloadAtAdmission);
       // Native acquisition can project only static servers. Requester discovery
       // owns its advertised catalog; lease release/reload own server retirement.
       const advertisedCatalogConfigFingerprint = loadSessionMcpConfig({
@@ -283,18 +285,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       if (requesterScopedServerNames.length === 0) {
         return undefined;
       }
-      const scopedNameSet = new Set(requesterScopedServerNames);
-      const lease = await materializeRequesterScopedRuntime({
-        ...params,
-        configReloadAtAdmission,
-        mcpServers: fullConfig.loaded.mcpServers,
-        oauthRequesterServerNames,
-        resolverRequesterServerNames,
-        scopedNameSet,
-        safeServerNamesByServer,
-        requesterSenderId: requester.senderId,
-        runtimeKey: requester.runtimeKey,
-      });
+      const lease = await acquireRequester();
       if (!lease) {
         return undefined;
       }

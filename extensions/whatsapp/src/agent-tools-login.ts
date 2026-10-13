@@ -42,11 +42,13 @@ export function createWhatsAppLoginTool(
           throw new Error("WhatsApp login authority is no longer active.");
         }
       };
-      const renderQrReply = (params: {
-        message: string;
-        qrDataUrl: string;
-        connected?: boolean;
-      }) => {
+      const renderReply = (
+        params: { message: string; qrDataUrl?: string; connected?: boolean },
+        noQrDetails: { connected: boolean } | { qr: false },
+      ) => {
+        if (!params.qrDataUrl) {
+          return textResult(params.message, noQrDetails);
+        }
         const text = [
           params.message,
           "",
@@ -71,14 +73,7 @@ export function createWhatsAppLoginTool(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
         });
-        if (result.qrDataUrl) {
-          return renderQrReply({
-            message: result.message,
-            qrDataUrl: result.qrDataUrl,
-            connected: result.connected,
-          });
-        }
-        return textResult(result.message, { connected: result.connected });
+        return renderReply(result, { connected: result.connected });
       }
 
       await beforeCredentialPersistence();
@@ -92,15 +87,7 @@ export function createWhatsAppLoginTool(
             : false,
       });
 
-      if (!result.qrDataUrl) {
-        return textResult(result.message, { qr: false });
-      }
-
-      return renderQrReply({
-        message: result.message,
-        qrDataUrl: result.qrDataUrl,
-        connected: result.connected,
-      });
+      return renderReply(result, { qr: false });
     },
   };
 }

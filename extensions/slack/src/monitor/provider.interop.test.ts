@@ -1,12 +1,18 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
   createSlackBoltApp,
   gracefulStopSlackApp,
+  publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
+import {
+  formatSlackSocketModeSharedConnectionWarning,
+  isNonRecoverableSlackAuthError,
+  registerSlackSocketModeConnectionDiagnostics,
+} from "./reconnect-policy.js";
 
 const socketOptions = {
   slackMode: "socket",
@@ -73,25 +79,16 @@ describe("resolveSlackBoltInterop", () => {
     SocketModeReceiver: FakeSocketModeReceiver,
   };
 
-  it.each([
-    ["nested default import", { defaultImport: { default: moduleExports }, namespaceImport: {} }],
-    [
-      "App constructor with namespace receivers",
-      {
+  it("resolves the App constructor with namespace receivers", () => {
+    expect(
+      resolveSlackBoltInterop({
         defaultImport: FakeApp,
         namespaceImport: {
           HTTPReceiver: FakeHTTPReceiver,
           SocketModeReceiver: FakeSocketModeReceiver,
         },
-      },
-    ],
-    [
-      "namespace default",
-      { defaultImport: undefined, namespaceImport: { default: moduleExports } },
-    ],
-    ["namespace import", { defaultImport: undefined, namespaceImport: moduleExports }],
-  ] as const)("resolves the %s module shape", (_name, imports) => {
-    expect(resolveSlackBoltInterop(imports)).toEqual(moduleExports);
+      }),
+    ).toEqual(moduleExports);
   });
 });
 
@@ -405,4 +402,157 @@ describe("createSlackBoltApp", () => {
       ).resolves.toBe(false);
     },
   );
+});
+
+describe("slack socket reconnect helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("marks socket mode disconnected without error when the socket closes cleanly", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_402_000);
+
+    publishSlackDisconnectedStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lifecycle: "recovering",
+      lastDisconnect: {
+        at: 1_711_406_402_000,
+      },
+      lastError: null,
+    });
+  });
+
+  it("warns once when Slack reports a shared Socket Mode app token", () => {
+    const client = new EventEmitter();
+    const onSharedConnection = vi.fn();
+    const unregister = registerSlackSocketModeConnectionDiagnostics({
+      app: { receiver: { client } },
+      onSharedConnection,
+    });
+
+    const emit = (payload: object, binary = false) =>
+      client.emit("ws_message", Buffer.from(JSON.stringify(payload)), binary);
+    emit({ type: "events_api", payload: { text: "hello" } });
+    emit({ type: "hello", num_connections: "2" });
+    emit({ type: "hello", num_connections: 1 });
+    emit({ type: "hello", num_connections: 4 }, true);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
+
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(onSharedConnection).toHaveBeenCalledWith(2);
+    const warning = formatSlackSocketModeSharedConnectionWarning(
+      onSharedConnection.mock.calls[0]?.[0],
+    );
+    expect(warning).toContain("2 active connections");
+    expect(warning).toContain("equivalent routing and authorization");
+
+    unregister();
+    emit({ type: "hello", num_connections: 2 });
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount("ws_message")).toBe(0);
+  });
+
+  it("installs the disconnect waiter before socket start completes", async () => {
+    const client = new EventEmitter();
+    const app = {
+      receiver: { client },
+      start: vi.fn().mockImplementation(async () => {
+        client.emit("disconnected");
+      }),
+    };
+    const onStarted = vi.fn();
+
+    await expect(
+      startSlackSocketAndWaitForDisconnect({
+        app,
+        onStarted,
+      }),
+    ).resolves.toEqual({ event: "disconnect" });
+
+    expect(app.start).toHaveBeenCalledTimes(1);
+    expect(onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the disconnect waiter when onStarted throws", async () => {
+    const client = new EventEmitter();
+    const app = {
+      receiver: { client },
+      start: vi.fn().mockResolvedValue(undefined),
+    };
+    const err = new Error("status sink failed");
+
+    await expect(
+      startSlackSocketAndWaitForDisconnect({
+        app,
+        onStarted: () => {
+          throw err;
+        },
+      }),
+    ).rejects.toThrow("status sink failed");
+
+    expect(client.listenerCount("disconnected")).toBe(0);
+    expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
+    expect(client.listenerCount("error")).toBe(0);
+  });
+
+  it("uses socket start event error when Bolt rejects without detail", async () => {
+    const client = new EventEmitter();
+    const err = new Error("missing_scope");
+    const app = {
+      receiver: { client },
+      start: vi.fn().mockImplementation(() => {
+        client.emit("unable_to_socket_mode_start", err);
+        throw new Error();
+      }),
+    };
+
+    await expect(startSlackSocketAndWaitForDisconnect({ app })).rejects.toThrow("missing_scope");
+
+    expect(client.listenerCount("disconnected")).toBe(0);
+    expect(client.listenerCount("unable_to_socket_mode_start")).toBe(0);
+    expect(client.listenerCount("error")).toBe(0);
+  });
+
+  it("marks the socket client as shutting down before stop runs", async () => {
+    const app = {
+      receiver: { client: { shuttingDown: false } },
+      stop: vi.fn().mockImplementation(async () => {
+        expect(app.receiver.client.shuttingDown).toBe(true);
+      }),
+    };
+
+    await gracefulStopSlackApp(app);
+
+    expect(app.stop).toHaveBeenCalledTimes(1);
+    expect(app.receiver.client.shuttingDown).toBe(true);
+  });
+});
+
+it.each([
+  "account_inactive",
+  "invalid_auth",
+  "token_revoked",
+  "token_expired",
+  "not_authed",
+  "org_login_required",
+  "team_access_not_granted",
+  "user_removed_from_team",
+  "team_disabled",
+  "missing_scope",
+  "cannot_find_service",
+  "invalid_token",
+])("recognizes permanent Slack credential failure %s", (code) => {
+  expect(isNonRecoverableSlackAuthError(new Error(`An API error occurred: ${code}`))).toBe(true);
+});
+
+it("does not treat missing or non-error values as permanent auth failures", () => {
+  expect(isNonRecoverableSlackAuthError(null)).toBe(false);
+  expect(isNonRecoverableSlackAuthError(undefined)).toBe(false);
+  expect(isNonRecoverableSlackAuthError(42)).toBe(false);
+  expect(isNonRecoverableSlackAuthError({})).toBe(false);
 });

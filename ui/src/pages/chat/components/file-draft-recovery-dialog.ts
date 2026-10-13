@@ -34,6 +34,10 @@ export function reviewFileDrafts(
       }
       return true;
     };
+    const action = (label: string, run: () => void | Promise<void>, danger = false) =>
+      html`<button type="button" class=${danger ? "btn danger" : "btn"} @click=${run}>
+        ${label}
+      </button>`;
     const content = () => html`
       <openclaw-modal-dialog
         label=${t("chat.detailPanel.draftRecovery.review")}
@@ -70,10 +74,11 @@ export function reviewFileDrafts(
                   <textarea readonly rows="6" .value=${draft.content}></textarea>
                 </label>
                 <div class="exec-approval-actions">
-                  <button
-                    type="button"
-                    class="btn"
-                    @click=${async () => {
+                  ${action(
+                    copied === draft
+                      ? t("common.copied")
+                      : t("chat.detailPanel.draftRecovery.copy", { name: draft.name }),
+                    async () => {
                       if (!current(draft)) {
                         return;
                       }
@@ -83,25 +88,19 @@ export function reviewFileDrafts(
                         error = ok ? "" : t("chat.detailPanel.draftRecovery.copyFailed");
                         render(content);
                       }
-                    }}
-                  >
-                    ${copied === draft ? t("common.copied") : t("chat.detailPanel.draftRecovery.copy", { name: draft.name })}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn"
-                    @click=${() => {
+                    },
+                  )}
+                  ${action(
+                    t("chat.detailPanel.draftRecovery.download", { name: draft.name }),
+                    () => {
                       if (current(draft)) {
                         downloadTextFile(draft.name, draft.content);
                       }
-                    }}
-                  >
-                    ${t("chat.detailPanel.draftRecovery.download", { name: draft.name })}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn danger"
-                    @click=${() => {
+                    },
+                  )}
+                  ${action(
+                    t("chat.detailPanel.draftRecovery.discard", { name: draft.name }),
+                    () => {
                       if (!current(draft) || !draft.discard()) {
                         return;
                       }
@@ -112,10 +111,9 @@ export function reviewFileDrafts(
                       } else {
                         finish();
                       }
-                    }}
-                  >
-                    ${t("chat.detailPanel.draftRecovery.discard", { name: draft.name })}
-                  </button>
+                    },
+                    true,
+                  )}
                 </div>
               </section>
             `,

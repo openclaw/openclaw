@@ -7,12 +7,17 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { prepareProviderPrompt, type ProviderPromptTask } from "./provider-prompt-serialization.js";
+import {
+  prepareProviderPrompt,
+  type ProviderPromptCachePrefix,
+  type ProviderPromptTask,
+} from "./provider-prompt-serialization.js";
 
 type ProviderPromptSnapshot = {
   scopeDigest: string;
   digest: string;
   byteWeight: number;
+  cachePrefix?: ProviderPromptCachePrefix;
 };
 
 export type ProviderPromptState = {
@@ -131,6 +136,7 @@ async function recordProviderPrompt(params: {
     scopeDigest: sha256Hex(scope),
     digest: payload.digest,
     byteWeight: payload.byteWeight,
+    ...(payload.cachePrefix ? { cachePrefix: payload.cachePrefix } : {}),
   };
   const rejected = params.state.lastRejected;
   if (rejected?.scopeDigest === snapshot.scopeDigest && rejected.digest === snapshot.digest) {

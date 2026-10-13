@@ -651,24 +651,21 @@ export async function terminateGatewayProcessTree(
     return;
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-  const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-    env: resolveServiceManagerEnv(),
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const taskkill = (force: boolean) =>
+    spawnSync(taskkillPath, [...(force ? ["/F"] : []), "/T", "/PID", String(pid)], {
+      env: resolveServiceManagerEnv(),
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    });
+  const graceful = taskkill(false);
   // Direct PID probes avoid signaling an exited owner despite a lagging CIM snapshot.
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
   assertCurrent?.();
-  const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-    env: resolveServiceManagerEnv(),
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const forced = taskkill(true);
   if (forced.error || forced.status !== 0) {
     if (probeProcessState(pid) === "missing") {
       return;

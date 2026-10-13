@@ -46,6 +46,39 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Retroactively recorded shipped exports
+
+The following exports shipped in `v2026.9.8` and were removed without a
+compatibility window. Their removals were recorded retroactively on October 7,
+2026 when the shipped-surface guard was introduced; the exports remain removed.
+The registry's `removeAfter` is the UTC day before the removing commit landed,
+not a compatibility window that was offered to plugin authors.
+
+| Removed export (`openclaw/plugin-sdk/` prefix)                 | Landed (UTC) | `removeAfter` | Replacement                                                                                           |
+| -------------------------------------------------------------- | ------------ | ------------- | ----------------------------------------------------------------------------------------------------- |
+| `allow-from.mapBasicAllowlistResolutionEntries`                | 2026-10-05   | 2026-10-04    | None; project `BasicAllowlistResolutionEntry` fields in the consuming plugin.                         |
+| `computer-use.compileComputerUseValidator`                     | 2026-10-05   | 2026-10-04    | `Compile(schema).Check` from `typebox/compile`, using the exported Computer Use schemas.              |
+| `extension-shared.runStoppablePassiveMonitor`                  | 2026-10-05   | 2026-10-04    | `channel-outbound.runPassiveAccountLifecycle` with `stop: (monitor) => monitor.stop()`.               |
+| `gateway-runtime.resolveAdvertisedLanHost`                     | 2026-10-05   | 2026-10-04    | None; advertised LAN host discovery is host-owned.                                                    |
+| `json-store.readJsonFileWithFallback`                          | 2026-10-05   | 2026-10-04    | None; own JSON artifact parsing, fallback, and file-existence handling in the plugin.                 |
+| `provider-auth.normalizeSecretInputModeInput`                  | 2026-10-05   | 2026-10-04    | None; validate plugin-owned input as the exported `SecretInputMode` values `plaintext` or `ref`.      |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationOptions` | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationResult`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.listPersistentDedupeLegacyJsonFileEntries`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.migratePersistentDedupeLegacyJsonFile`      | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired. Runtime dedupe continues through the SQLite-backed APIs. |
+| `provider-auth.CachedCopilotToken`                             | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.DEFAULT_COPILOT_API_BASE_URL`                   | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.deriveCopilotApiBaseUrlFromToken`               | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.resolveCopilotApiToken`                         | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+
+The first six exports were removed in
+[`2fec39f57319be5b6e0b20b5305665ed1ff5e685`](https://github.com/openclaw/openclaw/commit/2fec39f57319be5b6e0b20b5305665ed1ff5e685).
+The four legacy JSON migration exports were removed in
+[`bd64d93ff1ae704d13813f6580c4809ba0e76606`](https://github.com/openclaw/openclaw/commit/bd64d93ff1ae704d13813f6580c4809ba0e76606).
+The four Copilot exports and their earlier deprecation entries were removed in
+[`f2de06b38de710854aacd19218327358445816c8`](https://github.com/openclaw/openclaw/commit/f2de06b38de710854aacd19218327358445816c8);
+third-party plugins must own their provider-specific token exchange and caching.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from

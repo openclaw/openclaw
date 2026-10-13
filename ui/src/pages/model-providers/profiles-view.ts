@@ -11,11 +11,7 @@ import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { showToast } from "../../lib/toast.ts";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
-import type {
-  ModelProviderCard,
-  ModelProviderPendingLogout,
-  ModelProviderProfileOrderLock,
-} from "./data.ts";
+import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
 
 registerSettingsEnglish();
 
@@ -73,14 +69,6 @@ export function apiKeySource(card: ModelProviderCard): string | undefined {
   return card.apiKey.envVar
     ? t("modelProviders.credentials.envKeyNamed", { name: card.apiKey.envVar })
     : t("modelProviders.credentials.envKey");
-}
-
-function profileOrderLockMessage(lock: ModelProviderProfileOrderLock): string {
-  return t(
-    lock === "auth-config"
-      ? "modelProviders.profiles.priorityManagedByAuth"
-      : "modelProviders.profiles.priorityManagedByProvider",
-  );
 }
 
 function profileMeta(profile: ProviderProfile): string {
@@ -163,7 +151,11 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
     const explicit =
       drafts[provider] !== undefined || card.profileOrderExplicitProviders.includes(provider);
     const explanation = lock
-      ? profileOrderLockMessage(lock)
+      ? t(
+          lock === "auth-config"
+            ? "modelProviders.profiles.priorityManagedByAuth"
+            : "modelProviders.profiles.priorityManagedByProvider",
+        )
       : !complete
         ? t(
             stored
@@ -182,14 +174,6 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
       profiles: [...ordered, ...remaining.values()],
     };
   });
-}
-
-function clearDragState(section: HTMLElement): void {
-  section.classList.remove(SORTING_CLASS);
-  for (const row of section.querySelectorAll<HTMLElement>(".model-providers__profile")) {
-    row.classList.remove(DRAGGING_CLASS);
-    row.style.removeProperty("translate");
-  }
 }
 
 function startPointerDrag(params: {
@@ -281,7 +265,11 @@ function startPointerDrag(params: {
     }
     update(event);
     const targetId = target?.element.dataset.profileId;
-    clearDragState(section);
+    section.classList.remove(SORTING_CLASS);
+    for (const profileRow of section.querySelectorAll<HTMLElement>(".model-providers__profile")) {
+      profileRow.classList.remove(DRAGGING_CLASS);
+      profileRow.style.removeProperty("translate");
+    }
     grip.removeEventListener("pointermove", update);
     grip.removeEventListener("pointerup", handleUp);
     grip.removeEventListener("pointercancel", handleCancel);

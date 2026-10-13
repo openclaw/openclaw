@@ -7,6 +7,7 @@ import { resolveSubagentCompletionResultText } from "../completion/subagent-comp
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -91,31 +92,35 @@ export async function readSubagentRunAnnounceResultUsing(
     target?.storePath ??
     deps.resolveSessionStorePathCore(deps.getRuntimeConfig().session?.store, { agentId });
   const sessionKey = target?.sessionKey ?? childSessionKey;
-  const sessionId =
-    target?.sessionId ?? deps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
-  const scope = { agentId, storePath, sessionKey };
-  const found = sessionId
-    ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
-    : undefined;
-  let event: unknown = found?.event;
-  if (!event) {
-    // Delete commits the canonical archive before its derived file is published.
-    event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
-      ?.event;
-  }
-  if (!isCurrent()) {
-    throw new SubagentAnnouncePreparationConflictError(
-      "The completed child run's transcript identity changed during announcement.",
-    );
-  }
-  const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
-  if (!answer) {
-    return {
-      text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
-      isCurrent,
-    };
-  }
-  return { text: answer, isCurrent };
+  return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) => {
+    const sourcePath = source ? ("kind" in source ? source.path : source.actor.path) : storePath;
+    const sessionId =
+      target?.sessionId ??
+      (await deps.readSubagentSessionEntry(sourcePath, sessionKey, agentId))?.sessionId;
+    const scope = { agentId, storePath: sourcePath, sessionKey };
+    const found = sessionId
+      ? await deps.findTranscriptEvent({ ...scope, sessionId }, { kind: "visible-final", runId })
+      : undefined;
+    let event: unknown = found?.event;
+    if (!event) {
+      // Delete commits the canonical archive before its derived file is published.
+      event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
+        ?.event;
+    }
+    if (!isCurrent()) {
+      throw new SubagentAnnouncePreparationConflictError(
+        "The completed child run's transcript identity changed during announcement.",
+      );
+    }
+    const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
+    if (!answer) {
+      return {
+        text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+        isCurrent,
+      };
+    }
+    return { text: answer, isCurrent };
+  });
 }
 
 function describeSubagentOutcome(child: ChildCompletionRow): string {

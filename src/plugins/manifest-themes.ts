@@ -7,6 +7,7 @@ import {
   THEME_DESCRIPTION_MAX_LENGTH,
   THEME_ARTWORK_ID_PATTERN,
   THEME_AVATAR_HAT_IDS,
+  THEME_BRAND_ICON_IDS,
   THEME_CRITTER_IDS,
 } from "../../packages/gateway-protocol/src/theme.ts";
 import type { PluginManifestTheme } from "./manifest-types.js";
@@ -43,7 +44,7 @@ function validateArtworkDuplicates(source: string): void {
       }
       for (const artwork of objectProperties(theme)) {
         const kind = propertyName(artwork);
-        if (kind !== "hats" && kind !== "critters") {
+        if (kind !== "icons" && kind !== "hats" && kind !== "critters") {
           continue;
         }
         const ids = new Set<string>();
@@ -88,20 +89,21 @@ function normalizeArtworkPath(value: unknown, label: string): string {
 }
 
 function normalizeArtwork(
+  icons: unknown,
   hats: unknown,
   critters: unknown,
   label: string,
-): Pick<PluginManifestTheme, "hats" | "critters"> {
+): Pick<PluginManifestTheme, "icons" | "hats" | "critters"> {
+  const paths = (value: unknown, kind: string, catalogIds: readonly string[]) =>
+    Object.fromEntries(
+      normalizeArtworkEntries(value, `${label}.${kind}`, catalogIds).map(([id, source]) => [
+        id,
+        normalizeArtworkPath(source, `${label}.${kind}.${id}`),
+      ]),
+    );
   return {
-    ...(hats !== undefined
-      ? {
-          hats: Object.fromEntries(
-            normalizeArtworkEntries(hats, `${label}.hats`, THEME_AVATAR_HAT_IDS).map(
-              ([id, source]) => [id, normalizeArtworkPath(source, `${label}.hats.${id}`)],
-            ),
-          ),
-        }
-      : {}),
+    ...(icons !== undefined ? { icons: paths(icons, "icons", THEME_BRAND_ICON_IDS) } : {}),
+    ...(hats !== undefined ? { hats: paths(hats, "hats", THEME_AVATAR_HAT_IDS) } : {}),
     ...(critters !== undefined
       ? {
           critters: Object.fromEntries(
@@ -178,10 +180,14 @@ export function normalizeManifestThemes(
       return { ok: false, error: `themes[${index}] must be an object` };
     }
     // SAFETY: entry is a non-null, non-array object; every field is validated below.
-    const { id, name, description, source, hats, critters } = entry as Record<string, unknown>;
+    const { id, name, description, source, icons, hats, critters } = entry as Record<
+      string,
+      unknown
+    >;
     if (
       Object.keys(entry).some(
-        (key) => !["id", "name", "description", "source", "hats", "critters"].includes(key),
+        (key) =>
+          !["id", "name", "description", "source", "icons", "hats", "critters"].includes(key),
       ) ||
       typeof id !== "string" ||
       !THEME_LOCAL_ID_PATTERN.test(id) ||
@@ -215,14 +221,14 @@ export function normalizeManifestThemes(
         name: name.trim(),
         description: description.trim(),
         source: relativePath,
-        ...normalizeArtwork(hats, critters, `themes[${index}]`),
+        ...normalizeArtwork(icons, hats, critters, `themes[${index}]`),
       });
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "invalid theme artwork" };
     }
     ids.add(id);
   }
-  if (manifestSource && themes.some((theme) => theme.hats || theme.critters)) {
+  if (manifestSource && themes.some((theme) => theme.icons || theme.hats || theme.critters)) {
     try {
       validateArtworkDuplicates(manifestSource);
     } catch (error) {

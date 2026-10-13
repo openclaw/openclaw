@@ -46,7 +46,7 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
+import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
@@ -68,32 +68,10 @@ export function createBoundedMistralFetcher(
 ): Fetcher {
   return async (input, init) => {
     const response = init == null ? await upstreamFetch(input) : await upstreamFetch(input, init);
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return response;
-    }
-    const reader = response.body.getReader();
-    const guard = createSseByteGuard(reader, {
+    return boundResponseBody(response, {
       maxBytes,
       onOverflow: ({ size, maxBytes: cap }) =>
         new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
-    });
-    const guardedStream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await guard.read();
-        if (done) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(value);
-      },
-      async cancel(reason) {
-        await guard.cancel(reason);
-      },
-    });
-    return new Response(guardedStream, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
     });
   };
 }
@@ -368,14 +346,6 @@ async function consumeChatStream(
   const createMissingToolCallId = (contentIndex: number) =>
     normalizeMissingToolCallId(`${missingToolCallIdScope}:toolcall:${contentIndex}`);
 
-  const findIdentityCandidates = (
-    matches: (identity: ToolBlock) => boolean,
-    excludedContentIndexes: ReadonlySet<number>,
-  ): ToolBlock[] =>
-    toolBlocks.filter(
-      (identity) => !excludedContentIndexes.has(identity.contentIndex) && matches(identity),
-    );
-
   const requireSingleCandidate = (candidates: ToolBlock[]): ToolBlock | undefined => {
     if (candidates.length > 1) {
       throw new Error(
@@ -394,17 +364,14 @@ async function consumeChatStream(
     const explicitId = params.explicitId;
     const functionName = params.functionName;
     const toolCallIndex = params.index;
+    const available = toolBlocks.filter(
+      (identity) => !params.usedContentIndexes.has(identity.contentIndex),
+    );
     const idCandidates = explicitId
-      ? findIdentityCandidates(
-          (identity) => identity.explicitIds.has(explicitId),
-          params.usedContentIndexes,
-        )
+      ? available.filter((identity) => identity.explicitIds.has(explicitId))
       : [];
     const nameCandidates = functionName
-      ? findIdentityCandidates(
-          (identity) => identity.functionNames.has(functionName),
-          params.usedContentIndexes,
-        )
+      ? available.filter((identity) => identity.functionNames.has(functionName))
       : [];
     if (idCandidates.length > 0) {
       let candidates = idCandidates;
@@ -445,10 +412,7 @@ async function consumeChatStream(
     const indexCandidates =
       toolCallIndex === undefined
         ? []
-        : findIdentityCandidates(
-            (identity) => identity.indexes.has(toolCallIndex),
-            params.usedContentIndexes,
-          );
+        : available.filter((identity) => identity.indexes.has(toolCallIndex));
 
     // Adopt newly supplied identity only into a block that still lacks it.
     // Index alone must remain unambiguous even when the SDK defaults it to zero.

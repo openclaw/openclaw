@@ -6,6 +6,7 @@ import {
   startAcpSpawnParentStreamRelay,
   type AcpSpawnParentRelayHandle,
 } from "../agents/subagents/spawn/acp-spawn-parent-stream.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -36,15 +37,26 @@ it("settles accepted ACP diagnostic batches before Gateway database close and re
     const runId = "acp-diagnostics-close-run";
     await replaceSessionEntry({ ...options, sessionKey }, { sessionId, updatedAt: 1 });
     const agent = openOpenClawAgentDatabase(options);
-    relay = withPluginRuntimeGatewayContextResolver(kernel.resolvePluginGatewayContext, () =>
-      startAcpSpawnParentStreamRelay({
-        ...options,
-        runId,
-        childSessionId: sessionId,
-        childSessionKey: sessionKey,
-        parentSessionKey: "agent:main:main",
-        eventRouting: {},
-      }),
+    const parentSessionKey = "agent:main:main";
+    relay = await withPluginRuntimeGatewayContextResolver(
+      kernel.resolvePluginGatewayContext,
+      async () =>
+        startAcpSpawnParentStreamRelay({
+          ...options,
+          runId,
+          childSessionId: sessionId,
+          childSessionKey: sessionKey,
+          parentSessionKey,
+          requesterAgentId: options.agentId,
+          expectedTarget: await captureSessionEventTargetForHost(
+            options.agentId,
+            parentSessionKey,
+            {
+              env: fixture.state.env,
+            },
+          ),
+          eventRouting: {},
+        }),
     );
     heldWriter = runOpenClawAgentWriteAdmission(options, async () => {
       writerEntered.resolve();

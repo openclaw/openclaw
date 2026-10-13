@@ -219,6 +219,14 @@
   /* The app owns the artwork; keep one translucent writing surface, not a
      second texture. Foreground/menu tokens retain their opaque surface color. */
   background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
+
+  &:where(.shell[data-background-managed] *) {
+    /* Personal artwork never changes the writing surface's readability. */
+    --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
+    background:
+      linear-gradient(var(--chat-composer-fill), var(--chat-composer-fill)),
+      var(--bg-content, var(--bg));
+  }
   border: 1px solid var(--chat-composer-hairline);
   /* Deliberately lighter than --shadow-sm: with the border and the luminance
      step already doing the separating, a heavier drop reads as a second frame. */

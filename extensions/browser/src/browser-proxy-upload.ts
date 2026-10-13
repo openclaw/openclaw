@@ -130,15 +130,11 @@ export async function prepareBrowserProxyUploadRequest(params: {
   signal?: AbortSignal;
 }): Promise<PreparedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
-  if (!isFileChooserRequest(params.method, params.path)) {
-    return { body: params.body };
-  }
-  const body = asNullableRecord(params.body);
-  if (!body) {
-    return { body: params.body };
-  }
-  const requestedPaths = readUploadPaths(body);
-  if (!requestedPaths) {
+  const body = isFileChooserRequest(params.method, params.path)
+    ? asNullableRecord(params.body)
+    : null;
+  const requestedPaths = body && readUploadPaths(body);
+  if (!body || !requestedPaths) {
     return { body: params.body };
   }
   assertBrowserProxyFileCountWithinLimit(requestedPaths.length, "request");
@@ -222,17 +218,20 @@ async function removeStagedUpload(directory: string): Promise<void> {
   }
 }
 
-async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+async function readUploadDirectoryEntries(directory: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
-  let entries;
   try {
-    entries = await fs.readdir(directory, { withFileTypes: true });
+    return await fs.readdir(directory, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
+      return [];
     }
     throw error;
   }
+}
+
+async function readDirectoryBytes(directory: string, signal?: AbortSignal): Promise<number> {
+  const entries = await readUploadDirectoryEntries(directory, signal);
   let totalBytes = 0;
   for (const entry of entries) {
     signal?.throwIfAborted();
@@ -254,16 +253,7 @@ async function readOwnedStagedUploads(
   stagingRoot: string,
   signal?: AbortSignal,
 ): Promise<OwnedStagedUpload[]> {
-  signal?.throwIfAborted();
-  let entries;
-  try {
-    entries = await fs.readdir(stagingRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
+  const entries = await readUploadDirectoryEntries(stagingRoot, signal);
   const uploads = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && entry.name.startsWith(BROWSER_PROXY_UPLOAD_PREFIX))

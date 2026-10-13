@@ -139,7 +139,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
     .watchStore(() => this.context?.agentIdentity)
-    .watchStore(() => this.context?.theme)
+    .watchStore(
+      () => this.context?.theme,
+      () => this.syncCommunityInviteState(),
+    )
     .watchStore(
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
@@ -322,7 +325,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   };
 
   private syncCommunityInviteState() {
-    if (this.context?.config.current.communityInvite !== true || !isCommunityInviteEligible()) {
+    if (
+      this.context?.theme.branding.communityLinks === false ||
+      this.context?.config.current.communityInvite !== true ||
+      !isCommunityInviteEligible()
+    ) {
       this.communityInvitePresentation = "unavailable";
     } else if (this.communityInvitePresentation !== "shown") {
       this.communityInvitePresentation = "pending";

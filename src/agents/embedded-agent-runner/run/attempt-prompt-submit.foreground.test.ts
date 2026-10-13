@@ -139,17 +139,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     );
   });
 
-  it.each([
-    "terminal",
-    "tool",
-    "steer",
-    "steer-backlog",
-    "followUp",
-    "cancelled",
-    "initial",
-    "initial-backlog",
-    "agent-end",
-  ] as const)(
+  it.each(["tool", "steer", "steer-backlog", "cancelled", "initial-backlog", "agent-end"] as const)(
     "refreshes permissions only for admitted %s continuation input",
     async (continuation) => {
       const model = {
@@ -200,7 +190,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         content: "Continue after the permission change.",
         timestamp: 2,
       };
-      const initial = continuation === "initial" || continuation === "initial-backlog";
+      const initial = continuation === "initial-backlog";
       if (initial) {
         prepareSystemPromptUpdate(pinnedPrompt).commit();
         await persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
@@ -230,9 +220,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
           return;
         }
         currentPrompt = "## Tools\nread";
-        if (continuation === "followUp") {
-          session.agent.followUp(queuedUser);
-        } else if (
+        if (
           continuation === "steer" ||
           continuation === "steer-backlog" ||
           continuation === "cancelled"
@@ -303,12 +291,11 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
           (entry) =>
             entry.type === "custom_message" && entry.customType === "openclaw.system-update",
         );
-      if (continuation === "terminal" || continuation === "cancelled") {
+      if (continuation === "cancelled") {
         expect(requests).toHaveLength(1);
         expect(updates).toHaveLength(0);
       } else {
-        const expectedRequests =
-          continuation === "initial" ? 1 : continuation === "steer-backlog" ? 3 : 2;
+        const expectedRequests = continuation === "steer-backlog" ? 3 : 2;
         expect(requests).toHaveLength(expectedRequests);
         expect(updates).toHaveLength(initial ? 2 : 1);
         expect(requests.map((request) => request.systemPrompt)).toEqual(
@@ -347,128 +334,123 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     },
   );
 
-  it.each(["loop", "session"] as const)(
-    "retains a late prompt update through a tool round with %s-owned history",
-    async (historyOwner) => {
-      const model = {
-        ...testModel,
-        provider: "anthropic",
-        api: "anthropic-messages" as const,
-        id: "claude-opus-5",
-      };
-      const { session, sessionManager } = await createTestSession({
-        model,
-        customTools: [
-          {
-            name: "read",
-            label: "Read",
-            description: "Read a fixture",
-            parameters: Type.Object({}),
-            execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
-          },
-        ],
-      });
-      const input = createBaseInput();
-      if (historyOwner === "session") {
-        const previous = session.agent.prepareNextTurnWithContext;
-        session.agent.prepareNextTurnWithContext = async (turn, signal) => {
-          const snapshot = await previous?.(turn, signal);
-          return {
-            ...snapshot,
-            context: {
-              ...(snapshot?.context ?? turn.context),
-              messages: session.agent.state.messages.slice(),
-            },
-          };
-        };
-      }
-      const pinnedPrompt = "## Tools\nNo tools are selected.";
-      session.setBaseSystemPrompt(pinnedPrompt);
-      const prepare = (systemPrompt: string) =>
-        prepareSessionSystemPrompt({
-          state: input.sessionPromptState,
-          routeKey: "anthropic/claude-opus-5/anthropic-messages",
-          systemPrompt,
-          entries: sessionManager.getBranch(),
-        });
-      const persist = () =>
-        persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
-          sessionManager.appendCustomEntryAsync(customType, data),
-        );
-      prepare(pinnedPrompt).commit();
-      await persist();
-      const baseConvert = session.agent.convertToLlm;
-      session.agent.convertToLlm = (messages) =>
-        baseConvert(
-          normalizeMessagesForLlmBoundary(messages, {
-            inHistorySystemUpdates: true,
-            appendOnlyRuntimeContext: true,
-            includeTimestamp: false,
-          }),
-        );
-      const requests: Context[] = [];
-      streamMocks.streamSimple.mockImplementation((activeModel, context: Context) => {
-        requests.push({ ...context, messages: structuredClone(context.messages) });
-        expect(
-          sessionManager
-            .getBranch()
-            .filter(
-              (entry) =>
-                entry.type === "custom_message" && entry.customType === "openclaw.system-update",
-            ),
-        ).toHaveLength(1);
-        return createAssistantResultStream(
-          createAssistant(
-            activeModel,
-            requests.length === 1
-              ? [{ type: "toolCall", id: "read-fixture", name: "read", arguments: {} }]
-              : [{ type: "text", text: "Done." }],
-            requests.length === 1 ? "toolUse" : "stop",
-          ),
-        );
-      });
-      let restore = true;
-      await submitEmbeddedAttemptPrompt({
-        ...input,
-        activeSession: session,
-        prependContext: undefined,
-        appendContext: undefined,
-        persistToolResultProjections: persist,
-        preparePrimaryModelRequest: () => {
-          if (!restore) {
-            return undefined;
-          }
-          restore = false;
-          const projection = prepare("## Tools\nThe read tool is available.");
-          return Promise.resolve(() => ({
-            tools: session.agent.state.tools,
-            systemPrompt: projection.systemPrompt,
-            promptUpdate: { update: projection.update, commit: projection.commit },
-          }));
+  it("retains a late prompt update through a tool round with session-owned history", async () => {
+    const model = {
+      ...testModel,
+      provider: "anthropic",
+      api: "anthropic-messages" as const,
+      id: "claude-opus-5",
+    };
+    const { session, sessionManager } = await createTestSession({
+      model,
+      customTools: [
+        {
+          name: "read",
+          label: "Read",
+          description: "Read a fixture",
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
         },
-        promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+      ],
+    });
+    const input = createBaseInput();
+    const previous = session.agent.prepareNextTurnWithContext;
+    session.agent.prepareNextTurnWithContext = async (turn, signal) => {
+      const snapshot = await previous?.(turn, signal);
+      return {
+        ...snapshot,
+        context: {
+          ...(snapshot?.context ?? turn.context),
+          messages: session.agent.state.messages.slice(),
+        },
+      };
+    };
+    const pinnedPrompt = "## Tools\nNo tools are selected.";
+    session.setBaseSystemPrompt(pinnedPrompt);
+    const prepare = (systemPrompt: string) =>
+      prepareSessionSystemPrompt({
+        state: input.sessionPromptState,
+        routeKey: "anthropic/claude-opus-5/anthropic-messages",
+        systemPrompt,
+        entries: sessionManager.getBranch(),
       });
-      expect(requests).toHaveLength(2);
-      expect(requests.map((request) => request.systemPrompt)).toEqual([pinnedPrompt, pinnedPrompt]);
-      expect(requests[0]?.messages.at(-1)).toMatchObject({
-        role: "user",
-        operatorMessage: { turnScoped: false },
-        content: expect.stringContaining("The read tool is available."),
-      });
-      expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
-        requests[0]?.messages,
+    const persist = () =>
+      persistSessionSystemPrompt(input.sessionPromptState, (customType, data) =>
+        sessionManager.appendCustomEntryAsync(customType, data),
       );
-      expect(requests[1]?.messages.slice(-2).map((message) => message.role)).toEqual([
-        "assistant",
-        "toolResult",
-      ]);
+    prepare(pinnedPrompt).commit();
+    await persist();
+    const baseConvert = session.agent.convertToLlm;
+    session.agent.convertToLlm = (messages) =>
+      baseConvert(
+        normalizeMessagesForLlmBoundary(messages, {
+          inHistorySystemUpdates: true,
+          appendOnlyRuntimeContext: true,
+          includeTimestamp: false,
+        }),
+      );
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel, context: Context) => {
+      requests.push({ ...context, messages: structuredClone(context.messages) });
       expect(
-        session.messages.filter(
-          (message) => message.role === "custom" && message.customType === "openclaw.system-update",
-        ),
+        sessionManager
+          .getBranch()
+          .filter(
+            (entry) =>
+              entry.type === "custom_message" && entry.customType === "openclaw.system-update",
+          ),
       ).toHaveLength(1);
-    },
-  );
+      return createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          requests.length === 1
+            ? [{ type: "toolCall", id: "read-fixture", name: "read", arguments: {} }]
+            : [{ type: "text", text: "Done." }],
+          requests.length === 1 ? "toolUse" : "stop",
+        ),
+      );
+    });
+    let restore = true;
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession: session,
+      prependContext: undefined,
+      appendContext: undefined,
+      persistToolResultProjections: persist,
+      preparePrimaryModelRequest: () => {
+        if (!restore) {
+          return undefined;
+        }
+        restore = false;
+        const projection = prepare("## Tools\nThe read tool is available.");
+        return Promise.resolve(() => ({
+          tools: session.agent.state.tools,
+          systemPrompt: projection.systemPrompt,
+          promptUpdate: { update: projection.update, commit: projection.commit },
+        }));
+      },
+      promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.systemPrompt)).toEqual([pinnedPrompt, pinnedPrompt]);
+    expect(requests[0]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      operatorMessage: { turnScoped: false },
+      content: expect.stringContaining("The read tool is available."),
+    });
+    expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
+      requests[0]?.messages,
+    );
+    expect(requests[1]?.messages.slice(-2).map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+    ]);
+    expect(
+      session.messages.filter(
+        (message) => message.role === "custom" && message.customType === "openclaw.system-update",
+      ),
+    ).toHaveLength(1);
+  });
 
   it("observes only foreground dispatch and keeps compaction out of restoration", async () => {
     const { activeSession } = createSession();
@@ -552,33 +534,4 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
     expect(observe).not.toHaveBeenCalled();
     expect(stream).not.toHaveBeenCalled();
   });
-
-  it.each(["preflight", "aborted"])(
-    "does not report applied filtering for %s-only submission",
-    async (kind) => {
-      const { activeSession } = createSession();
-      const observe = vi.fn();
-      const execute = submitEmbeddedAttemptPrompt({
-        ...createBaseInput(),
-        activeSession,
-        onPrimaryModelRequest: observe,
-        promptActiveSession: async (_prompt, options) => {
-          options?.preflightResult?.(kind !== "preflight");
-          if (kind === "aborted") {
-            await activeSession.agent.streamFn(
-              testModel,
-              { messages: [] },
-              { signal: AbortSignal.abort(new Error("cancelled")) },
-            );
-          }
-        },
-      });
-      if (kind === "aborted") {
-        await expect(execute).rejects.toThrow("cancelled");
-      } else {
-        await execute;
-      }
-      expect(observe).not.toHaveBeenCalled();
-    },
-  );
 });

@@ -213,28 +213,23 @@ async function recoverCorruptSqliteTargets(
     if (recoveryFiles.existing.length === 0) {
       continue;
     }
-    if (!recoveryFiles.existing.includes(sqlitePath)) {
-      reports.push(
-        recoverCorruptSqliteTarget(
-          target,
-          sqlitePath,
-          new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
-          () => maintenance.assertOwned(),
-        ),
-      );
-      continue;
-    }
-    const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
+    const hasDatabase = recoveryFiles.existing.includes(sqlitePath);
+    const inspection = hasDatabase
+      ? inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing)
+      : {
+          ok: false,
+          error: new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+        };
     if (inspection.ok) {
       continue;
     }
-    if (!isSqliteCorruptionError(inspection.error)) {
+    if (hasDatabase && !isSqliteCorruptionError(inspection.error)) {
       reports.push(
         createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error),
       );
       continue;
     }
-    if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
+    if (!hasDatabase || !isCanonicalAgentIndexCorruptionError(inspection.error)) {
       reports.push(
         recoverCorruptSqliteTarget(target, sqlitePath, inspection.error, () =>
           maintenance.assertOwned(),

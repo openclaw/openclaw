@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -129,24 +130,13 @@ function resolve() {
 
 function observeRemovalIntent() {
   const accepted = createDeferred();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    (context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "sandboxRegistry.beginRemoval") {
-                accepted.resolve();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  );
+  probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const result = await scope.execute(command, executeOptions);
+    if (command.type === "sandboxRegistry.beginRemoval") {
+      accepted.resolve();
+    }
+    return result;
+  });
   return accepted.promise;
 }
 

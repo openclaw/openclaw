@@ -43,10 +43,11 @@ describe("assertSqliteIntegrity", () => {
       } catch (error) {
         failure = error;
       }
-      expect(failure).toMatchObject({ name: "SqliteIntegrityError" });
-      expect(String(failure)).toMatch(
-        /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
-      );
+      expect(failure).toMatchObject({
+        name: "SqliteIntegrityError",
+        message:
+          'SQLite foreign_key_check failed for test database: children row 1 references parents (foreign key 0). Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.',
+      });
     } finally {
       database.close();
     }
@@ -238,7 +239,7 @@ describe("assertSqliteIntegrity", () => {
       `);
 
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        /children row 5 references parents \(foreign key 0\); additional violations omitted$/u,
+        /children row 5 references parents \(foreign key 0\); additional violations omitted\. Stop the Gateway, run "openclaw doctor --fix"/u,
       );
     } finally {
       database.close();

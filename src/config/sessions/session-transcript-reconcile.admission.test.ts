@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -95,16 +96,12 @@ it("waits for a cold projection without superseding its native integrity admissi
     return database;
   });
   const entered = createDeferred();
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "open") {
-          entered.resolve();
-        }
-        admit(request, grant);
-      }, attachment),
-  );
+  probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "open") {
+      entered.resolve();
+    }
+    admit(request, grant);
+  });
   startSessionTranscriptIndexReconcile(options);
   await entered.promise;
   await waitForSessionTranscriptProjection(scope);

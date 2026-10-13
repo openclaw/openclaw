@@ -12,8 +12,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -250,16 +252,17 @@ it("executes Board mutations off the host and publishes each committed change on
       html: "<p>committed</p>",
       grantState: "granted",
     });
-    const hostBoardMutations = host.calls
-      .slice(0, 2)
-      .flatMap((call) => call.mock.calls.map(([sql]) => sql))
-      .filter(
-        (sql) =>
-          typeof sql === "string" &&
-          /^\s*(?:insert|update|delete|replace)\b/iu.test(sql) &&
-          /\bboard_(?:tabs|widgets)\b/iu.test(sql),
-      );
+    const hostBoardMutations = host.queries.filter(
+      (sql) =>
+        /^\s*(?:insert|update|delete|replace|create|alter|drop)\b/iu.test(sql) &&
+        /\bboard_(?:tabs|widgets)\b/iu.test(sql),
+    );
     expect(hostBoardMutations).toEqual([]);
+    expect(
+      host.queries.filter(
+        (sql) => /\bfrom\s+sqlite_schema\b/iu.test(sql) && /\bboard_widgets\b/iu.test(sql),
+      ),
+    ).toEqual([]);
     expect(changes).toEqual([]);
   } finally {
     host.restore();
@@ -330,24 +333,19 @@ it("preserves committed Boards and admits followers after publication cleanup is
       changes.push(change);
     }
   });
-  const create = admission.createSqliteWorkerOperationAdmission;
   let refuseCleanup = false;
   let refusals = 0;
-  const interception = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      create((request, grant) => {
-        if (refuseCleanup && request.stage === "prepare") {
-          refuseCleanup = false;
-          refusals++;
-          throw new Error("controlled Board publication cleanup admission refusal");
-        }
-        admit(request, grant);
-        if (request.stage === "commit" && refusals === 0) {
-          refuseCleanup = true;
-        }
-      }, attachment),
-    );
+  const interception = probe.admission(admission, (request, grant, admit) => {
+    if (refuseCleanup && request.stage === "prepare") {
+      refuseCleanup = false;
+      refusals++;
+      throw new Error("controlled Board publication cleanup admission refusal");
+    }
+    admit(request, grant);
+    if (request.stage === "commit" && refusals === 0) {
+      refuseCleanup = true;
+    }
+  });
   const put = (name: string) =>
     store.putWidget({ ...target, name, content: { kind: "html", html: `<p>${name}</p>` } });
   const first = put("first");
@@ -443,17 +441,12 @@ it.each(["transaction", "commit"] as const)(
       resolveSession: () => ({ ...options, sessionKey }),
       env: options.env,
     });
-    const create = admission.createSqliteWorkerOperationAdmission;
-    const interception = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        create((request, grant) => {
-          if (request.stage === stage) {
-            sessionKey = "agent:main:replacement";
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const interception = probe.admission(admission, (request, grant, admit) => {
+      if (request.stage === stage) {
+        sessionKey = "agent:main:replacement";
+      }
+      admit(request, grant);
+    });
     try {
       const pending = reader.putWidget({
         ...target,
@@ -539,9 +532,9 @@ it.each(["target", "native-mutation"] as const)(
 );
 
 it.each(["snapshot", "document"] as const)(
-  "retains Board validation error identity from a worker %s read",
+  "retains Board validation errors without waiting on writer-dependent retirement (%s)",
   async (operation) => {
-    const { database, store, target } = fixture();
+    const { database, options, store, target } = fixture();
     await store.putWidget({
       ...target,
       name: "status",
@@ -550,12 +543,37 @@ it.each(["snapshot", "document"] as const)(
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
       .run(JSON.stringify({ contentOwner: "invalid" }), target.sessionKey);
+    const historyRetiring = createDeferredCore();
+    const writerSettled = createDeferredCore();
+    const releaseHistory = createDeferredCore();
+    const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+      historyRetiring.resolve();
+      return Promise.race([writerSettled.promise, releaseHistory.promise]);
+    });
     const read =
       operation === "snapshot"
         ? store.getSnapshot(target)
         : store.useWidgetDocument(target, "status", (document) => document);
-    await expect(read).rejects.toBeInstanceOf(BoardValidationError);
-    await expect(read).rejects.toMatchObject({ code: "invalid_operation" });
+    const outcome = read.catch((error: unknown) => error);
+    const following = runOpenClawAgentWorkerWrite(options, async () => {
+      writerSettled.resolve();
+      return "following writer";
+    });
+    try {
+      const result = await Promise.race([
+        outcome,
+        historyRetiring.promise.then(
+          () => new Error("Board read cleanup waits on its own queued writer"),
+        ),
+      ]);
+      expect(result).toBeInstanceOf(BoardValidationError);
+      expect(result).toMatchObject({ code: "invalid_operation" });
+      await expect(following).resolves.toBe("following writer");
+    } finally {
+      releaseHistory.resolve();
+      await Promise.allSettled([read, following]);
+      retirement.mockRestore();
+    }
   },
 );
 

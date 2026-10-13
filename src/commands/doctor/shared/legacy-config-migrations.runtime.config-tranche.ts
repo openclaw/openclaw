@@ -139,9 +139,3 @@ export function migrateConfigTranche(raw: Record<string, unknown>, changes: stri
   stripRetiredAgentConfig(raw, changes);
   migrateWhatsAppDebounce(raw, changes);
 }
-
-export function hasConfigTrancheLegacyKeys(root: Record<string, unknown>): boolean {
-  const changes: string[] = [];
-  migrateConfigTranche(structuredClone(root), changes);
-  return changes.length > 0;
-}

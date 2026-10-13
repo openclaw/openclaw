@@ -66,7 +66,7 @@ describe("Sessions archive outcome lifetime", () => {
     "restores the captured pinned session after leaving %s",
     async (navigation) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
+      const archived = fixture.page.archiveActions.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       if (navigation === "before confirmation") {
         fixture.page.remove();
@@ -96,7 +96,7 @@ describe("Sessions archive outcome lifetime", () => {
     "retires Undo on reconnect $reconnect (same client=$sameClient)",
     async ({ reconnect, sameClient }) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
+      const archived = fixture.page.archiveActions.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       const transition = () => {
         fixture.gateway.emit({ phase: "reconnecting", client: null });
@@ -126,7 +126,7 @@ describe("Sessions archive outcome lifetime", () => {
 
   it("keeps the original durable identity when the row is replaced before Undo", async () => {
     const fixture = await setup();
-    const archived = fixture.page.archiveSessionWithUndo(row);
+    const archived = fixture.page.archiveActions.archive(row);
     fixture.pending.resolve(result);
     await archived;
     await fixture.toast.updateComplete;
@@ -153,7 +153,7 @@ describe("Sessions archive outcome lifetime", () => {
     "does not report success for a failed archive (left page=%s)",
     async (left) => {
       const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
+      const archived = fixture.page.archiveActions.archive(row);
       await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
       if (left) {
         fixture.page.remove();

@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   runWriteTransaction,
   withPluginStateDatabaseReadOnly,
@@ -352,8 +353,11 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
       for (const entry of observed) {
         const query = getPluginStateKysely(db)
           .deleteFrom("plugin_state_entries")
-          .where((eb) => observedPluginStateRow(eb, params, entry));
-        deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
+          .where((eb) => observedPluginStateRow(eb, params, entry))
+          .returning(["plugin_id", "namespace", "entry_key"]);
+        const result = executeSqliteQuerySync(db, query);
+        pluginStatePublication.stageDeletions(db, result.rows);
+        deleted += result.rows.length;
       }
       return { deleted, changed: observed.length - deleted };
     },

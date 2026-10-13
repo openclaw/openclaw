@@ -36,10 +36,23 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { configureRestartSessionEventMocks } from "./server-restart-sentinel.test-support.js";
 import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn<typeof import("./session-utils.js").loadSessionEntry>(),
+  resolveSessionTarget:
+    vi.fn<
+      typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
+    >(),
+  captureSessionEventTarget:
+    vi.fn<
+      typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
+    >(),
+  enqueueSessionEvent:
+    vi.fn<
+      typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
+    >(),
   sendDurableMessageBatchCore: vi.fn(async () => ({
     status: "sent" as const,
     results: [{ channel: "matrix" as const, messageId: "synthetic-notice" }],
@@ -64,9 +77,14 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
 }));
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: vi.fn(),
+// mock-isolation: Inspect the supplied state context without loading worker store discovery.
+vi.mock("./session-utils-store-worker.js", () => ({
+  resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
+}));
+// mock-isolation: The state-context suite observes adoption without executing a model turn.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: mocks.enqueueSessionEvent,
 }));
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: mocks.sendDurableMessageBatchCore,
@@ -132,6 +150,8 @@ beforeEach(() => {
   ]);
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
   vi.clearAllMocks();
+  setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: ["matrix:!operator:example"] } });
+  configureRestartSessionEventMocks(mocks, "synthetic-session");
   mocks.loadSessionEntry.mockReturnValue({
     cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
     agentId: "main",

@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
@@ -43,7 +43,7 @@ describe("chat transcript invalidation", () => {
   it.each(["ready", "delayed"])(
     "updates settled avatars when only the theme hat changes with a %s palette",
     (palette) => {
-      const branding = { mascot: "claw" as const, critters: [], avatarHat: "fedora" as const };
+      const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
       const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
       )!;

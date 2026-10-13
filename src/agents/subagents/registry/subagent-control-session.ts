@@ -14,10 +14,8 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import type {
-  AgentDatabaseGenerationClaim,
-  OpenClawAgentDatabaseExecution,
-} from "../../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseGenerationClaim } from "../../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,

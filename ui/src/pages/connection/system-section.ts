@@ -69,13 +69,6 @@ function renderSystemStat(stat: SystemStat) {
   `;
 }
 
-function usedFraction(totalBytes: number | undefined, freeBytes: number | undefined) {
-  if (totalBytes == null || freeBytes == null || totalBytes <= 0) {
-    return undefined;
-  }
-  return (totalBytes - freeBytes) / totalBytes;
-}
-
 function formatUsedPercent(fraction: number) {
   return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
 }
@@ -86,7 +79,10 @@ function resourceStat(
   freeBytes: number | undefined,
   path?: string,
 ): SystemStat {
-  const used = usedFraction(totalBytes, freeBytes);
+  const used =
+    totalBytes == null || freeBytes == null || totalBytes <= 0
+      ? undefined
+      : (totalBytes - freeBytes) / totalBytes;
   return {
     label: t(`quickSettings.system.${kind}`),
     value: used == null ? "—" : formatUsedPercent(used),

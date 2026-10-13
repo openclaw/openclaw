@@ -150,3 +150,15 @@ if (sendToParent) {
     })();
   });
 }
+
+// Synchronous admission waits for native close without opening a source reader in its process.
+if (process.argv[2] === "--openclaw-database-verify-sync" && process.argv[3]) {
+  const pathname = process.argv[3];
+  void verifyOpenClawDatabases([{ path: pathname, kind: "agent", label: pathname, check: "full" }])
+    .then(([result]) => {
+      process.exitCode = result?.ok ? 0 : 1;
+    })
+    .catch(() => {
+      process.exitCode = 1;
+    });
+}

@@ -89,7 +89,6 @@ export class AcpTranslatorPromptStream {
       sessionUpdates,
       this.pendingPrompts,
       this.approvalRelays,
-      (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
       (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
       log,
     );

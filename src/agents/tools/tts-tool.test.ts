@@ -30,20 +30,6 @@ describe("createTtsTool", () => {
     });
   });
 
-  it("does not hardcode silent-reply tokens in the tool description", () => {
-    const tool = createTtsTool();
-
-    expect(tool.description).not.toContain("NO_REPLY");
-  });
-
-  it("requires explicit user or config audio intent in guidance text", () => {
-    const tool = createTtsTool();
-
-    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
-    expect(tool.description).toContain("active TTS config");
-    expect(tool.description).toContain("never ordinary text reply");
-  });
-
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,
@@ -70,49 +56,15 @@ describe("createTtsTool", () => {
     expect(getCoreTtsToolResultMediaUrls(result)).toEqual(["/tmp/reply.opus"]);
   });
 
-  it.each([
-    {
-      audioAsVoice: true,
-      voiceCompatible: false,
-      audioPath: "/tmp/reply.mp3",
-      channel: "feishu",
-    },
-    {
-      audioAsVoice: false,
-      voiceCompatible: true,
-      audioPath: "/tmp/reply.ogg",
-      channel: undefined,
-    },
-  ])(
-    "preserves runtime voice delivery $audioAsVoice with provider compatibility $voiceCompatible",
-    async ({ audioAsVoice, voiceCompatible, audioPath, channel }) => {
-      textToSpeechSpy.mockResolvedValue({
-        success: true,
-        audioPath,
-        provider: "test",
-        voiceCompatible,
-        audioAsVoice,
-      });
-
-      const tool = createTtsTool();
-      const result = await tool.execute("call-1", { text: "hello", channel });
-
-      const media = requireRecord(
-        requireRecord(result.details, "TTS result details").media,
-        "media",
-      );
-      expect(media.mediaUrl).toBe(audioPath);
-      expect(media.audioAsVoice).toBe(audioAsVoice ? true : undefined);
-    },
-  );
-
   it("passes an optional timeout to speech generation", async () => {
-    const tool = createTtsTool();
+    const tool = createTtsTool({ agentId: "voice-agent", agentAccountId: "feishu-main" });
     const result = await tool.execute("call-1", { text: "hello", timeoutMs: 12_345 });
 
     const args = latestTextToSpeechArgs();
     expect(args.text).toBe("hello");
     expect(args.timeoutMs).toBe(12_345);
+    expect(args.agentId).toBe("voice-agent");
+    expect(args.accountId).toBe("feishu-main");
     expect(requireRecord(result.details, "TTS result details").timeoutMs).toBe(12_345);
   });
 
@@ -123,24 +75,6 @@ describe("createTtsTool", () => {
       "timeoutMs must be a positive integer in milliseconds.",
     );
     expect(textToSpeechSpy).not.toHaveBeenCalled();
-  });
-
-  it("passes the active agent id to speech generation", async () => {
-    const tool = createTtsTool({ agentId: "voice-agent" });
-    await tool.execute("call-1", { text: "hello" });
-
-    const args = latestTextToSpeechArgs();
-    expect(args.text).toBe("hello");
-    expect(args.agentId).toBe("voice-agent");
-  });
-
-  it("passes the active account id to speech generation", async () => {
-    const tool = createTtsTool({ agentAccountId: "feishu-main" });
-    await tool.execute("call-1", { text: "hello" });
-
-    const args = latestTextToSpeechArgs();
-    expect(args.text).toBe("hello");
-    expect(args.accountId).toBe("feishu-main");
   });
 
   it("defuses reply-directive tokens embedded in the spoken text", async () => {

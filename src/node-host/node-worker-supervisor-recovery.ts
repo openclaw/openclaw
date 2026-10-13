@@ -148,19 +148,15 @@ async function recoverNodeWorkerLaunch(params: {
     if (!(await stillOwned())) {
       return latest();
     }
-    if (containerState === "unknown") {
+    if (containerState === "unknown" || containerState === "reused") {
       if (params.state === "cancelled") {
         return latest();
       }
       throw new Error(
-        `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`,
+        containerState === "unknown"
+          ? `node worker container ${receipt.container.containerId} could not be inspected; restore its ${receipt.container.engine} engine before enabling worker hosting`
+          : `node worker launch ${receipt.launchId} lost its container ownership`,
       );
-    }
-    if (containerState === "reused") {
-      if (params.state === "cancelled") {
-        return latest();
-      }
-      throw new Error(`node worker launch ${receipt.launchId} lost its container ownership`);
     }
     await params.containerLifecycle.remove(receipt.container, receipt);
   } else if (receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {

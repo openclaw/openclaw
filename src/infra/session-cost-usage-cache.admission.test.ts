@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,6 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
+import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
@@ -463,6 +464,55 @@ it.each([false, true])(
   },
 );
 
+it.for(["rollup", "prune"] as const)(
+  "cancels a queued usage %s before the active writer settles",
+  async (operation, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-canceled-admission";
+      const options = { agentId, env: state.env };
+      const database = openOpenClawAgentDatabase(options);
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
+      expect(await owner.acquire()).toBe(true);
+      const row = {
+        rollupId: "retained",
+        previousValueJson: null,
+        valueJson: Buffer.from("{}"),
+        blob: null,
+        updatedAt: 1,
+      };
+      expect(await owner.writeRollup(row)).toBe(true);
+      const before = readSessionCostUsageRollupRows(agentId, database.path);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const held = runOpenClawAgentWorkerWrite(options, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      const controller = new AbortController();
+      const cancellation = new Error("Usage callback deadline expired");
+      const writing =
+        operation === "rollup"
+          ? owner.writeRollup({ ...row, rollupId: "canceled" }, controller.signal)
+          : owner.pruneRows(before, controller.signal);
+      const outcome = writing.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      controller.abort(cancellation);
+      try {
+        expect(await withinTest(outcome, signal)).toBe(cancellation);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, writing]);
+        await owner.release();
+      }
+      expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual(before);
+    });
+  },
+);
+
 it("rejects a queued rollup after its refresh authority is revoked", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-revoked-write";
@@ -505,6 +555,56 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
   });
 });
+
+it.each(["rollup", "prune"] as const)(
+  "cancels a queued native usage %s before the writer settles",
+  async (operation) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      vi.spyOn(agentExecution, "supportsOpenClawAgentDatabaseExecution").mockReturnValue(false);
+      const agentId = "usage-queued-deadline";
+      const options = { agentId, env: state.env };
+      const database = openOpenClawAgentDatabase(options);
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
+      expect(await owner.acquire()).toBe(true);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      const admit = vi.spyOn(writerAdmission, "runOpenClawAgentWriteAdmission");
+      const controller = new AbortController();
+      const expired = new Error("usage host callback deadline expired");
+      const writing =
+        operation === "rollup"
+          ? owner.writeRollup(
+              {
+                rollupId: "expired",
+                previousValueJson: null,
+                valueJson: Buffer.from("{}"),
+                blob: null,
+                updatedAt: 1,
+              },
+              controller.signal,
+            )
+          : owner.pruneRows([], controller.signal);
+      const outcome = Promise.allSettled([writing]);
+      try {
+        // Check the queue boundary before awaiting: a missing signal fails without wedging cleanup.
+        expect(admit.mock.calls.at(-1)?.[4]).toBe(controller.signal);
+        controller.abort(expired);
+        expect(await outcome).toEqual([{ status: "rejected", reason: expired }]);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual([]);
+      } finally {
+        release.resolve();
+        await reservation;
+        await outcome;
+        await owner.release();
+      }
+    });
+  },
+);
 
 it("releases the acquired refresh lock after the caller changes its state directory", async () => {
   const originalRoot = tempDirs.make("openclaw-usage-lock-origin-");

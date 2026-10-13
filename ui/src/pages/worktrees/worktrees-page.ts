@@ -77,8 +77,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private readonly listTask = new Task(this, {
     autoRun: false,
-    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
-    task: ([client], { signal }) =>
+    task: ([client]: readonly [GatewayBrowserClient | null], { signal }) =>
       client ? client.request<WorktreesListResult>("worktrees.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
@@ -90,9 +89,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private readonly branchesTask = new Task(this, {
     autoRun: false,
-    args: () =>
-      [this.gateway.connected ? this.gateway.client : null, this.createRepoRoot.trim()] as const,
-    task: ([client, repoRoot], { signal }) =>
+    task: ([client, repoRoot]: readonly [GatewayBrowserClient | null, string], { signal }) =>
       client && repoRoot
         ? client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal })
         : initialState,

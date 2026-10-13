@@ -10,6 +10,7 @@ import * as walCheckpoint from "../../infra/sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -122,23 +123,18 @@ test.each([
     };
     const budget = getBudgetKickState(params.storePath, params.maintenance);
     let commitRequestedAtNs: bigint | undefined;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observeAdmission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.identity) &&
-            typeof request.facts.identity.nativeLocation === "string" &&
-            sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
-          ) {
-            commitRequestedAtNs = process.hrtime.bigint();
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observeAdmission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        typeof request.facts.identity.nativeLocation === "string" &&
+        sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
+      ) {
+        commitRequestedAtNs = process.hrtime.bigint();
+      }
+      admit(request, grant);
+    });
     let completedAt: number | undefined;
     const relayedCompletions: number[] = [];
     const publish = walCheckpoint.publishSqliteWalCheckpointObservation;
@@ -384,27 +380,22 @@ test.each([false, true])(
       nativeSettled: boolean;
     }> = [];
     const databasePathKey = sqliteReaderDatabasePathKey(database.path);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observeAdmission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            (request.stage === "transaction" || request.stage === "commit") &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.identity) &&
-            typeof request.facts.identity.nativeLocation === "string" &&
-            sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
-          ) {
-            maintenanceAdmissions.push({
-              stage: request.stage,
-              authorizationChecked,
-              nativeSettled,
-            });
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observeAdmission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (
+        (request.stage === "transaction" || request.stage === "commit") &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.identity) &&
+        typeof request.facts.identity.nativeLocation === "string" &&
+        sqliteReaderDatabasePathKey(request.facts.identity.nativeLocation) === databasePathKey
+      ) {
+        maintenanceAdmissions.push({
+          stage: request.stage,
+          authorizationChecked,
+          nativeSettled,
+        });
+      }
+      admit(request, grant);
+    });
     const execSpy = vi.spyOn(database.db, "exec");
     const scheduled = observeSqliteWalPeriodicWork();
     let maintenance: ReturnType<typeof configureSqliteWalMaintenance>;

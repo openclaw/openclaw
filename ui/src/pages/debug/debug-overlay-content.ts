@@ -156,9 +156,7 @@ class DebugOverlayContent extends OpenClawLightDomElement {
         ];
       }
     }
-    const next = new Map(this.sections);
-    next.set(id, state);
-    this.sections = next;
+    this.sections = new Map(this.sections).set(id, state);
   }
 
   private renderSection(section: DebugOverlaySectionDescriptor) {

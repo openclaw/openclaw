@@ -21,6 +21,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { readSessionIdentityEvidenceInDatabase } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -437,6 +438,7 @@ describe("worker placement session evidence", () => {
           database.db.exec("PRAGMA user_version = 999;");
           closeOpenClawAgentDatabasesForTest();
         } else {
+          markCanonicalSessionValidationPending(database, [unreadable.sessionKey]);
           database.db
             .prepare(
               "UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?",

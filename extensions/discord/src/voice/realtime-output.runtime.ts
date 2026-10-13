@@ -12,6 +12,7 @@ import {
   setDiscordAudioOutputStatus,
 } from "./audio-worker-protocol.js";
 import { DiscordOpusEncodeStream, createRealtimePcmToDiscordConverter } from "./audio.js";
+import { resolveDiscordOutputAudioDelta } from "./output-activity.js";
 import {
   DISCORD_REALTIME_PLAYBACK_IDLE_MS,
   type DiscordRealtimePlayer,
@@ -21,7 +22,6 @@ import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
-const DISCORD_RAW_PCM_BYTES_PER_MS = 192;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 // Cover the provider's 80 ms reorder window plus two Discord playback ticks.
 const DISCORD_CONTINUOUS_PREROLL_FRAMES = 6;
@@ -101,14 +101,9 @@ export class DiscordRealtimeOutput {
     if (!this.isAcceptingAudio()) {
       return;
     }
-    const previous = this.activity.snapshot();
-    const sinkBytes = Math.floor((previous.sourceAudioBytes + sourcePcm.length) / 2) * 8;
-    const audioMs = (sinkBytes - previous.sinkAudioBytes) / DISCORD_RAW_PCM_BYTES_PER_MS;
-    this.activity.markAudio({
-      audioMs,
-      sourceAudioBytes: sourcePcm.length,
-      sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
-    });
+    this.activity.markAudio(
+      resolveDiscordOutputAudioDelta(this.activity.snapshot(), sourcePcm.length),
+    );
     if (audible) {
       this.clearTimer("silenceTimer");
       this.silentSince = undefined;

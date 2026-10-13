@@ -228,6 +228,7 @@ function createCronPromptExecutor(
       scheduledToolPolicy,
       executionIdentity: params.executionIdentity,
     });
+    params.onPromptAdmission(cronAdmission);
     const onExecutionStarted = async (info?: CronRunnerStartedInfo) => {
       params.onExecutionStarted?.(info);
       await params.executionIdentity?.onExecutionStarted?.();
@@ -645,7 +646,6 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??
@@ -689,6 +689,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
   registerAgentRunContext(params.runId, {
+    sessionEventDelivery: params.sourceDelivery.normalFinal === "private" ? false : undefined,
     sessionId: params.cronSession.sessionEntry.sessionId,
     agentId: params.agentId,
     verboseLevel: resolvedVerboseLevel,
@@ -770,7 +771,6 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
         })
       ).preferFinalAssistantVisibleText,
     });
-    const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
       !runResult.meta?.error &&
       !interimHasFatalErrorPayload &&
@@ -778,7 +778,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
       !hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, promptMediaTaskIds) &&
       !interimPayloadHasStructuredContent &&
       !interimPayloads.some((payload) => payload?.isError === true) &&
-      isLikelyInterimCronMessage(interimText);
+      isLikelyInterimCronMessage(interimOutputText ?? "");
 
     let hasFreshDescendants = false;
     let hasActiveDescendants = false;

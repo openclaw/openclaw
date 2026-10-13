@@ -55,12 +55,9 @@ function resolvePhysicalPathInsideRootSync(
     while (true) {
       const candidate = fs.statSync(current, { bigint: true });
       if (candidate.dev === root.dev && candidate.ino === root.ino) {
-        // Prefer the matching observed spelling unless it is itself a link.
-        // Windows 8.3 aliases are ordinary directory paths; junction roots retain
-        // their already-admitted canonical spelling.
-        const physicalRoot = fs.lstatSync(current).isSymbolicLink()
-          ? path.resolve(rootPath)
-          : current;
+        // Resolve ancestor junctions too; ordinary realpath preserves 8.3 names.
+        // The descriptor boundary revalidates this spelling against rootIdentity.
+        const physicalRoot = fs.realpathSync(current);
         return {
           rootPath: physicalRoot,
           targetPath: path.resolve(physicalRoot, path.relative(current, targetPath)),

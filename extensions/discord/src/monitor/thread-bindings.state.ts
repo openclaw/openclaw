@@ -356,10 +356,9 @@ function restoreBindings(entries: PluginStateEntry<ThreadBindingRecord>[]) {
   THREAD_BINDINGS_STATE.loadedPersistentBindings = entries.length > 0;
   for (const entry of entries) {
     const normalized = normalizePersistedBinding(entry.key, entry.value);
-    if (!normalized) {
-      continue;
+    if (normalized) {
+      setBindingRecord(normalized);
     }
-    setBindingRecord(normalized);
   }
 }
 

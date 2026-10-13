@@ -9,7 +9,10 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
-import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
+import {
+  markdownInlineChildren,
+  replaceMarkdownTextMatches,
+} from "./markdown-text-replacements.ts";
 
 const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
@@ -93,11 +96,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
       token.attrSet("tabindex", "0");
       return true;
     };
-    for (const blockToken of state.tokens) {
-      const children = blockToken.children;
-      if (blockToken.type !== "inline" || !children) {
-        continue;
-      }
+    for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];

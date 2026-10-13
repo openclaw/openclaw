@@ -1,6 +1,7 @@
 import { text as readText } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
 import { runIsolatedCompletion } from "../agents/isolated-completion.js";
+import { slugifyWorktreeTitle, validateName } from "../agents/worktrees/name.js";
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -266,10 +267,25 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     },
   );
 
-  it("persists the generated title through the dashboard owner", async () => {
-    await withTitleProvider(
-      "Invoice follow-up<think>private",
-      async ({ cfg, storePath, requests }) => {
+  it.each([
+    ["visible output", "Invoice follow-up<think>private", "Invoice follow-up"],
+    ["empty output", "", null],
+    ["whitespace", " \n ", null],
+    ["reasoning-only output", "<think>private</think>", null],
+    ["unclosed reasoning", "<think>private", null],
+    ["empty ASCII quotes", '""', null],
+    ["empty typographic quotes", "„“", null],
+    ["quote-only output", "„ ” « » ‘ ’", null],
+    ["balanced quotes", 'Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
+    [
+      "truncated quote",
+      `Instruction to reply exactly "${"ok ".repeat(15)}"`,
+      "Instruction to reply exactly ok ok ok ok ok ok ok ok ok ok",
+    ],
+  ] as const)(
+    "persists a usable title for %s through the dashboard owner",
+    async (_name, raw, title) => {
+      await withTitleProvider(raw, async ({ cfg, storePath, requests }) => {
         const sessionKey = "agent:main:dashboard:title-proof";
         const entry = { sessionId: "title-proof-session", updatedAt: 1 };
         const scope = { agentId: "main", sessionKey, storePath };
@@ -286,14 +302,18 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           }),
         ).resolves.toBe(true);
         const persisted = loadSessionEntry(scope);
-        expect(requests).toHaveLength(1);
+        expect(requests).toHaveLength(title === null ? 2 : 1);
         expect(Object.hasOwn(requests[0]!.body, "store")).toBe(false);
         const messages = requests[0]!.body.messages as Array<{ role: string; content: string }>;
         const sourceMessage = messages.findLast((message) => message.role === "user");
         expect(JSON.parse(sourceMessage!.content)).toEqual({ conversationLabelSource: source });
-        expect(persisted?.displayName).toBe("Invoice follow-up");
-        expect(deriveSessionTitle(persisted)).toBe("Invoice follow-up");
-      },
-    );
-  });
+        const expected = title ?? expect.stringMatching(/^[a-z]+-[a-z]+$/);
+        expect(persisted?.displayName).toEqual(expected);
+        expect(deriveSessionTitle(persisted)).toEqual(expected);
+        const branchName = slugifyWorktreeTitle(persisted!.displayName!);
+        expect(branchName).toBeDefined();
+        expect(validateName(branchName!)).toBe(branchName);
+      });
+    },
+  );
 });

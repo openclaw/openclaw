@@ -130,13 +130,17 @@ export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owne
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
-export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+export { recordOpenClawDatabaseQuarantine, readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { projectComputerActResult } from "../agents/tools/computer-tool-result.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
+export { createReadTool } from "../agents/sessions/tools/read.js";
 export { createEditTool } from "../agents/sessions/tools/edit.js";
 export { createWriteTool } from "../agents/sessions/tools/write.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
@@ -220,15 +224,19 @@ const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
-  updateExecApprovalsSync,
+  updateExecApprovals,
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
+  resolveOpenClawStateSqlitePath,
+  readStableSqliteFileGeneration,
+  recordOpenClawDatabaseQuarantine,
+  readOpenClawDatabaseQuarantineFailure,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
-updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
+  await updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } } } });
   assert.deepEqual(await readSecretStoreExecEnvironment({ includeSecretSentinels: false }), {});
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,
@@ -240,6 +248,17 @@ try {
   assert.equal(stored.lastUsedCommand, command);
   assert.equal(stored.lastResolvedPath, process.execPath);
   assert.ok(stored.lastUsedAt > 0);
+  await closeOpenClawStateDatabaseAsync();
+  const statePath = resolveOpenClawStateSqlitePath();
+  assert.equal(recordOpenClawDatabaseQuarantine({
+    kind: "state", path: statePath, reason: "portable integrity failure",
+    generation: readStableSqliteFileGeneration(statePath),
+  }), true);
+  assert.equal(readOpenClawDatabaseQuarantineFailure("state", statePath)?.name, "SqliteIntegrityError");
+  await assert.rejects(
+    updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "deny", ask: "off" } } } }),
+    /quarantined after integrity verification failed/,
+  );
 } finally {
   await closeOpenClawStateDatabaseAsync();
 }
@@ -404,7 +423,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
         ).toEqual([]);
       }));
 
-    it("delivers image operations and file edits from a relocated archive", async () => {
+    it("delivers image operations and file reads and edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
       const relocated = path.join(root, "bundle");
       fs.mkdirSync(relocated);
@@ -429,7 +448,7 @@ for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
+const { projectComputerActResult, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
 const filePath = imagePath + ".txt";
@@ -445,6 +464,12 @@ const edited = await createEditTool(process.cwd()).execute("portable-edit", {
 assert.equal(edited.details.changed, true);
 assert.match(edited.details.diff, /\\+1 const label = "hi"; \\/\\/ keep — unchanged/);
 assert.equal(fs.readFileSync(filePath, "utf8"), 'const label = "hi"; // keep — unchanged\\n');
+for (const extension of [".txt", ".sqlite"]) {
+  const readPath = imagePath + extension;
+  fs.writeFileSync(readPath, "portable file read\\n");
+  const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
+  assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
+}
 for (let index = 0; index < 3; index++) {
   const projected = await projectComputerActResult({
     action: "get_window_state",
@@ -471,7 +496,7 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated computer observations, image operations, and file edits passed");
+console.log("relocated computer observations, image operations, and file reads and edits passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
@@ -496,7 +521,7 @@ console.log("relocated computer observations, image operations, and file edits p
         },
       );
       expect(result.stdout).toContain(
-        "relocated computer observations, image operations, and file edits passed",
+        "relocated computer observations, image operations, and file reads and edits passed",
       );
     });
 
@@ -727,7 +752,7 @@ export async function createAttachedBrowserToolRuntime(params) {
       ensureAttachTarget: async () => {
         attached += 1;
       },
-      agentSessionKey: "worker:session-1",
+      agentSessionKey: "agent:worker-agent:worker:session-1",
       agentDir: path.join(root, "agent"),
       workspaceDir: path.join(root, "workspace"),
     };

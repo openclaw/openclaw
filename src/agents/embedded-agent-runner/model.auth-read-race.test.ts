@@ -247,43 +247,36 @@ it.for([
   const refreshEntered = createDeferred();
   let externallyReplacedStore: AuthProfileStore | undefined;
   let externallyFencedStore: AuthProfileStore | undefined;
-  if (scope === "already fenced peer") {
-    const loadCandidate = candidateStores.loadCandidateAuthProfileStore;
-    vi.spyOn(candidateStores, "loadCandidateAuthProfileStore").mockImplementation((candidate) => {
-      if (
-        candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
-        !externallyFencedStore
-      ) {
-        const pending = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-        if (!pending || !readPendingOAuthRefreshClaimId(pending)) {
-          throw new Error("Expected owner claim before peer discovery");
+  if (scope === "already fenced peer" || scope === "peer CAS replacement") {
+    const fenceCandidate = candidateStores.fenceCandidateAuthProfileStore;
+    vi.spyOn(candidateStores, "fenceCandidateAuthProfileStore").mockImplementation(
+      async (params) => {
+        if (
+          params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
+          !externallyReplacedStore &&
+          !externallyFencedStore
+        ) {
+          if (scope === "already fenced peer") {
+            const pending = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
+            if (!pending || !readPendingOAuthRefreshClaimId(pending)) {
+              throw new Error("Expected owner claim before peer discovery");
+            }
+            externallyFencedStore = { version: 1, profiles: { [profileId]: pending } };
+          } else {
+            externallyReplacedStore = localStore();
+          }
+          runAuthProfileWriteTransaction(readAgentDir, (database) => {
+            writePersistedAuthProfileStoreRaw(
+              externallyFencedStore ?? externallyReplacedStore,
+              readAgentDir,
+              database,
+            );
+          });
+          return fenceCandidate(params);
         }
-        externallyFencedStore = { version: 1, profiles: { [profileId]: pending } };
-        runAuthProfileWriteTransaction(readAgentDir, (database) => {
-          writePersistedAuthProfileStoreRaw(externallyFencedStore, readAgentDir, database);
-        });
-      }
-      return loadCandidate(candidate);
-    });
-  }
-  if (scope === "peer CAS replacement") {
-    const updateCandidate = candidateStores.updateCandidateAuthProfileStore;
-    vi.spyOn(candidateStores, "updateCandidateAuthProfileStore").mockImplementation((params) => {
-      if (
-        params.candidate.databasePath === resolveAuthProfileDatabasePath(readAgentDir) &&
-        !externallyReplacedStore
-      ) {
-        externallyReplacedStore = localStore();
-        // A foreign writer changes SQLite without publishing into this process's observation registry.
-        runAuthProfileWriteTransaction(readAgentDir, (database) => {
-          writePersistedAuthProfileStoreRaw(externallyReplacedStore, readAgentDir, database);
-        });
-        const result = updateCandidate(params);
-        expect(result.changed).toBe(false);
-        return result;
-      }
-      return updateCandidate(params);
-    });
+        return fenceCandidate(params);
+      },
+    );
   }
   const releaseRefresh = createDeferred();
   const retryEntered = createDeferred();

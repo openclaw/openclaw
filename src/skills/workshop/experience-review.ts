@@ -11,7 +11,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
@@ -195,21 +194,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     // fs-safe requires synchronous authority immediately before mutation.
     // SDK sync writers bypass the FIFO; the connection-local witness misses
     // foreign commits. Retain this fence until the next SDK major retires them.
-    const current = loadSessionEntryReadOnly({
-      ...source,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    if (
-      current?.sessionId !== generation.sessionId ||
-      (current.lifecycleRevision ?? null) !== generation.lifecycleRevision ||
-      current.permissionMode !== sourceEntry.permissionMode
-    ) {
-      throw new Error(
-        "Skill experience review source session was deleted, reset, or changed permissions.",
-      );
-    }
-    validateSessionTranscriptContextAnchor(source, candidate.source);
+    validateSessionTranscriptContextAnchor(source, candidate.source, sourceEntry);
   };
   const preparedRunAdmission = prepareAgentRunAdmission({
     cfg: config,

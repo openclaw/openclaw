@@ -17,6 +17,12 @@ import type { IrcNickServConfig } from "./types.js";
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 const IRC_MAX_LINE_BYTES = 512;
+// Recipients see our line with the server's `:nick!user@host ` prefix in front, and 512 bytes
+// bounds that relayed line too: servers truncate it or reject the send outright (Ergo answers
+// 417 "Line too long to be relayed without truncation"). Our user@host is only as long as the
+// server makes it, so reserve its ceiling: `~` + USERLEN 10, and HOSTLEN 63.
+const IRC_MAX_RELAY_USER_BYTES = 11;
+const IRC_MAX_RELAY_HOST_BYTES = 63;
 // Inbound framing cap: IRCv3 allows up to 8191 bytes of message tags plus a 512-byte
 // line body. Bound a pending (unterminated) line at twice that so compliant servers
 // never trip it, while a peer that withholds the line terminator cannot grow memory.
@@ -217,7 +223,12 @@ export async function connectIrcClient(options: IrcClientOptions) {
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
-    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const relayPrefixBytes =
+      Buffer.byteLength(`:${currentNick}!@ `, "utf8") +
+      IRC_MAX_RELAY_USER_BYTES +
+      IRC_MAX_RELAY_HOST_BYTES;
+    const lineOverheadBytes =
+      relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];

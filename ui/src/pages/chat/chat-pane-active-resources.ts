@@ -50,37 +50,33 @@ export type ActiveResourceOwner = {
   isCurrent: () => boolean;
 };
 
-function placementResourceIdentity(placement: GatewaySessionRow["placement"]) {
-  if (!placement) {
-    return null;
-  }
-  const runner = placement.state === "active" ? placement.runner : undefined;
-  // Ack cursors, disk observations and timestamps advance during ordinary work;
-  // they do not replace the resource or revoke an in-flight discovery owner.
-  return [
-    placement.state,
-    placement.generation,
-    "environmentId" in placement ? placement.environmentId : undefined,
-    "activeOwnerEpoch" in placement ? placement.activeOwnerEpoch : undefined,
-    "providerId" in placement ? placement.providerId : undefined,
-    "profileId" in placement ? placement.profileId : undefined,
-    runner?.kind,
-    runner?.deviceId,
-    runner?.status,
-  ];
-}
-
 type ResourceIdentitySource = Pick<
   GatewaySessionRow,
   "sessionId" | "execNode" | "archived" | "placement"
 >;
 
 function resourceIdentityForSession(session: ResourceIdentitySource | undefined): string {
+  const placement = session?.placement;
+  const runner = placement?.state === "active" ? placement.runner : undefined;
+  // Ack cursors, disk observations and timestamps advance during ordinary work;
+  // they do not replace the resource or revoke an in-flight discovery owner.
   return JSON.stringify([
     session?.sessionId,
     session?.execNode,
     session?.archived === true,
-    placementResourceIdentity(session?.placement),
+    placement
+      ? [
+          placement.state,
+          placement.generation,
+          "environmentId" in placement ? placement.environmentId : undefined,
+          "activeOwnerEpoch" in placement ? placement.activeOwnerEpoch : undefined,
+          "providerId" in placement ? placement.providerId : undefined,
+          "profileId" in placement ? placement.profileId : undefined,
+          runner?.kind,
+          runner?.deviceId,
+          runner?.status,
+        ]
+      : null,
   ]);
 }
 

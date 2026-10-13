@@ -56,6 +56,8 @@ function writeSessionFixture(
   return patchSessionEntryCore(scope, () => patch, {
     skipMaintenance: true,
     fallbackEntry: createFallbackSessionEntry(patch),
+    // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+    assertCommitAllowed: () => {},
   });
 }
 
@@ -317,6 +319,8 @@ describe("direct session model catalogs", () => {
         await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
           preserveActivity: true,
           skipMaintenance: true,
+          // Keep the pending reader's lifetime independent of an idle writer generation.
+          assertCommitAllowed: () => {},
         });
         expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
         expect(readRow()).toEqual({

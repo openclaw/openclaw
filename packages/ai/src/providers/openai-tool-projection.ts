@@ -85,6 +85,9 @@ function projectOpenAIToolDescriptors(
   const diagnostics: OpenAIToolProjectionDiagnostic[] = [];
   for (let toolIndex = 0; toolIndex < inputToolCount; toolIndex += 1) {
     let tool: OpenAIToolDescriptor;
+    let name: string | undefined;
+    let parameters: unknown;
+    let readPath = `tool[${toolIndex}]`;
     try {
       const candidate = tools[toolIndex];
       if (!candidate) {
@@ -92,37 +95,20 @@ function projectOpenAIToolDescriptors(
         continue;
       }
       tool = candidate;
-    } catch {
-      diagnostics.push(unreadableToolDiagnostic(toolIndex));
-      continue;
-    }
-
-    let name: unknown;
-    try {
-      name = tool.name;
-    } catch {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is unreadable`],
-      });
-      continue;
-    }
-    if (typeof name !== "string" || !name) {
-      diagnostics.push({
-        toolIndex,
-        violations: [`tool[${toolIndex}].name is empty`],
-      });
-      continue;
-    }
-
-    let parameters: unknown;
-    try {
+      readPath += ".name";
+      const nameValue = tool.name;
+      if (typeof nameValue !== "string" || !nameValue) {
+        diagnostics.push({ toolIndex, violations: [`${readPath} is empty`] });
+        continue;
+      }
+      name = nameValue;
+      readPath = `${name}.parameters`;
       parameters = tool.parameters;
     } catch {
       diagnostics.push({
         toolIndex,
-        toolName: name,
-        violations: [`${name}.parameters is unreadable`],
+        ...(name ? { toolName: name } : {}),
+        violations: [`${readPath} is unreadable`],
       });
       continue;
     }

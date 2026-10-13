@@ -5,6 +5,7 @@ import { applySessionEntryExactReplacements } from "../../../config/sessions/ses
 import { callGateway } from "../../../gateway/call.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
@@ -102,29 +103,18 @@ async function readStored() {
 
 function createRegistrationFixture() {
   const refusal = { descriptor: true, terminal: false };
-  const execute = stateWorker.runOpenClawStateWorkerOperation;
-  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-    (owner, run, options) =>
-      execute(
-        owner,
-        (scope) =>
-          run({
-            execute: async (command, executeOptions) => {
-              if (isSubagentRegistryWriteCommand(command)) {
-                const rows = command.input.values.map(rowToSubagentRunRecord);
-                if (refusal.descriptor && rows.some((row) => row?.queuedLaunch)) {
-                  throw new Error("descriptor refused");
-                }
-                if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
-                  throw new Error("terminal settlement refused");
-                }
-              }
-              return scope.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-  );
+  probe.command(stateWorker, async (command, executeOptions, scope) => {
+    if (isSubagentRegistryWriteCommand(command)) {
+      const rows = command.input.values.map(rowToSubagentRunRecord);
+      if (refusal.descriptor && rows.some((row) => row?.queuedLaunch)) {
+        throw new Error("descriptor refused");
+      }
+      if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
+        throw new Error("terminal settlement refused");
+      }
+    }
+    return scope.execute(command, executeOptions);
+  });
   const options: SubagentManagerOptions = {
     acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,

@@ -6,10 +6,9 @@ import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
-import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 import {
   createMatrixQaScenarioEnvironment,
-  isMatrixQaAccountReady,
+  waitForMatrixAccountReady,
 } from "./scenarios/scenario-environment.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
@@ -142,32 +141,6 @@ function resolveMatrixQaAdapterRoom(
       ? topology.rooms.find((room) => room.kind === "dm")
       : undefined) ??
     topology.rooms.find((room) => room.roomId === topology.defaultRoomId)!
-  );
-}
-
-async function waitForMatrixChannelReady(
-  gateway: Parameters<AdapterDefinition["waitReady"]>[0]["gateway"],
-  accountId: string,
-  timeoutMs = 60_000,
-  pollIntervalMs = 500,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let lastAccounts: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const accounts = await readLiveQaChannelAccounts(gateway, "matrix", { timeoutMs });
-      lastAccounts = accounts;
-      const account = accounts.find((entry) => entry.accountId === accountId);
-      if (isMatrixQaAccountReady(account)) {
-        return;
-      }
-    } catch {
-      // Retry until the shared host readiness deadline.
-    }
-    await sleep(pollIntervalMs);
-  }
-  throw new Error(
-    `matrix account "${accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
   );
 }
 
@@ -417,7 +390,15 @@ export async function createMatrixQaTransportAdapter(
     prepareFlow: scenarioEnvironment.prepareFlow,
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) => {
       gatewayClient = gateway;
-      await waitForMatrixChannelReady(gateway, accountId, timeoutMs, pollIntervalMs);
+      await waitForMatrixAccountReady({
+        gateway,
+        accountId,
+        deadline: Date.now() + (timeoutMs ?? 60_000),
+        fixedPolling: {
+          requestTimeoutMs: timeoutMs ?? 60_000,
+          intervalMs: pollIntervalMs ?? 500,
+        },
+      });
     },
     buildAgentDelivery: () => ({
       channel: "matrix",

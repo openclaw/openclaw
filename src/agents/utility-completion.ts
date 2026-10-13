@@ -6,7 +6,7 @@ import {
 } from "./isolated-completion-route.js";
 import { hasAvailableAuthForProvider } from "./model-auth.js";
 import {
-  createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
@@ -118,7 +118,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!entry) {
         return undefined;
       }
-      const decisions = createModelCatalogDecisions({
+      const decisions = await prepareModelCatalogDecisions({
         ...params,
         preferredProfileId: prepared.authProfileId,
         pinnedProfileId: prepared.authProfileId,

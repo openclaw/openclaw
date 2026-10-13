@@ -154,6 +154,8 @@ describe("project registry", () => {
     openOpenClawStateDatabase(options);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    await fs.rename(options.path, `${options.path}.template`);
+    await fs.copyFile(`${options.path}.template`, options.path, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(options.path);
     legacy.exec("DROP TABLE projects;");

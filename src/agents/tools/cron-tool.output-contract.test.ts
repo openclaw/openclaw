@@ -252,6 +252,11 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   added.id;
   const addedJob = "job" in added ? added.job : added;
   const id: string = addedJob.id;
+  const updated = await automations({ action: "update", jobId: id, job: { enabled: false } });
+  const warning: string | undefined = updated.deliveryPreview?.detail;
+  const details = await automations({ action: "get", jobId: id });
+  // @ts-expect-error Get does not return a write-time delivery preview.
+  details.deliveryPreview;
   const run = await automations({ action: "run", jobId: id });
   if (!run.ok) {
     const instance: string | undefined = run.processInstanceId;

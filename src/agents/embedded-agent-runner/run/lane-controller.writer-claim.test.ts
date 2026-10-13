@@ -17,6 +17,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../../agent-harness-completion-recovery.js";
 import {
@@ -323,27 +324,23 @@ describe("embedded run durable writer admission", () => {
         assertSourceCurrent,
       );
       const admittedRunContext = await prepared.admit("embedded");
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const sameStoreQueriesInGrants: string[] = [];
-      vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          createAdmission((request, grant) => {
-            const sql = observeHostDataSql();
-            try {
-              callback(request, grant);
-            } finally {
-              sameStoreQueriesInGrants.push(
-                ...sql.queries.filter((query) =>
-                  /\bsession_(?:nodes|windows|participants)\b/.test(query),
-                ),
-              );
-              sql.restore();
-            }
-            if (revoke) {
-              sourceCurrent = false;
-            }
-          }, attachment),
-      );
+      probe.admission(workerAdmission, (request, grant, callback) => {
+        const sql = observeHostDataSql();
+        try {
+          callback(request, grant);
+        } finally {
+          sameStoreQueriesInGrants.push(
+            ...sql.queries.filter((query) =>
+              /\bsession_(?:nodes|windows|participants)\b/.test(query),
+            ),
+          );
+          sql.restore();
+        }
+        if (revoke) {
+          sourceCurrent = false;
+        }
+      });
       try {
         const result = claimAgentSessionWriter({
           ...scope,

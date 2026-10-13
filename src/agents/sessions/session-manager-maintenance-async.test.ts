@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -289,7 +290,7 @@ it("branches a large selected path and rebuilds its new session projection", asy
   expect(reopened.getLeafId()).toBe(selected);
 });
 
-it("retains a committed branch identity and invalidates the view after target rebinding", async () => {
+it("preserves a committed branch and a later target rebinding", async () => {
   const { scope, manager } = await openSession();
   const selected = await appendUser(manager, "selected");
   const replacementScope = {
@@ -301,6 +302,7 @@ it("retains a committed branch identity and invalidates the view after target re
     sessionId: replacementScope.sessionId,
     updatedAt: 1,
   });
+  const runExternalRetarget = AsyncLocalStorage.snapshot();
   const original = metadataRuntime.withSessionMetadataWorker;
   const rebindAfterCommit: typeof original = async (
     options,
@@ -310,38 +312,43 @@ it("retains a committed branch identity and invalidates the view after target re
     controls,
   ) => {
     const result = await original(options, database, assertCurrent, operation, controls);
-    await manager.setSessionTargetAsync(replacementScope);
+    await runExternalRetarget(() => manager.setSessionTargetAsync(replacementScope));
     return result;
   };
   const observer = vi
     .spyOn(metadataRuntime, "withSessionMetadataWorker")
     .mockImplementation(rebindAfterCommit);
-  const publishedSessionIds: Array<string | undefined> = [];
+  const publications: Array<{ sessionId: string | undefined; managerSessionId: string }> = [];
   const unsubscribe = onSessionIdentityMutation((mutation) => {
     if (mutation.kind !== "delete" && mutation.current.sessionKeys.includes(scope.sessionKey)) {
-      publishedSessionIds.push(mutation.current.sessionId);
+      publications.push({
+        sessionId: mutation.current.sessionId,
+        managerSessionId: manager.getSessionId(),
+      });
     }
   });
-  let failure: unknown;
+  let branchSessionId: string | undefined;
   try {
-    await manager.createBranchedSession(selected);
-  } catch (error) {
-    failure = error;
+    branchSessionId = await manager.createBranchedSession(selected);
   } finally {
     observer.mockRestore();
     unsubscribe();
   }
   const committed = loadSessionEntry(scope);
-  expect(committed?.sessionId).not.toBe(scope.sessionId);
-  expect(failure).toMatchObject({
-    name: "SessionBranchCommittedError",
-    committedSessionId: committed?.sessionId,
-    cause: { message: "Session transcript changed during branch preparation" },
-  });
-  expect(isRecordedModelFallbackStop(failure)).toBe(true);
-  expect(() => manager.getBranch()).toThrow("Session branch committed");
   expect(committed).toBeDefined();
-  expect(publishedSessionIds).toContain(committed?.sessionId);
+  expect(committed?.sessionId).not.toBe(scope.sessionId);
+  expect(branchSessionId).toBe(committed?.sessionId);
+  expect(publications).toContainEqual({
+    sessionId: branchSessionId,
+    managerSessionId: branchSessionId,
+  });
+  expect(manager.getSessionId()).toBe(replacementScope.sessionId);
+  expect(manager.getSessionTarget()).toMatchObject({
+    sessionId: replacementScope.sessionId,
+    sessionKey: replacementScope.sessionKey,
+  });
+  expect(manager.getBranch()).toEqual([]);
+  expect(manager.buildSessionContext().messages).toEqual([]);
   const reopened = await SessionManager.openAsync({ ...scope, sessionId: committed!.sessionId });
   expect(reopened.getLeafId()).toBe(selected);
 });

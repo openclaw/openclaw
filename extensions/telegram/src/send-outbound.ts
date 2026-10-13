@@ -56,11 +56,9 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   writebackAuthority: "caller" | "internal" = "caller",
 ): Promise<T> {
   return withTelegramApiContext(opts, async (context) => {
-    const { cfg, api } = context;
+    const { cfg } = context;
     const rawTarget = String(to);
-    const chatId = await resolveAndPersistChatId({
-      cfg,
-      api,
+    const chatId = await resolveAndPersistChatId(context, {
       lookupTarget: parseTelegramTarget(rawTarget).chatId,
       persistTarget: rawTarget,
       verbose: opts.verbose,
@@ -149,7 +147,7 @@ export async function prepareTelegramOutbound(params: {
   useApiErrorLogging?: boolean;
   wrapChatNotFound?: boolean;
 }): Promise<PreparedTelegramOutbound> {
-  const { cfg, api } = params.context;
+  const { cfg } = params.context;
   const rawTarget = String(params.to);
   const target = parseTelegramTarget(rawTarget);
   const threadSpec = params.thread
@@ -161,9 +159,7 @@ export async function prepareTelegramOutbound(params: {
         chatType: target.chatType,
       })
     : undefined;
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
+  const chatId = await resolveAndPersistChatId(params.context, {
     lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: params.opts.verbose,

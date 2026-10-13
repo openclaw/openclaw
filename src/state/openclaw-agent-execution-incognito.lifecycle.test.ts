@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
@@ -35,10 +35,20 @@ import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { beginAgentDeletionJournal, removeAgentDeletionJournal } from "./agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  removeAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  registerIncognitoLifecycleSourceTests,
+  registerIncognitoMessageCutTests,
+} from "./openclaw-agent-execution-incognito.lifecycle-facades.test-support.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -46,17 +56,17 @@ import {
 } from "./openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
 
-// Three retained private actors plus shared-state cleanup need four broker slots.
+// Two retained actors, one scoped peer, and shared-state cleanup fit four broker slots.
 vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   availableParallelism: () => 32,
 }));
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let lossActor: IncognitoAgentDatabaseExecution;
-let sameAgentActor: IncognitoAgentDatabaseExecution;
 let lossWorker: Worker;
 let env: NodeJS.ProcessEnv;
 
@@ -64,28 +74,8 @@ beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-") };
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
-    const opened = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env,
-      authority,
-    });
-    const loss = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "loss",
-      env,
-      authority,
-    });
-    const sameAgent = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-peer-") },
-      authority,
-    });
-    assert(opened && loss && sameAgent);
-    actor = opened;
-    lossActor = loss;
-    sameAgentActor = sameAgent;
+    actor = await openIncognitoTestActor(env, authority);
+    lossActor = await openIncognitoTestActor(env, authority, "loss");
     const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "loss", env });
     const index = posted.mock.calls.findIndex(
       ([message]) =>
@@ -99,8 +89,19 @@ beforeAll(async () => {
   }
 });
 afterAll(async () => {
-  await Promise.all([actor?.close(), lossActor?.close(), sameAgentActor?.close()]);
+  await Promise.all([actor?.close(), lossActor?.close()]);
   await closeOpenClawStateDatabaseAsync();
+});
+
+registerIncognitoLifecycleSourceTests({
+  authority,
+  create,
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
 });
 
 async function create(
@@ -200,12 +201,7 @@ it("serializes deletion with appends, preserves siblings, and executes zero call
   const siblingClaim = actor.sessions.captureCurrent(sibling.sessionKey);
   const oldClaim = actor.sessions.captureCurrent(target.sessionKey);
   await withDeletion([target], async (assertCurrent, capture) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = actor.run(authority, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { entered, release, held } = probe.hold(actor, authority);
     await entered.promise;
     const sql = observeHostDataSql();
     const order: string[] = [];
@@ -722,62 +718,78 @@ it.each([false, true])(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "checks the destination %s grant for equal fork keys in separate actor namespaces",
-  async (deniedStage) => {
-    const parent = await create(`same-key-${deniedStage}`);
-    await append(parent, "private parent transcript");
-    const targetSessionId = `${parent.entry.sessionId}-child`;
-    const sql = observeHostDataSql();
-    try {
-      await expect(
-        forkSessionTranscriptFromParent(
-          {
-            storePath: actor.path,
-            targetStorePath: sameAgentActor.path,
-            parentEntry: parent.entry,
-            parentSessionKey: parent.sessionKey,
-            sessionKey: parent.sessionKey,
-            targetSessionId,
-          },
-          {
-            source: { actor, authority, sessionKey: parent.sessionKey },
-            destination: {
-              actor: sameAgentActor,
-              authority: {
-                assertCurrent() {},
-                authorize(stage) {
-                  if (stage === deniedStage) {
-                    throw new Error("destination fork denied");
-                  }
+describe("same-key actor namespaces", () => {
+  let sameAgentActor: IncognitoAgentDatabaseExecution;
+
+  beforeAll(async () => {
+    const opened = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("incognito-lifecycle-peer-") },
+      authority,
+    });
+    assert(opened);
+    sameAgentActor = opened;
+  });
+  afterAll(() => sameAgentActor?.close());
+
+  it.each(["transaction", "commit"] as const)(
+    "checks the destination %s grant for equal fork keys in separate actor namespaces",
+    async (deniedStage) => {
+      const parent = await create(`same-key-${deniedStage}`);
+      await append(parent, "private parent transcript");
+      const targetSessionId = `${parent.entry.sessionId}-child`;
+      const sql = observeHostDataSql();
+      try {
+        await expect(
+          forkSessionTranscriptFromParent(
+            {
+              storePath: actor.path,
+              targetStorePath: sameAgentActor.path,
+              parentEntry: parent.entry,
+              parentSessionKey: parent.sessionKey,
+              sessionKey: parent.sessionKey,
+              targetSessionId,
+            },
+            {
+              source: { actor, authority, sessionKey: parent.sessionKey },
+              destination: {
+                actor: sameAgentActor,
+                authority: {
+                  assertCurrent() {},
+                  authorize(stage) {
+                    if (stage === deniedStage) {
+                      throw new Error("destination fork denied");
+                    }
+                  },
                 },
               },
             },
-          },
-        ),
-      ).rejects.toThrow("destination fork denied");
-      const child = await sameAgentActor.sessions.create(authority, {
-        sessionKey: parent.sessionKey,
-        entry: { ...parent.entry, sessionId: targetSessionId },
-      });
-      assert(child.entry);
-      const snapshot = await sameAgentActor.sessions.history(authority, {
-        type: "session.history.hydrate",
-        input: {
+          ),
+        ).rejects.toThrow("destination fork denied");
+        const child = await sameAgentActor.sessions.create(authority, {
           sessionKey: parent.sessionKey,
-          sessionId: targetSessionId,
-          lifecycleRevision: child.entry.lifecycleRevision,
-        },
-      });
-      assert(snapshot.kind === "full");
-      expect(snapshot.snapshot.events).toHaveLength(1);
-      expect(snapshot.snapshot.events[0]).toMatchObject({ type: "session", id: targetSessionId });
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  },
-);
+          entry: { ...parent.entry, sessionId: targetSessionId },
+        });
+        assert(child.entry);
+        const snapshot = await sameAgentActor.sessions.history(authority, {
+          type: "session.history.hydrate",
+          input: {
+            sessionKey: parent.sessionKey,
+            sessionId: targetSessionId,
+            lifecycleRevision: child.entry.lifecycleRevision,
+          },
+        });
+        assert(snapshot.kind === "full");
+        expect(snapshot.snapshot.events).toHaveLength(1);
+        expect(snapshot.snapshot.events[0]).toMatchObject({ type: "session", id: targetSessionId });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    },
+  );
+});
 
 it("cleans repository ownership after actor deletion without reopening its sentinel", async () => {
   const target = await create("repository-cleanup");
@@ -822,18 +834,17 @@ it("rechecks reclamation snapshots and preserves sessions outside the selected l
     const fresh = await prepare();
     expect(fresh.entries.map(({ sessionKey }) => sessionKey)).toEqual([target.sessionKey]);
     expect(
-      await cleanupSessionLifecycleArtifactsCore({
-        kind: "incognito",
-        actor,
-        authority,
-        env,
-        input: {
+      await withIncognitoSessionActor(actor, () =>
+        cleanupSessionLifecycleArtifactsCore({
+          agentId: actor.agentId,
+          storePath: actor.path,
+          env,
           sessionKeySegmentPrefix: "dashboard:incognito-reclaim-",
           transcriptContentMarker: "synthetic cleanup",
           orphanTranscriptMinAgeMs: 0,
           nowMs: Date.now() + 86_400_000,
-        },
-      }),
+        }),
+      ),
     ).toEqual({ archivedTranscriptArtifacts: 0, removedEntries: 1 });
     expect(mutations).toEqual([
       {
@@ -957,6 +968,19 @@ it.each(["commit", "rollback", "actor loss"] as const)(
   },
 );
 
+registerIncognitoMessageCutTests({
+  authority,
+  create,
+  append,
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
+});
+
+// Keep last: observing this foreign deletion permanently retires the shared actor.
 it("observes a foreign deletion fence on the retained actor", async () => {
   const target = await create("foreign-deletion-fence");
   const root = path.join(path.dirname(actor.path), "foreign-fence");

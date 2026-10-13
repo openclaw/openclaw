@@ -8,6 +8,7 @@ import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-deferral.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -442,6 +443,7 @@ async function updateCommandInternal(
     );
     let preUpdatePluginInstallRecords: Awaited<ReturnType<typeof prepareMutableUpdateRuntime>> = {};
     let mutableUpdatePrepared = false;
+    let retainedRuntimeStep: UpdateStepResult | undefined;
     const prepareMutableUpdate: Parameters<
       typeof executeMutableUpdate
     >[0]["prepareMutableUpdate"] = async (
@@ -486,12 +488,15 @@ async function updateCommandInternal(
         timeoutMs: updateStepTimeoutMs,
         assertCurrent: () => fence.assertCurrent(),
       });
-      await reportUpdateStepCompletion(progress, {
-        ...retentionStep,
+      retainedRuntimeStep = {
+        name: retentionStep.name,
+        command: retentionStep.command,
+        cwd: root,
         durationMs: Date.now() - retentionStartedAt,
         exitCode: 0,
         diagnostics: retention ? [JSON.stringify(retention)] : undefined,
-      });
+      };
+      await reportUpdateStepCompletion(progress, { ...retentionStep, ...retainedRuntimeStep });
       mutableUpdatePrepared = true;
     };
 
@@ -528,6 +533,9 @@ async function updateCommandInternal(
     }
     const { ownedManagedUpdateContext, recoveryEnv, ...executionState } = execution;
     const { result } = executionState;
+    if (retainedRuntimeStep) {
+      result.steps.unshift(retainedRuntimeStep);
+    }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
       await activateCurrentCore();

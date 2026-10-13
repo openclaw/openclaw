@@ -16,42 +16,31 @@ function createDurationUpdate(field: "idleTimeoutMs" | "maxAgeMs", raw: number) 
   });
 }
 
-export async function setThreadBindingIdleTimeoutBySessionKeyAsync(input: {
-  targetSessionKey: string;
-  accountId?: string;
-  idleTimeoutMs: number;
-}): Promise<ThreadBindingRecord[]> {
-  const params = { ...input };
-  return mutateBindingsForTargetSession(
-    params,
-    createDurationUpdate("idleTimeoutMs", params.idleTimeoutMs),
-  );
+function createDurationSetters<Field extends "idleTimeoutMs" | "maxAgeMs">(field: Field) {
+  type Params = {
+    targetSessionKey: string;
+    accountId?: string;
+  } & Record<Field, number>;
+  return {
+    setAsync: async (input: Params): Promise<ThreadBindingRecord[]> => {
+      const params = { ...input };
+      return mutateBindingsForTargetSession(params, createDurationUpdate(field, params[field]));
+    },
+    set: (params: Params): ThreadBindingRecord[] => {
+      const ids = resolveBindingIdsForTargetSession(params);
+      return updateBindingsForTargetSessionSync(ids, createDurationUpdate(field, params[field]));
+    },
+  };
 }
 
-export async function setThreadBindingMaxAgeBySessionKeyAsync(input: {
-  targetSessionKey: string;
-  accountId?: string;
-  maxAgeMs: number;
-}): Promise<ThreadBindingRecord[]> {
-  const params = { ...input };
-  return mutateBindingsForTargetSession(params, createDurationUpdate("maxAgeMs", params.maxAgeMs));
-}
+const idleSetters = createDurationSetters("idleTimeoutMs");
+const maxAgeSetters = createDurationSetters("maxAgeMs");
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
-export function setThreadBindingIdleTimeoutBySessionKey(
-  params: Parameters<typeof setThreadBindingIdleTimeoutBySessionKeyAsync>[0],
-): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  return updateBindingsForTargetSessionSync(
-    ids,
-    createDurationUpdate("idleTimeoutMs", params.idleTimeoutMs),
-  );
-}
+export const setThreadBindingIdleTimeoutBySessionKeyAsync = idleSetters.setAsync;
+export const setThreadBindingMaxAgeBySessionKeyAsync = maxAgeSetters.setAsync;
 
 /** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
-export function setThreadBindingMaxAgeBySessionKey(
-  params: Parameters<typeof setThreadBindingMaxAgeBySessionKeyAsync>[0],
-): ThreadBindingRecord[] {
-  const ids = resolveBindingIdsForTargetSession(params);
-  return updateBindingsForTargetSessionSync(ids, createDurationUpdate("maxAgeMs", params.maxAgeMs));
-}
+export const setThreadBindingIdleTimeoutBySessionKey = idleSetters.set;
+
+/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+export const setThreadBindingMaxAgeBySessionKey = maxAgeSetters.set;

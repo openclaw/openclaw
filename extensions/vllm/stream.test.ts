@@ -80,6 +80,7 @@ describe("vLLM provider thinking composition", () => {
     initialPayload?: Record<string, unknown>;
     contextModelId?: string;
     model?: Partial<Model<"openai-completions">>;
+    reasoning?: NonNullable<Parameters<StreamFn>[2]>["reasoning"];
   }): Record<string, unknown> | undefined {
     let captured: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -103,7 +104,9 @@ describe("vLLM provider thinking composition", () => {
       thinkingLevel: params.thinkingLevel ?? "high",
       streamFn: baseStreamFn,
     } as never);
-    void (wrapped ?? baseStreamFn)(model, { messages: [] } as Context, {});
+    void (wrapped ?? baseStreamFn)(model, { messages: [] } as Context, {
+      reasoning: params.reasoning,
+    });
 
     return captured;
   }
@@ -113,6 +116,121 @@ describe("vLLM provider thinking composition", () => {
       chat_template_kwargs: {
         enable_thinking: false,
         force_nonempty_content: true,
+      },
+    });
+  });
+
+  it.each(["qwen", "qwen-chat-template"] as const)(
+    "sends each declared effort in the %s dialect",
+    (thinkingFormat) => {
+      for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+        const enabled = level !== "off";
+        const effort = enabled ? { reasoning_effort: level } : {};
+        const captured = captureProviderPayload({
+          thinkingLevel: "off",
+          reasoning: level,
+          model: {
+            id: "qwen3:8b",
+            compat: {
+              thinkingFormat,
+              supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
+            },
+          },
+        });
+        expect(captured).toEqual(
+          thinkingFormat === "qwen"
+            ? { enable_thinking: enabled, ...effort }
+            : {
+                chat_template_kwargs: {
+                  enable_thinking: enabled,
+                  preserve_thinking: true,
+                  ...effort,
+                },
+              },
+        );
+      }
+    },
+  );
+
+  it.each(["compat", "model"] as const)(
+    "resolves %s maps and honors explicit disablement",
+    (source) => {
+      const mapping = { low: "LOW", high: "HIGH" };
+      for (const supportsReasoningEffort of [true, false]) {
+        expect(
+          captureProviderPayload({
+            reasoning: "high",
+            model: {
+              id: "qwen3:8b",
+              ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
+              compat: {
+                thinkingFormat: "qwen-chat-template",
+                supportsReasoningEffort,
+                supportedReasoningEfforts: ["LOW", "HIGH"],
+                ...(source === "compat" ? { reasoningEffortMap: mapping } : {}),
+              },
+            },
+          }),
+        ).toEqual({
+          chat_template_kwargs: {
+            enable_thinking: true,
+            preserve_thinking: true,
+            ...(supportsReasoningEffort ? { reasoning_effort: "HIGH" } : {}),
+          },
+        });
+      }
+    },
+  );
+
+  it.each(["off", "high", "max"] as const)(
+    "uses DeepSeek template kwargs for call-time %s and removes hosted fields",
+    (reasoning) => {
+      expect(
+        captureProviderPayload({
+          thinkingLevel: "high",
+          contextModelId: "nemotron-3-super",
+          reasoning,
+          initialPayload: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+          model: {
+            id: "deepseek-ai/DeepSeek-V4-Flash",
+            compat: { supportedReasoningEfforts: ["high", "max"] },
+          },
+        }),
+      ).toEqual({
+        chat_template_kwargs: {
+          thinking: reasoning !== "off",
+          enable_thinking: reasoning !== "off",
+          ...(reasoning !== "off" ? { reasoning_effort: reasoning } : {}),
+        },
+      });
+    },
+  );
+
+  it("does not apply a captured DeepSeek dialect to another model", () => {
+    expect(
+      captureProviderPayload({
+        contextModelId: "DeepSeek-V4-Flash",
+        model: { id: "ordinary-model" },
+        initialPayload: { reasoning_effort: "high" },
+      }),
+    ).toEqual({ reasoning_effort: "high" });
+  });
+
+  it("preserves explicit DeepSeek template kwargs over generated defaults", () => {
+    expect(
+      captureProviderPayload({
+        reasoning: "high",
+        initialPayload: {
+          chat_template_kwargs: { thinking: false, enable_thinking: false, drop_thinking: false },
+        },
+        model: { id: "DeepSeek-V4-Flash" },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        thinking: false,
+        enable_thinking: false,
+        drop_thinking: false,
+        reasoning_effort: "high",
       },
     });
   });

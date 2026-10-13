@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -192,7 +193,7 @@ describe("session creation display titles", () => {
     },
   );
 
-  it("rejects a label claimed by a raw metadata edit after creation preparation", async () => {
+  it("rejects a label claimed by a canonical write after creation preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const siblingKey = "agent:main:sibling";
       const sibling = await createGatewaySession({
@@ -208,9 +209,10 @@ describe("session creation display titles", () => {
       }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
-        database.db
-          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run(JSON.stringify({ ...sibling.entry, label: "Claimed" }), siblingKey);
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: siblingKey },
+          { ...sibling.entry, label: "Claimed" },
+        );
         return run(() => {});
       };
       await expect(

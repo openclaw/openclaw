@@ -115,7 +115,8 @@ export function registerRestartOutcomeTests(
         await expect(activation).rejects.toThrow("Original update owner revoked");
         expect(mocks.restart).not.toHaveBeenCalled();
         expect(onVerified).not.toHaveBeenCalled();
-        expect(result.steps).toEqual([]);
+        // The completed install child keeps its timing; nothing after revocation is recorded.
+        expect(result.steps.map(({ name }) => name)).toEqual(["managed-service-install"]);
       } else {
         await expect(activation).resolves.toBe("ok");
         expect(mocks.restart).toHaveBeenCalledOnce();

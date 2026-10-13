@@ -35,6 +35,8 @@ export async function readSelectedMemoryProviderStatus(params: {
 }): Promise<SelectedMemoryProviderStatus> {
   const { cfg, agentId, owner } = params;
   let provider: Awaited<ReturnType<typeof getActiveMemoryProvider>>["provider"] = null;
+  let providerId = owner;
+  let health: MemoryHealth;
   try {
     const acquired = await getActiveMemoryProvider({
       cfg,
@@ -43,23 +45,14 @@ export async function readSelectedMemoryProviderStatus(params: {
       context: { authority: { kind: "host", operation: "status" }, assertCurrent() {} },
     });
     provider = acquired.provider;
-    const health: MemoryHealth = provider
+    health = provider
       ? await provider.health()
       : { status: "unavailable", message: acquired.error ?? "memory provider unavailable" };
-    return {
-      agentId,
-      provider: acquired.providerId ?? owner,
-      health,
-      memoryCore: "consolidation-sidecar",
-    };
+    providerId = acquired.providerId ?? owner;
   } catch (error) {
-    return {
-      agentId,
-      provider: owner,
-      health: { status: "unavailable", message: formatErrorMessage(error) },
-      memoryCore: "consolidation-sidecar",
-    };
+    health = { status: "unavailable", message: formatErrorMessage(error) };
   } finally {
     await provider?.close().catch(() => {});
   }
+  return { agentId, provider: providerId, health, memoryCore: "consolidation-sidecar" };
 }

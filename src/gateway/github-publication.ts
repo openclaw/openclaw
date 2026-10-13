@@ -9,6 +9,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
@@ -21,6 +22,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -52,7 +54,6 @@ import {
 } from "./github-publication-store.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { createRepositoryGitHubPublicationCoordinator } from "./github-repository-publication.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -290,6 +291,7 @@ export function createGitHubPublicationCoordinator(params: {
         if (!updated) {
           throw new Error("GitHub publication accepted workspace snapshot changed.");
         }
+        githubPublicationReceipts.stageRow(db, "shared", updated);
         deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },
@@ -553,7 +555,7 @@ export function createGitHubPublicationCoordinator(params: {
       repository.deferClaimPreparation(claim);
     },
     requestForSession(input: Parameters<typeof methods.requestForSession>[0]) {
-      const loaded = loadGatewaySessionEntryReadOnly(input.sessionKey!, { agentId: input.agentId });
+      const loaded = readGitHubPublicationSession(input.sessionKey!, { agentId: input.agentId });
       return loaded.entry?.repositoryWorkspaceId
         ? repository.requestForSession(input)
         : methods.requestForSession(input);

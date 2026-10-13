@@ -9,6 +9,7 @@ import {
   isOpenClawAgentDatabaseOpen,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSession, resolveSessionKeyForRequestCore } from "./session.js";
 
@@ -147,6 +148,7 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);
+          expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
         }
       } finally {
         list.mockRestore();

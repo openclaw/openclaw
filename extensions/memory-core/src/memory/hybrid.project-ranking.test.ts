@@ -1,7 +1,7 @@
 import { INVALID_PROJECT_ANNOTATION_KEY } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
-import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
+import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 
 describe("hybrid project ranking", () => {
   it("prepares active membership once across exact scoring and diverse reranking", async () => {
@@ -72,7 +72,7 @@ describe("hybrid project ranking", () => {
     const invalid = { score: 0.8, projectKey: `one; ${INVALID_PROJECT_ANNOTATION_KEY} ` };
     const input = [global, tagged, invalid];
     const before = structuredClone(input);
-    const result = applyProjectRanking(input, prepareActiveProjectKeys(active));
+    const result = applyRetrievalRanking(input, prepareActiveProjectKeys(active));
     expect(result).toEqual([global, { ...tagged, score: 0.8 * 1.15 }]);
     expect(result).not.toBe(input);
     for (const [index, entry] of [global, tagged].entries()) {

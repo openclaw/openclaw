@@ -10,6 +10,7 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 
 /** Compare fresh durable facts after the host grants its live deletion authority. */
 export function assertSessionSubagentRunsCurrent(
@@ -58,6 +59,9 @@ export function assertSessionSubagentRunsCurrent(
     matches !== true &&
     !(matches === undefined && bases.every((basis) => basis.digest === null))
   ) {
-    throw new Error("Session subagent facts changed before commit");
+    if (params.descendantRunBasis) {
+      throw new Error("Session subagent facts changed before commit");
+    }
+    throw new SqliteSessionMutationConflictError("session maintenance");
   }
 }

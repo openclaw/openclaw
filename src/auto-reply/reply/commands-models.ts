@@ -11,7 +11,7 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   loadModelsProviderData,
   type ModelsCommandSessionEntry,
@@ -143,21 +143,6 @@ export function formatModelsAvailableHeader(params: {
     .join("\n\n");
 }
 
-function buildModelsMenuText(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): string {
-  return [
-    "Providers:",
-    ...params.providers.map(
-      (provider) => `- ${provider} (${params.byProvider.get(provider)?.size ?? 0})`,
-    ),
-    "",
-    "Use: /models <provider>",
-    "Switch: /model <provider/model>",
-  ].join("\n");
-}
-
 type ModelsCommandReplyParams = {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -253,7 +238,15 @@ function buildModelsCommandReply(
       };
     }
     return {
-      text: withAvailability(buildModelsMenuText({ providers, byProvider })),
+      text: withAvailability(
+        [
+          "Providers:",
+          ...providers.map((provider) => `- ${provider} (${byProvider.get(provider)?.size ?? 0})`),
+          "",
+          "Use: /models <provider>",
+          "Switch: /model <provider/model>",
+        ].join("\n"),
+      ),
     };
   };
 
@@ -376,7 +369,7 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, commandBodyNormalized) => {
     const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
     if (parsed.action === "add") {
-      return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
+      return commandReply(MODELS_ADD_DEPRECATED_TEXT);
     }
 
     const modelsAgentId = params.sessionKey
@@ -404,9 +397,6 @@ export const handleModelsCommand: CommandHandler = defineAuthorizedTextCommand(
         (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
       sessionEntry: targetSessionEntry,
     });
-    if (!reply) {
-      return null;
-    }
-    return { reply, shouldContinue: false };
+    return reply ? commandReply(reply) : null;
   },
 );

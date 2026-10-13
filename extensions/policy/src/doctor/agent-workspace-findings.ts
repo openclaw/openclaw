@@ -4,7 +4,7 @@ import type { PolicyAgentWorkspaceEvidence, PolicyEvidence } from "../policy-sta
 import { getPolicyPath } from "../policy-value.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
-import { agentScopedPolicyTargets, scopedWorkspaceAgentMatches } from "./policy-scope.js";
+import { agentScopedPolicyTargets, scopedAgentEvidenceMatches } from "./policy-scope.js";
 import { posturePolicyShapeFinding } from "./posture-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readStringList } from "./utils.js";
@@ -37,7 +37,9 @@ export function agentWorkspaceFindings(
           getPolicyPath(target.overlay, ["agents", "workspace"]),
           policyDocName,
           `scopes/${ocPathSegment(target.scopeName)}/agents/workspace`,
-          entries.filter((entry) => scopedWorkspaceAgentMatches(entry, target.agentId, entries)),
+          entries.filter((entry) =>
+            scopedAgentEvidenceMatches(entry, target.agentId, entries, entry.scope === "defaults"),
+          ),
         ),
       );
     }

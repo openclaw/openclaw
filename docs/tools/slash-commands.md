@@ -276,7 +276,7 @@ plugins, and installed skills.
 
         **Scope in one line:** `-s` changes only this session, `-a` also updates the agent default, and `-g` also updates the shared global default. Without a flag, `agents.defaults.modelSelectionScope` applies when set. Omission changes only this session.
 
-        Configured `/<alias>` shorthands accept the same trailing scope and `--runtime` options as `/model <alias>`.
+        Configured `/<alias>` shorthands recognize aliases from `agents.defaults.models` and the current agent's `agents.entries.<id>.models`. They accept the same trailing scope and `--runtime` options as `/model <alias>`; another agent's aliases do not apply.
 
         | Goal | Command | Effect |
         | --- | --- | --- |

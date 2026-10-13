@@ -7,20 +7,12 @@ import { resolveModelExtraParamSources } from "../../agents/model-extra-params.j
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const parsed = parseNonNegativeByteSize(
-    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
 
 export function resolveEffectivePromptTokens(
   basePromptTokens?: number,

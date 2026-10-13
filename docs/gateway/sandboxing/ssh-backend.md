@@ -23,12 +23,17 @@ Remove and rename operations follow in-mount parent-directory aliases while acti
 on the final entry itself. Removing a final symlink leaves its target intact;
 parents that resolve outside the allowed mounts are rejected.
 
-Creating a new remote workspace also requires atomic no-replace directory rename:
-`renameat2` on Linux or `renameatx_np` on macOS, supported by the remote filesystem.
-An older libc or filesystem without that capability cannot publish a new staged
-workspace. Initialization fails without replacing an existing directory; it does
-not fall back to an overwrite or nested move. Existing remote workspaces continue
-to be adopted without reseeding.
+New remote workspaces are uploaded into a private staging directory before
+publication. When supported, fs-safe publishes with atomic no-replace directory
+rename: `renameat2` on Linux or `renameatx_np` on macOS.
+
+On Linux filesystems that reject `RENAME_NOREPLACE`, including gVisor volume
+mounts, fs-safe checks that the destination is absent and falls back to directory
+rename. This never exposes an empty claim as a completed workspace. Targets
+present at the check are preserved, and file or nonempty-directory competitors
+cannot be replaced. An empty directory created after that check can be replaced.
+macOS still requires its native no-replace primitive. Existing remote workspaces
+continue to be adopted without reseeding.
 
 ```json5
 {

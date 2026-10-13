@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerDispatchPlacement,
   WorkerProvisioningDispatchPlacement,
@@ -424,10 +425,7 @@ export function coordinateWorkerPlacementDispatch(
               service.dispatch(
                 request,
                 report,
-                () => {
-                  authorize?.();
-                  assertSessionCurrent?.();
-                },
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
                 signal,
               ),
             ),
@@ -497,10 +495,7 @@ export function coordinateWorkerPlacementDispatch(
               service.move(
                 request,
                 report,
-                () => {
-                  authorize?.();
-                  assertSessionCurrent?.();
-                },
+                composePlacementAuthorization(authorize, () => assertSessionCurrent?.()),
                 signal,
               ),
             ),

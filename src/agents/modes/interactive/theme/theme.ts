@@ -95,6 +95,14 @@ type ThemeBg =
 
 type ColorMode = "truecolor" | "256color";
 
+const THINKING_BORDER_COLORS = new Map<string, ThemeColor>([
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+]);
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const cleaned = hex.replace("#", "");
   if (cleaned.length !== 6) {
@@ -307,22 +315,8 @@ export class Theme {
   getThinkingBorderColor(
     level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
   ): (str: string) => string {
-    switch (level) {
-      case "off":
-        return (str: string) => this.fg("thinkingOff", str);
-      case "minimal":
-        return (str: string) => this.fg("thinkingMinimal", str);
-      case "low":
-        return (str: string) => this.fg("thinkingLow", str);
-      case "medium":
-        return (str: string) => this.fg("thinkingMedium", str);
-      case "high":
-        return (str: string) => this.fg("thinkingHigh", str);
-      case "xhigh":
-        return (str: string) => this.fg("thinkingXhigh", str);
-      default:
-        return (str: string) => this.fg("thinkingOff", str);
-    }
+    const color = THINKING_BORDER_COLORS.get(level) ?? "thinkingOff";
+    return (str: string) => this.fg(color, str);
   }
 
   getBashModeBorderColor(): (str: string) => string {

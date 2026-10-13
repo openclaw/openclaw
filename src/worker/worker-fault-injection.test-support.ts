@@ -18,7 +18,10 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptTargetBinding,
+  type CapturedSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
@@ -238,7 +241,7 @@ export class ComposedGatewayHarness {
 
   private constructor(
     readonly root: string,
-    readonly sessionTarget: ReturnType<typeof captureSessionTranscriptTargetBinding>,
+    readonly sessionTarget: CapturedSessionTranscriptTargetBinding,
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
     private readonly artifact: WorkerInstallationArtifact,

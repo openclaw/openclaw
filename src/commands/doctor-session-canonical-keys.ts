@@ -381,7 +381,7 @@ async function repairCanonicalSessionGroup(
   }
 
   const destinationStore = byDatabase.get(destination.sqlitePath) ?? [];
-  const preArchivedDirectories: string[] = [];
+  const archivedDirectories = new Set<string>();
   if (winner.sqlitePath !== destination.sqlitePath) {
     const generationIds = new Set([
       ...listSessionGenerationIdsForCanonicalRepair({
@@ -431,9 +431,7 @@ async function repairCanonicalSessionGroup(
         reason: "deleted",
         sessionId,
       });
-      if (!preArchivedDirectories.includes(archiveDirectory)) {
-        preArchivedDirectories.push(archiveDirectory);
-      }
+      archivedDirectories.add(archiveDirectory);
     }
   }
   setCanonicalSqliteSessionMainKey(
@@ -468,10 +466,9 @@ async function repairCanonicalSessionGroup(
     storePath: destination.storePath,
     upserts: [{ entry: selected.entry, sessionKey: winner.canonicalKey }],
   });
-  const archivedDirectories = new Set([
-    ...preArchivedDirectories,
-    ...winnerResult.archivedTranscriptDirectories,
-  ]);
+  for (const directory of winnerResult.archivedTranscriptDirectories) {
+    archivedDirectories.add(directory);
+  }
 
   for (const [sqlitePath, storeCandidates] of byDatabase) {
     if (sqlitePath === destination.sqlitePath) {

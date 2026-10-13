@@ -169,10 +169,7 @@ export function startGatewayMaintenanceTimers(params: {
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
     });
-    if (!admission) {
-      return { status: "retry", reason: "admission-closed" };
-    }
-    if (!admission.commit()) {
+    if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
@@ -335,9 +332,6 @@ export function startGatewayMaintenanceTimers(params: {
     pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
-      }
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
         if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
@@ -433,24 +427,20 @@ export function startGatewayMaintenanceTimers(params: {
             observedAt: entry.projectSessionTerminalObservedAt,
           });
         }
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
+      } else if (entry.projectSessionActive !== false) {
+        const aborted = abortChatRunById(params, {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+        });
+        if (aborted.aborted) {
+          continue;
+        }
+        // A non-abortable expired entry (signal already aborted, frozen reply
+        // op) whose owner cleanup was lost would otherwise survive every sweep:
+        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
       }
-      if (entry.projectSessionActive === false) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
-      }
-      const aborted = abortChatRunById(params, {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "timeout",
-      });
-      // A non-abortable expired entry (signal already aborted, frozen reply
-      // op) whose owner cleanup was lost would otherwise survive every sweep:
-      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
-      if (!aborted.aborted) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      }
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;

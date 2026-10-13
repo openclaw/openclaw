@@ -3016,7 +3016,6 @@
       "ui/src/e2e/connection-settings.e2e.test.ts": 8,
       "ui/src/e2e/control-ui-build-publication.e2e.test.ts": 1,
       "ui/src/e2e/control-ui-credentials.e2e.test.ts": 5,
-      "ui/src/e2e/control-ui-retained-assets.e2e.test.ts": 1,
       "ui/src/e2e/control-ui-route-readiness.e2e.test.ts": 10,
       "ui/src/e2e/control-ui-shell-routing.e2e.test.ts": 5,
       "ui/src/e2e/cron-agent-ownership.e2e.test.ts": 6,

@@ -41,23 +41,15 @@ function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
   return [...byId.values()];
 }
 
-function findExactNames<T extends { id?: string; displayName?: string }>(
+function findExactMatches<T extends GraphUser>(
   items: T[],
   query: string,
+  fields: readonly ("displayName" | "mail" | "userPrincipalName")[] = ["displayName"],
 ): T[] {
   const normalized = normalizeLowercaseStringOrEmpty(query);
   return uniqueItemsById(
-    items.filter((item) => normalizeLowercaseStringOrEmpty(item.displayName) === normalized),
-  );
-}
-
-function findExactUsers(items: GraphUser[], query: string): GraphUser[] {
-  const normalized = normalizeLowercaseStringOrEmpty(query);
-  return uniqueItemsById(
     items.filter((item) =>
-      [item.displayName, item.mail, item.userPrincipalName].some(
-        (value) => normalizeLowercaseStringOrEmpty(value) === normalized,
-      ),
+      fields.some((field) => normalizeLowercaseStringOrEmpty(item[field]) === normalized),
     ),
   );
 }
@@ -78,27 +70,18 @@ function normalizeStaticMSTeamsAllowEntry(raw: string): string | undefined {
   return isStableMSTeamsUserId(id) ? id : undefined;
 }
 
-export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  const projected = entries
-    .map((entry) => normalizeStaticMSTeamsAllowEntry(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return [
-    ...new Map(projected.map((entry) => [normalizeLowercaseStringOrEmpty(entry), entry])).values(),
-  ];
-}
-
-export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[] | undefined {
+function projectStableMSTeamsAllowlist(
+  entries: string[] | undefined,
+  allowConversations: boolean,
+): string[] | undefined {
   if (!entries) {
     return undefined;
   }
   const projected = entries
     .map((entry) => {
-      const stableUserEntry = normalizeStaticMSTeamsAllowEntry(entry);
-      if (stableUserEntry) {
-        return stableUserEntry;
+      const stable = normalizeStaticMSTeamsAllowEntry(entry);
+      if (stable || !allowConversations) {
+        return stable;
       }
       const conversationId = normalizeMSTeamsConversationId(normalizeMSTeamsUserInput(entry));
       return MSTEAMS_GROUP_CONVERSATION_ID.test(conversationId) ? conversationId : undefined;
@@ -107,13 +90,21 @@ export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[]
   return [
     ...new Map(
       projected.map((entry) => [
-        MSTEAMS_GROUP_CONVERSATION_ID.test(entry)
+        allowConversations && MSTEAMS_GROUP_CONVERSATION_ID.test(entry)
           ? `conversation:${entry}`
           : normalizeLowercaseStringOrEmpty(entry),
         entry,
       ]),
     ).values(),
   ];
+}
+
+export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] | undefined {
+  return projectStableMSTeamsAllowlist(entries, false);
+}
+
+export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[] | undefined {
+  return projectStableMSTeamsAllowlist(entries, true);
 }
 
 function stripProviderPrefix(raw: string): string {
@@ -333,7 +324,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         if (result.truncated) {
           return { input, resolved: false, note: "team lookup incomplete" };
         }
-        const exactTeams = findExactNames(result.items, team);
+        const exactTeams = findExactMatches(result.items, team);
         const [exactTeam] = exactTeams;
         if (!exactTeam) {
           return { input, resolved: false, note: "team not found" };
@@ -368,7 +359,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       } catch {
         return { input, resolved: false, note: "channel lookup failed" };
       }
-      const generalChannels = findExactNames(teamChannels, "general");
+      const generalChannels = findExactMatches(teamChannels, "general");
       if (params.teamIdMode !== "graph" && generalChannels.length !== 1) {
         return {
           input,
@@ -392,7 +383,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         };
       }
       const channelById = teamChannels.find((item) => item.id === channel);
-      const exactChannels = channelById ? [channelById] : findExactNames(teamChannels, channel);
+      const exactChannels = channelById ? [channelById] : findExactMatches(teamChannels, channel);
       if (exactChannels.length === 0) {
         return { input, resolved: false, note: "channel not found" };
       }
@@ -535,7 +526,11 @@ export async function resolveMSTeamsUserAllowlist(params: {
       if (result.truncated) {
         return { input, resolved: false, note: "user lookup incomplete" };
       }
-      const users = findExactUsers(result.items, query);
+      const users = findExactMatches(result.items, query, [
+        "displayName",
+        "mail",
+        "userPrincipalName",
+      ]);
       const [match] = users;
       if (!match) {
         return { input, resolved: false, note: "user not found" };

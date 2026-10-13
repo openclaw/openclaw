@@ -99,16 +99,6 @@ function renderDiagnosticsError(error: string | null) {
   `;
 }
 
-function renderSnapshotOffline(props: DebugProps) {
-  if (props.connected || !props.offlineStable) {
-    return nothing;
-  }
-  return renderSettingsRow({
-    title: renderSettingsStatus({ kind: "muted", label: t("common.offline") }),
-    description: t("debug.offlineSnapshots"),
-  });
-}
-
 function renderEventRow(evt: EventLogEntry) {
   return renderSettingsRow({
     title: evt.event,
@@ -135,8 +125,15 @@ export function renderDebug(props: DebugProps) {
       `,
     },
     html`
-      ${renderSnapshotOffline(props)} ${renderDiagnosticsError(props.diagnosticsError)}
-      ${renderSecurityRow(props)}
+      ${
+        !props.connected && props.offlineStable
+          ? renderSettingsRow({
+              title: renderSettingsStatus({ kind: "muted", label: t("common.offline") }),
+              description: t("debug.offlineSnapshots"),
+            })
+          : nothing
+      }
+      ${renderDiagnosticsError(props.diagnosticsError)} ${renderSecurityRow(props)}
       ${(["status", "health", "heartbeat"] as const).map((key) => {
         const title = t(key === "heartbeat" ? "debug.lastHeartbeat" : `debug.${key}`);
         const value = props[key];

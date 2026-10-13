@@ -174,6 +174,7 @@ export function selectSessionTranscriptIndexStatus(db: DatabaseSync, sessionId: 
     .leftJoin(selectSessionTranscriptProjectionState(db, sessionId).as("state"), (join) =>
       join.onTrue(),
     )
+    .select("latest.seq as latestSeq")
     .select((eb) =>
       eb
         .or([

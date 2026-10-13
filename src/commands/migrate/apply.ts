@@ -53,6 +53,13 @@ export async function runMigrationApply(params: {
   onApplyCompleted?: () => void;
 }): Promise<MigrationApplyResult> {
   const applyMigration = async (progress?: ProgressReporter) => {
+    const createContext = (paths: { backupPath?: string; reportDir?: string } = {}) =>
+      buildMigrationContext({
+        ...params.opts,
+        providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
+        runtime: params.runtime,
+        ...paths,
+      });
     const total = (params.opts.preflightPlan ? 0 : 1) + (params.opts.noBackup ? 0 : 1) + 1;
     let completed = 0;
     const tick = () => {
@@ -63,14 +70,7 @@ export async function runMigrationApply(params: {
       progress?.setLabel("Preparing migration plan…");
     }
     const preflightPlan =
-      params.opts.preflightPlan ??
-      (await params.provider.plan(
-        buildMigrationContext({
-          ...params.opts,
-          providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
-          runtime: params.runtime,
-        }),
-      ));
+      params.opts.preflightPlan ?? (await params.provider.plan(createContext()));
     if (!params.opts.preflightPlan) {
       tick();
     }
@@ -93,13 +93,7 @@ export async function runMigrationApply(params: {
         tick();
       }
       await fs.mkdir(reportDir, { recursive: true });
-      const ctx = buildMigrationContext({
-        ...params.opts,
-        providerOptions: buildMigrationProviderOptions(params.opts, params.providerId),
-        runtime: params.runtime,
-        backupPath,
-        reportDir,
-      });
+      const ctx = createContext({ backupPath, reportDir });
       progress?.setLabel("Applying migration…");
       const result = await withCommandProcessScope(async () => {
         const applied = await params.provider.apply(ctx, selectedPlan);

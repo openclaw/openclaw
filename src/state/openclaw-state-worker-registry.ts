@@ -45,14 +45,19 @@ import type { SkillLibraryWorkerOperations } from "../skills/library/store.worke
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { SkillWorkshopWorkerOperations } from "../skills/workshop/changes.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
+import type { agentRecoveryOperations } from "./agent-deletion-recovery.worker.js";
+import type { agentDeletionOperations } from "./agent-deletion.worker.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
+import type { UserBackgroundWorkerOperations } from "./user-background.worker.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBootOperations> &
+  WorkerOperations<typeof agentDeletionOperations> &
+  WorkerOperations<typeof agentRecoveryOperations> &
   WorkerOperations<typeof localWorkspaceOperations> &
   ClawProvenanceWriteOperations &
   GeneratedHtmlProvenanceOperations &
@@ -102,12 +107,16 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   WorkerEnvironmentWorkerOperations &
   WorkerTranscriptCommitOperations &
   RepositoryWorkspaceWorkerOperations &
+  UserBackgroundWorkerOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
   WorkerWriteOperationContext
 >({
+  agentDeletion: () => import("./agent-deletion.worker.js").then((m) => m.agentDeletionOperations),
+  agentRecovery: () =>
+    import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryOperations),
   gatewayBoot: () =>
     import("../infra/gateway-boot-lifecycle.worker.js").then((m) => m.gatewayBootOperations),
   localWorkspace: () =>
@@ -142,6 +151,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     import("../infra/exec-approvals-authorization.worker.js").then(
       (m) => m.execAuthorizationOperations,
     ),
+  userBackground: async () =>
+    (await import("./user-background.worker.js")).userBackgroundOperations,
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
   agentDatabaseRegistry: () =>
     import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),

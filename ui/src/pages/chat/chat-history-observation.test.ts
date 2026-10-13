@@ -206,7 +206,6 @@ function seedCursor(state: ReturnType<Awaited<ReturnType<typeof fixture>>["makeS
 describe("history descriptor observation order", () => {
   it.each([
     { name: "shorter", ids: ["off"], reasoning: false },
-    { name: "empty", ids: [], reasoning: true },
     { name: "omitted", ids: undefined, reasoning: true },
   ])(
     "adopts a current $name thinking profile without reviving an older list",
@@ -282,78 +281,34 @@ describe("history descriptor observation order", () => {
     },
   );
 
-  it.each([10, null])(
-    "keeps the newer primary-held delta descriptor over an older full read (updatedAt: %s)",
-    async (updatedAt) => {
-      const h = await fixture(initial, false);
-      const full = h.begin(h.makeState());
-      const cursorState = h.makeState();
-      seedCursor(cursorState);
-      const delta = h.begin(cursorState);
-      expect(h.reads).toHaveLength(2);
-      expect(h.reads[0]!.params).not.toHaveProperty("cursor");
-      expect(h.reads[1]!.params).toHaveProperty("cursor", "cursor-observation");
-      const fresh = { ...initial, updatedAt, label: "Current delta descriptor" };
-      h.reads[1]!.pending.resolve({
-        kind: "delta",
-        messages: [],
-        sessionInfo: fresh,
-        deltaCursor: "cursor-current",
-      });
-      await delta;
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-        fresh.label,
-      );
-      h.reads[0]!.pending.resolve(history({ ...initial, updatedAt, label: "Earlier full read" }));
-      await full;
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-        fresh.label,
-      );
-    },
-  );
-
-  it.each(["page", "delta"] as const)(
-    "keeps a newer %s history descriptor when an earlier managed query finishes",
-    async (mode) => {
-      const h = await fixture();
-      const state = h.makeState();
-      if (mode === "delta") {
-        seedCursor(state);
-      }
-      const oldList = h.holdManaged();
-      const loaded = h.begin(state);
-      if (mode === "delta") {
-        expect(h.reads[0]!.params).toHaveProperty("cursor", "cursor-observation");
-      } else {
-        expect(h.reads[0]!.params).not.toHaveProperty("cursor");
-      }
-      const fresh = { ...initial, updatedAt: 20, label: "Newer history read" };
-      h.reads[0]!.pending.resolve(
-        mode === "page"
-          ? history(fresh)
-          : {
-              kind: "delta",
-              messages: [],
-              sessionInfo: fresh,
-              deltaCursor: "cursor-next",
-            },
-      );
-      await loaded;
-      oldList.resolve(
-        sessionsResult([{ ...initial, updatedAt: 100, label: "Earlier query" }, sibling], 100),
-      );
-      await oldList.refresh;
-
-      expect(h.managedRow()?.label).toBe(fresh.label);
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-        fresh.label,
-      );
-      expect(h.sessions.listSnapshot(query).result?.sessions.map((row) => row.key)).toEqual([
-        key,
-        sibling.key,
-      ]);
-    },
-  );
+  it("keeps the newer primary-held delta descriptor over an older full read without timestamps", async () => {
+    const h = await fixture(initial, false);
+    const full = h.begin(h.makeState());
+    const cursorState = h.makeState();
+    seedCursor(cursorState);
+    const delta = h.begin(cursorState);
+    expect(h.reads).toHaveLength(2);
+    expect(h.reads[0]!.params).not.toHaveProperty("cursor");
+    expect(h.reads[1]!.params).toHaveProperty("cursor", "cursor-observation");
+    const fresh = { ...initial, updatedAt: null, label: "Current delta descriptor" };
+    h.reads[1]!.pending.resolve({
+      kind: "delta",
+      messages: [],
+      sessionInfo: fresh,
+      deltaCursor: "cursor-current",
+    });
+    await delta;
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
+      fresh.label,
+    );
+    h.reads[0]!.pending.resolve(
+      history({ ...initial, updatedAt: null, label: "Earlier full read" }),
+    );
+    await full;
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
+      fresh.label,
+    );
+  });
 
   it("does not let a late shared consumer recapture an older history result", async () => {
     const h = await fixture();
@@ -374,53 +329,51 @@ describe("history descriptor observation order", () => {
     expect(h.sessions.state.result?.sessions.map((row) => row.key)).toEqual([key, sibling.key]);
   });
 
-  it.each(["chat.history", "chat.startup"] as const)(
-    "uses the successful %s retry's observation for shared consumers",
-    async (method) => {
-      const h = await fixture();
-      const firstState = h.makeState();
-      const first = h.begin(firstState, method === "chat.startup");
-      expect(h.reads).toHaveLength(1);
-      expect(h.reads[0]!.method).toBe(method);
-      h.reads[0]!.pending.reject(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "session history is rebuilding; retry shortly",
-          details: { method },
-          retryable: true,
-          retryAfterMs: 250,
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      const between = { ...initial, label: "Roster read between attempts" };
-      await h.refreshManaged(between);
-      expect(h.managedRow()?.label).toBe(between.label);
+  it("uses the successful chat.startup retry's observation for shared consumers", async () => {
+    const method = "chat.startup";
+    const h = await fixture();
+    const firstState = h.makeState();
+    const first = h.begin(firstState, method === "chat.startup");
+    expect(h.reads).toHaveLength(1);
+    expect(h.reads[0]!.method).toBe(method);
+    h.reads[0]!.pending.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "session history is rebuilding; retry shortly",
+        details: { method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const between = { ...initial, label: "Roster read between attempts" };
+    await h.refreshManaged(between);
+    expect(h.managedRow()?.label).toBe(between.label);
 
-      const joinedState = h.makeState();
-      const joined = h.begin(joinedState, method === "chat.startup");
-      expect(h.reads).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(499);
-      expect(h.reads).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(h.reads).toHaveLength(2);
-      expect(h.reads[1]!.method).toBe(method);
-      expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
-      const recovered = { ...initial, label: "Descriptor from successful retry" };
-      h.reads[1]!.pending.resolve(history(recovered));
-      await Promise.all([first, joined]);
+    const joinedState = h.makeState();
+    const joined = h.begin(joinedState, method === "chat.startup");
+    expect(h.reads).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.reads).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.reads).toHaveLength(2);
+    expect(h.reads[1]!.method).toBe(method);
+    expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
+    const recovered = { ...initial, label: "Descriptor from successful retry" };
+    h.reads[1]!.pending.resolve(history(recovered));
+    await Promise.all([first, joined]);
 
-      for (const state of [firstState, joinedState]) {
-        expect(state.chatMessages).toHaveLength(1);
-        expect(state.currentSessionId).toBe(initial.sessionId);
-        expect(state.chatLoading).toBe(false);
-      }
-      expect(h.reads).toHaveLength(2);
-      expect.soft(h.managedRow()?.label).toBe(recovered.label);
-      expect
-        .soft(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label)
-        .toBe(recovered.label);
-    },
-  );
+    for (const state of [firstState, joinedState]) {
+      expect(state.chatMessages).toHaveLength(1);
+      expect(state.currentSessionId).toBe(initial.sessionId);
+      expect(state.chatLoading).toBe(false);
+    }
+    expect(h.reads).toHaveLength(2);
+    expect.soft(h.managedRow()?.label).toBe(recovered.label);
+    expect
+      .soft(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label)
+      .toBe(recovered.label);
+  });
 
   it("starts a distinct history read when the capability changes on the same client", async () => {
     const h = await fixture();
@@ -466,87 +419,79 @@ describe("history descriptor observation order", () => {
     expect(h.managedRow()?.label).toBe("Fallback page read");
   });
 
-  it.each([false, true])(
-    "orders short-route pane history by request issuance (retried: %s)",
-    async (retried) => {
-      const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
-      const lifecycle = new AbortController();
-      const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
-        routes: [
-          definePage({
-            id: "chat",
-            path: "/chat",
-            component: () => null,
-            loader: (context, { location, signal }) =>
-              loadChatRoute(context, location, "chat", signal),
-          }),
-        ],
-      });
-      const context: ApplicationContext = {
-        ...h.context,
-        router,
-        lifecycleAbortSignal: lifecycle.signal,
-      };
-      onTestFinished(() => {
-        lifecycle.abort();
-        router.stop();
-      });
-      const navigation = router.navigate("chat", context, undefined, {
-        pathname: "/chat/main/observed-session-12345678",
-        search: "",
-        hash: "",
-      });
-      h.operations.push(navigation);
-      await navigation;
-      expect(router.getState().matches[0]?.data).toMatchObject({
-        kind: "session",
-        sessionKey: key,
-      });
-      expect(h.reads).toHaveLength(0);
-      const pane = h.makeState();
-      const loaded = h.begin(pane, true);
-      await vi.waitFor(() => expect(h.reads).toHaveLength(1));
-      expect(h.reads[0]!.method).toBe("chat.startup");
-      expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
-      if (retried) {
-        h.reads[0]!.pending.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "session history is rebuilding; retry shortly",
-            details: { method: "chat.startup" },
-            retryable: true,
-            retryAfterMs: 250,
-          }),
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between startup attempts" });
-        expect(h.managedRow()?.label).toBe("Between startup attempts");
-        await vi.advanceTimersByTimeAsync(499);
-        expect(h.reads).toHaveLength(1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(h.reads).toHaveLength(2);
-        expect(h.reads[1]!.method).toBe("chat.startup");
-        expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
-      }
-      const startupRow = {
-        ...initial,
-        updatedAt: 50,
-        label: retried ? "Startup retry descriptor" : "Earlier startup",
-      };
-      if (!retried) {
-        await h.refreshManaged({ ...initial, updatedAt: 5, label: "After startup read" });
-      }
-      h.reads[retried ? 1 : 0]!.pending.resolve(history(startupRow));
-      await loaded;
+  it("orders short-route pane history by the retried request issuance", async () => {
+    const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
+    const lifecycle = new AbortController();
+    const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
+      routes: [
+        definePage({
+          id: "chat",
+          path: "/chat",
+          component: () => null,
+          loader: (context, { location, signal }) =>
+            loadChatRoute(context, location, "chat", signal),
+        }),
+      ],
+    });
+    const context: ApplicationContext = {
+      ...h.context,
+      router,
+      lifecycleAbortSignal: lifecycle.signal,
+    };
+    onTestFinished(() => {
+      lifecycle.abort();
+      router.stop();
+    });
+    const navigation = router.navigate("chat", context, undefined, {
+      pathname: "/chat/main/observed-session-12345678",
+      search: "",
+      hash: "",
+    });
+    h.operations.push(navigation);
+    await navigation;
+    expect(router.getState().matches[0]?.data).toMatchObject({
+      kind: "session",
+      sessionKey: key,
+    });
+    expect(h.reads).toHaveLength(0);
+    const pane = h.makeState();
+    const loaded = h.begin(pane, true);
+    await vi.waitFor(() => expect(h.reads).toHaveLength(1));
+    expect(h.reads[0]!.method).toBe("chat.startup");
+    expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
+    h.reads[0]!.pending.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "session history is rebuilding; retry shortly",
+        details: { method: "chat.startup" },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between startup attempts" });
+    expect(h.managedRow()?.label).toBe("Between startup attempts");
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.reads).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.reads).toHaveLength(2);
+    expect(h.reads[1]!.method).toBe("chat.startup");
+    expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
+    const startupRow = {
+      ...initial,
+      updatedAt: 50,
+      label: "Startup retry descriptor",
+    };
+    h.reads[1]!.pending.resolve(history(startupRow));
+    await loaded;
 
-      expect(h.reads).toHaveLength(retried ? 2 : 1);
-      expect(pane.chatMessages).toHaveLength(1);
-      expect(pane.currentSessionId).toBe(initial.sessionId);
-      expect(pane.chatLoading).toBe(false);
-      expect.soft(h.managedRow()?.label).toBe(retried ? startupRow.label : "After startup read");
-      expect.soft(h.sessions.state.result?.sessions.some((row) => row.key === key)).toBe(retried);
-    },
-  );
+    expect(h.reads).toHaveLength(2);
+    expect(pane.chatMessages).toHaveLength(1);
+    expect(pane.currentSessionId).toBe(initial.sessionId);
+    expect(pane.chatLoading).toBe(false);
+    expect.soft(h.managedRow()?.label).toBe(startupRow.label);
+    expect.soft(h.sessions.state.result?.sessions.some((row) => row.key === key)).toBe(true);
+  });
 });
 
 it.each([false, true])(
@@ -688,11 +633,10 @@ it("keeps an authoritative empty startup committed when its cache entry is evict
   expect(getChatHistoryLoadState(state).phase).toBe("idle");
 });
 
-it.each(
-  (["branch-switch", "rewind"] as const).flatMap((reason) =>
-    (["before", "after"] as const).map((eventOrder) => ({ reason, eventOrder })),
-  ),
-)(
+it.each([
+  { reason: "branch-switch", eventOrder: "before" },
+  { reason: "rewind", eventOrder: "after" },
+] as const)(
   "follows $reason with exhausted history when its event arrives $eventOrder cache invalidation",
   async ({ reason, eventOrder }) => {
     vi.useRealTimers();

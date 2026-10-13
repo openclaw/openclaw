@@ -198,7 +198,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { bindingStore: persistedBindings },
     );
-    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
+    await expect(operation).rejects.toThrow("Codex session execution policy changed");
     expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(persistedBindings.read(current)).toEqual(parent);
   });

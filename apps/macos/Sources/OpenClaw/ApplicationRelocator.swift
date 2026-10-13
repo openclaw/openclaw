@@ -5,13 +5,6 @@ import Foundation
 import OSLog
 import Security
 
-@_silgen_name("csops")
-private func csops(
-    _: pid_t,
-    _: UInt32,
-    _: UnsafeMutableRawPointer?,
-    _: Int) -> Int32
-
 @MainActor
 enum ApplicationRelocator {
     struct ApplicationIdentity: Equatable, Sendable {
@@ -179,22 +172,18 @@ enum ApplicationRelocator {
         }
 
         if let currentIdentity = environment.currentIdentity {
-            for candidate in environment.candidates {
+            let trustedCandidates = environment.candidates.filter {
+                $0.isTrusted && $0.identity?.bundleIdentifier == currentIdentity.bundleIdentifier
+            }
+            for candidate in trustedCandidates {
                 guard let installedIdentity = candidate.identity,
-                      candidate.isTrusted,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier,
                       installedIdentity.buildVersion.compare(currentIdentity.buildVersion, options: .numeric) !=
                       .orderedAscending
                 else { continue }
                 return .handOff(candidate.url)
             }
 
-            for candidate in environment.candidates {
-                guard candidate.isWritable,
-                      candidate.isTrusted,
-                      let installedIdentity = candidate.identity,
-                      installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier
-                else { continue }
+            if let candidate = trustedCandidates.first(where: \.isWritable) {
                 return .offerInstall(destination: candidate.url, replacing: true)
             }
         }
@@ -417,7 +406,7 @@ extension ApplicationRelocator {
               parentPID == getppid(),
               let expectedHashText = environment[replacementCodeHashEnvironmentKey],
               let expectedHash = Data(base64Encoded: expectedHashText),
-              expectedHash == kernelCodeDirectoryHash(),
+              expectedHash == ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let readyFDText = environment[replacementReadyFDEnvironmentKey],
               let readyFD = Int32(readyFDText),
               readyFD >= 3,
@@ -764,7 +753,7 @@ extension ApplicationRelocator {
     private static func runningCodeIdentity(
         bundleIdentifier: String) -> (codeDirectoryHash: Data, requirementData: Data)?
     {
-        guard let codeDirectoryHash = kernelCodeDirectoryHash(),
+        guard let codeDirectoryHash = ProcessIdentity.codeDirectoryHash(pid: getpid()),
               let teamIdentifier = kernelTeamIdentifier(),
               let requirementString = developerIDRequirementString(
                   bundleIdentifier: bundleIdentifier,
@@ -792,14 +781,6 @@ extension ApplicationRelocator {
             "certificate 1[field.1.2.840.113635.100.6.2.6] exists and " +
             "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and " +
             "certificate leaf[subject.OU] = \"\(teamIdentifier)\""
-    }
-
-    private static func kernelCodeDirectoryHash() -> Data? {
-        var bytes = [UInt8](repeating: 0, count: 20)
-        let result = bytes.withUnsafeMutableBytes {
-            csops(getpid(), 5, $0.baseAddress, $0.count)
-        }
-        return result == 0 ? Data(bytes) : nil
     }
 
     private static func kernelTeamIdentifier() -> String? {

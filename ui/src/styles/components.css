@@ -474,7 +474,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   gap: 20px;
 }
 
-.login-gate__status-icon {
+.login-gate__status-icon,
+.gateway-switch__icon {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -482,6 +483,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 40px;
   height: 40px;
   border-radius: var(--radius-full);
+}
+
+.login-gate__status-icon {
   color: var(--login-gate-tone, var(--accent));
   background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
 }
@@ -668,10 +672,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__form {
   display: grid;
   gap: 14px;
-}
-
-.login-gate__form .field {
-  gap: 6px;
 }
 
 .login-gate__form .field label {
@@ -887,13 +887,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .gateway-switch__icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-full);
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
@@ -1066,54 +1059,24 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   font-weight: 500;
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--border);
-  padding: 5px 11px;
-  border-radius: var(--radius-full);
-  background: var(--secondary);
-  font-size: 12px;
-  font-weight: 500;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.pill:hover {
-  border-color: var(--border-strong);
-}
-
-.pill.danger {
-  border-color: var(--danger-subtle);
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
 .statusDot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 50%, transparent);
-  animation: pulse-subtle 2s ease-in-out infinite;
 }
 
 .statusDot.ok {
   background: var(--ok);
   box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent);
-  animation: none;
 }
 
 .statusDot.warn {
   background: var(--warn);
   box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent);
-  animation: none;
 }
 
 .statusDot.muted {
   background: var(--muted);
-  box-shadow: none;
-  animation: none;
   opacity: 0.5;
 }
 
@@ -1795,10 +1758,6 @@ openclaw-session-progress-hovercard-provider {
   gap: 6px;
 }
 
-.field.full {
-  grid-column: 1 / -1;
-}
-
 .field span {
   color: var(--muted);
   font-size: 13px;
@@ -1839,7 +1798,8 @@ select.input {
 .field input:focus-visible,
 .field textarea:focus-visible,
 .field select:focus-visible,
-.input:focus-visible {
+.input:focus-visible,
+.oc-sensitive-input:focus-within {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -1865,11 +1825,6 @@ select.input {
   border-color: var(--border-strong);
 }
 
-.oc-sensitive-input:focus-within {
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
-}
-
 .oc-sensitive-input > input {
   width: 100%;
   min-width: 0;
@@ -1882,7 +1837,8 @@ select.input {
   box-shadow: none;
 }
 
-.oc-sensitive-input > input:disabled {
+.oc-sensitive-input > input:disabled,
+.oc-sensitive-toggle:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -1946,11 +1902,6 @@ select.input {
 
 .oc-sensitive-toggle:hover:not(:disabled) {
   color: var(--text);
-}
-
-.oc-sensitive-toggle:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .oc-sensitive-toggle:focus-visible {
@@ -2975,10 +2926,6 @@ td.data-table-key-col {
   animation: none;
 }
 
-.exec-approval-card--severity-info {
-  --exec-approval-accent: var(--border);
-}
-
 .exec-approval-card--severity-warning {
   --exec-approval-accent: var(--warn);
 }
@@ -3130,8 +3077,6 @@ td.data-table-key-col {
 }
 
 .exec-approval-actions .btn {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
 }
 
@@ -3184,15 +3129,11 @@ td.data-table-key-col {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
 .exec-approval-list__agent {
   color: var(--muted);
-  font-size: 12px;
-}
-
-.exec-approval-list__command {
-  font-size: 12px;
 }
 
 .exec-approval-list__expiry {
@@ -3289,13 +3230,18 @@ td.data-table-key-col {
   line-height: 1.5;
 }
 
-.agents-layout {
+.agents-layout,
+.agents-main {
   display: grid;
-  grid-template-columns: 1fr;
   gap: 14px;
 }
 
-.agents-toolbar {
+.agents-layout {
+  grid-template-columns: 1fr;
+}
+
+.agents-toolbar,
+.agent-file-header {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -3403,6 +3349,10 @@ td.data-table-key-col {
 
 .agent-select__label {
   flex: 0 1 auto;
+}
+
+.agent-select__label,
+.agent-select__option-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3540,13 +3490,6 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.agent-select__option-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-select__option-description {
   overflow: hidden;
   color: var(--muted);
@@ -3575,15 +3518,6 @@ td.data-table-key-col {
   gap: 6px;
   flex-shrink: 0;
   margin-left: auto;
-}
-
-.agents-refresh-btn {
-  white-space: nowrap;
-}
-
-.agents-main {
-  display: grid;
-  gap: 14px;
 }
 
 .agent-file-tabs {
@@ -3716,11 +3650,7 @@ td.data-table-key-col {
 }
 
 .agent-file-header {
-  display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 
 .agent-file-sub {
@@ -4291,7 +4221,8 @@ td.data-table-key-col {
   }
 }
 
-.agent-tools-buttons {
+.agent-tools-buttons,
+.agent-tools-runtime {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -4301,12 +4232,6 @@ td.data-table-key-col {
   display: grid;
   gap: 16px;
   margin-top: 20px;
-}
-
-.agent-tools-runtime {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .agent-tools-runtime-chip {
@@ -4639,7 +4564,6 @@ td.data-table-key-col {
 @media (max-width: 768px) {
   .agent-tools-group__summary {
     flex-wrap: wrap;
-    align-items: flex-start;
   }
 
   .agent-tools-group__summary::before {
@@ -4654,7 +4578,6 @@ td.data-table-key-col {
 
   .agent-tool-summary {
     grid-template-columns: 1fr;
-    padding-right: 92px;
   }
 
   .agent-tool-summary__facts {
@@ -4697,13 +4620,11 @@ td.data-table-key-col {
 
 .code-block-json-node > summary::-webkit-details-marker,
 .agent-tools-group summary::-webkit-details-marker,
-.agent-tool-summary::-webkit-details-marker,
 .agent-skills-group summary::-webkit-details-marker {
   display: none;
 }
 
 .agent-tools-group summary::marker,
-.agent-tool-summary::marker,
 .agent-skills-group summary::marker {
   content: "";
 }
@@ -4878,8 +4799,6 @@ td.data-table-key-col {
 @media (max-width: 768px) {
   .exec-approval-card {
     padding: 16px;
-    display: flex;
-    flex-direction: column;
   }
 
   .exec-approval-actions {
@@ -4895,7 +4814,6 @@ td.data-table-key-col {
     font-size: 12px;
     padding: 8px 10px;
     max-height: 40dvh;
-    overflow-y: auto;
   }
 }
 
@@ -5329,10 +5247,7 @@ td.data-table-key-col {
   }
 }
 
-.md-preview-expand-btn .when-fullscreen {
-  display: none;
-}
-
+.md-preview-expand-btn .when-fullscreen,
 .md-preview-expand-btn.is-fullscreen .when-normal {
   display: none;
 }
@@ -5834,36 +5749,29 @@ td.data-table-key-col {
    jaw snip timing so the brand activity signal stays consistent. */
 @keyframes chatWorkingClawFlex {
   0%,
-  6% {
+  6%,
+  42%,
+  100% {
     transform: rotate(0deg);
   }
 
-  10% {
-    transform: rotate(-4deg);
-  }
-
-  16% {
-    transform: rotate(3deg);
-  }
-
+  10%,
   22%,
   26% {
     transform: rotate(-4deg);
   }
 
+  16%,
   32% {
     transform: rotate(3deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(0deg);
   }
 }
 
 @keyframes chatWorkingClawSnip {
   0%,
-  6% {
+  6%,
+  42%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -5871,22 +5779,14 @@ td.data-table-key-col {
     transform: rotate(-26deg);
   }
 
-  16% {
+  16%,
+  32% {
     transform: rotate(4deg);
   }
 
   22%,
   26% {
     transform: rotate(-24deg);
-  }
-
-  32% {
-    transform: rotate(4deg);
-  }
-
-  42%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 

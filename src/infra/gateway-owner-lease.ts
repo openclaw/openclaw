@@ -253,50 +253,38 @@ export function acquireGatewayOwnerLease(params: {
     mode: params.mode,
     supervisor: params.supervisor,
   });
-  const expiresAt = withOpenClawStateStartupMigrationCheckpointDatabase(
-    (db) =>
-      runSqliteImmediateTransactionSync(
-        db,
-        () => {
-          assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-          const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
-          if (previous) {
-            releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
-          }
-          const acquired = acquireOpenClawStateLeaseInTransaction(
-            db,
-            identity,
-            STARTUP_MIGRATION_LEASE_TTL_MS,
-            payloadJson,
-          );
-          if (acquired.kind === "held") {
-            throw new Error("Another Gateway owner lease is still active for this state directory");
-          }
-          return acquired.expiresAt;
-        },
-        {
-          databaseLabel: databasePath,
-          operationLabel: "gateway.owner-lease.acquire",
-        },
-      ),
-    { env, path: databasePath },
-  );
-  const releaseRow = () =>
+  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: DatabaseSync) => T) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
         runSqliteImmediateTransactionSync(
           db,
           () => {
             assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-            releaseOpenClawStateLeaseInTransaction(db, identity);
+            return mutate(db);
           },
           {
             databaseLabel: databasePath,
-            operationLabel: "gateway.owner-lease.release",
+            operationLabel: `gateway.owner-lease.${operation}`,
           },
         ),
       { env, path: databasePath },
     );
+  const expiresAt = mutateLease("acquire", (db) => {
+    const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    if (previous) {
+      releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
+    }
+    const acquired = acquireOpenClawStateLeaseInTransaction(
+      db,
+      identity,
+      STARTUP_MIGRATION_LEASE_TTL_MS,
+      payloadJson,
+    );
+    if (acquired.kind === "held") {
+      throw new Error("Another Gateway owner lease is still active for this state directory");
+    }
+    return acquired.expiresAt;
+  });
   let heartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   let constructionFailure: { error: unknown } | undefined;
   let warned = false;
@@ -344,7 +332,9 @@ export function acquireGatewayOwnerLease(params: {
       try {
         // Lost custody may join its worker, but cannot mutate the recorded lease.
         if (!custody?.signal.aborted) {
-          releaseRow();
+          mutateLease("release", (db) => {
+            releaseOpenClawStateLeaseInTransaction(db, identity);
+          });
         }
       } catch (error) {
         if (!custody?.signal.aborted) {

@@ -116,6 +116,7 @@ describe("HTTP historical model disclosure", () => {
       getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
       getRuntimeConfig: () => current,
       getGatewayRequestContext: () => context,
+      httpRequestLifetime: context,
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

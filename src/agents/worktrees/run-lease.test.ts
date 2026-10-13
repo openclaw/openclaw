@@ -267,15 +267,23 @@ describe("worktree run lease", () => {
             error: { code: "outcome-unknown", cause: deliveryFailure },
           });
         } else {
-          await expect(result).resolves.toEqual({ ok: false, error: deliveryFailure });
+          const recovered = await acquisition;
+          expect(recovered).toMatchObject({ id: created.id, token: admittedToken });
+          expect(tokens()).toEqual([...incumbentTokens, admittedToken].toSorted());
+          expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+          await runLeaseTesting.drainPendingCleanupsForTest();
+          expect(tokens()).toEqual([...incumbentTokens, admittedToken].toSorted());
+          expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+          await recovered.release();
         }
         const remaining =
           settlement === "unknown"
             ? [...incumbentTokens, admittedToken].toSorted()
             : incumbentTokens;
         expect(tokens()).toEqual(remaining);
-        // A failed admission never retained this guard, including its zero-refcount retry state.
-        expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+        expect(await lockState(record)).toEqual(
+          guard === "live" ? { kind: "live", pid: process.pid } : { kind: "none" },
+        );
         await runLeaseTesting.drainPendingCleanupsForTest();
         expect(tokens()).toEqual(remaining);
         expect(await lockState(record)).toEqual(

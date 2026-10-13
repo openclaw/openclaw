@@ -149,11 +149,7 @@ export function registerSlackAgentEvents(params: {
         }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
-        assertCommitAllowed: () => {
-          if (!routing.isCurrentSession()) {
-            throw new Error("Slack conversation owner changed before the title update");
-          }
-        },
+        assertCommitAllowed: routing.assertCurrentSession,
         update: () => ({ displayName: event.title }),
       });
       if (!updated) {

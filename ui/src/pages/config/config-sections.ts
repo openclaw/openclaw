@@ -1,28 +1,30 @@
 // Advanced renders without an include list: it shows every section that has no
 // curated home (config-page computes its exclude list).
 // Each curated page opens at its first section.
-const CONFIG_SECTION_KEYS_BY_PAGE = {
-  communications: ["messages", "tts", "transcripts"],
-  appearance: ["__appearance__", "ui"],
-  notifications: ["__notifications__"],
-  security: ["security", "approvals"],
-  automation: ["commands", "hooks", "bindings", "cron"],
-  mcp: ["mcp"],
-  memory: ["memory"],
-  talk: ["talk"],
-  infrastructure: ["gateway", "browser", "nodeHost", "discovery", "acp"],
-  updates: ["update"],
-  "ai-agents": ["agents", "skills", "tools", "session"],
-  advanced: undefined,
-} as const satisfies Record<string, readonly string[] | undefined>;
+const CONFIG_PAGES = [
+  ["communications", ["messages", "tts", "transcripts"]],
+  ["appearance", ["__appearance__", "ui"]],
+  ["notifications", ["__notifications__"]],
+  ["security", ["security", "approvals"]],
+  ["automation", ["commands", "hooks", "bindings", "cron"]],
+  ["mcp", ["mcp"]],
+  ["memory", ["memory"]],
+  ["talk", ["talk"]],
+  ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+  ["updates", ["update"]],
+  ["ai-agents", ["agents", "skills", "tools", "session"]],
+  ["advanced", undefined],
+] as const;
 
-export type ConfigPageId = keyof typeof CONFIG_SECTION_KEYS_BY_PAGE;
+export type ConfigPageId = (typeof CONFIG_PAGES)[number][0];
+export const CONFIG_PAGE_IDS = CONFIG_PAGES.map(([pageId]) => pageId);
+const CONFIG_SECTION_KEYS_BY_PAGE = Object.fromEntries<readonly string[] | undefined>(CONFIG_PAGES);
 
 // Search and page rendering must agree on section ownership, or a result can
 // open a page whose editor rejects the section it promised to reveal.
 const CONFIG_PAGE_BY_SECTION = new Map<string, ConfigPageId | "plugin-settings">([
-  ...Object.entries(CONFIG_SECTION_KEYS_BY_PAGE).flatMap(([pageId, sectionKeys]) =>
-    (sectionKeys ?? []).map((sectionKey) => [sectionKey, pageId as ConfigPageId] as const),
+  ...CONFIG_PAGES.flatMap(([pageId, sectionKeys]) =>
+    (sectionKeys ?? []).map((sectionKey) => [sectionKey, pageId] as const),
   ),
   ["plugins", "plugin-settings"],
 ]);

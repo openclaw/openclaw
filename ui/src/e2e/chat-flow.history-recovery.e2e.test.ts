@@ -344,16 +344,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
-      // Settle the short prefetched snapshot before startup expands the transcript.
+      // Keyboard navigation intent warms the short snapshot before startup expands it.
+      const sessionBLink = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+      );
+      await sessionBLink.focus();
       await waitForRequests(gateway, "chat.history", 1, { sessionKey: "agent:main:session-b" });
       await gateway.resolveDeferred("chat.history");
       await gateway.deferNext("chat.startup", { sessionKey: "agent:main:session-b" });
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
-      await page
-        .locator(
-          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
-        )
-        .click();
+      await sessionBLink.click();
       const startupRequests = await waitForRequests(
         gateway,
         "chat.startup",

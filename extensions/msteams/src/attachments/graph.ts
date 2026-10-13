@@ -253,6 +253,19 @@ export async function downloadMSTeamsGraphMedia(params: {
   });
   const ssrfPolicy = resolveMediaSsrfPolicy(policy.allowHosts);
   const messageUrl = params.messageUrl;
+  const logGraphFailure = (
+    phase: "token acquisition" | "message parse" | "message fetch",
+    err: unknown,
+  ) => {
+    params.logger?.debug?.(`graph media ${phase} failed`, {
+      messageUrl,
+      error: coerceErrorMessage(err),
+    });
+    params.logger?.warn?.(`msteams graph ${phase} failed`, {
+      error: coerceErrorMessage(err),
+      ...(phase === "message parse" ? { messageUrl } : {}),
+    });
+  };
   let accessToken: string;
   try {
     accessToken = await withMSTeamsRequestDeadline({
@@ -261,13 +274,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
     });
   } catch (err) {
-    params.logger?.debug?.("graph media token acquisition failed", {
-      messageUrl,
-      error: coerceErrorMessage(err),
-    });
-    params.logger?.warn?.("msteams graph token acquisition failed", {
-      error: coerceErrorMessage(err),
-    });
+    logGraphFailure("token acquisition", err);
     return { media: [], messageUrl, tokenError: true };
   }
 
@@ -295,14 +302,7 @@ export async function downloadMSTeamsGraphMedia(params: {
               "MS Teams Graph message",
             );
           } catch (err) {
-            params.logger?.debug?.("graph media message parse failed", {
-              messageUrl,
-              error: coerceErrorMessage(err),
-            });
-            params.logger?.warn?.("msteams graph message parse failed", {
-              error: coerceErrorMessage(err),
-              messageUrl,
-            });
+            logGraphFailure("message parse", err);
             msgData = {};
           }
           messageAttachments = Array.isArray(msgData.attachments) ? msgData.attachments : [];
@@ -319,13 +319,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       },
     );
   } catch (err) {
-    params.logger?.debug?.("graph media message fetch failed", {
-      messageUrl,
-      error: coerceErrorMessage(err),
-    });
-    params.logger?.warn?.("msteams graph message fetch failed", {
-      error: coerceErrorMessage(err),
-    });
+    logGraphFailure("message fetch", err);
   }
 
   // The message response owns a pinned dispatcher. Release it before nested
@@ -411,16 +405,13 @@ export async function downloadMSTeamsGraphMedia(params: {
   const normalizedAttachments = messageAttachments.map(normalizeGraphAttachment);
   const filteredAttachments =
     sharePointMedia.length > 0
-      ? normalizedAttachments.filter((att) => {
-          if (att.contentType !== "reference") {
-            return true;
-          }
-          const url = typeof att.contentUrl === "string" ? att.contentUrl : "";
-          if (!url) {
-            return true;
-          }
-          return !downloadedReferenceUrls.has(url);
-        })
+      ? normalizedAttachments.filter(
+          (att) =>
+            att.contentType !== "reference" ||
+            typeof att.contentUrl !== "string" ||
+            !att.contentUrl ||
+            !downloadedReferenceUrls.has(att.contentUrl),
+        )
       : normalizedAttachments;
   let attachmentMedia: MSTeamsInboundMedia[] = [];
   try {

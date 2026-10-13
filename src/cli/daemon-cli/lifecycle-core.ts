@@ -21,6 +21,7 @@ import {
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
+import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -200,7 +201,7 @@ export async function runServiceStart(params: {
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"started"> | null>;
-  /** Runs after the service process is started, before start reports success. */
+  /** Verifies readiness before start reports success, including an already-running process. */
   postStartCheck?: (ctx: StartPostCheckContext) => Promise<void>;
   expectedPort?: number;
 }) {
@@ -211,12 +212,28 @@ export async function runServiceStart(params: {
     json,
   });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
+  let postCheckFailed = false;
+  const checkReadiness = async () => {
+    await params.postStartCheck?.({
+      json,
+      stdout,
+      warnings,
+      warn,
+      fail: (message, hints, result) => {
+        postCheckFailed = true;
+        fail(message, hints, result);
+      },
+    });
+    return !postCheckFailed;
+  };
   const emitStarted = async (result: {
     loaded: boolean;
     message?: string;
     reportedWarnings?: readonly string[];
   }) => {
-    await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
+    if (!(await checkReadiness())) {
+      return;
+    }
     emitMessage({
       ok: true,
       result: "started",
@@ -253,6 +270,9 @@ export async function runServiceStart(params: {
         return;
       }
     } catch (err) {
+      if (postCheckFailed) {
+        throw err;
+      }
       fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
       return;
     }
@@ -284,6 +304,9 @@ export async function runServiceStart(params: {
         if (!json) {
           defaultRuntime.log(warning);
         }
+      }
+      if (!(await checkReadiness())) {
+        return;
       }
       const pid = startResult.state.runtime?.pid;
       emitMessage({
@@ -318,6 +341,9 @@ export async function runServiceStart(params: {
           return;
         }
       } catch (err) {
+        if (postCheckFailed) {
+          throw err;
+        }
         fail(`${params.serviceNoun} repair failed: ${String(err)}`, params.renderStartHints());
         return;
       }
@@ -330,6 +356,9 @@ export async function runServiceStart(params: {
     const serviceLoaded = startResult.state.loadState.status === "loaded";
     await emitStarted({ loaded: serviceLoaded });
   } catch (err) {
+    if (postCheckFailed) {
+      throw err;
+    }
     fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }
 }
@@ -433,6 +462,13 @@ export async function runServiceRestart(params: {
     json,
   });
   const warn = json ? (message: string) => warnings.push(message) : undefined;
+  const renderRestartFailureHints = (error: unknown) =>
+    error instanceof GatewayRestartPreparationError && error.reason === "serving-owner"
+      ? [
+          formatCliCommand("openclaw gateway status --deep"),
+          `Fix the reported startup failure, then run \`${formatCliCommand("openclaw gateway start")}\` to wait for readiness without restarting the process.`,
+        ]
+      : params.renderStartHints();
   const restartIntent = params.opts?.restartIntent;
   const gatewayRestartAudit = createServiceLifecycleMutationAudit({
     serviceNoun: params.serviceNoun,
@@ -537,7 +573,7 @@ export async function runServiceRestart(params: {
       }
     } catch (err) {
       clearPreparedRestartIntent();
-      const hints = params.renderStartHints();
+      const hints = renderRestartFailureHints(err);
       fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
       return false;
     }
@@ -636,7 +672,7 @@ export async function runServiceRestart(params: {
     if (postCheckFailed) {
       throw err;
     }
-    const hints = params.renderStartHints();
+    const hints = renderRestartFailureHints(err);
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;
   }

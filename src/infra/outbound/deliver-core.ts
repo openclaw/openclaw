@@ -333,8 +333,7 @@ export async function deliverOutboundPayloadsCore(
         );
         await recordIdentifiedDeliveryResult(delivery);
         adoptSuccessfulResultsSince(beforeCount);
-        const deliveredResults = results.slice(beforeCount);
-        if (deliveredResults.length === 0) {
+        if (results.length <= beforeCount) {
           finishDeliveryDiagnostics(0);
           recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
           continue;

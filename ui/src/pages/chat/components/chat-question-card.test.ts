@@ -216,26 +216,6 @@ describe("shared question panel", () => {
     expect(onSubmit).toHaveBeenCalledWith({ parts: ["washer", "custom-spacer", "custom-gasket"] });
   });
 
-  it("allows an optional answer to remain empty without restoring its cleared default", async () => {
-    const onSubmit = vi.fn();
-    drawGateway(
-      gatewayPrompt({
-        questions: [freeTextQuestion({ allowEmpty: true, defaultAnswers: ["Suggested"] })],
-      }),
-      { onSubmit },
-    );
-    const panel = await panelIn(container);
-    const input = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(input.value).toBe("Suggested");
-    input.value = "";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await panel.updateComplete;
-    const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
-    expect(button.disabled).toBe(false);
-    button.click();
-    expect(onSubmit).toHaveBeenCalledWith({ value: [] });
-  });
-
   it("does not automatically load remote form thumbnails", async () => {
     drawGateway(
       gatewayPrompt({
@@ -353,38 +333,6 @@ describe("shared question panel", () => {
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
   });
 
-  it.each([
-    { isSecret: true, value: "  synthetic-value  ", expected: "  synthetic-value  " },
-    { isSecret: true, value: "   ", expected: "   " },
-    { isSecret: true, value: "", expected: null },
-    { isSecret: false, value: "  normal answer  ", expected: "normal answer" },
-    { isSecret: false, value: "   ", expected: null },
-  ])(
-    "preserves draft text and normalizes only submitted non-secrets: $isSecret / '$value'",
-    async ({ isSecret, value, expected }) => {
-      const prompt = gatewayPrompt({
-        questions: [freeTextQuestion({ isSecret })],
-        drafts: new Map([["value", { selected: new Set<string>(), freeText: value }]]),
-      });
-      const onSubmit = vi.fn();
-      drawGateway(prompt, { onSubmit });
-      await panelIn(container);
-      const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-        "input, textarea",
-      )!;
-      const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
-      expect(input.value).toBe(value);
-      expect(input.placeholder).toBe("Value");
-      expect(submit.disabled).toBe(expected === null);
-      submit.click();
-      if (expected === null) {
-        expect(onSubmit).not.toHaveBeenCalled();
-      } else {
-        expect(onSubmit).toHaveBeenCalledWith({ value: [expected] });
-      }
-    },
-  );
-
   it("labels optionless answers when the compact header is empty", async () => {
     drawGateway(
       gatewayPrompt({
@@ -500,12 +448,7 @@ describe("shared question panel", () => {
     );
   });
 
-  it.each([
-    { key: "Enter" },
-    { key: "Enter", shiftKey: true },
-    { key: "Enter", ctrlKey: true, isComposing: true },
-    { key: "1" },
-  ])("leaves textarea editing to the field: %j", async (keys) => {
+  it("leaves IME Ctrl+Enter editing to the textarea", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
@@ -513,45 +456,33 @@ describe("shared question panel", () => {
     other.value = "A draft that is not ready";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
-    const event = new KeyboardEvent("keydown", { ...keys, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      ctrlKey: true,
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
     other.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(container.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
   });
 
-  it.each(["ctrlKey", "metaKey"] as const)(
-    "uses %s+Enter in Other to submit a multiline answer",
-    async (modifier) => {
-      const onSubmit = vi.fn();
-      drawGateway(gatewayPrompt(), { onSubmit });
-      const panel = await panelIn(container);
-      const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
-
-      other.value = "Markdown table\nInclude the tradeoffs.";
-      other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      other.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", [modifier]: true, bubbles: true }),
-      );
-      await panel.updateComplete;
-
-      expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table\nInclude the tradeoffs."] });
-    },
-  );
-
-  it("uses Ctrl+Enter in empty Other to submit an already-selected option", async () => {
+  it("uses Ctrl+Enter in Other to submit a multiline answer", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
-
-    container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
-    await panel.updateComplete;
     const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+
+    other.value = "Markdown table\nInclude the tradeoffs.";
+    other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     other.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
     );
+    await panel.updateComplete;
 
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
+    expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table\nInclude the tradeoffs."] });
   });
 
   it("collapses without answering and exposes gateway cancellation through Skip", async () => {
@@ -573,23 +504,6 @@ describe("shared question panel", () => {
     expect(onSkip).toHaveBeenCalledOnce();
   });
 
-  it("disables actions whose gateway callbacks are unavailable", async () => {
-    await drawUncontrolled({});
-
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
-    ).toBe(true);
-    expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
-  });
-
-  it("does not render the request expiry countdown", async () => {
-    drawGateway(gatewayPrompt());
-    await panelIn(container);
-
-    expect(container.querySelector(".chat-question-panel__countdown")).toBeNull();
-    expect(container.textContent).not.toContain("1:00");
-  });
-
   it("manages collapse state when no controlled callback is supplied", async () => {
     const panel = await drawUncontrolled({});
 
@@ -600,17 +514,6 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
     await panel.updateComplete;
     expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
-  });
-
-  it("retains answers with submit-only wiring", async () => {
-    const onSubmit = vi.fn();
-    const panel = await drawUncontrolled({ onSubmit });
-
-    container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
-    await panel.updateComplete;
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
-
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
   });
 
   it("keeps a typed answer distinct from an identical option across remounts", async () => {
@@ -634,30 +537,6 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Compact"] });
   });
-
-  it.each(["submit", "skip"] as const)(
-    "unlocks a pending question when its %s callback settles without a resolution",
-    async (action) => {
-      const pending = createDeferred();
-      const callback = vi.fn(() => pending.promise);
-      drawGateway(gatewayPrompt(), { onSubmit: callback, onSkip: callback });
-      const panel = await panelIn(container);
-      container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
-      await panel.updateComplete;
-      const button = container.querySelector<HTMLButtonElement>(
-        action === "submit" ? ".chat-question-panel__advance" : ".chat-question-panel__skip",
-      )!;
-      button.click();
-      await panel.updateComplete;
-      expect(button.disabled).toBe(true);
-
-      // A retired transport can settle normally while reconnect recovery keeps the prompt pending.
-      pending.resolve();
-      await vi.waitFor(() => expect(button.disabled).toBe(false));
-      button.click();
-      expect(callback).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it("keeps a newer submission locked when an older visit to the same question settles", async () => {
     const older = createDeferred();
@@ -684,16 +563,5 @@ describe("shared question panel", () => {
     newer.resolve();
     await vi.waitFor(() => expect(button.disabled).toBe(false));
     expect(onSubmit).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps Skip available with skip-only wiring", async () => {
-    const onSkip = vi.fn();
-    await drawUncontrolled({ onSkip });
-
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
-    ).toBe(true);
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
-    expect(onSkip).toHaveBeenCalledOnce();
   });
 });

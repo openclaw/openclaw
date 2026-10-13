@@ -2,11 +2,13 @@ import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../pages/apps/apps-page.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
+import { McpAppResources } from "./mcp-app-resources.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -35,7 +37,183 @@ const result: McpAppDiscoverResult = {
   ],
 };
 
+function discoveryContext(request: ReturnType<typeof vi.fn>) {
+  const events = new Set<(event: GatewayEventFrame) => void>();
+  return {
+    events,
+    context: {
+      gateway: {
+        snapshot: {
+          client: { request },
+          phase: "connected",
+          hello: { features: { methods: ["mcp.app.discover"] } },
+        },
+        connectionRevision: 1,
+        subscribe: () => () => {},
+        subscribeEvents: (listener: (event: GatewayEventFrame) => void) => {
+          events.add(listener);
+          return () => events.delete(listener);
+        },
+      },
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+      sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
+    },
+  };
+}
+
 describe("app launch catalog", () => {
+  it("shares pending discovery and retires it once for a config publication", async () => {
+    const previous = createDeferred<McpAppDiscoverResult>();
+    const current = createDeferred<McpAppDiscoverResult>();
+    const remounted = createDeferred<McpAppDiscoverResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(previous.promise)
+      .mockReturnValueOnce(current.promise)
+      .mockReturnValueOnce(remounted.promise);
+    const { context, events } = discoveryContext(request);
+    const sidebar = new McpAppCatalog();
+    sidebar.surface = "sidebar";
+    const thread = new McpAppCatalog();
+    thread.surface = "thread";
+    const resources = new McpAppResources();
+    const elements = [sidebar, thread, resources];
+    for (const element of elements) {
+      element.sessionKey = "agent:main:one";
+      element.agentId = "main";
+      Reflect.set(element, "context", context);
+      document.body.append(element);
+      await element.updateComplete;
+    }
+    expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+    });
+
+    const event: GatewayEventFrame = { type: "event", event: "config.changed" };
+    for (const listener of events) {
+      listener(event);
+    }
+    expect(request).toHaveBeenCalledTimes(2);
+    current.resolve({ servers: [{ ...result.servers[0]!, mentionTool: "search" }] });
+    await current.promise;
+    for (const element of elements) {
+      await element.updateComplete;
+    }
+    expect(sidebar.textContent).toContain("Library");
+    expect(thread.querySelector("button")).not.toBeNull();
+    expect(resources.querySelector("button")).not.toBeNull();
+
+    previous.resolve({ servers: [] });
+    await previous.promise;
+    for (const element of elements) {
+      await element.updateComplete;
+    }
+    expect(sidebar.textContent).toContain("Library");
+    expect(resources.querySelector("button")).not.toBeNull();
+
+    sidebar.remove();
+    document.body.append(sidebar);
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    expect(request).toHaveBeenCalledTimes(3);
+    remounted.resolve({ servers: [] });
+    await remounted.promise;
+    await sidebar.updateComplete;
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector("button")).toBeNull();
+  });
+
+  it("starts a fresh manual retry instead of joining an earlier consumer's read", async () => {
+    const failed = createDeferred<McpAppDiscoverResult>();
+    const background = createDeferred<McpAppDiscoverResult>();
+    const retry = createDeferred<McpAppDiscoverResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(failed.promise)
+      .mockReturnValueOnce(background.promise)
+      .mockReturnValueOnce(retry.promise);
+    const { context } = discoveryContext(request);
+    const catalog = new McpAppCatalog();
+    catalog.sessionKey = "agent:main:one";
+    Reflect.set(catalog, "context", context);
+    document.body.append(catalog);
+    await catalog.updateComplete;
+    await catalog.updateComplete;
+    failed.reject(new Error("Discovery unavailable"));
+    await failed.promise.catch(() => {});
+    await catalog.updateComplete;
+    await catalog.updateComplete;
+    expect(catalog.querySelector('[role="alert"]')?.textContent).toContain("Discovery unavailable");
+
+    const sibling = new McpAppCatalog();
+    sibling.surface = "sidebar";
+    sibling.sessionKey = catalog.sessionKey;
+    Reflect.set(sibling, "context", context);
+    document.body.append(sibling);
+    await sibling.updateComplete;
+    expect(request).toHaveBeenCalledTimes(2);
+    catalog.querySelector<HTMLButtonElement>('[role="alert"] + button')!.click();
+    expect(request).toHaveBeenCalledTimes(3);
+    retry.resolve(result);
+    await retry.promise;
+    await catalog.updateComplete;
+    await catalog.updateComplete;
+    expect(catalog.textContent).toContain("Library");
+    background.resolve({ servers: [] });
+    await background.promise;
+    await sibling.updateComplete;
+    expect(catalog.textContent).toContain("Library");
+  });
+
+  it("discovers again after creating a session while an earlier lookup is pending", async () => {
+    const previous = createDeferred<McpAppDiscoverResult>();
+    const current = createDeferred<McpAppDiscoverResult>();
+    const created = createDeferred<{ key: string }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(previous.promise)
+      .mockReturnValueOnce(current.promise);
+    const createResult = vi.fn(() => created.promise);
+    const context = {
+      ...discoveryContext(request).context,
+      sessions: {
+        describe: async () => ({ session: null }),
+        createResult,
+        state: { error: null },
+      },
+    };
+    const sidebar = new McpAppCatalog();
+    sidebar.surface = "sidebar";
+    sidebar.sessionKey = "agent:main:one";
+    Reflect.set(sidebar, "context", context);
+    document.body.append(sidebar);
+    await sidebar.updateComplete;
+    expect(request).toHaveBeenCalledOnce();
+
+    const apps = new McpAppCatalog();
+    apps.sessionKey = sidebar.sessionKey;
+    Reflect.set(apps, "context", context);
+    document.body.append(apps);
+    await apps.updateComplete;
+    await apps.updateComplete;
+    expect(createResult).toHaveBeenCalledOnce();
+    created.resolve({ key: sidebar.sessionKey });
+    await created.promise;
+    expect(request).toHaveBeenCalledTimes(2);
+    current.resolve(result);
+    await current.promise;
+    await apps.updateComplete;
+    expect(apps.textContent).toContain("Library");
+
+    previous.reject(new Error("The requested session is unavailable"));
+    await previous.promise.catch(() => {});
+    await sidebar.updateComplete;
+    await apps.updateComplete;
+    expect(apps.querySelector('[role="alert"]')).toBeNull();
+    expect(apps.textContent).toContain("Library");
+  });
+
   it.each([false, true])(
     "prepares global discovery only for a missing session (exists: %s)",
     async (exists) => {

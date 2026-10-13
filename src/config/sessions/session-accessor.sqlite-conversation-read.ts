@@ -1,5 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { ConversationReadQuery, ConversationRecord } from "./conversation-registry.types.js";
@@ -71,6 +75,13 @@ export function selectConversationRowsFromDatabase(
       "c.conversation_id",
       "=",
       normalizeConversationRef(options.conversationRef),
+    );
+  }
+  if (options.conversationRefs !== undefined) {
+    query = query.where(
+      "c.conversation_id",
+      "in",
+      sqliteStringSet(options.conversationRefs.map(normalizeConversationRef)),
     );
   }
   if (options.currentSession) {

@@ -17,6 +17,70 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each([
+    ["length", ["<thi", "nk>unfinished reasoning"], ""],
+    ["length", ["Answer. ", "<reasoning>unfinished\n\nreasoning"], "Answer. "],
+    ["content_filter", ["<thinking>unfinished reasoning"], ""],
+    ["stop", ["<thi", "nk>Recovered answer."], "Recovered answer."],
+    ["stop", ["Use <think> in prose"], "Use <think> in prose"],
+    ["length", ["<think>hidden</think>", "Answer."], "Answer."],
+    ["length", ["Use `<think>` in code. <thi"], "Use `<think>` in code. <thi"],
+    ["length", ["Answer </think> remains visible."], "Answer </think> remains visible."],
+  ] as const)("finalizes content-only tags on %s: %j", async (finishReason, content, expected) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await processCompletionsStream(
+      streamChunks([
+        ...content.map((text) => makeCompletionsChunk({ content: text })),
+        makeCompletionsChunk({}, finishReason),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event) },
+      { emitReasoning: false },
+    );
+
+    expect(collectVisibleText(output)).toBe(expected);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe(expected);
+    expect(output.stopReason).toBe(finishReason === "content_filter" ? "error" : finishReason);
+  });
+
+  it.each(["abort", "error"] as const)("does not recover unfinished tags after %s", async (end) => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const events: CapturedStreamEvent[] = [];
+    async function* interruptedStream() {
+      yield makeCompletionsChunk({ content: "Answer. <think>unfinished reasoning" });
+      if (end === "abort") {
+        abort.abort();
+      } else {
+        throw new Error("Provider disconnected");
+      }
+    }
+
+    await expect(
+      processCompletionsStream(
+        interruptedStream(),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+        { signal: abort.signal, emitReasoning: false },
+      ),
+    ).rejects.toThrow(end === "abort" ? "Request was aborted" : "Provider disconnected");
+    expect(collectVisibleText(output)).toBe("Answer. ");
+    expect(
+      events.filter((event) => event.type === "text_delta").map((event) => event.delta),
+    ).toEqual(["Answer. "]);
+  });
+
   it("partitions inline reasoning tags out of OpenAI-compatible visible text", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",

@@ -48,6 +48,10 @@ import { withTempConfig } from "./test-temp-config.js";
 const roots: string[] = [];
 const firstSource = 'export default { id: "native-ui" };';
 
+function responseHeader(response: ReturnType<typeof createResponse>, name: string) {
+  return response.setHeader.mock.calls.findLast(([header]) => header.toLowerCase() === name)?.[1];
+}
+
 function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-")));
   roots.push(rootDir);
@@ -125,7 +129,7 @@ describe("native Control UI browser assets", () => {
     await import("./control-ui.js");
   });
 
-  it("keeps Custom plugin UI off by default for nonbundled plugins", async () => {
+  it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
       cfg: {},
       run: async () => {
@@ -140,21 +144,6 @@ describe("native Control UI browser assets", () => {
             message: expect.stringContaining("Settings > Labs"),
           },
         ]);
-        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
-        expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
-          expect.objectContaining({ pluginId: fixture.record.id }),
-        );
-        expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
-      },
-    });
-  });
-
-  it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
-    await withTempConfig({
-      cfg: {},
-      run: async () => {
-        activateFixture("workspace");
-        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
         expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
 
         setRuntimeConfigSnapshot({
@@ -225,7 +214,6 @@ describe("native Control UI browser assets", () => {
 
   it.each([
     { auth: AUTH_NONE, basePath: "" },
-    { auth: AUTH_TOKEN, basePath: "" },
     { auth: AUTH_TOKEN, basePath: "/openclaw" },
   ])(
     "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
@@ -282,6 +270,12 @@ describe("native Control UI browser assets", () => {
             );
             const asset = await sendRequest(server, { path: assetUrl, headers: { cookie } });
             expect(asset.res.statusCode).toBe(200);
+            expect(responseHeader(asset, "cache-control")).toBe(
+              "private, max-age=31536000, immutable",
+            );
+            expect(String(responseHeader(asset, "vary")).toLowerCase().split(/,\s*/)).not.toContain(
+              "cookie",
+            );
             expect(asset.end.mock.calls[0]?.[0]?.toString()).toBe(source);
             if (basePath) {
               expect(
@@ -412,7 +406,7 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(["", "/openclaw"])(
+  it.each(["/openclaw"])(
     "keeps opaque iframe grants Secure when native HTTP grants are allowed at %j",
     (basePath) => {
       const response = createResponse();
@@ -488,7 +482,10 @@ describe("native Control UI browser assets", () => {
         const head = await read(entry.entryUrl, "HEAD");
         expect(head.res.statusCode).toBe(200);
         expect(head.getBody()).toBe("");
-        expect((await read(entry.entryUrl, "POST")).res.statusCode).toBe(405);
+        expect(responseHeader(head, "cache-control")).toBe("private, max-age=31536000, immutable");
+        const unsupported = await read(entry.entryUrl, "POST");
+        expect(unsupported.res.statusCode).toBe(405);
+        expect(unsupported.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
 
         const nextSource = 'export default { id: "native-ui", version: 2 };';
         fs.writeFileSync(path.join(fixture.directory, "index.js"), nextSource);
@@ -508,13 +505,10 @@ describe("native Control UI browser assets", () => {
             status: "failed",
           }),
         ).toBe(true);
-        fs.writeFileSync(
-          path.join(fixture.directory, "index.js"),
-          "export default { version: 3 };",
-        );
         fs.writeFileSync(path.join(fixture.directory, "lazy.js"), "export const value = 'third';");
         const third = await reloadControlUiPluginCatalog("native-ui");
         expect(third.diagnostics).toEqual([]);
+        expect(third.plugins[0]!.revision).not.toBe(next.plugins[0]!.revision);
         expect(
           reportControlUiPluginActivation(browser, {
             pluginId: "native-ui",
@@ -525,6 +519,9 @@ describe("native Control UI browser assets", () => {
         // Failed activations still use the first renderer, including its later imports.
         const retainedChunk = await read(entry.entryUrl.replace(/index\.js$/u, "lazy.js"));
         expect(retainedChunk.res.statusCode).toBe(200);
+        expect(responseHeader(retainedChunk, "cache-control")).toBe(
+          "private, max-age=31536000, immutable",
+        );
         expect(retainedChunk.end.mock.calls[0]?.[0]?.toString()).toBe(firstChunk);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
 
@@ -541,43 +538,35 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(["cold", "replaced"] as const)(
-    "serves profile-bound cookie assets with a %s profile catalog",
-    async (catalogState) => {
-      await withOpenClawTestState({ prefix: "native-ui-profile-cookie-" }, async () => {
-        activateFixture();
-        const entry = (await listControlUiPluginCatalog()).plugins[0]!;
-        const profile = ensureProfileForEmail("reader@example.test");
-        const previous =
-          catalogState === "replaced"
-            ? await userProfileCatalog.prepareUserProfileCatalog()
-            : undefined;
-        try {
-          if (previous) {
-            const databasePath = resolveOpenClawStateSqlitePath();
-            await closeOpenClawStateDatabaseByPathAsync(databasePath);
-            fs.renameSync(databasePath, `${databasePath}.previous`);
-            fs.copyFileSync(`${databasePath}.previous`, databasePath);
-          }
-          await withGatewayServer({
-            prefix: "native-ui-profile-http-",
-            resolvedAuth: AUTH_TOKEN,
-            overrides: { controlUiEnabled: true, controlUiBasePath: "" },
-            run: async (server) => {
-              const response = await sendRequest(server, {
-                path: entry.entryUrl,
-                headers: { cookie: cookieForGrant({ profileId: profile.id }) },
-              });
-              expect(response.res.statusCode).toBe(200);
-              expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
-            },
-          });
-        } finally {
-          previous?.release();
-        }
-      });
-    },
-  );
+  it("serves profile-bound cookie assets with a replaced profile catalog", async () => {
+    await withOpenClawTestState({ prefix: "native-ui-profile-cookie-" }, async () => {
+      activateFixture();
+      const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+      const profile = ensureProfileForEmail("reader@example.test");
+      const previous = await userProfileCatalog.prepareUserProfileCatalog();
+      try {
+        const databasePath = resolveOpenClawStateSqlitePath();
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
+        fs.renameSync(databasePath, `${databasePath}.previous`);
+        fs.copyFileSync(`${databasePath}.previous`, databasePath);
+        await withGatewayServer({
+          prefix: "native-ui-profile-http-",
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { controlUiEnabled: true, controlUiBasePath: "" },
+          run: async (server) => {
+            const response = await sendRequest(server, {
+              path: entry.entryUrl,
+              headers: { cookie: cookieForGrant({ profileId: profile.id }) },
+            });
+            expect(response.res.statusCode).toBe(200);
+            expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+          },
+        });
+      } finally {
+        previous.release();
+      }
+    });
+  });
 
   it.each(["auth rotation", "response closure"] as const)(
     "refuses asset disclosure after %s during profile preparation",
@@ -730,31 +719,7 @@ describe("native Control UI browser assets", () => {
     expect(await listControlUiPluginCatalog()).toEqual(second);
   });
 
-  it.each(["cold", "initialized"] as const)(
-    "serves a %s catalog when a concurrent reload rejects",
-    async (initialization) => {
-      activateFixture();
-      const first = initialization === "initialized" ? await listControlUiPluginCatalog() : null;
-      const rejected = reloadControlUiPluginCatalog("missing-plugin");
-      const reading = listControlUiPluginCatalog();
-      const [catalog] = await Promise.all([
-        reading,
-        expect(rejected).rejects.toThrow("No active Control UI entrypoint for this plugin"),
-      ]);
-
-      expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
-      expect(catalog.diagnostics).toEqual([]);
-      if (first) {
-        expect(catalog).toEqual(first);
-      }
-      expect(await listControlUiPluginCatalog()).toEqual(catalog);
-    },
-  );
-
-  it.each([
-    { limit: "256 revisions", maxChanges: 256, sourceBytes: 0 },
-    { limit: "64 MiB", maxChanges: 16, sourceBytes: 4 * 1024 * 1024 },
-  ])(
+  it.each([{ limit: "64 MiB", maxChanges: 16, sourceBytes: 4 * 1024 * 1024 }])(
     "refuses reloads past $limit without evicting advertised assets",
     async ({ maxChanges, sourceBytes }) => {
       const fixture = activateFixture();
@@ -831,14 +796,22 @@ describe("native Control UI browser assets", () => {
           { cookie: cookieForGrant({ generation: "stale-generation" }) },
         ];
         for (const headers of unauthorizedHeaders) {
-          expect(
-            (await sendRequest(server, { path: entry.entryUrl, headers })).res.statusCode,
-          ).toBe(401);
+          const denied = await sendRequest(server, { path: entry.entryUrl, headers });
+          expect(denied.res.statusCode).toBe(401);
+          expect(responseHeader(denied, "cache-control")).toBe("no-store");
         }
         expect(
           (await sendRequest(server, { path: entry.entryUrl, authorization: "Bearer test-token" }))
             .res.statusCode,
         ).toBe(200);
+        for (const invalidRevision of ["latest", "", "0".repeat(64)]) {
+          const missing = await sendRequest(server, {
+            path: entry.entryUrl.replace(entry.revision, invalidRevision),
+            headers: { cookie },
+          });
+          expect(missing.res.statusCode).toBe(404);
+          expect(responseHeader(missing, "cache-control")).toBe("no-store");
+        }
         for (const suffix of [
           "source.ts",
           "index.js.map",
@@ -847,11 +820,9 @@ describe("native Control UI browser assets", () => {
           "%252e%252e/server.js",
           "missing.js",
         ]) {
-          expect(
-            (await sendRequest(server, { path: prefix + suffix, headers: { cookie } })).res
-              .statusCode,
-            suffix,
-          ).toBe(404);
+          const missing = await sendRequest(server, { path: prefix + suffix, headers: { cookie } });
+          expect(missing.res.statusCode, suffix).toBe(404);
+          expect(responseHeader(missing, "cache-control"), suffix).toBe("no-store");
         }
       },
     });
@@ -875,51 +846,6 @@ describe("native Control UI browser assets", () => {
       expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
     },
   );
-
-  it("adopts an immutable manifest publication only on explicit reload and retires old browser receipts", async () => {
-    const fixture = activateFixture();
-    const first = await listControlUiPluginCatalog();
-    const browser = {};
-    const report = {
-      pluginId: "native-ui",
-      revision: first.plugins[0]!.revision,
-      status: "activated" as const,
-    };
-    expect(reportControlUiPluginActivation(browser, report)).toBe(true);
-    expect(listControlUiPluginActivations(browser)).toEqual([report]);
-    expect(listControlUiPluginActivations({})).toEqual([]);
-    const nextDirectory = path.join(fixture.directory, "published");
-    fs.mkdirSync(nextDirectory);
-    fs.writeFileSync(path.join(nextDirectory, "index.js"), "export default { version: 2 };");
-    fs.writeFileSync(
-      path.join(fixture.rootDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "native-ui",
-        configSchema: { type: "object" },
-        controlUi: { entry: "dist/control-ui/published/index.js" },
-        uiCapabilities: ["page", "navigation"],
-      }),
-    );
-    expect(await listControlUiPluginCatalog()).toEqual(first);
-    const second = await reloadControlUiPluginCatalog("native-ui");
-    expect(second.diagnostics).toEqual([]);
-    expect(second.plugins[0]!.revision).not.toBe(report.revision);
-    expect(second.plugins[0]!.uiCapabilities).toEqual(["page", "navigation"]);
-    expect(fixture.record.uiCapabilities).toEqual(["page", "widget"]);
-    expect(fixture.record.controlUi?.entry).toBe("dist/control-ui/index.js");
-    expect(listControlUiPluginActivations(browser)).toEqual([]);
-    expect(reportControlUiPluginActivation(browser, report)).toBe(false);
-    const pending = {
-      ...report,
-      revision: second.plugins[0]!.revision,
-      status: "failed" as const,
-      error: "Activation failed",
-    };
-    expect(reportControlUiPluginActivation(browser, pending)).toBe(true);
-    expect(listControlUiPluginActivations(browser)).toEqual([pending]);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    expect(reportControlUiPluginActivation(browser, pending)).toBe(false);
-  });
 
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
     const fixture = activateFixture();

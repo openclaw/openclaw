@@ -3,6 +3,7 @@ import { projectedAgentRunInputKey } from "../infra/agent-run-projection.js";
 import type { AgentRunContext } from "../infra/agent-run-registry.types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logError } from "../logger.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionEventSubscriberRegistry } from "./server-chat-state.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
@@ -32,7 +33,7 @@ export type SessionEventSnapshotDependencies = {
   }) => { active: boolean; runIds?: string[] };
 };
 
-export function createSessionEventSnapshotBuilder({
+function createSessionEventSnapshotBuilder({
   loadGatewaySessionLifecycleSnapshotForEvent,
   resolveSessionActiveRunState,
 }: SessionEventSnapshotDependencies) {
@@ -78,75 +79,39 @@ export function createSessionEventSnapshotBuilder({
   };
 }
 
-type LiveLifecyclePhase = "start" | "model";
+type SessionLifecyclePublication = {
+  event: AgentEventRuntimePayload;
+  sessionKey: string;
+  agentId: string | undefined;
+  clientRunId: string;
+} & (
+  | { phase: "start" | "model"; runContext: AgentRunContext | undefined }
+  | {
+      phase: "end" | "error";
+      persistence: Promise<void>;
+      projection: SessionRowProjection | undefined;
+      publishLifecycle?: boolean;
+    }
+);
 
-export function createSessionLifecyclePublisher(deps: {
-  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-  sessionEventSubscribers: SessionEventSubscriberRegistry;
-  getSessionRowProjection?: () => SessionRowProjection | undefined;
-  persistGatewaySessionLifecycleEventForEvent: typeof persistGatewaySessionLifecycleEvent;
-  buildSnapshot: (
-    sessionKey: string,
-    event: AgentEventRuntimePayload,
-    agentId: string | undefined,
-    phase: LiveLifecyclePhase,
-    read?: SessionRowReadView,
-  ) => Record<string, unknown>;
-}) {
+export function createSessionLifecyclePublisher(
+  deps: SessionEventSnapshotDependencies & {
+    broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+    sessionEventSubscribers: SessionEventSubscriberRegistry;
+    getSessionRowProjection?: () => SessionRowProjection | undefined;
+    persistGatewaySessionLifecycleEventForEvent: typeof persistGatewaySessionLifecycleEvent;
+  },
+) {
+  const buildSnapshot = createSessionEventSnapshotBuilder(deps);
   const publishedModelInputs = new WeakMap<AgentRunContext, string>();
-  return ({
-    event,
-    phase,
-    sessionKey,
-    agentId,
-    clientRunId,
-    runContext,
-  }: {
-    event: AgentEventRuntimePayload;
-    phase: LiveLifecyclePhase;
-    sessionKey: string;
-    agentId: string | undefined;
-    clientRunId: string;
-    runContext: AgentRunContext | undefined;
-  }) => {
-    if (phase === "start") {
-      void deps
-        .persistGatewaySessionLifecycleEventForEvent({
-          sessionKey,
-          agentId,
-          event: {
-            ...event,
-            ...(clientRunId !== event.runId ? { clientRunId } : {}),
-          },
-        })
-        .catch((err: unknown) => {
-          logError(
-            `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(event.runId)} error=${formatForLog(err)}`,
-          );
-        });
-    }
-    const sessionEventConnIds = deps.sessionEventSubscribers.getAll();
-    if (!hasSessionChangeReceivers(sessionEventConnIds)) {
-      return;
-    }
-    const readModelInput = () =>
-      phase === "model" && runContext
-        ? JSON.stringify([sessionKey, agentId, projectedAgentRunInputKey(runContext)])
-        : undefined;
-    const observedModelInput = readModelInput();
-    if (
-      runContext &&
-      observedModelInput &&
-      publishedModelInputs.get(runContext) === observedModelInput
-    ) {
-      return;
-    }
-    const projection = deps.getSessionRowProjection?.();
-    const publish = (read?: SessionRowReadView) => {
-      const modelInput = readModelInput();
-      if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
-        return;
-      }
+  const publish = (params: SessionLifecyclePublication) => {
+    const { event, phase, sessionKey, agentId, clientRunId } = params;
+    const broadcastSnapshot = (
+      snapshotEvent: AgentEventPayload | undefined,
+      sessionEventConnIds: ReadonlySet<string>,
+      projection: SessionRowProjection | undefined,
+      read?: SessionRowReadView,
+    ) =>
       deps.broadcastToConnIds(
         "sessions.changed",
         {
@@ -156,7 +121,15 @@ export function createSessionLifecyclePublisher(deps: {
           runId: event.runId,
           ...(clientRunId !== event.runId ? { clientRunId } : {}),
           ts: event.ts,
-          ...deps.buildSnapshot(sessionKey, event, agentId, phase, read),
+          ...buildSnapshot(
+            sessionKey,
+            snapshotEvent,
+            agentId,
+            true,
+            phase !== "model",
+            event,
+            read,
+          ),
         },
         sessionEventConnIds,
         {
@@ -166,14 +139,94 @@ export function createSessionLifecyclePublisher(deps: {
             : {}),
         },
       );
-      // Failed preparation/publication must leave the next observation publishable.
-      if (runContext && modelInput) {
-        publishedModelInputs.set(runContext, modelInput);
+    switch (params.phase) {
+      case "end":
+      case "error": {
+        const { persistence, projection } = params;
+        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
+          withPreparedSessionEventRow(projection, sessionKey, agentId, (read) => {
+            if (params.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
+              return;
+            }
+            const sessionEventConnIds = deps.sessionEventSubscribers.getAll();
+            if (hasSessionChangeReceivers(sessionEventConnIds)) {
+              broadcastSnapshot(snapshotEvent, sessionEventConnIds, projection, read);
+            }
+          });
+        // Terminal writes serialize with restart markers. Reload only after the
+        // write so subscribers see the canonical post-race session state.
+        void persistence
+          .then(
+            async () => {
+              await broadcastSessionChange();
+            },
+            async (err: unknown) => {
+              logError(
+                `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(event.runId)} error=${formatForLog(err)}`,
+              );
+              await broadcastSessionChange(event);
+            },
+          )
+          .catch((error: unknown) => {
+            logError(
+              `gateway: terminal session snapshot publication failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        return;
       }
-    };
-    void withPreparedSessionEventRow(projection, sessionKey, agentId, publish).catch(
-      (error: unknown) =>
-        logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-    );
+      case "start":
+      case "model": {
+        const { runContext } = params;
+        if (phase === "start") {
+          void deps
+            .persistGatewaySessionLifecycleEventForEvent({
+              sessionKey,
+              agentId,
+              event: {
+                ...event,
+                ...(clientRunId !== event.runId ? { clientRunId } : {}),
+              },
+            })
+            .catch((err: unknown) => {
+              logError(
+                `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(event.runId)} error=${formatForLog(err)}`,
+              );
+            });
+        }
+        const sessionEventConnIds = deps.sessionEventSubscribers.getAll();
+        if (!hasSessionChangeReceivers(sessionEventConnIds)) {
+          return;
+        }
+        const readModelInput = () =>
+          phase === "model" && runContext
+            ? JSON.stringify([sessionKey, agentId, projectedAgentRunInputKey(runContext)])
+            : undefined;
+        const observedModelInput = readModelInput();
+        if (
+          runContext &&
+          observedModelInput &&
+          publishedModelInputs.get(runContext) === observedModelInput
+        ) {
+          return;
+        }
+        const projection = deps.getSessionRowProjection?.();
+        const publishPrepared = (read?: SessionRowReadView) => {
+          const modelInput = readModelInput();
+          if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
+            return;
+          }
+          broadcastSnapshot(event, sessionEventConnIds, projection, read);
+          // Failed preparation/publication must leave the next observation publishable.
+          if (runContext && modelInput) {
+            publishedModelInputs.set(runContext, modelInput);
+          }
+        };
+        void withPreparedSessionEventRow(projection, sessionKey, agentId, publishPrepared).catch(
+          (error: unknown) =>
+            logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
+        );
+      }
+    }
   };
+  return { buildSnapshot, publish };
 }

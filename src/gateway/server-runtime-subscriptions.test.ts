@@ -39,6 +39,7 @@ import {
   lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
+  registerSubscriptionRegistrationTests,
   registerAuditSubscriptionTests,
   registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
@@ -450,6 +451,11 @@ describe("startGatewayEventSubscriptions", () => {
     expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
+  registerSubscriptionRegistrationTests((params) => {
+    unsubs = startGatewayEventSubscriptions(params);
+    return unsubs;
+  });
+
   it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";
     const sessionKey = "agent:main:main";
@@ -596,6 +602,12 @@ describe("startGatewayEventSubscriptions", () => {
             return { ok: false as const, error };
           },
         );
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
+        expect(firstSettled).toBe(false);
         const recovery = {
           runId,
           sessionKey,
@@ -623,12 +635,6 @@ describe("startGatewayEventSubscriptions", () => {
           );
         }
         const currentState = readLifecycleState(current);
-        await awaitGateBeforeSettlement(
-          firstDispatchEntered.promise,
-          firstDrain,
-          "Terminal ownership settled before its held dispatch was released",
-        );
-        expect(firstSettled).toBe(false);
         if (change !== "removed") {
           await successorDispatchEntered.promise;
         }
@@ -952,6 +958,7 @@ describe("startGatewayEventSubscriptions", () => {
 
   registerTranscriptPublicationTests({
     createParams,
+    installHandlerFactory: (factory) => agentEventHandlerMocks.create.mockImplementation(factory),
     start: (params) => {
       unsubs = startGatewayEventSubscriptions(params);
       return unsubs;

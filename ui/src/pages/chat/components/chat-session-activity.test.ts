@@ -47,7 +47,119 @@ afterEach(() => {
   resetChatThreadState();
 });
 
-describe("inter-session activity", () => {
+function automation(id: string, jobId = "daily", source = sessionKey) {
+  return {
+    ...update(id, source),
+    senderSession: { sessionKey: source, agentId: "main", label: "Daily report" },
+    provenance: {
+      kind: "internal_system",
+      sourceTool: "cron",
+      jobId,
+      runId: id,
+      sourceSessionKey: source,
+    },
+  };
+}
+
+describe("session activity", () => {
+  it("collapses recorded automation inputs and reveals their exact run from the shared disclosure", () => {
+    const input = automation("execution");
+    const projection = chain([input]);
+    const group = projection.transcriptItems[0];
+    if (group?.kind !== "group") {
+      throw new Error("expected automation activity group");
+    }
+    const expanded = new Map<string, boolean>();
+    const draw = () =>
+      render(
+        renderMessageGroup(group, {
+          showReasoning: false,
+          showToolCalls: false,
+          agentId: "main",
+          isToolMessageExpanded: (id) => expanded.get(id),
+          onToggleToolMessageExpanded: (id, previous) => {
+            expanded.set(id, !previous);
+            draw();
+          },
+        }),
+        container,
+      );
+    draw();
+    const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
+    expect(disclosure).not.toBeNull();
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector("summary")?.textContent).toContain("Daily report");
+    expect(container.textContent).not.toContain("Original receipt");
+    expect(
+      container.querySelector(".chat-avatar, .chat-group--forwarded, .chat-bubble"),
+    ).toBeNull();
+    expect(
+      projectTranscriptIndex(projection, expanded, { assistantName: "OpenClaw" }).positionIndex
+        .markers,
+    ).toHaveLength(0);
+    expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
+      "1 update from Daily report",
+    );
+    expandReplyTargetWork(projection.transcriptItems, expanded, "execution");
+    draw();
+    expect(disclosure?.open).toBe(true);
+    expect(container.textContent).toContain("END execution");
+    expect(disclosure?.querySelector("a[data-cron-run-link]")?.getAttribute("href")).toBe(
+      "/automations?job=daily&run=execution",
+    );
+    expect(disclosure?.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    expect(
+      projectTranscriptIndex(projection, expanded, { assistantName: "OpenClaw" }).positionIndex
+        .markers,
+    ).toHaveLength(1);
+  });
+  it.each([
+    { jobId: "other", runId: "execution" },
+    { jobId: "daily", runId: "another-run" },
+    { jobId: "daily", runId: "execution" },
+  ])("never coalesces automation inputs sharing a session: %j", (identity) => {
+    const first = automation("execution");
+    const last = automation("next");
+    last.provenance = { ...last.provenance, ...identity };
+    // Old envelopes can lack the projection marker and share a session-incarnation run ID.
+    const messages = [first, last].map((message) =>
+      Object.assign({}, message, { __openclaw: { id: message["__openclaw"].id } }),
+    );
+    const projection = chain(messages);
+    expect(projection.transcriptItems).toHaveLength(2);
+    for (const [index, group] of projection.transcriptItems.entries()) {
+      if (group.kind !== "group") {
+        throw new Error("expected automation group");
+      }
+      expect(group.messages.map((entry) => entry.message)).toEqual([messages[index]]);
+    }
+  });
+
+  it.each([
+    { kind: "internal_system", sourceTool: "cron" },
+    {
+      kind: "internal_system",
+      sourceTool: "cron",
+      jobId: "daily",
+      runId: 42,
+      sourceSessionKey: sessionKey,
+    },
+    {
+      kind: "internal_system",
+      sourceTool: "hook",
+      jobId: "daily",
+      runId: "execution",
+      sourceSessionKey: sessionKey,
+    },
+  ])("does not disguise incomplete or unrelated system input as automation: %j", (provenance) => {
+    const group = chain([{ ...automation("input"), provenance }]).transcriptItems[0];
+    if (group?.kind !== "group") {
+      throw new Error("expected input group");
+    }
+    render(renderMessageGroup(group, { showReasoning: false }), container);
+    expect(container.querySelector(".chat-session-activity")).toBeNull();
+  });
+
   it("folds adjacent same-source inputs without changing message order or reply identities", () => {
     const messages = [update("first"), update("second"), update("third")];
     const projection = chain(messages);
@@ -66,7 +178,7 @@ describe("inter-session activity", () => {
     expect(index.loadedReplySources.get("second")?.message).toBe(messages[1]);
     expect(index.positionIndex.markers).toHaveLength(0);
     expandReplyTargetWork(projection.transcriptItems, expansions, "second");
-    expect(expansions.get("inter-session:" + group.key)).toBe(true);
+    expect(expansions.get("session-activity:" + group.key)).toBe(true);
     expect(
       projectTranscriptIndex(projection, expansions, { assistantName: "OpenClaw" }).positionIndex
         .markers,
@@ -221,12 +333,12 @@ describe("inter-session activity", () => {
     const sourceClick = new MouseEvent("click", { bubbles: true, cancelable: true });
     sourceLink?.dispatchEvent(sourceClick);
     expect(sourceClick.defaultPrevented).toBe(false);
-    const collapsed = new Map([["inter-session:" + group.key, false]]);
+    const collapsed = new Map([["session-activity:" + group.key, false]]);
     expect(
       projectTranscriptIndex(projection, collapsed, { assistantName: "Assistant" }).positionIndex
         .markers,
     ).toHaveLength(1);
-    expect(collapsed.get("inter-session:" + group.key)).toBe(false);
+    expect(collapsed.get("session-activity:" + group.key)).toBe(false);
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     container.querySelector("summary")?.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);

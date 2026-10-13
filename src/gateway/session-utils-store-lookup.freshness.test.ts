@@ -1,15 +1,17 @@
 import { expect, it, vi } from "vitest";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sessionEntryReaders from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveGatewaySessionStoreTargetWithStore,
@@ -125,7 +127,7 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const key = "agent:main:concurrent-metadata";
     const scope = { agentId: "main", sessionKey: key, env };
-    await replaceSessionEntry(scope, {
+    replaceSessionEntrySync(scope, {
       sessionId: "same-session",
       updatedAt: 1,
       label: "initial",

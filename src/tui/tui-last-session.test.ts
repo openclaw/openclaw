@@ -236,6 +236,7 @@ describe("tui last session state", () => {
           open,
           open,
           open,
+          open,
         ),
       ),
     ).toBe(0);

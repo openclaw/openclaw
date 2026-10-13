@@ -65,6 +65,11 @@ import {
   loadManagedChildSpawner,
 } from "./lib/managed-child-process.mts";
 import {
+  claimManagedCleanup,
+  failManagedCleanup,
+  ManagedCleanupCancelled,
+} from "./lib/managed-cleanup-handoff.mts";
+import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
 } from "./testbox-lease-freshness.mts";
@@ -4148,6 +4153,7 @@ function cleanupOnce() {
   }
   cleanupSucceeded = false;
   if (!childTreeSettled) {
+    failManagedCleanup();
     try {
       sourceStaging?.hold("writers");
     } catch {
@@ -4345,6 +4351,17 @@ if (sourceStaging?.recorded) {
   }
   const leaseId = optionValue(normalizedArgs, "--id");
   sourceStaging.admitted(namespace, leaseId ? [leaseId] : undefined);
+}
+try {
+  await claimManagedCleanup();
+  await preparationCheckpoint();
+} catch (error) {
+  if (error instanceof ManagedCleanupCancelled) {
+    cancellationSignal ??= error.signal;
+  }
+  await preparationCheckpoint(error);
+  cleanupOnce();
+  throw error;
 }
 const child = spawnManagedChild(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

@@ -1,5 +1,5 @@
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
-import { updateExecApprovalsSync } from "./exec-approvals-store.js";
+import { updateExecApprovalsForMaintenance } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 // Detects and removes generated exec grants that predate cwd-bound authorization.
 import { classifyExecAllowlistScope } from "./exec-command-resolution.js";
@@ -39,7 +39,7 @@ function removeObsoleteGeneratedExecApprovals(file: ExecApprovalsFile): {
 
 export function repairObsoleteGeneratedExecApprovals(): number {
   let removed = 0;
-  updateExecApprovalsSync({
+  updateExecApprovalsForMaintenance({
     update: (file) => {
       const result = removeObsoleteGeneratedExecApprovals(file);
       removed = result.removed;

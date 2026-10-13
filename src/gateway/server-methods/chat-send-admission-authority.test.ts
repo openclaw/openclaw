@@ -10,6 +10,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -141,7 +142,8 @@ describe("chat admission authority", () => {
           const reservation = fixture.context.dedupe.get(pendingKey);
           if (reservation && !closing) {
             reservedIdentity = reservation.requestIdentity;
-            closing = closeOpenClawAgentDatabasesAsync();
+            // The revoker is independent of the admission's writer custody.
+            closing = runInDetachedAsyncContext(closeOpenClawAgentDatabasesAsync);
           }
           return value;
         });
@@ -246,7 +248,7 @@ describe("chat admission authority", () => {
       // Only the admission's borrowed custody survives the initiating request.
       root.release();
       caller.release();
-      closing = closeOpenClawAgentDatabasesAsync();
+      closing = runInDetachedAsyncContext(closeOpenClawAgentDatabasesAsync);
       entered.resolve();
       await finishCallback.promise;
       return true;

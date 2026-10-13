@@ -179,7 +179,7 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
     // A foreign/older writer must not make private records readable by this UI.
     await putRawRecord({
-      projectionVersion: 1,
+      projectionVersion: 2,
       sessionKey: privateKey,
       savedAt: 1,
       sessionId: "session-1",
@@ -386,7 +386,7 @@ describe("persistent chat session snapshots", () => {
       await writer.flush();
       await putRawRecord(
         {
-          projectionVersion: 1,
+          projectionVersion: 2,
           sessionKey: corrupt,
           sessionId: "session-1",
           savedAt: Date.now(),

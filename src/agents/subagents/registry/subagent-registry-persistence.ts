@@ -16,7 +16,10 @@ import type { SessionStateNotice } from "../../../sessions/session-state-events.
 import { enqueueSessionStateNotice } from "../../../sessions/session-state-notices.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
@@ -104,9 +107,7 @@ export function assertSubagentRegistryWriteSourceCurrent(
 ): void {
   context.maintenanceScope?.assertAdmission();
   context.admission.assertCurrent();
-  if (
-    captureOpenClawStateWorkerContext().admission.identity.key !== context.admission.identity.key
-  ) {
+  if (captureOpenClawStateReadContext().admission.identity.key !== context.admission.identity.key) {
     throw new Error("Queued registry write lost its original database");
   }
 }

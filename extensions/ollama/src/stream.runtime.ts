@@ -55,6 +55,7 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
+import { appendOllamaResponseText } from "./stream-commentary.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
@@ -64,6 +65,7 @@ import {
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
 import type { OllamaLocalService } from "./stream-registration.js";
+import { normalizeOllamaToolCallName, wrapOllamaToolNames } from "./tool-name-aliases.js";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
 
 export { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
@@ -225,16 +227,6 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   ) {
     options.top_p = 1;
   }
-}
-
-function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
-  const params = model.params;
-  const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl));
-  if (think !== undefined) {
-    requestParams.think = think;
-  }
-  return Object.keys(requestParams).length > 0 ? requestParams : undefined;
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
@@ -513,34 +505,6 @@ function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> 
   return names.size > 0 ? names : undefined;
 }
 
-function normalizeOllamaToolCallName(
-  rawName: string,
-  options: OllamaToolCallNameOptions = {},
-): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const availableToolNames = options.availableToolNames;
-  if (availableToolNames?.has(trimmed)) {
-    return trimmed;
-  }
-
-  const strippedAnySeparator = trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
-  if (
-    availableToolNames &&
-    strippedAnySeparator !== trimmed &&
-    availableToolNames.has(strippedAnySeparator)
-  ) {
-    return strippedAnySeparator;
-  }
-  if (availableToolNames) {
-    return trimmed;
-  }
-
-  return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
-}
-
 type OllamaInputMessage = {
   role: string;
   content: unknown;
@@ -644,6 +608,7 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -659,9 +624,7 @@ export function buildAssistantMessage(
           modelId: modelInfo.id,
           text: rawText,
         });
-  if (text) {
-    content.push({ type: "text", text });
-  }
+  appendOllamaResponseText(content, text, stopReason);
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
@@ -693,7 +656,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason: resolveOllamaStopReason(response),
+    stopReason,
     usage: {
       ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
@@ -858,6 +821,10 @@ function createRawOllamaStreamFn(
                 baseUrl,
                 modelId: model.id,
               });
+        // Direct completions skip the agent wrapper; configured thinking still wins over off.
+        const think =
+          resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl)) ??
+          (options?.reasoning === "off" ? false : undefined);
         const requestParams = {
           // OpenClaw owns history compaction. Ask local servers to reject overflow
           // instead of silently discarding messages or shifting the context window.
@@ -866,7 +833,8 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model, baseUrl),
+          ...pickOllamaParams(model.params, OLLAMA_TOP_LEVEL_PARAM_KEYS),
+          ...(think !== undefined ? { think } : {}),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 
@@ -918,7 +886,7 @@ function createRawOllamaStreamFn(
             method: "POST",
             headers,
             // Applied after payload hooks, so a `false` from any writer gets the model's floor.
-            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model.id)),
+            body: JSON.stringify(applyOllamaThinkingFloor(requestBody, model)),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
@@ -1238,7 +1206,9 @@ export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
-  return createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders));
+  return wrapOllamaToolNames(
+    createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders)),
+  );
 }
 
 export function createConfiguredOllamaStreamFn(params: {
@@ -1251,11 +1221,13 @@ export function createConfiguredOllamaStreamFn(params: {
     modelBaseUrl,
     providerBaseUrl: params.providerBaseUrl,
   });
-  return createPlainTextToolCallCompatWrapper(
-    createRawOllamaStreamFn(
-      baseUrl,
-      resolveOllamaModelHeaders(params.model),
-      params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+  return wrapOllamaToolNames(
+    createPlainTextToolCallCompatWrapper(
+      createRawOllamaStreamFn(
+        baseUrl,
+        resolveOllamaModelHeaders(params.model),
+        params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+      ),
     ),
   );
 }

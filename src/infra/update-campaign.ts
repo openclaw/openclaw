@@ -32,9 +32,6 @@ type UpdateCampaignAnnouncement = {
 };
 
 function sameTarget(a: UpdateCampaignTarget, b: UpdateCampaignTarget): boolean {
-  if (a.kind !== b.kind) {
-    return false;
-  }
   if (a.kind === "package" && b.kind === "package") {
     return a.version === b.version;
   }
@@ -260,18 +257,16 @@ export class UpdateCampaignController {
     });
     if (runApply) {
       // An apply can settle after clear/new announce; only its originating campaign may be cleared.
-      void trackAsyncWork(() => announcement.apply({ forced })).then(
-        (outcome) => {
-          if (outcome === "failed" && this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
-        () => {
-          if (this.campaign?.id === campaign.id) {
-            this.clear();
-          }
-        },
-      );
+      const clearIfCurrent = () => {
+        if (this.campaign?.id === campaign.id) {
+          this.clear();
+        }
+      };
+      void trackAsyncWork(() => announcement.apply({ forced })).then((outcome) => {
+        if (outcome === "failed") {
+          clearIfCurrent();
+        }
+      }, clearIfCurrent);
     }
   }
 

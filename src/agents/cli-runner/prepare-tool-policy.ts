@@ -79,7 +79,11 @@ export function resolveCliRuntimeToolPolicy(input: {
           modelId: params.model,
         }).policy;
   const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
-  if ((params.trustedInternalHandoff || senderRestricted) && params.disableTools !== true) {
+  const delegatedExecution = Boolean(requesterPolicy?.delegatedToolPolicy);
+  if (
+    (params.trustedInternalHandoff || senderRestricted || delegatedExecution) &&
+    params.disableTools !== true
+  ) {
     if (
       !input.canEnforceExactToolAvailability ||
       !input.bundleMcp ||
@@ -88,7 +92,7 @@ export function resolveCliRuntimeToolPolicy(input: {
       params.trustedInternalHandoff?.settleBatch !== undefined
     ) {
       throw new Error(
-        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : "completion"} tool policy`,
+        `CLI backend ${input.backendId} cannot enforce ${senderRestricted ? "conversation" : delegatedExecution ? "delegated execution" : "completion"} tool policy`,
       );
     }
     runtimeToolsAllowPolicy ??= senderRestricted

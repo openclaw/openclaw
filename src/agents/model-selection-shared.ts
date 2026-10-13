@@ -103,12 +103,15 @@ type ExactConfiguredProviderRefParts = {
   modelRaw: string;
 };
 
-function resolveManifestPluginsForModelIdNormalization(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-  allowManifestNormalization?: boolean;
-}): ModelManifestPlugins {
+function resolveManifestPluginsForModelIdNormalization(
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    manifestPlugins?: ModelManifestPlugins;
+    allowManifestNormalization?: boolean;
+  },
+  scanWithoutWorkspace = true,
+): ModelManifestPlugins {
   if (params.manifestPlugins !== undefined) {
     return params.manifestPlugins;
   }
@@ -118,7 +121,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
       config: params.cfg,
       env: process.env,
     });
-    if (currentManifestPlugins) {
+    if (currentManifestPlugins || !scanWithoutWorkspace) {
       return currentManifestPlugins;
     }
   }
@@ -1123,18 +1126,7 @@ function resolveConfiguredModelManifestPlugins(params: {
   if (!hasConfiguredProviderModelRows(params.cfg)) {
     return undefined;
   }
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  if (!workspaceDir) {
-    return getCurrentPluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    });
-  }
-  return loadManifestMetadataSnapshot({
-    config: params.cfg,
-    env: process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  });
+  return resolveManifestPluginsForModelIdNormalization(params, false);
 }
 
 /** Build catalog entries from configured provider model rows. */

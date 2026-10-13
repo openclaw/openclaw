@@ -151,7 +151,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       this.dreaming.hello = snapshot.hello;
     }
     if (snapshot.phase === "connected" && this.selectedAgentId && replaceState) {
-      void this.loadAll();
+      void this.loadResources();
     }
     this.requestUpdate();
   }
@@ -166,7 +166,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     this.resetTransientState();
     this.dreaming = this.createGatewayState();
     if (agentId && this.dreaming.connected) {
-      void this.loadAll();
+      void this.loadResources();
     }
   }
 
@@ -208,9 +208,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     return this.runDreamingTask((current) => runDreamDiaryAction(current, method));
   }
 
-  private async loadAll(refreshConfig = false) {
+  private async loadResources(
+    resource: DreamingResourceKey | "all" = "all",
+    refreshConfig = resource !== "all",
+  ) {
     const scope = this.captureTaskScope();
-    if (!scope || !scope.state.client || !scope.state.connected || !scope.state.selectedAgentId) {
+    if (
+      !scope?.state.selectedAgentId ||
+      (resource === "all" && (!scope.state.client || !scope.state.connected))
+    ) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
@@ -219,11 +225,15 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       return;
     }
     this.syncConfigSnapshot();
-    await Promise.all(
-      (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map((key) =>
-        this.runDreamingTask((current) => loadDreamingResource(current, key), scope),
-      ),
-    );
+    if (resource === "all") {
+      await Promise.all(
+        (["dreamingStatus", "dreamDiary", "wikiImportInsights", "wikiOverview"] as const).map(
+          (key) => this.runDreamingTask((current) => loadDreamingResource(current, key), scope),
+        ),
+      );
+    } else {
+      await this.runDreamingTask((current) => loadDreamingResource(current, resource), scope);
+    }
   }
 
   private setEnabled(enabled: boolean) {
@@ -337,20 +347,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     };
   }
 
-  private async refreshWikiData(key: DreamingResourceKey) {
-    const scope = this.captureTaskScope();
-    if (!scope?.state.selectedAgentId) {
-      return;
-    }
-    const runtimeConfig = this.context.runtimeConfig;
-    await runtimeConfig.refresh();
-    if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
-      return;
-    }
-    this.syncConfigSnapshot();
-    await this.runDreamingTask((current) => loadDreamingResource(current, key), scope);
-  }
-
   override render() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
@@ -376,7 +372,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             <button
               class="btn btn--subtle btn--sm"
               ?disabled=${loading || dreaming.dreamDiaryLoading}
-              @click=${() => void this.loadAll(true)}
+              @click=${() => void this.loadResources("all", true)}
             >
               ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
             </button>
@@ -445,8 +441,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         wikiOverview: dreaming.wikiOverview,
         onRefreshDiary: () =>
           void this.runDreamingTask((current) => loadDreamingResource(current, "dreamDiary")),
-        onRefreshImports: () => void this.refreshWikiData("wikiImportInsights"),
-        onRefreshWikiOverview: () => void this.refreshWikiData("wikiOverview"),
+        onRefreshImports: () => void this.loadResources("wikiImportInsights"),
+        onRefreshWikiOverview: () => void this.loadResources("wikiOverview"),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () => void this.runDiaryAction("doctor.memory.backfillDreamDiary"),

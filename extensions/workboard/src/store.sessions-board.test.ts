@@ -1,5 +1,7 @@
+import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
@@ -258,8 +260,11 @@ describe("Sessions board schema reopening", () => {
     });
     await store.close();
 
+    // Model the prior schema's first admission, rather than altering admitted format facts.
+    renameSync(dbPath, `${dbPath}.seed`);
+    copyFileSync(`${dbPath}.seed`, dbPath);
     {
-      using prior = new DatabaseSync(dbPath);
+      using prior = openNodeSqliteDatabase(dbPath);
       // These are the only schema additions for Sessions boards; preserve the existing migration receipt.
       prior.exec(`
         DROP TABLE workboard_session_placements;

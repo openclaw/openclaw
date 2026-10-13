@@ -115,19 +115,15 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
 
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
-  const current = getMemoryRuntime();
-  if (current) {
-    runtimes.add(current);
-  }
-  const providerRuntime = getMemoryProviderRuntime();
-  if (providerRuntime) {
-    runtimes.add(providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.providerRuntime) {
-    runtimes.add(standaloneMemoryRegistrySlot.providerRuntime);
-  }
-  if (standaloneMemoryRegistrySlot?.runtime) {
-    runtimes.add(standaloneMemoryRegistrySlot.runtime);
+  for (const runtime of [
+    getMemoryRuntime(),
+    getMemoryProviderRuntime(),
+    standaloneMemoryRegistrySlot?.providerRuntime,
+    standaloneMemoryRegistrySlot?.runtime,
+  ]) {
+    if (runtime) {
+      runtimes.add(runtime);
+    }
   }
   return [...runtimes];
 }
@@ -209,11 +205,10 @@ function ensureMemoryRuntime(params: {
     return owner;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
-  if (previousSlot?.runtime) {
-    retiredRuntimes.add(previousSlot.runtime);
-  }
-  if (previousSlot?.providerRuntime) {
-    retiredRuntimes.add(previousSlot.providerRuntime);
+  for (const retiredRuntime of [previousSlot?.runtime, previousSlot?.providerRuntime]) {
+    if (retiredRuntime) {
+      retiredRuntimes.add(retiredRuntime);
+    }
   }
   standaloneMemoryRegistrySlot = {
     runtime,
@@ -561,10 +556,35 @@ export function prepareMemoryRuntimeReload(
     }
     return cleanup;
   };
+  // Reload retires capability caches too; managers can hold adapters absent from this registry.
+  const retainedPluginIds = new Set(
+    previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+      [capability.runtime, capability.providerRuntime].some(
+        (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
+      )
+        ? [pluginId]
+        : [],
+    ),
+  );
   return {
+    retainedPluginIds,
     drain: () => withPluginHostCleanupTimeout("memory managers", close),
     close,
     commit: (retained = nextRegistry) => resume(true, retained),
-    rollback: () => resume(false),
+    rollback: () => {
+      resume(false);
+      // Admission can be prepared without draining; only drained owners need service restart.
+      return new Set(
+        previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+          cleanup &&
+          prepared.some(
+            ({ runtime }) =>
+              runtime === capability.runtime || runtime === capability.providerRuntime,
+          )
+            ? [pluginId]
+            : [],
+        ),
+      );
+    },
   };
 }

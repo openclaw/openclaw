@@ -108,10 +108,16 @@ function captureRequestAuthorityAssertion(
   nativeTransport: boolean,
 ) {
   const source = captureExternalSessionCommitGuard(options.sessionMutationCommitGuard);
+  const transportSource =
+    nativeTransport && options.hasCurrentClientAuthority
+      ? captureExternalSessionCommitGuard(() => assertRequestTransportCurrent(options))
+      : undefined;
   return composeSessionSourceAssertion(
-    [source],
+    [transportSource, source],
     (assertSource) => {
-      assertRequestTransportCurrent(options);
+      if (!transportSource) {
+        assertRequestTransportCurrent(options);
+      }
       assertSource();
     },
     {
@@ -442,13 +448,26 @@ export function withSessionMutationCommitGuard(
     ...authorization,
     ...(authorization?.prepareWorkerGrant
       ? {
-          prepareWorkerGrant: async () => {
-            const prepared = await withCommitGuards(() => authorization.prepareWorkerGrant!());
-            const wrap = (assertSource: () => void) => () => withCommitGuards(assertSource);
+          prepareWorkerGrant: async (target) => {
+            const prepared = await withCommitGuards(() =>
+              authorization.prepareWorkerGrant!(target),
+            );
+            const wrap =
+              <Args extends unknown[]>(assertSource: (...args: Args) => void) =>
+              (...args: Args) =>
+                withCommitGuards(() => assertSource(...args));
             return {
               ...prepared,
               assertCurrent: wrap(prepared.assertCurrent),
               assertLifetimeCurrent: wrap(prepared.assertLifetimeCurrent),
+              ...(prepared.transaction
+                ? {
+                    transaction: {
+                      ...prepared.transaction,
+                      assertCurrent: wrap(prepared.transaction.assertCurrent),
+                    },
+                  }
+                : {}),
             };
           },
         }

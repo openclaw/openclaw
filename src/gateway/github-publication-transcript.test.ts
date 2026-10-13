@@ -1,18 +1,23 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import {
   loadTranscriptEvents,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
@@ -33,6 +38,75 @@ afterEach(() => {
 });
 
 describe("GitHub publication transcript reporting", () => {
+  it("commits one bound private report before marking its publication receipt", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const authority = { assertCurrent() {} };
+      const actor = await captureOpenClawAgentDatabaseExecution({
+        kind: "ephemeral",
+        agentId: "main",
+        env: state.env,
+        authority,
+      });
+      assert(actor);
+      const session = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:incognito-publication-transcript",
+        sessionId: "private-publication",
+      };
+      await actor.sessions.create(authority, {
+        sessionKey: session.sessionKey,
+        entry: { sessionId: session.sessionId, updatedAt: Date.now() },
+      });
+      const result = {
+        requestId: "private-result",
+        status: "published" as const,
+        repository: "example/repository",
+        url: "https://github.com/example/repository/pull/1",
+        branch: "private-result",
+        headCommit: "a".repeat(40),
+      };
+      const loadRuntime = vi.fn(async () => {
+        throw new Error("Private reports must not select native storage");
+      });
+      const markReported = vi.fn();
+      const sql = observeHostDataSql();
+      try {
+        await withIncognitoSessionBinding({ actor }, async () => {
+          await reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReported },
+            { ...session, result },
+          );
+          await reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReported },
+            { ...session, result },
+          );
+          const events = await loadTranscriptEvents({
+            ...session,
+            storePath: actor.path,
+            env: state.env,
+          });
+          const reports = events.filter(
+            (event) =>
+              isRecord(event) &&
+              event.type === "message" &&
+              isRecord(event.message) &&
+              event.message.responseId === `github-publication:${result.requestId}`,
+          );
+          expect(reports).toHaveLength(1);
+          expect(JSON.stringify(reports[0])).toContain(result.url);
+          expect(markReported).toHaveBeenCalledTimes(2);
+          expect(loadRuntime).not.toHaveBeenCalled();
+          expect(sql.queries).toEqual([]);
+        });
+      } finally {
+        sql.restore();
+        await actor.close();
+      }
+    });
+  });
+
   it.each(
     [
       {

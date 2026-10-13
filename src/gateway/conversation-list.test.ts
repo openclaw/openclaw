@@ -13,7 +13,10 @@ import {
   resolveCurrentSessionPrimaryConversation,
 } from "../config/sessions/conversation-registry.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  targetDiscoveryLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -470,8 +473,9 @@ describe("worker conversation reads", () => {
       await fs.mkdir(directory, { recursive: true });
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      const lane = targetDiscoveryLane;
+      const run = lane.pool.run.bind(lane.pool);
+      vi.spyOn(lane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

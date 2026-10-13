@@ -44,6 +44,7 @@ import {
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
+import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
 export function openSqliteReadOnlyDatabase(
@@ -54,21 +55,25 @@ export function openSqliteReadOnlyDatabase(
   if (!scope || !isArtifactPreservingStateRead("agent", pathname)) {
     return openNodeSqliteDatabase(pathname, { ...options, readOnly: true });
   }
-  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
-  const release = retainSnapshotTempDirectory(
-    snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-  );
+  // The published updater already prepared this image. Keep inspection read-only
+  // and scoped, but do not copy the same database again for each canary check.
+  const snapshot = isUpdateRehearsalPrivateDatabase(pathname, process.env)
+    ? undefined
+    : prepareSqliteReadOnlyLocationSync(pathname);
+  const release = snapshot
+    ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
+    : undefined;
   const native: { close?: () => void } = {};
   const close = () => {
     native.close?.();
-    release();
-    if (!snapshot.cleanup()) {
+    release?.();
+    if (snapshot && !snapshot.cleanup()) {
       throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
     }
     scope.readers.delete(close);
   };
   scope.readers.add(close);
-  const db = openNodeSqliteDatabase(snapshot.location, { ...options, readOnly: true });
+  const db = openNodeSqliteDatabase(snapshot?.location ?? pathname, { ...options, readOnly: true });
   const dispose = db.close.bind(db);
   native.close = () => {
     if (db.isOpen) {
@@ -184,10 +189,7 @@ export function startSqliteReadOnlyLocationAsync(
               if (flightSignal.aborted) {
                 if (!cleanup) {
                   cleanup = prepared.startCleanup();
-                  void cleanup.result.then(
-                    () => retained.operation.service(),
-                    () => retained.operation.service(),
-                  );
+                  void cleanup.result.then(service, service);
                 }
                 cleanup.service();
                 const removed = cleanup.read();
@@ -212,6 +214,7 @@ export function startSqliteReadOnlyLocationAsync(
             }
           }),
         );
+        const service = () => retained.operation.service();
         try {
           task = staging.start(
             {
@@ -226,10 +229,7 @@ export function startSqliteReadOnlyLocationAsync(
             },
             flightSignal,
           );
-          void task.result.then(
-            () => retained.operation.service(),
-            () => retained.operation.service(),
-          );
+          void task.result.then(service, service);
         } catch (error) {
           retained.reject(error);
         }
@@ -339,18 +339,16 @@ export async function withSqliteSnapshotSource<T>(
 ): Promise<T> {
   let prepared = await prepareSqliteSnapshotSource(pathname);
   try {
-    try {
-      return prepared ? await operation(prepared.location) : await operation(pathname);
-    } catch (error) {
-      if (prepared) {
-        throw error;
-      }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
+    return await operation(prepared ? prepared.location : pathname);
+  } catch (error) {
+    if (prepared) {
+      throw error;
     }
+    prepared = await prepareSqliteSnapshotSource(pathname);
+    if (!prepared) {
+      throw error;
+    }
+    return await operation(prepared.location);
   } finally {
     await prepared?.cleanupAsync();
   }

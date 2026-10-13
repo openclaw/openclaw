@@ -3,6 +3,7 @@ import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   readMatrixIdbSnapshotJson,
@@ -44,12 +45,9 @@ class MatrixIdbSnapshotMigrationRequiredError extends Error {
 }
 
 function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["indexes"][number] {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbStoreSnapshot["indexes"][number]>;
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     (typeof candidate.keyPath === "string" ||
       (Array.isArray(candidate.keyPath) &&
         candidate.keyPath.every((entry) => typeof entry === "string"))) &&
@@ -59,24 +57,19 @@ function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["ind
 }
 
 function isValidIdbRecordSnapshot(value: unknown): value is IdbStoreSnapshot["records"][number] {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return "key" in value && "value" in value;
+  const candidate = asOptionalObjectRecord(value);
+  return Boolean(candidate && "key" in candidate && "value" in candidate);
 }
 
 function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbStoreSnapshot>;
+  const candidate = asOptionalObjectRecord(value);
+  const keyPath = candidate?.keyPath;
   const validKeyPath =
-    candidate.keyPath === null ||
-    typeof candidate.keyPath === "string" ||
-    (Array.isArray(candidate.keyPath) &&
-      candidate.keyPath.every((entry) => typeof entry === "string"));
+    keyPath === null ||
+    typeof keyPath === "string" ||
+    (Array.isArray(keyPath) && keyPath.every((entry) => typeof entry === "string"));
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     validKeyPath &&
     typeof candidate.autoIncrement === "boolean" &&
     Array.isArray(candidate.indexes) &&
@@ -87,12 +80,9 @@ function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
 }
 
 function isValidIdbDatabaseSnapshot(value: unknown): value is IdbDatabaseSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<IdbDatabaseSnapshot>;
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.name === "string" &&
+    typeof candidate?.name === "string" &&
     typeof candidate.version === "number" &&
     Number.isFinite(candidate.version) &&
     candidate.version > 0 &&

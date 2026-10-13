@@ -101,14 +101,8 @@ export type TelegramDispatchTurnConfig = Omit<DispatchTelegramMessageParams, "te
   telegramDeps: TelegramBotDeps;
 };
 
-export type TelegramDraftPartialTextUpdate = {
-  text: string;
-  delta?: string;
-  replace?: true;
-  isReasoningSnapshot?: boolean;
-};
 export type TelegramSplitLaneSegmentsResult = {
-  segments: Array<{ lane: LaneName; update: TelegramDraftPartialTextUpdate }>;
+  segment: { lane: LaneName; text: string } | undefined;
   suppressedReasoningOnly: boolean;
 };
 export type TelegramQueuedAnswerBlockRotation = {
@@ -180,6 +174,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramDeliveryStateSlice &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
+    finalDeliveryNotDispatched?: boolean;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   registerRealtimeVoiceSelection,
@@ -204,7 +204,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     if (this.warmSession === session) {
-      this.params.onTerminalError(error instanceof Error ? error : new Error(String(error)));
+      this.params.onTerminalError(toStringifiedError(error));
       return;
     }
     for (const speaker of this.sessions) {

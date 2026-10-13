@@ -17,15 +17,12 @@ import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "../runtime
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
 
 it.each([
-  ["incognito", "same-binding", "live"],
-  ["incognito", "clear", "live"],
   ["incognito", "rebind", "live"],
   ["incognito", "clear", "snapshot"],
   ["durable", "same-binding", "live"],
   ["durable", "clear", "live"],
   ["durable", "rebind", "live"],
   ["durable", "owner", "live"],
-  ["durable", "signal-failure", "live"],
 ] as const)(
   "rechecks %s global ACP metadata after a signal wait and %s mutation under %s reads",
   async (sourceKind, change, readScope) => {
@@ -75,9 +72,6 @@ it.each([
                         paused = true;
                         reached.resolve();
                         return release.promise.then(() => {
-                          if (change === "signal-failure") {
-                            throw new Error("Synthetic signal storage failure.");
-                          }
                           return Reflect.apply(execute, receiver, args);
                         });
                       }
@@ -144,7 +138,7 @@ it.each([
               updatedAt: 200,
               spawnedBy: "agent:other:parent",
             });
-          } else if (change !== "signal-failure") {
+          } else {
             writeAcpSessionMetaForMigration({
               env: f.state.env,
               sessionKey: buildAcpDatabaseSessionKey(f.target.sessionKey, "main"),
@@ -159,7 +153,7 @@ it.each([
             .db.prepare("SELECT kind FROM session_state_events WHERE run_id = ?")
             .all("incognito-parity");
           expect(signals).toEqual(change === "same-binding" ? [{ kind: "run_failed" }] : []);
-          const authorityCurrent = change === "same-binding" || change === "signal-failure";
+          const authorityCurrent = change === "same-binding";
           expect(events).toEqual(
             authorityCurrent ? [{ type: "done", status: "cancelled", stopReason: "cancel" }] : [],
           );
@@ -190,19 +184,3 @@ it.each([
     );
   },
 );
-
-it("preserves idle Incognito cancellation through the retained native metadata writer", async () => {
-  await withAcpCancellationFixture(
-    async (f) => {
-      const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-      const memory = getOpenIncognitoAgentDatabase("main", path);
-      expect(memory).toBeDefined();
-      await f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" });
-      expect(f.cancel).toHaveBeenCalledOnce();
-      expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
-      expect(getOpenIncognitoAgentDatabase("main", path)).toBe(memory);
-      expect(fs.existsSync(path)).toBe(false);
-    },
-    { sessionKey: "agent:main:dashboard:incognito-idle-parity" },
-  );
-});

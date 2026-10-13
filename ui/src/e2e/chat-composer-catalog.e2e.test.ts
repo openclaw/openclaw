@@ -85,7 +85,7 @@ suite.define(() => {
   );
 
   it.each([1280, 390])(
-    "keeps the selected model during startup, then tracks fallback and recovery at %ipx",
+    "keeps the saved preference through startup, fallback, reload, and recovery at %ipx",
     async (width) => {
       const artifactDir = suite.artifactDir;
       await suite.withPage(
@@ -132,7 +132,7 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__input");
           const trigger = composer.locator('[data-chat-model-select="true"]');
 
-          await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+          await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           await expect
             .poll(() =>
               composer
@@ -194,7 +194,7 @@ suite.define(() => {
                 activeRunState: { active: true },
               }),
             });
-            await expect.poll(() => trigger.textContent()).toContain(model.name);
+            await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
             await expect.poll(() => trigger.getAttribute("aria-busy")).toBe("false");
             expect(await trigger.locator(".btn__spinner").count()).toBe(0);
             expect(
@@ -208,7 +208,7 @@ suite.define(() => {
           }
           await page.reload();
           await gateway.waitForRequest("chat.startup");
-          await expect.poll(() => trigger.textContent()).toContain(activeModel.name);
+          await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(
             await composer
               .locator('[data-chat-model-option="codex/gpt-5.5"]')

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -48,26 +49,14 @@ it.each(["transition", "complete"] as const)(
       });
       const acknowledged = createDeferred();
       const releaseAcknowledgement = createDeferred();
-      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-      const worker = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementation((context, run, options) =>
-          runWorker(
-            context,
-            (scope) =>
-              run({
-                execute: async (command, executeOptions) => {
-                  const receipt = await scope.execute(command, executeOptions);
-                  if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                    acknowledged.resolve();
-                    await releaseAcknowledgement.promise;
-                  }
-                  return receipt;
-                },
-              }),
-            options,
-          ),
-        );
+      const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const receipt = await scope.execute(command, executeOptions);
+        if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+          acknowledged.resolve();
+          await releaseAcknowledgement.promise;
+        }
+        return receipt;
+      });
       const publication = mutateRequesterCompletionBatch({
         entries: [input.subagent],
         operation:

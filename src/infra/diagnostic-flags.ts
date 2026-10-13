@@ -30,22 +30,13 @@ export function isDiagnosticFlagEnabled(
     return false;
   }
   for (const enabled of enabledFlags) {
-    if (enabled === "*" || enabled === "all") {
+    if (enabled === "*" || enabled === "all" || enabled === target) {
       return true;
     }
-    if (enabled.endsWith(".*")) {
-      const prefix = enabled.slice(0, -2);
-      if (target === prefix || target.startsWith(`${prefix}.`)) {
-        return true;
-      }
+    if (enabled.endsWith(".*") && target === enabled.slice(0, -2)) {
+      return true;
     }
-    if (enabled.endsWith("*")) {
-      const prefix = enabled.slice(0, -1);
-      if (target.startsWith(prefix)) {
-        return true;
-      }
-    }
-    if (enabled === target) {
+    if (enabled.endsWith("*") && target.startsWith(enabled.slice(0, -1))) {
       return true;
     }
   }

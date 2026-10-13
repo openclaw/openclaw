@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { expressionBuilder, type SelectQueryBuilder } from "kysely";
+import { expressionBuilder, type Compilable, type SelectQueryBuilder } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -197,10 +197,15 @@ function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatar
 export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged_into">>(
   db: DatabaseSync,
   profileId: string,
-  query: SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>,
+  query:
+    | SelectQueryBuilder<UserProfilesDatabase, "user_profiles", T>
+    | ((profileId: string) => Compilable<T>),
 ): T | undefined {
   return readResolvedUserProfile(profileId, (id) =>
-    executeSqliteQueryTakeFirstSync(db, query.where("id", "=", id)),
+    executeSqliteQueryTakeFirstSync(
+      db,
+      typeof query === "function" ? query(id) : query.where("id", "=", id),
+    ),
   );
 }
 

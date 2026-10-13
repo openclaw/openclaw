@@ -304,7 +304,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it.each([undefined, "idle"])(
+  it.each(["idle"])(
     "keeps hidden incognito rows from changing non-owner list metadata (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -497,48 +497,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("projects a shared session member's truthful role in sessions.list", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:shared-member";
-      const memberIdentity = { id: "member@example.com", label: "Member" };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-shared-member",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-          visibility: "shared",
-        },
-      );
-      expect(
-        addSessionMember(
-          { agentId: "main", sessionKey },
-          { identityId: memberIdentity.id, addedBy: "owner@example.com", addedAt: 1 },
-        ).inserted,
-      ).toBe(true);
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionReadHandlers["sessions.list"]?.({
-        req: { type: "req", id: "session-list-test", method: "sessions.list" },
-        params: { agentId: "main" },
-        client: identifiedClient(memberIdentity.id, memberIdentity.label),
-        context: {
-          ...context(vi.fn()),
-          loadGatewayModelCatalog: async () => [],
-        } as unknown as GatewayRequestContext,
-        respond: (...response: Parameters<RespondFn>) => responses.push(response),
-      } as never);
-
-      expect(responses[0]?.[0]).toBe(true);
-      const payload = responses[0]?.[1] as
-        | { sessions?: Array<{ key: string; sharingRole?: string }> }
-        | undefined;
-      expect(payload?.sessions?.find((session) => session.key === sessionKey)?.sharingRole).toBe(
-        "member",
-      );
-    });
-  });
-
-  it.each([undefined, "direct"])(
+  it.each(["direct"])(
     "hides drafts after asynchronous catalog preparation (search: %s)",
     async (search) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {

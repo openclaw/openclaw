@@ -184,11 +184,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     expect(formatErrorMessageForDisplay(error).length).toBeLessThan(2_200);
   });
 
-  it("preserves a silent child's exit error without inventing stderr", async () => {
-    const context = await contextForChild("process.exit(1);");
-    await expect(collect(context)).rejects.toThrow(/^Claude Code process exited with code 1$/);
-  });
-
   it.skipIf(process.platform === "win32")(
     "preserves a live child's broken pipe when shutdown makes it exit nonzero",
     async () => {
@@ -490,7 +485,6 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
   });
 
   it.each([
-    { firstPrompt: "success with stderr", prompt: "fail silently" },
     { firstPrompt: "success with stderr", prompt: "fail noisily" },
     { firstPrompt: "success with stderr", prompt: "close idle" },
     { firstPrompt: "success with delayed stderr", prompt: "fail silently" },

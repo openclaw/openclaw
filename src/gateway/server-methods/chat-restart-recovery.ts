@@ -151,7 +151,7 @@ function isAdoptedRestartRecoveryClaim(
   );
 }
 
-export async function resolveDurableChatClaim(params: {
+export function resolveDurableChatClaim(params: {
   canonicalSessionKey: string;
   cfg: OpenClawConfig;
   clientRunId: string;
@@ -161,22 +161,26 @@ export async function resolveDurableChatClaim(params: {
   storePath: string;
   recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
-}): Promise<DurableChatClaimResolution> {
-  let entry = params.entry;
-  if (isAdoptedRestartRecoveryClaim(entry, params.clientRunId) && entry.abortedLastRun === true) {
-    const recoverySessionError = resolveAgentSessionWorkStartError(
-      params.canonicalSessionKey,
-      entry,
-    );
-    if (recoverySessionError) {
-      return { kind: "rejected", message: recoverySessionError };
-    }
-    if (!params.recoveryRuntime) {
-      return {
-        kind: "pending",
-        message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
-      };
-    }
+}): DurableChatClaimResolution | Promise<DurableChatClaimResolution> {
+  const entry = params.entry;
+  if (!isAdoptedRestartRecoveryClaim(entry, params.clientRunId) || entry.abortedLastRun !== true) {
+    return isAdoptedRestartRecoveryClaim(entry, params.clientRunId) ||
+      hasRestartRecoveryTerminalRun(entry, params.clientRunId)
+      ? { kind: "accepted" }
+      : { kind: "continue", entry };
+  }
+  const recoverySessionError = resolveAgentSessionWorkStartError(params.canonicalSessionKey, entry);
+  if (recoverySessionError) {
+    return { kind: "rejected", message: recoverySessionError };
+  }
+  const recoveryRuntime = params.recoveryRuntime;
+  if (!recoveryRuntime) {
+    return {
+      kind: "pending",
+      message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
+    };
+  }
+  return (async (): Promise<DurableChatClaimResolution> => {
     try {
       const { retryRestartAbortedMainSessionRecovery } =
         await import("../../agents/main-session-recovery/main-session-restart-recovery.js");
@@ -188,21 +192,24 @@ export async function resolveDurableChatClaim(params: {
         expectedSessionId: entry.sessionId,
         sessionKey: params.persistedSessionKey,
         storePath: params.storePath,
-        gatewayRuntime: params.recoveryRuntime,
+        gatewayRuntime: recoveryRuntime,
       });
     } catch (error) {
       params.warn(String(error));
     }
-    entry = params.reloadEntry();
-    if (isAdoptedRestartRecoveryClaim(entry, params.clientRunId) && entry.abortedLastRun === true) {
+    const current = params.reloadEntry();
+    if (
+      isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
+      current.abortedLastRun === true
+    ) {
       return {
         kind: "pending",
         message: "accepted chat turn recovery is still pending; retry",
       };
     }
     if (
-      !isAdoptedRestartRecoveryClaim(entry, params.clientRunId) &&
-      !hasRestartRecoveryTerminalRun(entry, params.clientRunId)
+      !isAdoptedRestartRecoveryClaim(current, params.clientRunId) &&
+      !hasRestartRecoveryTerminalRun(current, params.clientRunId)
     ) {
       return {
         kind: "rejected",
@@ -211,11 +218,8 @@ export async function resolveDurableChatClaim(params: {
         unavailable: true,
       };
     }
-  }
-  return isAdoptedRestartRecoveryClaim(entry, params.clientRunId) ||
-    hasRestartRecoveryTerminalRun(entry, params.clientRunId)
-    ? { kind: "accepted" }
-    : { kind: "continue", entry };
+    return { kind: "accepted" };
+  })();
 }
 
 function isRestartSafeChatSession(params: {

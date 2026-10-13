@@ -376,6 +376,12 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = CronJob & {
+  /** Creation-bound destination for isolated results when no external route exists. */
+  sourceConversation?: {
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */

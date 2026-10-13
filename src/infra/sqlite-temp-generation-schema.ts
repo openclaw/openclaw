@@ -42,12 +42,18 @@ export function prepareSqliteTempTrackingSchema(
       : prepareTranscriptIndexSchema(schema);
   const definitions = new Map(objects.map((object) => [object.name.toLowerCase(), object]));
   const names = objects.map((object) => object.name);
+  const tableNames = objects
+    .filter((object) => object.type === "table")
+    .map((object) => object.name);
+  const parameters = [...names, ...tableNames];
   // sqlite-allow-raw -- One TEMP admission snapshot verifies names and shapes before replacement.
   const existing = executeWithCachedStatement(
     database,
-    `SELECT type, name, tbl_name, sql FROM temp.sqlite_schema WHERE name COLLATE NOCASE IN (${names.map(() => "?").join(",")})`,
-    names,
-    (statement) => statement.all(...names),
+    `SELECT type, name, tbl_name, sql FROM temp.sqlite_schema
+     WHERE name COLLATE NOCASE IN (${names.map(() => "?").join(",")})
+       OR (type = 'trigger' AND tbl_name COLLATE NOCASE IN (${tableNames.map(() => "?").join(",")}))`,
+    parameters,
+    (statement) => statement.all(...parameters),
   );
   const unexpected = existing.some((row) => {
     const declared =
@@ -107,7 +113,7 @@ function prepareTranscriptIndexSchema(schema: SqliteTempTranscriptIndexSchema): 
   const pending = quoteSqliteIdentifier(schema.pendingTable);
   const index = quoteSqliteIdentifier(schema.pendingIndex);
   const statusTable = `${status} (
-    id INTEGER PRIMARY KEY CHECK (id = 1), data_version INTEGER NOT NULL,
+    id INTEGER PRIMARY KEY CHECK (id = 1), sibling_write_revision INTEGER NOT NULL,
     schema_version INTEGER NOT NULL, complete INTEGER NOT NULL, after_session TEXT,
     completed_traversals INTEGER NOT NULL
   ) STRICT`;
@@ -148,7 +154,7 @@ function prepareTranscriptIndexSchema(schema: SqliteTempTranscriptIndexSchema): 
   const sql = `
     CREATE TEMP TABLE IF NOT EXISTS ${statusTable};
     INSERT OR IGNORE INTO temp.${status} VALUES (1, -1, -1, 0, NULL, 0);
-    UPDATE temp.${status} SET data_version = -1;
+    UPDATE temp.${status} SET sibling_write_revision = -1;
     CREATE TEMP TABLE IF NOT EXISTS ${pendingTable};
     CREATE INDEX IF NOT EXISTS temp.${pendingIndex};
     ${triggers

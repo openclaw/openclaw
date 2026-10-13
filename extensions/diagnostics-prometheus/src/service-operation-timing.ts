@@ -24,10 +24,49 @@ const CHAT_SEND_PHASE =
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" | "diagnostic.phase.completed" }>,
+  evt: Extract<
+    DiagnosticEventPayload,
+    {
+      type:
+        | "gateway.rpc"
+        | "diagnostic.phase.completed"
+        | "gateway.http.cancelled"
+        | "diagnostic.gc"
+        | "gateway.event_loop.sample";
+    }
+  >,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "gateway.http.cancelled":
+      store.counter(
+        "openclaw_gateway_http_cancelled_total",
+        "Gateway HTTP requests cancelled before completion.",
+        { source: evt.source },
+      );
+      return;
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
     case "diagnostic.phase.completed": {
       if (!metadata.trusted) {
         return;

@@ -35,6 +35,30 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it("does not verify a running Gateway that owns its listener but never answers health", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockRejectedValue(new Error("Gateway health timed out"));
+    const result = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 3,
+      delayMs: 500,
+      requireRunningService: true,
+    });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      healthy: false,
+      waitOutcome: "timeout",
+      staleGatewayPids: [],
+      probeError: "Gateway health timed out",
+    });
+  });
+
   it.each(["masked", "refuse-manual-start", "disabled-no-start"] as const)(
     "ends readiness polling immediately for a verified service hold (%s)",
     async (reason) => {
@@ -264,6 +288,12 @@ describe("restart health", () => {
       elapsedMs,
       phase,
     }) => {
+      callGateway.mockImplementation(async (options) => {
+        if (monotonicClock.nowMs < readyAtMs) {
+          throw new Error("Gateway health timed out");
+        }
+        return gatewayHealthResponse()(options);
+      });
       inspectPortUsage.mockImplementation(async (port) => ({
         port,
         status: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? "free" : "busy",
@@ -499,6 +529,7 @@ describe("restart health", () => {
   });
 
   it("waits through a healthy long-running startup migration", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {
       inspections += 1;
@@ -535,6 +566,7 @@ describe("restart health", () => {
   });
 
   it("keeps the readiness window after an observed migration ends near the standard deadline", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {
       inspections += 1;

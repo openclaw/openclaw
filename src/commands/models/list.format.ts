@@ -24,17 +24,15 @@ export const padTerminalCell = (value: string, size: number) => {
 };
 
 export const formatTag = (tag: string) => {
-  if (tag === "default") {
-    return theme.success(tag);
-  }
-  if (tag === "image") {
-    return theme.accentBright(tag);
-  }
-  if (tag === "configured") {
-    return theme.accent(tag);
-  }
-  if (tag === "missing") {
-    return theme.error(tag);
+  switch (tag) {
+    case "default":
+      return theme.success(tag);
+    case "image":
+      return theme.accentBright(tag);
+    case "configured":
+      return theme.accent(tag);
+    case "missing":
+      return theme.error(tag);
   }
   if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
     return theme.warn(tag);

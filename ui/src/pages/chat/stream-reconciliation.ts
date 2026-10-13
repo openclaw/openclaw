@@ -45,6 +45,7 @@ export type ToolStreamReconciliationState = StreamReconciliationState & {
 };
 
 type VisibleAssistantStreamPart = {
+  afterUserSendId?: string;
   text: string;
   replacementText: string;
   source: "segment" | "current";
@@ -139,23 +140,11 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
   ) {
     removedIndexes.add(onlyCurrentFallbackIndex);
   }
-  const retainedInterval: unknown[] = [];
-  let insertIndex: number | null = null;
-  for (let index = interval.start; index < interval.end; index += 1) {
-    if (removedIndexes.has(index)) {
-      insertIndex ??= retainedInterval.length;
-    } else {
-      retainedInterval.push(messages[index]);
-    }
-  }
-  const targetIndex = insertIndex ?? retainedInterval.length;
-  return [
-    ...messages.slice(0, interval.start),
-    ...retainedInterval.slice(0, targetIndex),
-    message,
-    ...retainedInterval.slice(targetIndex),
-    ...messages.slice(interval.end),
-  ];
+  // Removals were recorded in transcript order, so none precede the insertion point.
+  const insertIndex = removedIndexes.values().next().value ?? interval.end;
+  const retained = Array.from(messages).filter((_, index) => !removedIndexes.has(index));
+  retained.splice(insertIndex, 0, message);
+  return retained;
 }
 
 function visibleAssistantStreamText(
@@ -209,6 +198,7 @@ export function visibleAssistantStreamParts(
         ...(itemId ? { itemId } : {}),
         ...(segmentRunId ? { runId: segmentRunId } : {}),
         toolCallId: explicitToolCallId ?? indexedToolRef?.id,
+        afterUserSendId: segment.afterUserSendId,
       });
     }
     if (usesAccumulatedText) {
@@ -428,9 +418,9 @@ export function materializeVisibleStreamState(
       continue;
     }
     const interval =
-      replacementCandidates === nextMessages
+      replacementCandidates === nextMessages && !part.afterUserSendId
         ? replacementInterval
-        : streamCausalInterval(nextMessages, part);
+        : streamCausalInterval(nextMessages, part, part.afterUserSendId);
     const toolIndex =
       part.source === "segment" && part.toolCallId
         ? currentToolStreamMessageIndex(

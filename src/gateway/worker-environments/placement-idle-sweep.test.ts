@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -373,18 +374,14 @@ describe("worker placement idle suspension", () => {
       });
       const active = await harness.service.dispatch(REQUEST);
       nowMs += 60_000;
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let admissionReached = false;
-      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              admissionReached = true;
-              profile.suspendAfter = undefined;
-            }
-            admit(request, grant);
-          }, attachment),
-      );
+      probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          admissionReached = true;
+          profile.suspendAfter = undefined;
+        }
+        admit(request, grant);
+      });
       await idleSweep.sweep();
       expect(admissionReached).toBe(true);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({

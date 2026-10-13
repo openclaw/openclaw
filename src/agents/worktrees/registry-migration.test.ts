@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -124,26 +125,43 @@ describe("native worktree migration ownership", () => {
 
   it.each(["offline", "inherited maintenance"] as const)("preserves %s migration", async (mode) => {
     const fixture = migrationFixture();
+    const facts = new Map();
+    const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
+      if (change.kind === "committed") {
+        for (const [key, fact] of change.receipt.facts) {
+          facts.set(key, fact);
+        }
+      }
+    });
     const migrate = () => {
       expect(discardLegacyRegistryWorktrees(fixture.env, ["legacy"])).toBe(1);
+      expect(facts.get(JSON.stringify(["worktrees", "legacy"]))).toEqual({ kind: "absent" });
       expect(rewriteRegistryWorktreePathsForMigration(fixture.env, [fixture.rewrite])).toBe(1);
-    };
-    if (mode === "inherited maintenance") {
-      const owner = await acquireGatewayLock({
-        env: fixture.env,
-        role: "sqlite-maintenance",
-        allowInTests: true,
-        timeoutMs: 0,
+      expect(facts.get(JSON.stringify(["worktrees", "current"]))).toMatchObject({
+        kind: "postimage",
+        value: { id: "current", path: fixture.rewrite.toPath },
       });
-      expect(owner).not.toBeNull();
-      try {
-        owner!.run(migrate);
-      } finally {
-        await owner?.release();
+    };
+    try {
+      if (mode === "inherited maintenance") {
+        const owner = await acquireGatewayLock({
+          env: fixture.env,
+          role: "sqlite-maintenance",
+          allowInTests: true,
+          timeoutMs: 0,
+        });
+        expect(owner).not.toBeNull();
+        try {
+          owner!.run(migrate);
+        } finally {
+          await owner?.release();
+        }
+      } else {
+        migrate();
       }
-    } else {
-      migrate();
+      expect(fixture.rows()).toEqual([{ id: "current", path: fixture.rewrite.toPath }]);
+    } finally {
+      unsubscribe();
     }
-    expect(fixture.rows()).toEqual([{ id: "current", path: fixture.rewrite.toPath }]);
   });
 });

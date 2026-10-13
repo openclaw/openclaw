@@ -19,14 +19,9 @@ import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
-type RuntimeHintOptions = {
-  platform?: NodeJS.Platform;
-  env?: Record<string, string | undefined>;
-};
-
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
-  options: RuntimeHintOptions = {},
+  options: { platform?: NodeJS.Platform; env?: Record<string, string | undefined> } = {},
 ): string[] {
   const hints: string[] = [];
   if (!runtime) {
@@ -41,19 +36,17 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
+  const fileLogHints = fileLog ? [`File logs: ${fileLog}`] : [];
   const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
   if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
-    hints.push(
+    return [
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
         kind: classifySystemdUnavailableDetail(systemdDetail),
         env,
       }),
-    );
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
+      ...fileLogHints,
+    ];
   }
   if (runtime.cachedLabel && platform === "darwin") {
     const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
@@ -64,9 +57,7 @@ export function buildGatewayRuntimeHints(
   }
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
+    hints.push(...fileLogHints);
     return hints;
   }
   const missingGuiSession = runtime.missingGuiSession && platform === "darwin";

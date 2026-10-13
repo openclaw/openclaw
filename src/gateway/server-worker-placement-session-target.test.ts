@@ -1,5 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
   getRuntimeConfig,
@@ -10,10 +10,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
   loadExactSessionEntryReadOnly,
+  patchSessionEntryCore,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptWriteGuard from "../config/sessions/session-accessor.sqlite-transcript-write-guard.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { openIncognitoTestActor } from "../state/openclaw-agent-execution-incognito.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import * as repositoryPublications from "../state/session-repository-workspaces.publication.js";
@@ -39,6 +42,66 @@ import { createWorkerEnvironmentService } from "./worker-environments/service.js
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 afterEach(() => resetConfigRuntimeState());
+
+test("prepares an actor workspace and guards exact placement metadata without host session SQL", async () => {
+  await withStateDirEnv("actor-placement-source-", async () => {
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-placement-source",
+      sessionId: "placement-source",
+    };
+    const worktree = await managedWorktrees.createEmpty({
+      name: "actor-placement",
+      ownerKind: "session",
+      ownerId: identity.sessionKey,
+      runSetupScript: false,
+      provisionIgnoredFiles: false,
+    });
+    const actor = await openIncognitoTestActor(process.env, { assertCurrent() {} });
+    await actor.sessions.create(
+      { assertCurrent() {} },
+      {
+        sessionKey: identity.sessionKey,
+        entry: {
+          sessionId: identity.sessionId,
+          updatedAt: Date.now(),
+          lifecycleRevision: "placement-window",
+          incognito: true,
+          projectId: "full-planning-project",
+          worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+        },
+      },
+    );
+    const sql = observeHostDataSql();
+    try {
+      await withIncognitoSessionActor(actor, async () => {
+        const resolved = await resolveWorkerPlacementSessionTarget({
+          ...identity,
+          config: {},
+          errorMessage: "placement source changed",
+          sessionRuntime: {
+            managedWorktrees,
+            resolveGatewaySessionStoreTargetWithStore,
+            resolveCanonicalSessionEntryFromStoreKeys,
+          },
+        });
+        expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
+        expect(resolved.entry.projectId).toBe("full-planning-project");
+        const scope = { ...identity, storePath: actor.path };
+        await patchSessionEntryCore(scope, () => ({ label: "unrelated title" }));
+        expect(() => resolved.assertCurrent()).not.toThrow();
+        await patchSessionEntryCore(scope, () => ({
+          worktree: { id: "replacement", branch: worktree.branch, repoRoot: worktree.repoRoot },
+        }));
+        expect(() => resolved.assertCurrent()).toThrow("placement source changed");
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      await actor.close();
+    }
+  });
+});
 
 test.each([
   { scope: "individual", inherited: false },
@@ -473,14 +536,11 @@ test.each([
           { sessionId: "other-session", updatedAt: 1 },
         );
       }
-      const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
-      const other = new DatabaseSync(database.path);
-      const mutate = (key: string, property: string) =>
-        other
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-          )
-          .run(`$.${property}`, "concurrent-write", key);
+      const mutate = (sessionKey: string, property: string) => {
+        const scope = { agentId: identity.agentId, storePath, sessionKey };
+        const entry = loadExactSessionEntryReadOnly(scope)!.entry;
+        replaceSessionEntrySync(scope, { ...entry, [property]: "concurrent-write" });
+      };
       let armed = stage === "prepare";
       let committed = false;
       const createPredicate = transcriptWriteGuard.createSessionTranscriptOwnerPredicate;
@@ -532,7 +592,6 @@ test.each([
         expect(run).toHaveBeenCalledTimes(conflicts && stage === "prepare" ? 0 : 1);
       } finally {
         predicate.mockRestore();
-        other.close();
       }
     });
   },

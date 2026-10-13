@@ -1,36 +1,20 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function fixture() {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    sessionKey: "agent:main:turn-source-custody",
-    sessionId: "original",
-  };
-  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  return {
-    scope,
-    read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
-    events: () =>
-      readTranscriptEventRows(database, scope.sessionId).map((row) => JSON.parse(row.eventJson)),
-  };
-}
 
 it.each(["fresh", "replay"])(
   "fences unstaged original input at COMMIT while retaining %s semantics",
@@ -73,17 +57,13 @@ it.each(["fresh", "replay"])(
         assertCurrent.mockClear();
       }
       let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === "commit") {
-              commitSeen = true;
-              live = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
+      probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === "commit") {
+          commitSeen = true;
+          live = false;
+        }
+        callback(request, grant);
+      });
       if (mode === "fresh") {
         await expect(persist()).rejects.toThrow("original input authority closed");
         expect(commitSeen).toBe(true);
@@ -100,7 +80,7 @@ it.each(["fresh", "replay"])(
 );
 
 it.each(["worker", "native"] as const)(
-  "records a new Goal's committed store before a %s postcommit failure",
+  "retains a new Goal's committed store through a %s postcommit failure",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const scope = {
@@ -111,7 +91,7 @@ it.each(["worker", "native"] as const)(
       };
       const failure = new Error("synthetic postcommit failure");
       const sourceCommitted = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>();
-      await expect(
+      const persistence = expect(
         withSessionTranscriptSourcePublication(scope, sourceCommitted, () =>
           persistSessionTranscriptTurn(scope, {
             expectedSessionId: scope.sessionId,
@@ -157,7 +137,12 @@ it.each(["worker", "native"] as const)(
               : {}),
           }),
         ),
-      ).rejects.toBe(failure);
+      );
+      if (writer === "worker") {
+        await persistence.rejects.toBe(failure);
+      } else {
+        await persistence.resolves.toMatchObject({ appendedCount: 1 });
+      }
       const database = openOpenClawAgentDatabase({
         agentId: scope.agentId,
         path: scope.storePath,

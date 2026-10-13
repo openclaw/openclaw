@@ -17,6 +17,7 @@ import type { ExecApprovalRequestPayload } from "../infra/exec-approvals-core.js
 import { resolveExecApprovalRequestAllowedDecisions } from "../infra/exec-approvals-policy.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -329,22 +330,18 @@ it.each(["channel", "tool"] as const)(
     await fixture.exec.register(record, 60_000);
     let current = true;
     let transaction = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transaction++;
-          }
-          if (request.stage === "commit" && transaction === (route === "channel" ? 2 : 1)) {
-            current = false;
-            if (route === "channel") {
-              fixture.revoke();
-            }
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transaction++;
+      }
+      if (request.stage === "commit" && transaction === (route === "channel" ? 2 : 1)) {
+        current = false;
+        if (route === "channel") {
+          fixture.revoke();
+        }
+      }
+      return admit(request, grant);
+    });
     try {
       await expect(fixture.resolve(record.id, route, () => current)).rejects.toThrow();
       expect(transaction).toBe(route === "channel" ? 2 : 1);

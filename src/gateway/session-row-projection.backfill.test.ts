@@ -81,8 +81,27 @@ async function withStreamingProjection(
   });
 }
 
-it("coalesces streaming transcript refreshes without refreshing parents or children", async () => {
+it("coalesces streaming transcript refreshes without rereading metadata or refreshing relatives", async () => {
   await withStreamingProjection(async ({ projection, query, append, release }) => {
+    const reads: string[] = [];
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          lane,
+        ),
+    );
     const before = projection.materializedCount;
     await append("Update 1");
     expect(projection.materializedCount - before).toBe(1);
@@ -104,6 +123,7 @@ it("coalesces streaming transcript refreshes without refreshing parents or child
     await vi.advanceTimersByTimeAsync(1_000);
     expect(vi.getTimerCount()).toBe(0);
     expect(projection.materializedCount - before).toBe(3);
+    expect(reads).toEqual([]);
     release();
     vi.useRealTimers();
     await vi.waitFor(() =>
@@ -150,7 +170,7 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     );
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
-    expect(reads).toEqual([target.sessionKey]);
+    expect(reads).toEqual([]);
     reads.length = 0;
     pause = true;
     sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });

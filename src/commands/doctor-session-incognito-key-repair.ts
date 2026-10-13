@@ -22,7 +22,7 @@ import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
   type OpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -138,7 +138,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
       });
     } finally {
       if (!wasOpen) {
-        closeOpenClawAgentDatabaseByPath(target.sqlitePath);
+        await closeOpenClawAgentDatabaseByPathAsync(target.sqlitePath);
       }
     }
   }

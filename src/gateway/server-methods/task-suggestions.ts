@@ -12,6 +12,7 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProjectCheckout } from "../../projects/project-checkout.js";
@@ -19,12 +20,21 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import type {
+  PreparedSessionMutationFacts,
+  SessionSharingTarget,
+} from "../session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  type SessionFactsRead,
+} from "../session-sharing-preparation.js";
 import {
   authorizeSessionSharingTarget,
   createSessionListEntryFilter,
+  resolveSessionMutationAuthorization,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils-store.js";
 import {
   beginTaskSuggestionAcceptance,
   createTaskSuggestion,
@@ -34,6 +44,7 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.js";
+import { withSessionMutationCommitGuard } from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 import {
@@ -113,7 +124,11 @@ async function captureSuggestedTaskResponse(
 }
 
 async function sendSuggestedTaskPrompt(
-  params: SuggestedTaskContext & { sessionKey: string; sessionId?: string },
+  params: SuggestedTaskContext & {
+    sessionKey: string;
+    sessionId?: string;
+    source?: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath" | "entry">;
+  },
 ): Promise<ErrorShape | undefined> {
   const chatParams = {
     sessionKey: params.sessionKey,
@@ -123,6 +138,30 @@ async function sendSuggestedTaskPrompt(
     queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
+  let sessionMutationAuthorization = params.options.sessionMutationAuthorization;
+  if (params.source) {
+    const authorization = resolveSessionMutationAuthorization({
+      client: params.options.client,
+      context: params.options.context,
+      method: "chat.send",
+      requestParams: chatParams,
+      expectedTarget: {
+        agentId: params.source.agentId,
+        sessionKey: params.source.canonicalKey,
+        storePath: params.source.storePath,
+        sessionId: params.source.entry.sessionId,
+      },
+    });
+    if (authorization.error) {
+      return authorization.error;
+    }
+    sessionMutationAuthorization = withSessionMutationCommitGuard(
+      authorization.authorization,
+      params.options.sessionMutationCommitGuard,
+      sessionMutationAuthorization?.assertCurrent,
+      sessionMutationAuthorization?.assertAdmittedInputCurrent,
+    );
+  }
   const response = await captureSuggestedTaskResponse(
     "chat.send",
     "failed to deliver suggested task",
@@ -131,6 +170,7 @@ async function sendSuggestedTaskPrompt(
         ...params.options,
         req: { ...params.options.req, method: "chat.send", params: chatParams },
         params: chatParams,
+        sessionMutationAuthorization,
         respond,
       }),
   );
@@ -242,36 +282,54 @@ async function deliverSuggestedTaskToSourceSession(
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
-  let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
+  let sourceFacts: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  let nativeSource: ReturnType<typeof loadGatewaySessionEntryReadOnly> | undefined;
   try {
-    source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    if (captureIncognitoSessionSource({ sessionKey: params.suggestion.sessionKey, agentId })) {
+      sourceFacts = await prepareSessionMutationFacts({
+        cfg: params.options.context.getRuntimeConfig(),
+        sessionKey: params.suggestion.sessionKey,
+        agentId,
+        allowMissing: true,
+      });
+    } else {
+      nativeSource = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    }
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
-  if (!source.entry?.sessionId) {
-    return fail(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a new session instead",
-      ),
-    );
+  try {
+    const source = sourceFacts
+      ? sourceFacts.readCurrent(params.options.context.getRuntimeConfig()).target
+      : nativeSource;
+    if (!source?.entry?.sessionId) {
+      return fail(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "source session no longer exists; start it in a new session instead",
+        ),
+      );
+    }
+    const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
+    if (lifecycleError) {
+      return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
+    }
+    const sendError = await sendSuggestedTaskPrompt({
+      ...params,
+      source: { ...source, entry: source.entry },
+      sessionKey: params.suggestion.sessionKey,
+      sessionId: source.entry.sessionId,
+    });
+    if (sendError) {
+      return fail(sendError);
+    }
+    return finishSuggestedTaskAcceptance({
+      ...params,
+      sessionKey: params.suggestion.sessionKey,
+    });
+  } finally {
+    sourceFacts?.release();
   }
-  const lifecycleError = resolveSessionWorkStartError(source.canonicalKey, source.entry);
-  if (lifecycleError) {
-    return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
-  }
-  const sendError = await sendSuggestedTaskPrompt({
-    ...params,
-    sessionKey: params.suggestion.sessionKey,
-    sessionId: source.entry.sessionId,
-  });
-  if (sendError) {
-    return fail(sendError);
-  }
-  return finishSuggestedTaskAcceptance({
-    ...params,
-    sessionKey: params.suggestion.sessionKey,
-  });
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {

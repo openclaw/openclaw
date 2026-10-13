@@ -118,14 +118,6 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     // replacement or a forced reload must not let an older request win.
     const loadingState = { ...current, loading: true, error: undefined };
     const ownsLoadingState = () => this.sessionSharingStates.get(cacheKey) === loadingState;
-    const clearOwnedLoadingState = () => {
-      if (!ownsLoadingState()) {
-        return;
-      }
-      const next = new Map(this.sessionSharingStates);
-      next.delete(cacheKey);
-      this.sessionSharingStates = next;
-    };
     this.setSessionSharingState(cacheKey, loadingState);
     let next: ChatSessionSharingState;
     try {
@@ -140,8 +132,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       next = { loading: false, error: formatUiError(error) };
     }
     if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
-      if (this.isConnectionScopeCurrent(scope)) {
-        clearOwnedLoadingState();
+      if (this.isConnectionScopeCurrent(scope) && ownsLoadingState()) {
+        const sharingStates = new Map(this.sessionSharingStates);
+        sharingStates.delete(cacheKey);
+        this.sessionSharingStates = sharingStates;
       }
       return;
     }
@@ -346,26 +340,24 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
-      if ("visibility" in change) {
-        const outcome = await scope.sessions.reconcileMutation(agentId);
-        const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
-        if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
-          return;
-        }
-        if (outcome.status === "failed") {
-          this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
-          return;
-        }
-        await this.loadSessionSharing(refreshedRow, true);
-      } else {
+      const visibilityChanged = "visibility" in change;
+      if (!visibilityChanged) {
         await this.loadSessionSharing(currentRow, true);
         if (!this.ownsSessionSharing(scope, currentRow)) {
           return;
         }
-        const outcome = await scope.sessions.reconcileMutation(agentId);
-        if (outcome.status === "failed" && this.ownsSessionSharing(scope, currentRow)) {
-          this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
-        }
+      }
+      const outcome = await scope.sessions.reconcileMutation(agentId);
+      const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
+      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
+        return;
+      }
+      if (outcome.status === "failed") {
+        this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
+        return;
+      }
+      if (visibilityChanged) {
+        await this.loadSessionSharing(refreshedRow, true);
       }
     } catch (error) {
       if (!this.ownsSessionSharing(scope, currentRow)) {

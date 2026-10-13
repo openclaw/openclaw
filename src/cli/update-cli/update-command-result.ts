@@ -176,6 +176,27 @@ export function recordServiceReconciliationWarnings(
   }
 }
 
+/** Timing is diagnostic only: a lost history write never changes the update outcome. */
+export function recordServiceTimedStep(
+  result: UpdateRunResult,
+  step: UpdateStepResult,
+  run: UpdateCommandOptions["run"],
+): void {
+  result.steps.push(step);
+  if (!run) {
+    return;
+  }
+  const endedAtMs = Date.now();
+  const startedAtMs = Math.max(0, endedAtMs - step.durationMs);
+  try {
+    for (const row of updateRunStepsFromResultStep(step)) {
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+    }
+  } catch {
+    // The result step still reports the measured phase.
+  }
+}
+
 export function prepareUpdateServiceResult(
   params: Pick<
     FinishUpdateParams,

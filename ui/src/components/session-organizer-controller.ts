@@ -108,6 +108,18 @@ export class SessionOrganizerController {
     );
   }
 
+  archiveSessionTreeWithUndo(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
+      operations.archiveSessionTreeWithUndo(this.host, session, scope),
+    );
+  }
+
+  promoteSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
+      operations.promoteSession(this.host, session, scope),
+    );
+  }
+
   async runBatchSessionAction(
     action: SessionMenuAction,
     rows: SidebarRecentSession[],
@@ -182,6 +194,13 @@ export class SessionOrganizerController {
     this.sidebarZoneDropTarget = null;
     this.sessionListRemovalDrop = false;
     this.host.requestUpdate();
+  }
+
+  get isDraggingChildSession(): boolean {
+    return Boolean(
+      this.draggingSessionKey &&
+      this.host.findSidebarMenuSessionByKey(this.draggingSessionKey)?.isChild,
+    );
   }
 
   startSessionDrag(session: SidebarRecentSession): void {
@@ -287,8 +306,8 @@ export class SessionOrganizerController {
     }
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (session && !session.pinnable) {
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinnable && !session.isChild) {
       this.finishSidebarEntryDrag();
       return;
     }
@@ -297,7 +316,11 @@ export class SessionOrganizerController {
       // against the then-current order: a failed patch must not leave an
       // unpinned slot behind, and a stale snapshot must not undo zone edits
       // that raced the request.
-      void this.patchSession(session, { pinned: true }, { sessionScope: true }).then((result) => {
+      void this.patchSession(
+        session,
+        { pinned: true, ...(session.isChild ? { sidebarRoot: true } : {}) },
+        { sessionScope: true },
+      ).then((result) => {
         if (result === "completed") {
           this.writeSidebarEntryAt(entry, targetEntry, position);
         }
@@ -330,9 +353,9 @@ export class SessionOrganizerController {
       return;
     }
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
-    const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (!routeDrag && !session?.pinned) {
+    const sessionKey = this.draggingSessionKey ?? readSessionDragData(event.dataTransfer);
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (!routeDrag && !session?.pinned && !session?.isChild) {
       return;
     }
     event.preventDefault();
@@ -363,8 +386,12 @@ export class SessionOrganizerController {
       return;
     }
     const sessionKey = readSessionDragData(event.dataTransfer);
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
-    if (session?.pinned) {
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    if (session?.isChild) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.promoteSession(session);
+    } else if (session?.pinned) {
       event.preventDefault();
       // patchSession prunes the persisted zone entry once the unpin lands.
       void this.patchSession(session, { pinned: false }, { sessionScope: true });
@@ -595,7 +622,7 @@ export class SessionOrganizerController {
     // Browsers protect transferred data during dragover. Use the key recorded
     // at dragstart for hover eligibility; sectionDrop reads the payload itself.
     const session = this.draggingSessionKey
-      ? this.host.findSidebarSessionByKey(this.draggingSessionKey)
+      ? this.host.findSidebarMenuSessionByKey(this.draggingSessionKey)
       : undefined;
     if (!this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
@@ -632,7 +659,7 @@ export class SessionOrganizerController {
       return;
     }
     // Rows can be dragged from a browsed agent section, so search all caches.
-    const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    const session = sessionKey ? this.host.findSidebarMenuSessionByKey(sessionKey) : undefined;
     if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
@@ -646,12 +673,16 @@ export class SessionOrganizerController {
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
-      if (session.pinnable && !session.pinned) {
-        void this.patchSession(session, { pinned: true }, { sessionScope: true });
+      if ((session.pinnable || session.isChild) && !session.pinned) {
+        void this.patchSession(
+          session,
+          { pinned: true, ...(session.isChild ? { sidebarRoot: true } : {}) },
+          { sessionScope: true },
+        );
       }
     } else if (session) {
       const nextCategory = category ?? null;
-      if (session.category !== nextCategory || session.pinned) {
+      if (session.category !== nextCategory || session.pinned || session.isChild) {
         // The pinned:false leg prunes the persisted zone entry via patchSession.
         void this.assignSessionCategory(
           session,

@@ -62,14 +62,12 @@ function buildTelegramLink(
 }
 
 function buildTelegramCodeBlockOpen(span: { language?: string }): string {
-  if (!span.language) {
-    return "<pre><code>";
-  }
-  return `<pre><code class="language-${escapeTelegramHtmlAttr(span.language)}">`;
+  const attrs = span.language ? ` class="language-${escapeTelegramHtmlAttr(span.language)}"` : "";
+  return `<pre><code${attrs}>`;
 }
 
-function renderTelegramHtml(ir: MarkdownIR): string {
-  return renderMarkdownWithMarkers(ir, {
+function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
+  const html = renderMarkdownWithMarkers(ir, {
     annotationMarkers: {
       assistant_transcript_role: {
         open: "<code>",
@@ -89,6 +87,8 @@ function renderTelegramHtml(ir: MarkdownIR): string {
     escapeText: escapeTelegramHtml,
     buildLink: buildTelegramLink,
   });
+  const telegramHtml = renderSupportedTelegramHtml(html);
+  return wrapFileRefs ? wrapFileReferencesInHtml(telegramHtml) : telegramHtml;
 }
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
@@ -143,9 +143,7 @@ export function markdownToTelegramHtml(
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
   const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
-  const html = renderTelegramHtml(ir);
-  const telegramHtml = renderSupportedTelegramHtml(html);
-  return options.wrapFileRefs === false ? telegramHtml : wrapFileReferencesInHtml(telegramHtml);
+  return renderTelegramHtml(ir, options.wrapFileRefs !== false);
 }
 
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
@@ -192,16 +190,11 @@ function popLastTagName(tags: string[], name: string): boolean {
 }
 
 function isSupportedTelegramHtmlTag(closing: boolean, name: string, attrs: string): boolean {
-  if (closing) {
-    return (
-      attrs.trim() === "" &&
-      (TELEGRAM_SIMPLE_HTML_TAGS.has(name) || TELEGRAM_ATTR_HTML_TAG_PATTERNS.has(name))
-    );
+  if (TELEGRAM_SIMPLE_HTML_TAGS.has(name)) {
+    return attrs.trim() === "";
   }
-  if (TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name)?.test(attrs)) {
-    return true;
-  }
-  return TELEGRAM_SIMPLE_HTML_TAGS.has(name) && attrs.trim() === "";
+  const pattern = TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name);
+  return pattern !== undefined && (closing ? attrs.trim() === "" : pattern.test(attrs));
 }
 
 function preserveTelegramHtmlTag(
@@ -218,10 +211,7 @@ function preserveTelegramHtmlTag(
   const attrs = match[3] ?? "";
   if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
     openTags.push(tagName);
-    if (openTags.includes("pre")) {
-      return rawTag;
-    }
-    return "<code>";
+    return openTags.includes("pre") ? rawTag : "<code>";
   }
   if (!isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
     return escapeTag(rawTag);
@@ -554,8 +544,7 @@ export function markdownToTelegramChunks(
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
-    renderChunk: (chunk) =>
-      wrapFileReferencesInHtml(renderSupportedTelegramHtml(renderTelegramHtml(chunk))),
+    renderChunk: renderTelegramHtml,
     measureRendered: (html) => html.length,
   }).map(({ source, rendered }) => ({
     html: rendered,

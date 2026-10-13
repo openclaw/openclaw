@@ -26,7 +26,7 @@ import {
   requireToolResultHandler,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";

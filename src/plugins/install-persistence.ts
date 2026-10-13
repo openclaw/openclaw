@@ -6,6 +6,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -205,7 +206,7 @@ export async function persistPluginInstall(
   params: PluginInstallPersistenceParams,
 ): Promise<OpenClawConfig> {
   return await withPluginLifecycleLease({ env: params.env }, async (lease) =>
-    persistPluginInstallOwned(params, () => lease.assertOwned()),
+    persistPluginInstallOwned(params, lease.assertOwned),
   );
 }
 
@@ -418,10 +419,10 @@ async function persistPluginInstallOwned(
                     : { mode: "restart", reason: "plugin source changed" },
                 ...(params.beforePersistentApply
                   ? {
-                      assertConfigPathForWrite: () => {
-                        params.snapshot.writeOptions.assertConfigPathForWrite?.();
-                        params.beforePersistentApply?.();
-                      },
+                      assertConfigPathForWrite: composeConfigWriteAssertions(
+                        params.snapshot.writeOptions.assertConfigPathForWrite,
+                        params.beforePersistentApply,
+                      ),
                     }
                   : {}),
               },
@@ -444,7 +445,10 @@ async function persistPluginInstallOwned(
           },
           source?.assertSourceCurrent,
         );
-        refreshManagedPluginMetadata({ config: next });
+        await refreshManagedPluginMetadata({
+          config: next,
+          assertCurrent: params.beforePersistentApply,
+        });
         // Publish and drain the previous generation before removing its source files.
         await params.applyRuntime?.({
           config: next,

@@ -205,19 +205,18 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;
-  const { runtimeInfo, userTimezone, userDate, reactionGuidance, messageToolHints } =
-    await resolveAgentRuntimePrompt({
-      config: params.cfg,
-      agentId: sessionAgentId,
-      workspaceDir,
-      cwd: process.cwd(),
-      sessionKey: params.sessionKey,
-      sessionId: targetSessionEntry?.sessionId,
-      model: `${params.provider}/${params.model}`,
-      channel: params.command.channel,
-      accountId,
-      chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
-    });
+  const { runtimeInfo, reactionGuidance, messageToolHints } = await resolveAgentRuntimePrompt({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+    cwd: process.cwd(),
+    sessionKey: params.sessionKey,
+    sessionId: targetSessionEntry?.sessionId,
+    model: `${params.provider}/${params.model}`,
+    channel: params.command.channel,
+    accountId,
+    chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
+  });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
       enabled: params.elevated.enabled,
@@ -258,8 +257,6 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ownerNumbers: undefined,
     reasoningTagHint: false,
     toolNames,
-    userTimezone,
-    userDate,
     contextFiles: injectedFiles,
     skillsPrompt,
     acpEnabled: isAcpRuntimeSpawnAvailable({

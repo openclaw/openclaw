@@ -731,10 +731,28 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
   it("fences revoked creation authority when snapshot and native fallback both fail", async () => {
     const revokeCheckout = captureWorktreeMutationHeartbeat();
     vi.mocked(backend.cloneTemplate).mockRejectedValueOnce(new Error("snapshot unavailable"));
+    const branch = "openclaw/failed-fallback";
+    const originalHead = await git(repo, "rev-parse", "HEAD");
+    const commonDir = await git(repo, "rev-parse", "--git-common-dir");
+    const held = createDeferredCore();
+    const release = createDeferredCore();
+    const queued = createDeferredCore();
+    const enqueue = gitExec.enqueueGitRefMutation;
+    let holder: Promise<void> | undefined;
     let failedDestination: string | undefined;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv.includes("read-tree") && argv.includes("-u")) {
         failedDestination = argv[argv.indexOf("-C") + 1];
+        // Registration is complete; hold only the failed checkout's branch cleanup.
+        holder = enqueue(repo, commonDir, async () => {
+          held.resolve();
+          await release.promise;
+        });
+        await held.promise;
+        vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+          queued.resolve();
+          return enqueue(...args);
+        });
         return {
           stdout: "",
           stderr: "native checkout failed",
@@ -747,22 +765,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       return await realRunCommand(argv, options);
     });
 
-    const branch = "openclaw/failed-fallback";
-    const originalHead = await git(repo, "rev-parse", "HEAD");
-    const commonDir = await git(repo, "rev-parse", "--git-common-dir");
-    const held = createDeferredCore();
-    const release = createDeferredCore();
-    const holder = gitExec.enqueueGitRefMutation(repo, commonDir, async () => {
-      held.resolve();
-      await release.promise;
-    });
-    await held.promise;
-    const queued = createDeferredCore();
-    const enqueue = gitExec.enqueueGitRefMutation;
-    vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
-      queued.resolve();
-      return enqueue(...args);
-    });
     const pending = service
       .create({
         repoRoot: repo,

@@ -15,7 +15,7 @@ import {
   replaceSessionEntry,
 } from "./session-accessor.js";
 import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
-import * as entryReadRuntime from "./session-entry-read-runtime.js";
+import * as entryReadRuntime from "./session-entry-read-maintenance.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";

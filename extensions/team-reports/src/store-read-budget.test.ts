@@ -9,6 +9,51 @@ import { createSqliteWorkerBackend } from "./store.worker.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("reopens with admitted persistent schema while creating fresh connection scratch", () => {
+  const directory = tempDirs.make("team-reports-schema-admission-");
+  const databasePath = path.join(directory, "reports.sqlite");
+  const open = sqliteRuntime.openNodeSqliteDatabase;
+  const schemaStatements: string[] = [];
+  vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const db = open(...args);
+    const recordSchema = (sql: string) => {
+      if (
+        /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|team_reports_schema_migrations|CREATE\s+(?:TABLE|INDEX)/i.test(
+          sql,
+        )
+      ) {
+        schemaStatements.push(sql);
+      }
+    };
+    const prepare = db.prepare.bind(db);
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      recordSchema(sql);
+      return prepare(sql);
+    });
+    const exec = db.exec.bind(db);
+    vi.spyOn(db, "exec").mockImplementation((sql) => {
+      recordSchema(sql);
+      exec(sql);
+    });
+    return db;
+  });
+  for (let opened = 0; opened < 2; opened += 1) {
+    schemaStatements.length = 0;
+    const backend = createSqliteWorkerBackend(undefined, { databasePath });
+    try {
+      if (opened === 0) {
+        expect(schemaStatements.length).toBeGreaterThan(0);
+      } else {
+        expect(schemaStatements).toEqual([]);
+      }
+      expect(backend.execute({ type: "listPeriods", input: {} })).toEqual([]);
+      backend.execute({ type: "resetActivity", input: undefined });
+    } finally {
+      backend.close();
+    }
+  }
+});
+
 it("aggregates across payload pages without paging metadata already retained for sorting", () => {
   const directory = tempDirs.make("team-reports-read-budget-");
   const backend = createSqliteWorkerBackend(undefined, {

@@ -7,7 +7,10 @@ import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { packageActivationIdentityOrAbsent as entryIdentity } from "./package-update-activation-custody.js";
 import type { PackageActivationDescriptor } from "./package-update-activation-journal.js";
-import { assertPackagePathIdentity } from "./package-update-filesystem.js";
+import {
+  assertPackagePathIdentity,
+  createPackagePathAssertion,
+} from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
   isPackageIntegrityResourceError,
@@ -30,20 +33,14 @@ export async function copyPackagePublicationTree(
     const from = path.join(source, relative);
     const to = path.join(destination, relative);
     const original = fs.lstatSync(from, { bigint: true });
-    const assertSource = () => {
-      assertParents();
-      assertPackagePathIdentity(from, original);
-    };
+    const assertSource = createPackagePathAssertion(from, original, assertParents);
     if (original.isDirectory()) {
       if (relative) {
         await root.mkdir(relative, { private: true, assertBeforeMutation: assertSource });
       }
       assertSource();
       const directory = fs.lstatSync(to, { bigint: true });
-      const assertDirectory = () => {
-        assertSource();
-        assertPackagePathIdentity(to, directory);
-      };
+      const assertDirectory = createPackagePathAssertion(to, directory, assertSource);
       const children = await fsp.readdir(from);
       assertDirectory();
       for (const child of children) {

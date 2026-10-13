@@ -298,11 +298,11 @@ export function createWorkerPlacementMoveService(options: {
         const source = placement;
         const assertCurrent = () => {
           assertDestination();
-          const current = options.placements.get(intent.sessionId);
+          const { placement: current, move: currentMove } =
+            options.placements.readCurrentMoveAuthority(intent.sessionId);
           if (
             !matchesWorkerPlacementTarget(current, source) ||
-            options.placements.getPlacementMove(intent.sessionId)?.operationId !==
-              intent.operationId
+            currentMove?.operationId !== intent.operationId
           ) {
             throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
           }

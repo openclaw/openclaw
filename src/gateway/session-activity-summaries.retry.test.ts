@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -13,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { isSessionTranscriptIndexReconcileRunning } from "../config/sessions/session-transcript-reconcile.js";
+import * as transcriptWatermark from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -125,6 +127,61 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await testState.cleanup();
+  });
+
+  it("uses the patch watermark for concurrent messages and rereads a foreign rewrite on the next request", async ({
+    signal,
+  }) => {
+    const target = await addSession(1);
+    const transcript = scope(target);
+    const read = () => loadSessionEntryReadOnly(transcript);
+    const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
+    complete.mockImplementationOnce(async () => {
+      await appendWork(target);
+      return { ...result, text: "Only the first message was summarized." };
+    });
+    const firstPublication = createDeferred();
+    changed.mockImplementation(() => {
+      if (read()?.activitySummary) {
+        firstPublication.resolve();
+      }
+    });
+    service.ensure(target);
+    await withinTest(firstPublication.promise, signal);
+    expect(view(target)?.state).toBe("updating");
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
+    expect(readWatermark).not.toHaveBeenCalled();
+
+    const awaitCurrent = () => {
+      const publication = createDeferred();
+      changed.mockImplementation(() => {
+        if (view(target)?.state === "current") {
+          publication.resolve();
+        }
+      });
+      service.ensure(target);
+      return withinTest(publication.promise, signal);
+    };
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+    const database = openOpenClawAgentDatabase({ agentId: target.agentId, env: testState.env });
+    const foreign = new DatabaseSync(database.path);
+    try {
+      foreign
+        .prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+        .run("foreign-recap-generation", transcript.sessionId);
+    } finally {
+      foreign.close();
+    }
+    await awaitCurrent();
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(read()?.activitySummary).toMatchObject({ generation: "foreign-recap-generation" });
+    expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
+      "user: Request 1",
+      "assistant: Verified additional work.",
+    ]);
+    expect(readWatermark).not.toHaveBeenCalled();
   });
 
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
@@ -746,32 +803,49 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     }
   });
 
-  it.each(["ensure", "new transcript"] as const)(
+  it.for(["ensure", "new transcript"] as const)(
     "stops after bounded retries and starts a fresh retry chain for %s after cooldown",
-    async (trigger) => {
+    async (trigger, { signal }) => {
+      await service.dispose();
+      await scheduler.stop();
+      const time = createGatewaySchedulerClock(Date.now());
+      let retryArmed = createDeferred();
+      scheduler = createTestGatewayScheduler({
+        ...time.clock,
+        arm(run, delayMs) {
+          const cancel = time.clock.arm(run, delayMs);
+          retryArmed.resolve();
+          return cancel;
+        },
+      });
+      service = createService();
       const target = await addSession(1);
       fakeTime();
       complete.mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
       service.ensure(target);
+      await withinTest(retryArmed.promise, signal);
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(attempt));
-        await vi.advanceTimersByTimeAsync(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
+        expect(complete).toHaveBeenCalledTimes(attempt);
+        // Join each scheduled attempt through retry admission before moving the clock.
+        await time.advanceBy(attempt < 4 ? 30_000 * 2 ** (attempt - 1) : 0);
       }
       expect(view(target)?.state).toBe("unavailable");
-      await vi.advanceTimersByTimeAsync(3_600_000);
+      await time.advanceBy(3_600_000);
       expect(complete).toHaveBeenCalledTimes(4);
       complete
         .mockResolvedValue(result)
         .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
+      retryArmed = createDeferred();
       if (trigger === "ensure") {
         service.ensure(target);
       } else {
         await appendWork(target);
         service.handleTranscript({ target: scope(target) });
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(5));
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+      await withinTest(retryArmed.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(5);
+      await time.advanceBy(120_000);
+      expect(view(target)?.state).toBe("current");
       expect(complete).toHaveBeenCalledTimes(6);
     },
   );

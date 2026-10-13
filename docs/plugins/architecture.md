@@ -231,6 +231,15 @@ without copying the surrounding workspace. Bundled runtime and setup modules,
 including TypeScript source entries, share the host's code identity; each inventory
 still owns its registered callbacks and cleanup. Loading edited bundled code requires
 a Gateway restart; rebuild first when the installation loads compiled output.
+
+Doctor retains an unexecuted source snapshot across its maintenance phases.
+Each phase admits fresh callback instances with private module files and settles
+their cleanup before releasing its lifecycle lease. Reuse verifies the original
+source fingerprint and dependency lookups; edited files, replaced roots, and
+changed optional dependencies receive a new snapshot. Retained source custody
+ends when Doctor finishes, including before a diagnostic process exit. This does
+not change the running Gateway's inventory or require an installation migration.
+
 Conditional package aliases retain their package metadata, and native
 Node conditions, including `module-sync`, select the target from that captured metadata.
 Source inspection uses the same synchronous-module condition without evaluating plugin code.
@@ -552,6 +561,11 @@ instance; resolving a module alone does not evaluate it. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
+Captures reuse resolution state for local TypeScript imports such as `./helper.js`
+when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
+file probing. Existing JavaScript and Jiti's alternative filename precedence remain
+unchanged. Resolver state is released with its capture; new captures and custody
+validation select current source inputs independently.
 Entries loaded from captured source retain evaluation failures for their instance
 instead of retrying through another loader. Core-shipped JavaScript and libraries
 loaded outside a captured plugin instance keep their existing native/Jiti loading

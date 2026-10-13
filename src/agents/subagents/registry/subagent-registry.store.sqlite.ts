@@ -341,17 +341,15 @@ function decodeSubagentRegistryRows<T>(
 export function loadSubagentMaintenanceRunsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
 ): { runs: Map<string, SubagentRunMaintenanceRecord>; digest: string } {
-  return runSqliteDeferredTransactionSync(database.db, () => {
-    const hash = createHash("sha256");
-    const runs = decodeSubagentRegistryRows(
-      readSubagentRegistryRows(undefined, database, "maintenance"),
-      projectSubagentRunForMaintenance,
-      (row) => {
-        hash.update(JSON.stringify(row));
-      },
-    );
-    return { runs, digest: hash.digest("hex") };
-  });
+  const hash = createHash("sha256");
+  const runs = decodeSubagentRegistryRows(
+    readSubagentRegistryRows(undefined, database, "maintenance"),
+    projectSubagentRunForMaintenance,
+    (row) => {
+      hash.update(JSON.stringify(row));
+    },
+  );
+  return { runs, digest: hash.digest("hex") };
 }
 
 export function subagentMaintenanceDurableBasisMatches(

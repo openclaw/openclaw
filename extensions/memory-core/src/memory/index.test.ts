@@ -18,6 +18,7 @@ import {
   useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
@@ -1093,7 +1094,15 @@ describe("memory index", () => {
     } finally {
       await diagnostic.close();
     }
-    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
+    expect(
+      (
+        await getMemorySearchManager({
+          runInBackgroundContext: runInMemoryTestBackgroundContext,
+          cfg,
+          agentId: "main",
+        })
+      ).manager,
+    ).toBe(serving);
     expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
     expect(serving.status().storage).toBeUndefined();
   });

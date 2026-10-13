@@ -57,6 +57,7 @@ const EXECUTION_IDENTITY_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64
 
 const ensureExecutionIdentityContextSchema = createOpenClawStateSchemaEnsurer({
   table: "execution_identity_contexts",
+  indexes: ["execution_identity_contexts_run_created_idx"],
   endMarker: "  ON execution_identity_contexts (run_id, created_at, execution_id);\n",
   operationLabel: "audit.execution-identity.schema.ensure",
 });

@@ -8,6 +8,7 @@ import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { normalizeEnvVarKey } from "../../infra/host-env-security.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
+import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import {
@@ -68,20 +69,27 @@ export function createRemoteShellSandboxSession(
     if (command.argv.length === 0) {
       throw new Error("Remote shell command argv is empty");
     }
-    if (checkCurrent) {
-      options.assertCurrent?.();
-    }
-    params.signal?.throwIfAborted();
-    const result = await spawnCommand(command.argv, {
-      baseEnv: command.env,
-      cwd: command.cwd,
-      cancelSignal: params.signal,
-      encoding: "buffer",
-      input: params.stdin ?? Buffer.alloc(0),
-      maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
-      reject: false,
-      stripFinalNewline: false,
-    });
+    const launch = () => {
+      if (checkCurrent) {
+        options.assertCurrent?.();
+      }
+      params.signal?.throwIfAborted();
+      return spawnCommand(command.argv, {
+        baseEnv: command.env,
+        cwd: command.cwd,
+        cancelSignal: params.signal,
+        encoding: "buffer",
+        input: params.stdin ?? Buffer.alloc(0),
+        maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+        reject: false,
+        stripFinalNewline: false,
+      });
+    };
+    // Released guards cannot retain foreign-writer authority across broker IPC.
+    // Keep the final check and native launch synchronous until the next SDK major.
+    const result = await (checkCurrent && options.assertCurrent
+      ? runWithSpawnBroker(undefined, launch)
+      : launch());
     if (params.signal?.aborted || result.isCanceled) {
       throw createAbortError("Aborted");
     }

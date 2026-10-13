@@ -15,10 +15,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
-import {
-  SECRET_STORE_VALUE_MAX_BYTES,
-  SecretStoreValidationError,
-} from "./secret-store-validation-error.js";
+import { SecretStoreValidationError } from "./secret-store-validation-error.js";
+import { assertSecretStoreValueLength } from "./secret-store-value.js";
 
 type HiddenGitHubStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type HiddenGitHubStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
@@ -59,22 +57,6 @@ function hiddenGitHubStoreKindFromPrefix(prefix: HiddenGitHubStorePrefix): Hidde
   );
 }
 
-function validateHiddenGitHubSecretValue(value: string): void {
-  const bytes = Buffer.byteLength(value, "utf8");
-  if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_TOO_LARGE",
-      `Secret store value exceeds ${SECRET_STORE_VALUE_MAX_BYTES} UTF-8 bytes.`,
-    );
-  }
-  if (value.length === 0) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_VALUE_EMPTY",
-      "Secret store value is empty. Secret entries require a value; check the command that produced it.",
-    );
-  }
-}
-
 export class PersonalGitHubStateError extends Error {
   constructor() {
     super("Personal GitHub state is invalid; disconnect and reconnect My GitHub.");
@@ -99,7 +81,7 @@ export function readPersonalGitHubSecret(db: DatabaseSync, profileId: string): s
         throw new PersonalGitHubStateError();
       }
       try {
-        validateHiddenGitHubSecretValue(row.value);
+        assertSecretStoreValueLength(row.value, "secret");
       } catch (error) {
         if (error instanceof SecretStoreValidationError) {
           throw new PersonalGitHubStateError();
@@ -130,7 +112,7 @@ export function writePersonalGitHubSecret(
     );
     return;
   }
-  validateHiddenGitHubSecretValue(value);
+  assertSecretStoreValueLength(value, "secret");
   ensureSecretStoreSchema(db);
   const now = Date.now();
   upsertHiddenGitHubSecret(
@@ -205,7 +187,7 @@ export function writeHiddenGitHubSecretRecord(params: {
   database?: OpenClawStateDatabaseOptions;
 }): void {
   assertHiddenGitHubSecretRecordName(params.name);
-  validateHiddenGitHubSecretValue(params.value);
+  assertSecretStoreValueLength(params.value, "secret");
   const now = Date.now();
   runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {

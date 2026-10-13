@@ -488,7 +488,11 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       Promise.allSettled(
         candidates.map(
           async (owner) =>
-            await owner.snapshot?.loadFullModelCatalog?.({ refresh: true, wait: true }),
+            await owner.snapshot?.loadFullModelCatalog?.({
+              refresh: true,
+              changedOnly: true,
+              wait: true,
+            }),
         ),
       ),
       controller.signal,

@@ -401,10 +401,7 @@ async function readConfig(
 
 export async function loadConfigSchema(state: RuntimeConfigState) {
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.configSchemaLoading) {
+  if (!client || !state.connected || state.configSchemaLoading) {
     return;
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);

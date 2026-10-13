@@ -264,6 +264,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
 
     const port = await freePort();
     const token = "published-driver-synthetic-token";
+    const probe = async (name, version) => {
+      await run(name, "openclaw", [
+        "gateway",
+        "probe",
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--json",
+      ]);
+      const target = output(name).targets.find((entry) => entry.url === `ws://127.0.0.1:${port}`);
+      assert.equal(target?.connect.ok, true);
+      assert.equal(target.server.version, version);
+      return target;
+    };
     const config = {
       gateway: {
         mode: "local",
@@ -321,20 +336,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
     if (legacySqlite) {
-      await run("running-before", "openclaw", [
-        "gateway",
-        "probe",
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        token,
-        "--json",
-      ]);
-      const serving = output("running-before").targets.find(
-        (entry) => entry.url === `ws://127.0.0.1:${port}`,
-      );
-      assert.equal(serving?.connect.ok, true);
-      assert.equal(serving.server.version, driverVersion);
+      const serving = await probe("running-before", driverVersion);
       const buildComparable =
         typeof serving.server.buildId === "string" && typeof driverBuild.buildId === "string";
       if (buildComparable) {
@@ -470,20 +472,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "Update did not replace the managed service",
     );
     await ready("after-ready", port);
-    await run("running-version", "openclaw", [
-      "gateway",
-      "probe",
-      "--url",
-      `ws://127.0.0.1:${port}`,
-      "--token",
-      token,
-      "--json",
-    ]);
-    const target = output("running-version").targets.find(
-      (entry) => entry.url === `ws://127.0.0.1:${port}`,
-    );
-    assert.equal(target?.connect.ok, true);
-    assert.equal(target.server.version, build.version);
+    const target = await probe("running-version", build.version);
     for (const session of sessions) {
       const history = await gateway(`${session.kind}-after`, "chat.history", {
         ...session.params,

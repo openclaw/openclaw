@@ -21,6 +21,9 @@ export function resolveSidebarSessionParentKey(
   mainSessionKeys: ReadonlySet<string>,
   listedParentKey?: string,
 ): string | undefined {
+  if (row?.sidebarRoot && !isSubagentSessionKey(row.key)) {
+    return undefined;
+  }
   const parentKey = resolveUiSessionNavigationParentKey(row) ?? listedParentKey;
   // Operator roots carry an implicit Home link for notices. Explicit creation
   // records the parent's generation; delegation and forks have their own markers.

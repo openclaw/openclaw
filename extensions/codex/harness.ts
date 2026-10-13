@@ -217,9 +217,7 @@ export function createCodexAppServerAgentHarness(
         return { entries: [] };
       }
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
-      return {
-        entries: await modelCatalog.load(params, resolveAttemptPluginConfig(params.config)),
-      };
+      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),

@@ -247,7 +247,7 @@ export function registerUpdateRespawnProgressTests({
   respawnHealth,
   markUpdateRestartSentinelFailure,
   writeRestartSentinelIfUnchanged,
-  writeGatewayRestartHandoffSync,
+  writeGatewayRestartHandoff,
 }: UpdateRespawnFixtures) {
   it.each([
     { waitOutcome: "healthy", elapsedMs: 20_000, closeMs: 0, sentinelStatus: "ok" },
@@ -322,14 +322,14 @@ export function registerUpdateRespawnProgressTests({
         } else {
           expect(writeRestartSentinelIfUnchanged).not.toHaveBeenCalled();
         }
-        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoff).not.toHaveBeenCalled();
       });
     },
   );
 }
 
 export function registerGatewayRestartOwnershipTests({
-  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentPayload,
   readCgroup,
   systemctl,
   consumeGatewayRestartIntent,
@@ -413,7 +413,7 @@ export function registerGatewayRestartOwnershipTests({
       setPlatform("linux");
       vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "openclaw-gateway.service");
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ force: true });
+      consumeGatewayRestartIntentPayload.mockResolvedValueOnce({ force: true });
       systemctl.mockResolvedValue({
         code: 0,
         stdout: "LoadState=loaded\nTimeoutStopUSec=90s",

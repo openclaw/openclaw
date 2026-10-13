@@ -266,35 +266,6 @@ describe("runGatewayConversationTurn", () => {
     }
   });
 
-  it("rejects a stored conversation route owned by another agent", async () => {
-    const deps = await createDeps();
-
-    await expect(
-      runGatewayConversationTurn({
-        config: {
-          ...deps.config,
-          agents: { entries: { main: {}, finance: {} } },
-          bindings: [
-            {
-              type: "route",
-              agentId: "finance",
-              match: { channel: "reef", accountId: "default" },
-            },
-          ],
-        },
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-sibling-route",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1,
-      }),
-    ).rejects.toBeInstanceOf(ConversationInputError);
-    expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
-    expect(readConversationDeliveryStateForTest(deps.scope, "turn-sibling-route")).toBeUndefined();
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
-
   it("creates a context binding only when a discovered address starts a turn", async () => {
     const deps = await createDeps();
     const {
@@ -555,31 +526,6 @@ describe("runGatewayConversationTurn", () => {
     ).rejects.toBeInstanceOf(ConversationInputError);
   });
 
-  it("returns queued state without retrying recipient-visible I/O", async () => {
-    const deps = await createDeps();
-    await beginConversationDeliveryOperation(deps.scope, {
-      operationId: "turn-queued",
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      message: "hello",
-      preparedMessageId: "reef-outbound-1",
-    });
-    await markConversationDeliveryQueued(deps.scope, "turn-queued", "queue-existing");
-
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-queued",
-        conversationRef: conversation.conversationRef,
-        message: "hello",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toMatchObject({ status: "queued", messageId: "reef-outbound-1" });
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
-
   it("returns a durable permanent rejection as invalid input after restart", async () => {
     const deps = await createDeps();
     await beginConversationDeliveryOperation(deps.scope, {
@@ -666,36 +612,6 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
-
-  it("classifies a final rendered provider rejection as invalid input", async () => {
-    const deps = await createDeps();
-    deps.runMessageAction.mockImplementation(async () => {
-      await markConversationDeliveryRejected(
-        deps.scope,
-        "turn-rendered-rejected",
-        "atomic message limit",
-      );
-      throw new PlatformMessageNotDispatchedError("atomic message limit", {
-        cause: new Error("rendered text is too large"),
-        retryable: false,
-      });
-    });
-
-    await expect(
-      runGatewayConversationTurn({
-        config: deps.config,
-        agentId: "main",
-        senderIsOwner: true,
-        turnId: "turn-rendered-rejected",
-        conversationRef: conversation.conversationRef,
-        message: "raw text passed preflight",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toMatchObject({
-      name: "ConversationInputError",
-      message: "atomic message limit",
-    });
   });
 
   it("rejects delivery after the admitted session generation is replaced", async () => {

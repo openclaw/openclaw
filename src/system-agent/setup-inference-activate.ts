@@ -30,6 +30,7 @@ import { appendSystemAgentAuditEntry } from "./audit.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import { stageCodexCandidate } from "./setup-inference-codex.js";
 import {
@@ -490,6 +491,15 @@ async function verifyAndActivateCandidate(
     }
     throwIfSetupInferenceCancelled(params);
   }
+  const revalidateOwner = (candidateRoute: SystemAgentConfiguredRoute) =>
+    withGeneration(() =>
+      revalidateStableSetupInferenceOwner({
+        route: candidateRoute,
+        auth: turn.auth,
+        stagedOwnerPluginArtifacts: artifacts,
+        deps,
+      }),
+    );
   const revalidate = async (currentSnapshot: ConfigFileSnapshot) => {
     const config = currentSnapshot.runtimeConfig ?? currentSnapshot.config;
     const sourceConfig = currentSnapshot.sourceConfig;
@@ -513,14 +523,7 @@ async function verifyAndActivateCandidate(
         "The selected inference route is no longer available.",
       );
     }
-    await withGeneration(() =>
-      revalidateStableSetupInferenceOwner({
-        route: nextRoute,
-        auth: turn.auth,
-        stagedOwnerPluginArtifacts: artifacts,
-        deps,
-      }),
-    );
+    await revalidateOwner(nextRoute);
   };
   const activateCredential = async (assertCurrent: () => void) => {
     if (!staged.authProfileId || !savedCredential?.setup) {
@@ -540,14 +543,7 @@ async function verifyAndActivateCandidate(
             "The connection changed before credential activation. Test the saved sign-in again.",
           );
         }
-        await withGeneration(() =>
-          revalidateStableSetupInferenceOwner({
-            route,
-            auth: turn.auth,
-            stagedOwnerPluginArtifacts: artifacts,
-            deps,
-          }),
-        );
+        await revalidateOwner(route);
       },
       assertCurrent,
     );

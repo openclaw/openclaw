@@ -106,19 +106,19 @@ export async function withShimFixture<T>(
     mkdirSync(path.dirname(wrapperPath), { recursive: true });
     mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
     copyFileSync(wrapper, wrapperPath);
-    copyFileSync("scripts/tsx.mjs", path.join(checkoutRoot, "scripts", "tsx.mjs"));
-    copyFileSync(
+    for (const source of [
+      "scripts/tsx.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/tsx-cli-shim.mjs",
-      path.join(checkoutRoot, "scripts", "lib", "tsx-cli-shim.mjs"),
-    );
-    copyFileSync(
       "scripts/lib/local-check-runtime.mts",
-      path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
-    );
-    copyFileSync(
       "scripts/lib/tooling-dependencies.mjs",
-      path.join(checkoutRoot, "scripts", "lib", "tooling-dependencies.mjs"),
-    );
+      "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
+      "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/windows-taskkill.mjs",
+    ]) {
+      copyFileSync(source, path.join(checkoutRoot, source));
+    }
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     outcome = {
       value: await run({

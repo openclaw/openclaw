@@ -54,6 +54,20 @@ export function writeConfigMachineState(
   );
 }
 
+/** Write an owner-held value on its existing admitted transaction connection. */
+export function writeConfigMachineStateInDatabase(
+  database: DatabaseSync,
+  key: string,
+  value: unknown,
+): void {
+  upsertConfigMachineState(
+    database,
+    normalizeConfigMachineStateKey(key),
+    serializeStateValue(value),
+    Date.now(),
+  );
+}
+
 /** Atomically update one machine-state value from its current database value. */
 export function updateConfigMachineState<T>(
   key: string,

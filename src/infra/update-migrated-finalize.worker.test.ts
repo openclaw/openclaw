@@ -18,6 +18,8 @@ const fixture = vi.hoisted(() => ({
   stopService: vi.fn(),
   ownerLease: vi.fn(),
   recordStep: vi.fn(),
+  recordLedgerStep: vi.fn(),
+  adopt: vi.fn(),
   fence: { assertCurrent: vi.fn() },
 }));
 
@@ -82,9 +84,11 @@ vi.mock("./update-requester-authority.js", () => ({
   createManagedUpdateRequesterAuthority: vi.fn(),
   UpdateRequesterRevokedError: class extends Error {},
 }));
+// mock-isolation: Worker lifecycle tests replace ledger access without opening a real state database.
 vi.mock("./update-run-ledger.js", () => ({
-  adoptUpdateRun: vi.fn(),
+  adoptUpdateRun: fixture.adopt,
   getUpdateRun: fixture.terminal,
+  recordUpdateRunStep: fixture.recordLedgerStep,
 }));
 vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
@@ -283,6 +287,87 @@ it.each([false, true])(
     );
   },
 );
+
+it("times the fresh-driver handoff from the previous driver's last receipt", async () => {
+  const handoffStartedAtMs = 1_791_594_640_455;
+  const readyAtMs = handoffStartedAtMs + 23_400;
+  vi.spyOn(Date, "now").mockReturnValue(readyAtMs);
+  fixture.adopt.mockReturnValueOnce({
+    runId: "handoff-run",
+    steps: [
+      { step: "validating", status: "completed", endedAtMs: handoffStartedAtMs - 10_000 },
+      { step: "driver:adopted", status: "completed", endedAtMs: handoffStartedAtMs + 15_494 },
+    ],
+  });
+  const steps: unknown[] = [];
+  const input = {
+    params: {
+      root: "/fixture/candidate",
+      result: { status: "ok", mode: "git", root: "/fixture/candidate", steps, durationMs: 0 },
+      opts: { json: true, run: { runId: "handoff-run", env: {}, activationTimeoutMs: 1_000 } },
+      preUpdatePluginInstallRecords: {},
+      updateStepTimeoutMs: 1_000,
+      rollbackBlockedReason: "state-migrated-no-rollback",
+    },
+    bufferedSteps: [
+      {
+        step: "git-verify-head",
+        status: "completed",
+        startedAtMs: handoffStartedAtMs - 36,
+        endedAtMs: handoffStartedAtMs,
+        exitCode: 0,
+      },
+    ],
+    resultPath: "/fixture/result.json",
+  };
+  let stepsAtFinish: unknown[] = [];
+  fixture.finish.mockImplementation(async (params) => {
+    stepsAtFinish = [...params.result.steps];
+    return input.params.result;
+  });
+  fixture.terminal.mockReturnValue({ runId: "handoff-run", status: "succeeded" });
+
+  await runWorker(input);
+
+  const handoff = {
+    name: "update-driver-handoff",
+    command: "openclaw update",
+    cwd: "/fixture/candidate",
+    durationMs: 23_400,
+    exitCode: 0,
+    diagnostics: [
+      'Handoff began after "git-verify-head"; the fresh driver adopted the run after 15494ms.',
+    ],
+  };
+  expect(stepsAtFinish).toEqual([handoff]);
+  expect(fixture.recordStep).toHaveBeenCalledWith(
+    "handoff-run",
+    input.bufferedSteps[0],
+    expect.anything(),
+  );
+  expect(fixture.recordLedgerStep.mock.calls).toEqual([
+    [
+      "handoff-run",
+      expect.objectContaining({
+        step: "update-driver-handoff",
+        status: "completed",
+        startedAtMs: handoffStartedAtMs,
+        endedAtMs: readyAtMs,
+      }),
+      { env: {} },
+    ],
+    [
+      "handoff-run",
+      expect.objectContaining({
+        step: "diagnostic:update-driver-handoff",
+        detail: handoff.diagnostics[0],
+        startedAtMs: handoffStartedAtMs,
+        endedAtMs: readyAtMs,
+      }),
+      { env: {} },
+    ],
+  ]);
+});
 
 it.each([
   {

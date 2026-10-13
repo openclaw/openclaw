@@ -24,19 +24,16 @@ const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
-const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
-  vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
-    config: cfg,
-    changes: [] as string[],
-    warnings: [] as string[],
-  })),
+const collectTailscaleConfigWarningsMock = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-tailscale.js").collectTailscaleConfigWarnings>(async () => []),
 );
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: terminalNoteMock }));
 
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
 
-vi.mock("./doctor-tailscale.js", () => ({
-  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
+vi.mock("./doctor-tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-tailscale.js")>()),
+  collectTailscaleConfigWarnings: collectTailscaleConfigWarningsMock,
 }));
 
 vi.mock("./doctor/repair-sequencing.js", async () => {
@@ -224,12 +221,8 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
-    prepareTailscaleConfigMigrationMock.mockClear();
-    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
-      config: cfg,
-      changes: [],
-      warnings: [],
-    }));
+    collectTailscaleConfigWarningsMock.mockClear();
+    collectTailscaleConfigWarningsMock.mockResolvedValue([]);
   });
 
   it("previews and persists context-budget migration with every path reported", async () => {

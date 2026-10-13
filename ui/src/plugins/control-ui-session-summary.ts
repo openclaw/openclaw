@@ -139,6 +139,7 @@ class PluginSessionSummary extends OpenClawLightDomElement {
     void client
       .request<ChatHistoryResult>("chat.history", {
         ...target,
+        toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       })

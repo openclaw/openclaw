@@ -6,7 +6,7 @@ import * as boundaryPath from "../infra/boundary-path.js";
 import {
   detectLinuxVolatileStateDir,
   formatLinuxVolatileStateDirWarning,
-} from "./doctor-state-integrity.js";
+} from "./doctor-state-storage-platform.js";
 
 afterEach(() => vi.restoreAllMocks());
 

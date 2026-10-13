@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
@@ -23,11 +23,12 @@ import {
 import { makeProvenancePlan, readInstallRow, stateEnv } from "./provenance.test-helpers.js";
 import type { ClawPackage } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 async function makePlan(
   manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },

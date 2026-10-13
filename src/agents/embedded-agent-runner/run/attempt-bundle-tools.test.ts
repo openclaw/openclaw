@@ -89,6 +89,54 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
 
+  it.each(["file", "provider"] as const)(
+    "does not widen a %s memory flush with MCP, LSP, or client functions",
+    async (arm) => {
+      const persistenceName = arm === "file" ? "write" : "memory_store";
+      const input = createInput([], [createStubTool("read"), createStubTool(persistenceName)]);
+      input.attempt.trigger = "memory";
+      if (arm === "file") {
+        input.attempt.memoryFlushWritePath = "memory/2026-10-08.md";
+      } else {
+        input.attempt.memoryFlushTools = {
+          flushId: "flush",
+          ownerPluginId: "memory-provider",
+          persistenceToolNames: [persistenceName],
+          recordPersistenceToolSuccess: () => {},
+        };
+      }
+      input.attempt.clientTools = [
+        {
+          type: "function",
+          function: { name: "client_canary", parameters: { type: "object" } },
+        },
+      ];
+      mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [createStubTool("canary__write")],
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [createStubTool("lsp_canary")],
+        dispose: vi.fn(),
+      });
+
+      const result = await prepareEmbeddedAttemptBundleTools(input);
+
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+      expect(result.clientTools).toBeUndefined();
+      expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+      await withRuntimeToolSchemaQuarantine((record) => result.refreshTools(record));
+      expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual([
+        "read",
+        persistenceName,
+      ]);
+    },
+  );
+
   it.each([
     { allow: ["chrome*"], expected: ["chrome__click"] },
     { allow: ["ch*me*"], expected: ["chrome__click"] },

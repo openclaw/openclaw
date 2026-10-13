@@ -2,14 +2,13 @@
 import "./session-history-worker-errors.test-support.js";
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import * as sqliteScope from "./session-accessor.sqlite-scope.js";
 import {
@@ -17,10 +16,10 @@ import {
   SessionCanonicalKeyMigrationRequiredError,
 } from "./session-canonical-row.js";
 import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime.js";
-import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import {
   historyLane,
   rotateDatabaseWorkers,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -51,6 +50,34 @@ function input() {
     },
   };
 }
+
+// These lifecycle checks retain one already-admitted history lane.
+function useAdmittedHistoryReader() {
+  vi.spyOn(agentExecution, "captureExistingOpenClawAgentDatabaseExecution").mockImplementation(
+    (options) => {
+      const claim = { identity: "history", incarnation: "history", assertCurrent() {} };
+      return {
+        agentId: "main",
+        path: options.path,
+        fileIdentity: undefined,
+        assertCurrent() {},
+        captureGenerationClaim: () => claim,
+        capturePreparedGenerationClaim: () => claim,
+        async adoptNativeDatabase() {
+          throw new Error("Readonly history must not adopt a writer");
+        },
+        async prepare() {
+          throw new Error("Readonly history must not prepare a writer");
+        },
+        async runExisting() {
+          throw new Error("Readonly history must not open a writer");
+        },
+        async release() {},
+      };
+    },
+  );
+}
+
 function installWorkerTransport() {
   observed.run.mockImplementation(async (request, options) => {
     const posted = createDeferredCore<unknown>();
@@ -61,7 +88,7 @@ function installWorkerTransport() {
       taskId: 7,
       interactive: Boolean(options.onRequest),
       nativeSections: new SharedArrayBuffer(4),
-      taskContext: [],
+      taskContext: { deletedAgentDatabaseFences: [], databaseAdmissions: [] },
     });
     const reply = await posted.promise;
     assert(reply && typeof reply === "object" && "status" in reply);
@@ -82,7 +109,6 @@ async function readThroughWorker() {
   );
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   closeCapabilities.explicitSqliteCloseReleasesNativeResources = true;
   // Synthetic targets keep discovery outside the error-transfer worker controls.
@@ -99,31 +125,11 @@ beforeEach(() => {
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.closeResources.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
-  observed.quarantinePaths.clear();
-  observed.quarantineRead.mockReset().mockReturnValue({ user_version: 0 });
-  observed.quarantineClose.mockReset();
-  observed.quarantineOpen.mockReset().mockImplementation(() => {
-    const database: ReturnType<typeof observed.quarantineOpen> = {
-      isOpen: true,
-      exec() {},
-      prepare: () => ({ get: observed.quarantineRead }),
-      close() {
-        observed.quarantineClose();
-        database.isOpen = false;
-      },
-    };
-    return database;
-  });
-  observed.hydrate.mockReset().mockReturnValue({
-    kind: "full",
-    eventCount: 0,
-    version: { generation: null, rawSeq: null, updatedAt: null },
-  });
 });
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await rotateDatabaseWorkers(historyLane);
+  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });
@@ -326,6 +332,7 @@ it.each(
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
   const retirement = createDeferredCore();
@@ -418,6 +425,7 @@ it.each([
 );
 
 it("retains aliases until native cleanup and preserves later read custody", async () => {
+  useAdmittedHistoryReader();
   const request = input();
   const candidates = [{ path: request.database.path, physicalPath: request.database.path }];
   const cleanupEntered = createDeferredCore();
@@ -479,6 +487,7 @@ it.each([
 ])(
   "joins idle cleanup and retains failed custody (fails=$fails, capable=$capable)",
   async ({ fails, capable }) => {
+    useAdmittedHistoryReader();
     closeCapabilities.explicitSqliteCloseReleasesNativeResources = capable;
     const request = input();
     observed.run.mockResolvedValue({ ok: true, value: false });
@@ -839,109 +848,6 @@ it.each([
     } else {
       expect(observed.closeResources).not.toHaveBeenCalled();
       expect(observed.rotate).toHaveBeenCalledOnce();
-    }
-  },
-);
-
-function hydrateThroughWorker() {
-  const root = tempDirs.make("openclaw-hydration-quarantine-cleanup-");
-  fs.mkdirSync(path.join(root, "state"));
-  const quarantinePath = path.join(root, "state", "openclaw-quarantine.sqlite");
-  observed.quarantinePaths.add(quarantinePath);
-  fs.writeFileSync(quarantinePath, "mock quarantine");
-  installWorkerTransport();
-  return prepareSessionTranscriptHydration({
-    agentId: "main",
-    sessionId: "quarantine-hydration",
-    sessionKey: "agent:main:quarantine-hydration",
-    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    env: { OPENCLAW_STATE_DIR: root },
-  }).read();
-}
-
-it.each([
-  { readFails: true, closeFails: false, retirementFails: false },
-  { readFails: false, closeFails: true, retirementFails: false },
-  { readFails: true, closeFails: true, retirementFails: false },
-  { readFails: true, closeFails: true, retirementFails: true },
-])(
-  "settles hydration quarantine (read=$readFails, close=$closeFails, retirement=$retirementFails)",
-  async ({ readFails, closeFails, retirementFails }) => {
-    const readFailure = new Error("quarantine metadata read failed");
-    const closeFailure = Object.assign(new Error("quarantine native close failed"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 5,
-    });
-    const stopFailure = new Error("quarantine worker retirement failed");
-    if (readFails) {
-      observed.quarantineRead.mockImplementation(() => {
-        throw readFailure;
-      });
-    }
-    if (!closeFails) {
-      await expect(hydrateThroughWorker()).resolves.toMatchObject({
-        kind: "full",
-        snapshot: { events: [] },
-      });
-      expect(observed.quarantineClose).toHaveBeenCalledOnce();
-      expect(observed.hydrate).toHaveBeenCalledOnce();
-      expect(observed.rotate).not.toHaveBeenCalled();
-      return;
-    }
-    observed.quarantineClose.mockImplementation(() => {
-      throw closeFailure;
-    });
-    const entered = createDeferredCore();
-    const retirement = createDeferredCore();
-    observed.rotate.mockImplementation(() => {
-      entered.resolve();
-      return retirement.promise;
-    });
-    let settled = false;
-    const pending = hydrateThroughWorker()
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      )
-      .finally(() => {
-        settled = true;
-      });
-    try {
-      expect(
-        await Promise.race([entered.promise.then(() => "retiring"), pending.then(() => "settled")]),
-      ).toBe("retiring");
-      expect(settled).toBe(false);
-      expect(observed.quarantineOpen.mock.results[0]?.value.isOpen).toBe(true);
-      expect(observed.hydrate).not.toHaveBeenCalled();
-      expect(observed.unregister).not.toHaveBeenCalled();
-      if (retirementFails) {
-        retirement.reject(stopFailure);
-      } else {
-        retirement.resolve();
-      }
-      const result = await pending;
-      assert("error" in result);
-      const failure = result.error;
-      assert(failure instanceof AggregateError);
-      const quarantine = retirementFails ? failure.errors[0] : failure;
-      assert(quarantine instanceof AggregateError);
-      expect(quarantine.name).toBe("OpenClawQuarantineReadCleanupError");
-      expect(quarantine.errors).toMatchObject([
-        ...(readFails ? [{ message: readFailure.message }] : []),
-        { message: closeFailure.message, code: "ERR_SQLITE_ERROR", errcode: 5 },
-      ]);
-      expect(quarantine.cause).toBe(quarantine.errors[0]);
-      expect(observed.rotate).toHaveBeenCalledOnce();
-      if (retirementFails) {
-        expect(failure.errors[1]).toBe(stopFailure);
-        expect(failure.cause).toBe(stopFailure);
-        expect(observed.unregister).not.toHaveBeenCalled();
-      } else {
-        expect(observed.unregister).toHaveBeenCalledOnce();
-      }
-    } finally {
-      retirement.resolve();
-      await pending;
     }
   },
 );

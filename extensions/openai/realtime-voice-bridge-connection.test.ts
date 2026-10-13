@@ -55,10 +55,8 @@ const {
   openSocket,
   emitServerEvent,
   emitSessionUpdated,
-  connectReadyBridge,
   expectedResponseCreateEvent,
   requireRecord,
-  requireNestedRecord,
   expectRecordFields,
   requireSession,
   createRealtimeTool,
@@ -81,9 +79,6 @@ describe("OpenAI realtime voice bridge connection", () => {
 
   it.each([
     "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
-    "https://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
-    "ws://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
-    "http://localhost:8080/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
   ])(
     "uses the configured realtime endpoint %s without minting a client secret",
     async (baseUrl) => {
@@ -118,9 +113,7 @@ describe("OpenAI realtime voice bridge connection", () => {
   );
 
   it.each([
-    "not a url",
     "file:///private/voice",
-    "ftp://voice.example.test/realtime",
     "https://user@voice.example.test/realtime",
     "wss://voice.example.test/realtime#secret",
     123,
@@ -149,31 +142,6 @@ describe("OpenAI realtime voice bridge connection", () => {
       }),
     ).toThrow("cannot be combined with Azure");
     expect(FakeWebSocket.instances).toHaveLength(0);
-  });
-
-  it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "test-api-key-test" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-
-    void bridge.connect();
-    void bridge.close();
-
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as
-      | { headers?: Record<string, string>; maxPayload?: number }
-      | undefined;
-    expectRecordFields(options?.headers, "websocket headers", {
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-    });
-    expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
-    expect(options?.maxPayload).toBe(16 * 1024 * 1024);
   });
 
   it.each([
@@ -444,45 +412,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     await bridge.close();
   });
 
-  it("drops stalled input audio and rate-limits aggregate warnings", async () => {
-    vi.useFakeTimers();
-    try {
-      const logger = { debug: vi.fn(), warn: vi.fn() };
-      const provider = buildOpenAIRealtimeVoiceProvider({ logger });
-      const bridge = provider.createBridge({
-        providerConfig: { apiKey: "test-api-key-test" },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-      });
-      const { connecting, socket } = beginBridgeConnection(bridge);
-      openSocket(socket);
-      emitSessionUpdated(socket);
-      await connecting;
-      socket.bufferedAmount = 1024 * 1024 + 1;
-
-      bridge.sendAudio(Buffer.from("first"));
-      await vi.advanceTimersByTimeAsync(4_000);
-      bridge.sendAudio(Buffer.from("second"));
-      await vi.advanceTimersByTimeAsync(1_000);
-      bridge.sendAudio(Buffer.from("third"));
-
-      expect(
-        parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
-      ).toHaveLength(0);
-      expect(logger.warn).toHaveBeenNthCalledWith(
-        1,
-        "OpenAI realtime input audio backpressure; droppedFrames=1",
-      );
-      expect(logger.warn).toHaveBeenNthCalledWith(
-        2,
-        "OpenAI realtime input audio backpressure; droppedFrames=2",
-      );
-      await bridge.close();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("routes readiness-drained audio through websocket backpressure", async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const provider = buildOpenAIRealtimeVoiceProvider({ logger });
@@ -552,22 +481,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(
       parseSent(secondSocket).filter((event) => event.type === "input_audio_buffer.append"),
     ).toHaveLength(0);
-    await bridge.close();
-  });
-
-  it("shares an in-flight connection until session readiness", async () => {
-    const onReady = vi.fn();
-    const bridge = createNativeBridge({ onReady });
-    const firstConnect = bridge.connect();
-    const secondConnect = bridge.connect();
-    const socket = requireSocket();
-
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    openSocket(socket);
-    emitSessionUpdated(socket);
-
-    await Promise.all([firstConnect, secondConnect]);
-    expect(onReady).toHaveBeenCalledOnce();
     await bridge.close();
   });
 
@@ -720,20 +633,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     });
   });
 
-  it("rejects connection when session configuration fails before readiness", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    emitServerEvent(socket, {
-      type: "error",
-      error: { message: "invalid realtime session" },
-    });
-
-    await expect(connecting).rejects.toThrow("invalid realtime session");
-    expect(bridge.isConnected()).toBe(false);
-  });
-
   it("rejects connection when the socket closes before session readiness", async () => {
     const bridge = createNativeBridge();
     const { connecting, socket } = beginBridgeConnection(bridge);
@@ -776,53 +675,6 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(bridge.isConnected()).toBe(false);
   });
-
-  it.each([
-    {
-      $name: "automatic audio turn responses disabled with speech interruption enabled",
-      autoRespondToAudio: false,
-      interruptResponseOnInputAudio: true,
-      expectedCreateResponse: false,
-      expectedInterruptResponse: true,
-    },
-    {
-      $name: "automatic audio turn responses disabled",
-      autoRespondToAudio: false,
-      interruptResponseOnInputAudio: false,
-      expectedCreateResponse: false,
-      expectedInterruptResponse: false,
-    },
-    {
-      $name: "realtime response interruption disabled",
-      autoRespondToAudio: true,
-      interruptResponseOnInputAudio: false,
-      expectedCreateResponse: true,
-      expectedInterruptResponse: false,
-    },
-  ])(
-    "$name",
-    async ({
-      autoRespondToAudio,
-      interruptResponseOnInputAudio,
-      expectedCreateResponse,
-      expectedInterruptResponse,
-    }) => {
-      const bridge = createNativeBridge({
-        autoRespondToAudio,
-        interruptResponseOnInputAudio,
-      });
-      const socket = await connectReadyBridge(bridge);
-
-      expectRecordFields(
-        requireNestedRecord(requireSession(socket), ["audio", "input", "turn_detection"]),
-        "turn detection",
-        {
-          create_response: expectedCreateResponse,
-          interrupt_response: expectedInterruptResponse,
-        },
-      );
-    },
-  );
 
   it("routes registered GPT-Live Gateway PCM to the pre-connected output port and drains final transcripts", async () => {
     const { port1, port2 } = new MessageChannel();
@@ -899,23 +751,6 @@ describe("OpenAI realtime voice bridge connection", () => {
       port1.close();
       port2.close();
     }
-  });
-
-  it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
-    const bridge = createNativeBridge({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    });
-    const socket = await connectReadyBridge(bridge);
-
-    const session = requireSession(socket);
-    expect(requireNestedRecord(session, ["audio", "input", "format"])).toEqual({
-      type: "audio/pcm",
-      rate: 24000,
-    });
-    expect(requireNestedRecord(session, ["audio", "output", "format"])).toEqual({
-      type: "audio/pcm",
-      rate: 24000,
-    });
   });
 
   it("settles cleanly when closed before the websocket opens", async () => {

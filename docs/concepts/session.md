@@ -165,6 +165,10 @@ and runtime details.
 
 ## Session lifecycle
 
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
+
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
 - **No automatic reset** (default `mode: "none"`) - sessions keep the same

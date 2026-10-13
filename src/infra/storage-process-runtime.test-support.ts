@@ -30,6 +30,11 @@ export const storageProcessTestEntrypoints = {
     sourceWorkerName: "sqlite-readonly-worker.retention.test-support",
     distWorkerPath: "infra/sqlite-readonly-worker.retention.test-support.js",
   },
+  sqliteSchemaRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sqlite-schema-facts.retention.test-support",
+    distWorkerPath: "infra/sqlite-schema-facts.retention.test-support.js",
+  },
   sqliteLifecycleCreationRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sqlite-lifecycle-creation.retention.test-support",

@@ -15,10 +15,7 @@ import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { dockPanelStyles } from "../dock-panel-styles.ts";
 import { icons } from "../icons.ts";
-import {
-  PANEL_HOSTED_TABS_CHANGE_EVENT,
-  type PanelHostedTabsElement,
-} from "../panel-hosted-tabs.ts";
+import { notifyPanelHostedTabsChanged, type PanelHostedTabsElement } from "../panel-hosted-tabs.ts";
 import "../tooltip.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
@@ -98,7 +95,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   @state() private sessionPickerOpen = false;
   @state() private pickerSessions: TerminalSessionInfo[] = [];
   private readonly sessionPickerTrigger = createRef<HTMLButtonElement>();
-  private lastHostedTabsChangeKey?: string;
 
   private readonly sessionPickerTask = new Task(this, {
     autoRun: false,
@@ -225,7 +221,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       );
     }
     this.dockLayout.syncReservation();
-    const hostedTabsChangeKey = JSON.stringify([
+    notifyPanelHostedTabsChanged(this, [
       this.embedded && this.tabsInHeader,
       this.terminalSessions.activeId,
       this.hostedTabs.map(({ id, label, statusLabel, badge, className }) => [
@@ -244,12 +240,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       this.terminalPanelUploadController.hasPendingBatch(),
       this.terminalPanelUploadController.hasActiveTab(),
     ]);
-    if (hostedTabsChangeKey !== this.lastHostedTabsChangeKey) {
-      this.lastHostedTabsChangeKey = hostedTabsChangeKey;
-      this.dispatchEvent(
-        new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true, composed: true }),
-      );
-    }
   }
 
   get hostedTabs() {

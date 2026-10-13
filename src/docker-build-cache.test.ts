@@ -114,7 +114,9 @@ describe("docker build cache layout", () => {
 
   it("copies manifests before install in the qr-import image", async () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile.qr-import");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.indexOf(
+      "pnpm --filter 'openclaw...' install --frozen-lockfile",
+    );
     const manifestCopyIndex = dockerfile.search(
       /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
     );
@@ -126,6 +128,11 @@ describe("docker build cache layout", () => {
     expect(manifestCopyIndex).toBeLessThan(installIndex);
     expect(uiCopyIndex).toBeGreaterThan(-1);
     expect(uiCopyIndex).toBeLessThan(installIndex);
+    const workspaceCopyIndex = dockerfile.indexOf(
+      "COPY --parents --chown=appuser:appuser packages/*/package.json extensions/*/package.json examples/*/package.json ./",
+    );
+    expect(workspaceCopyIndex).toBeGreaterThan(-1);
+    expect(workspaceCopyIndex).toBeLessThan(installIndex);
     expect(
       dockerfile.search(
         /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,

@@ -26,7 +26,8 @@ suite.define(() => {
           ],
         });
         const gateway = await installMockGateway(page, {
-          heldMethods: ["connect", "agents.list"],
+          heldMethods: ["connect"],
+          heldRequests: [{ method: "agents.list", match: {}, exactParams: true }],
           authMethod: "token",
           authMode: "token",
           workspace: "/workspace-a",
@@ -36,8 +37,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat?session=main#token=synthetic-test-token`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("agents.list");
-        await gateway.resolveDeferred("agents.list");
+        await gateway.waitForRequest("agents.list", { match: {}, exactParams: true });
+        await gateway.resolveDeferred("agents.list", undefined, { match: {}, exactParams: true });
         await expect
           .poll(() =>
             page.evaluate(() =>
@@ -55,7 +56,7 @@ suite.define(() => {
         await message.fill("Keep the warm draft");
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("agents.list", { match: {}, exactParams: true });
         const workspaceOption = page.locator(
           '.new-session-page__project-popover [data-value="workspace"]',
         );
@@ -71,27 +72,38 @@ suite.define(() => {
         await message.press("Enter");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
-        await gateway.resolveDeferred("agents.list", roster("/workspace-a"));
+        await gateway.resolveDeferred("agents.list", roster("/workspace-a"), {
+          match: {},
+          exactParams: true,
+        });
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
         if (explicit) {
           await page.locator("#new-session-project-trigger").click();
           await workspaceOption.click();
         }
 
-        const rosterReads = (await gateway.getRequests("agents.list")).length;
+        const rosterReads = (await gateway.getRequests("agents.list", {}, { exactParams: true }))
+          .length;
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
-        await gateway.deferNext("agents.list");
+        await gateway.deferNext("agents.list", {}, { exactParams: true });
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await gateway.waitForRequest("agents.list", { after: rosterReads });
+        await gateway.waitForRequest("agents.list", {
+          after: rosterReads,
+          match: {},
+          exactParams: true,
+        });
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
         expect(await message.inputValue()).toBe("Keep the warm draft");
         await start.click({ force: true });
         await message.press("Enter");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
-        await gateway.resolveDeferred("agents.list", roster("/workspace-b"));
+        await gateway.resolveDeferred("agents.list", roster("/workspace-b"), {
+          match: {},
+          exactParams: true,
+        });
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
         expect(await message.inputValue()).toBe("Keep the warm draft");
         await start.click();

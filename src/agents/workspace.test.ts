@@ -292,6 +292,25 @@ describe("ensureAgentWorkspace", () => {
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
+  it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
+    const actual = workspaceState.readWorkspaceStateSnapshot;
+    const read = vi.spyOn(workspaceState, "readWorkspaceStateSnapshot");
+    try {
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).not.toHaveBeenCalled();
+      await writeWorkspaceFile(DEFAULT_BOOTSTRAP_FILENAME, "# Bootstrap\n");
+      read.mockImplementationOnce(async (...args) => {
+        const snapshot = await actual(...args);
+        await fs.unlink(workspacePath(DEFAULT_BOOTSTRAP_FILENAME));
+        return snapshot;
+      });
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("propagates a transient profile read after the retry budget is exhausted", async () => {
     await ensureWorkspace();
     const identityPath = workspacePath(DEFAULT_IDENTITY_FILENAME);

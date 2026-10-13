@@ -117,16 +117,6 @@ export async function handleCodexConversationInboundClaim(
     // an already-arrived message, even when the execution module is still cold.
     const expected = options.bindingStore.read(identity);
     const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
-      const { resolveCodexNativeExecutionBlock } = await import("./app-server/sandbox-guard.js");
-      const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
-        config: options.config,
-        sessionKey,
-        agentId: data.agentId,
-        surface: "Codex app-server conversation binding",
-      });
-      if (nativeExecutionBlock) {
-        return { text: nativeExecutionBlock };
-      }
       const { getSessionBindingService } =
         await import("openclaw/plugin-sdk/conversation-binding-runtime");
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");

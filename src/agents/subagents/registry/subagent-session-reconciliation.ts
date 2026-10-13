@@ -9,8 +9,11 @@ import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
@@ -75,6 +78,9 @@ export async function loadSubagentSessionEntry(params: {
   const agentId = resolveAgentIdFromSessionKey(key, params.childAgentId);
   const cfg = params.cfg ?? getRuntimeConfig();
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  if (isIncognitoSessionKey(key) && captureIncognitoSessionSource()) {
+    return withSubagentSessionEntry({ ...params, cfg }, (entry) => entry);
+  }
   return readSessionEntryReadOnlyInWorker(
     { agentId, storePath, sessionKey: key, projection: "list" },
     params.assertCurrent,
@@ -200,26 +206,30 @@ export async function resolveSubagentSessionCompletion(params: {
   );
 }
 
-async function withSubagentSessionEntry<T>(
+export async function withSubagentSessionEntry<T>(
   params: {
     childSessionKey: string;
     childAgentId?: string;
     cfg?: OpenClawConfig;
     assertCurrent?: () => void;
   },
-  consume: (entry: SessionEntry | undefined) => T,
+  consume: (entry: SessionEntry | undefined) => T | Promise<T>,
 ): Promise<T> {
   const cfg = params.cfg ?? getRuntimeConfig();
   const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
-  return withSessionEntryReadOnlyInWorker(
-    { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
-    () => params.assertCurrent?.(),
-    async (read) => {
-      if (!read.ok) {
-        throw read.error;
-      }
-      return consume(read.value);
-    },
+  return withSubagentSessionSource(
+    { agentId, storePath, sessionKey: params.childSessionKey, assertCurrent: params.assertCurrent },
+    async () =>
+      withSessionEntryReadOnlyInWorker(
+        { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
+        () => params.assertCurrent?.(),
+        async (result) => {
+          if (!result.ok) {
+            throw result.error;
+          }
+          return consume(result.value);
+        },
+      ),
   );
 }
 

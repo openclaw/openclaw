@@ -505,6 +505,27 @@ export async function isImplicitLocalGatewayTarget(
   return opts.localPortOverride !== undefined || config.gateway?.mode !== "remote";
 }
 
+function gatewayCallBootstrapOptions(
+  opts: Omit<CallGatewayBaseOptions, "method">,
+  context: ResolvedGatewayCallContext,
+) {
+  return {
+    config: context.config,
+    gatewayUrl: opts.url,
+    explicitAuth: context.explicitAuth,
+    env: process.env,
+    configPath: context.configPath,
+    ignoreEnvUrlOverride:
+      opts.localPortOverride !== undefined ||
+      opts.ignoreEnvUrlOverride === true ||
+      opts.serviceTargetUrl !== undefined,
+    localPortOverride: opts.localPortOverride,
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
+  };
+}
+
 function ensureRemoteModeUrlConfigured(params: {
   context: ResolvedGatewayCallContext;
   urlOverrideSource?: "cli" | "env";
@@ -589,17 +610,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const hasExplicitAuth = Boolean(context.explicitAuth.token || context.explicitAuth.password);
   const useStoredDeviceAuth = requestedStoredDeviceAuth && !hasExplicitAuth;
   const bootstrap = await resolveGatewayClientBootstrap({
-    config: context.config,
-    gatewayUrl: input.url,
-    explicitAuth: context.explicitAuth,
-    env: process.env,
-    configPath: context.configPath,
-    ignoreEnvUrlOverride:
-      input.localPortOverride !== undefined ||
-      input.ignoreEnvUrlOverride === true ||
-      input.serviceTargetUrl !== undefined,
-    localPortOverride: input.localPortOverride,
-    explicitTlsFingerprint: input.tlsFingerprint,
+    ...gatewayCallBootstrapOptions(input, context),
     skipImplicitAuth: useStoredDeviceAuth || input.skipImplicitAuth === true,
     ...(useStoredDeviceAuth
       ? {}
@@ -607,8 +618,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
           overrideAuthErrorHint:
             "Fix: pass --token or --password with --url (or gatewayToken in tools).",
         }),
-    buildConnectionDetails: buildGatewayConnectionDetails,
-    ...(input.serviceTargetUrl ? { serviceTargetUrl: input.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -985,20 +994,8 @@ export async function buildGatewayProbeConnectionDetails(
   } satisfies CallGatewayBaseOptions;
   const context = await resolveGatewayCallContext(callOpts);
   const bootstrap = await resolveGatewayClientBootstrap({
-    config: context.config,
-    gatewayUrl: opts.url,
-    explicitAuth: context.explicitAuth,
-    env: process.env,
-    configPath: context.configPath,
-    ignoreEnvUrlOverride:
-      opts.localPortOverride !== undefined ||
-      opts.ignoreEnvUrlOverride === true ||
-      opts.serviceTargetUrl !== undefined,
-    localPortOverride: opts.localPortOverride,
-    explicitTlsFingerprint: opts.tlsFingerprint,
+    ...gatewayCallBootstrapOptions(opts, context),
     skipImplicitAuth: true,
-    buildConnectionDetails: buildGatewayConnectionDetails,
-    ...(opts.serviceTargetUrl ? { serviceTargetUrl: opts.serviceTargetUrl } : {}),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -1078,21 +1075,10 @@ export async function callGateway<T = Record<string, unknown>>(
   if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
     return await callGatewayCli(opts);
   }
-  if (Array.isArray(opts.scopes)) {
-    return await callGatewayWithScopes(
-      {
-        ...opts,
-        mode: callerMode,
-        clientName: callerName,
-      },
-      opts.scopes,
-    );
-  }
-  return await callGatewayLeastPrivilege({
-    ...opts,
-    mode: callerMode,
-    clientName: callerName,
-  });
+  const input = { ...opts, mode: callerMode, clientName: callerName };
+  return Array.isArray(opts.scopes)
+    ? await callGatewayWithScopes(input, opts.scopes)
+    : await callGatewayLeastPrivilege(input);
 }
 
 export function randomIdempotencyKey() {

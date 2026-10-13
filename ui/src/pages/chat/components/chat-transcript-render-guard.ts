@@ -1,6 +1,7 @@
 import { guard } from "lit/directives/guard.js";
 import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
@@ -33,10 +34,7 @@ export function trackTranscriptRenderDependencies(
   dependencies: unknown[],
 ): void {
   const previous = state.transcriptRenderDependencies;
-  if (
-    previous.length !== dependencies.length ||
-    dependencies.some((value, index) => !Object.is(previous[index], value))
-  ) {
+  if (!transcriptArraysEqual(dependencies, previous)) {
     state.transcriptRenderDependencies = dependencies;
     state.transcriptRenderContext = {};
   }

@@ -213,7 +213,7 @@ describe("Where chip", () => {
       (heading) => heading.textContent?.trim(),
     );
 
-    expect(headings).toEqual(["Your devices"]);
+    expect(headings).toEqual(["Your devices", "Hosted workspaces"]);
   });
 
   it("shows the Cloud settings action only to admins when a cloud profile is available", () => {

@@ -14,6 +14,7 @@ import {
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import {
   testing,
   bindGenericCurrentConversation,
@@ -154,17 +155,12 @@ async function withReadOnlyStateDatabase<T>(run: () => T | Promise<T>): Promise<
 }
 
 async function withRejectedBindingCommit<T>(run: () => Promise<T>): Promise<T> {
-  const createAdmission = admission.createSqliteWorkerOperationAdmission;
-  const injected = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          throw new Error("Injected binding commit failure");
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const injected = probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      throw new Error("Injected binding commit failure");
+    }
+    admit(request, grant);
+  });
   try {
     return await run();
   } finally {

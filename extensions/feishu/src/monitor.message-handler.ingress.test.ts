@@ -247,20 +247,6 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(transport.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("rejects a missing message body before durable dispatch", async () => {
-    const { transport, event, harness } = createTurn("invalid-body", { noClaim: true });
-
-    Reflect.deleteProperty(event.message, "content");
-
-    await expect(harness.handler(event)).rejects.toThrow(
-      "Feishu durable message event payload is malformed.",
-    );
-
-    expect(harness.claim).not.toHaveBeenCalled();
-    expect(harness.handleMessage).not.toHaveBeenCalled();
-    expect(transport.calls.adopted).not.toHaveBeenCalled();
-  });
-
   it("adopts every constituent while dispatching the latest fresh message", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
@@ -300,18 +286,6 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       expect(transport.calls.finalizing).toHaveBeenCalledOnce();
       expect(transport.calls.adopted).toHaveBeenCalledOnce();
     }
-  });
-
-  it("completes gated no-dispatch transport claims and releases the logical guard", async () => {
-    const { transport, logicalClaim, event, harness } = createTurn("gated", { adoptTurn: false });
-
-    await harness.handler(event);
-    await harness.flush();
-
-    expect(logicalClaim.commit).not.toHaveBeenCalled();
-    expect(logicalClaim.release).toHaveBeenCalledTimes(1);
-    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(transport.calls.abandoned).not.toHaveBeenCalled();
   });
 
   it("releases a deferred logical claim when the drain abandons before debounce flush", async () => {

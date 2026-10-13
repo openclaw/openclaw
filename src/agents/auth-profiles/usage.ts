@@ -26,7 +26,10 @@ import { resolveAuthProfileOrder } from "./order.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import { logAuthProfileFailureStateChange } from "./state-observation.js";
+import {
+  logAuthProfileFailureStateChange,
+  logDroppedAuthProfileBookkeeping,
+} from "./state-observation.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   updateAuthProfileStoreWithLock,
@@ -77,15 +80,6 @@ const testing = {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileUsageTestApi")] =
     testing;
-}
-
-function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void {
-  authProfileUsageLog.warn("dropped auth profile bookkeeping after locked store update failed", {
-    event: "auth_profile_bookkeeping_dropped",
-    kind,
-    profileId,
-    tags: ["auth_profiles", "persistence"],
-  });
 }
 
 async function updateOwnedAuthProfileUsage(
@@ -755,5 +749,3 @@ export async function markInlineProviderApiKeyFailure(params: {
   }
   logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,10 +1,11 @@
 import { Session } from "node:inspector/promises";
 import { isMainThread } from "node:worker_threads";
 
+const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
 let collectedHeap = 0;
 let session: Session | null | undefined;
-let pending: NodeJS.Immediate | undefined;
+let pending: NodeJS.Timeout | undefined;
 let collecting = false;
 let idle = false;
 let generation = 0;
@@ -52,15 +53,16 @@ export function scheduleWorkerIdleGc(): void {
   if (pending || collecting) {
     return;
   }
-  pending = setImmediate(() => {
+  // A reply can immediately trigger another task; allow that burst to finish first.
+  pending = setTimeout(() => {
     void collectWorkerIdleGarbage();
-  }).unref();
+  }, IDLE_GC_DELAY_MS).unref();
 }
 
 /** A new operation takes precedence over collection of the preceding idle heap. */
 export function cancelWorkerIdleGc(): void {
   generation++;
   idle = false;
-  clearImmediate(pending);
+  clearTimeout(pending);
   pending = undefined;
 }

@@ -6,6 +6,7 @@
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "autoEnableWhenConfiguredProviders": ["llama-cpp"],
   "providers": ["llama-cpp"],

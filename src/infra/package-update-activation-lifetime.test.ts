@@ -93,17 +93,19 @@ describe.skipIf(process.platform === "win32")(
       });
     });
 
-    it("keeps automatic retirement resumable after the previous package is removed", async () => {
+    it("closes automatic retirement when anchor removal fails after the previous package is removed", async () => {
       const f = await createPackageSwapFixture(root);
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       const failure = new Error("retirement acknowledgement lost");
       const removeAnchor = fsp.rmdir.bind(fsp);
       let interrupted = false;
+      let retainedEvidence: string | undefined;
       const remove = vi.spyOn(fsp, "rmdir").mockImplementation(async (file, ...args) => {
         if (file === anchor) {
           expect(fs.existsSync(path.join(anchor, "previous"))).toBe(false);
           interrupted = true;
+          retainedEvidence = `${anchor}.superseded-${openPackageActivationJournal(anchor).read().descriptor.operationId}`;
           throw failure;
         }
         return removeAnchor(file, ...args);
@@ -117,21 +119,16 @@ describe.skipIf(process.platform === "win32")(
           });
         });
         expect(interrupted).toBe(true);
-        expect(result.status).toBe("failed");
-        expect(result.step.stderrTail).toContain(failure.message);
-        expect(result.step.stderrTail).toContain("Package retirement remains pending");
+        expect(result.status).toBe("committed");
+        expect(result.step.advisory).toMatchObject({ kind: "recoverable-maintenance" });
+        expect(result.step.warnings?.join("\n")).toContain(failure.message);
         expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
           '"version":"2.0.0"',
         );
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        const record = openPackageActivationJournal(anchor).read();
-        expect(record.phase).toBe("retiring");
-        expect(record.intent).toMatchObject({ kind: "remove-anchor", selected: "candidate" });
-        remove.mockRestore();
-        await expect(
-          runPackageActivationRecovery(anchor, "retire", record.descriptor.operationId),
-        ).resolves.toMatchObject({ phase: "complete" });
         expect(fs.existsSync(anchor)).toBe(false);
+        expect(fs.existsSync(path.join(retainedEvidence!, "control/recovery.mjs"))).toBe(true);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
       } finally {
         remove.mockRestore();

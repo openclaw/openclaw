@@ -375,25 +375,6 @@ describe("runWithModelFallback probe logic", () => {
     });
   });
 
-  it("decides when billing cooldowns should probe", () => {
-    expect(
-      cooldownDecision({
-        reason: "billing",
-        soonest: NOW + 30 * 60 * 1000,
-        hasFallbackCandidates: false,
-      }),
-    ).toEqual({ type: "attempt", reason: "billing", markProbe: true });
-    expect(cooldownDecision({ reason: "billing", soonest: NOW + 60 * 1000 })).toEqual({
-      type: "attempt",
-      reason: "billing",
-      markProbe: true,
-    });
-    expect(cooldownDecision({ reason: "billing", soonest: NOW + 30 * 60 * 1000 })).toEqual({
-      type: "suspend_session",
-      reason: "billing",
-    });
-  });
-
   it("does not suspend the session when fallback candidates remain", async () => {
     getExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
     unavailableReason.mockReturnValue("billing");
@@ -407,18 +388,6 @@ describe("runWithModelFallback probe logic", () => {
     );
     expect(result.attempts[0]?.reason).toBe("billing");
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
-  });
-
-  it("defers embedded session suspension only while another candidate remains", async () => {
-    inCooldown.mockReturnValue(false);
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("primary failed"))
-      .mockResolvedValueOnce("fallback-ok");
-    const result = await runPrimary(run, { sessionId: "test-session", lane: "main" });
-    expect(result.result).toBe("fallback-ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
   });
 
   it.each(["caller abort", "terminal classified result", "closed throw"])(

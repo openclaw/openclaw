@@ -306,7 +306,7 @@ async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const skipped: SkippedBackupAsset[] = [];
   const seenCanonicalPaths = new Set<string>();
-  for (const candidate of [...candidates].toSorted(compareCandidates)) {
+  for (const candidate of candidates.toSorted(compareCandidates)) {
     // Check both the original selection and the already resolved target before deduplication.
     const privateSelection = isUpdateCapturePath(candidate.sourcePath, stateDir);
     const privateTarget =
@@ -407,15 +407,11 @@ async function resolveBackupPlanFromPaths(params: {
 }
 
 function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
-  if (depthDelta !== 0) {
-    return depthDelta;
-  }
-  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.canonicalPath.localeCompare(right.canonicalPath);
+  return (
+    left.canonicalPath.length - right.canonicalPath.length ||
+    BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind] ||
+    left.canonicalPath.localeCompare(right.canonicalPath)
+  );
 }
 
 // Managed skill roots support operator-created directory links outside the root.

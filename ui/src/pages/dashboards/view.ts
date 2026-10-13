@@ -35,9 +35,7 @@ export type DashboardGalleryFilters = {
 };
 
 export type DashboardGalleryHandlers = {
-  onQueryChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
-  onSortChange: (value: DashboardGalleryFilters["sort"]) => void;
+  onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
   onNavigate?: ApplicationContext["navigate"];
 };
 
@@ -180,7 +178,7 @@ function renderDashboardList(
           placeholder=${t("dashboardsPage.searchPlaceholder")}
           @input=${(event: Event) => {
             if (event.currentTarget instanceof HTMLInputElement) {
-              handlers.onQueryChange(event.currentTarget.value);
+              handlers.onFilterChange({ query: event.currentTarget.value });
             }
           }}
         />
@@ -191,7 +189,7 @@ function renderDashboardList(
           .value=${filters.ownerId}
           @change=${(event: Event) => {
             if (event.currentTarget instanceof HTMLSelectElement) {
-              handlers.onOwnerChange(event.currentTarget.value);
+              handlers.onFilterChange({ ownerId: event.currentTarget.value });
             }
           }}
         >
@@ -208,7 +206,7 @@ function renderDashboardList(
               event.currentTarget instanceof HTMLSelectElement &&
               (event.currentTarget.value === "updated" || event.currentTarget.value === "title")
             ) {
-              handlers.onSortChange(event.currentTarget.value);
+              handlers.onFilterChange({ sort: event.currentTarget.value });
             }
           }}
         >

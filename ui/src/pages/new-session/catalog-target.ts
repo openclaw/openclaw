@@ -186,11 +186,9 @@ export function resolveAgentId(
   fallback: string,
 ): string {
   const rawRequested = data?.agentId?.trim();
-  if (!rawRequested) {
-    return fallback && normalizeAgentId(fallback);
-  }
-  const requested = normalizeAgentId(rawRequested);
-  return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
+  const requested = rawRequested ? normalizeAgentId(rawRequested) : undefined;
+  return requested &&
+    availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
     : fallback && normalizeAgentId(fallback);
 }

@@ -154,6 +154,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;
+  contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
   if (params.nativeModelOwned) {
@@ -228,6 +229,14 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   return {
     contextWindowInfo,
     contextTokenBudget,
+    // Cold readers match only provider/model/harness, so removable caps and
+    // session-selectable windows cannot become persisted model facts.
+    contextTokensSource:
+      contextWindowInfo.source === "model" &&
+      contextWindowInfo.referenceTokens === undefined &&
+      !params.runtimeModel.contextWindows?.length
+        ? "resolved-v1"
+        : undefined,
     effectiveModel,
   };
 }

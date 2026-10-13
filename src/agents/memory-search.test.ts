@@ -761,5 +761,20 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toEqual(["memory"]);
+    expect(resolved?.sessionSourceExcluded).toBe(true);
+  });
+
+  it.each([
+    { search: { experimental: { sessionMemory: true } }, enabledBy: "sessionMemory" },
+    { search: { rememberAcrossConversations: true }, enabledBy: "conversation recall" },
+  ])("keeps a requested session source when $enabledBy is enabled", ({ search }) => {
+    const cfg = asConfig({
+      memory: { search: { sources: ["memory", "sessions"], ...search } },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.searchSources).toContain("sessions");
+    expect(resolved?.sessionSourceExcluded).toBe(false);
   });
 });

@@ -215,7 +215,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   }
   if (
     customProviderConfig &&
-    isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
     isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)

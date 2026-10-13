@@ -14,6 +14,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -149,6 +150,53 @@ describe("subagent registry recovery scheduling", () => {
       }
     },
   );
+
+  it("preserves recovery priority and insertion order as unchanged runs become stale", async () => {
+    recoverRow.mockResolvedValue({ status: "handled" });
+    const { runs, sweeper } = createHarness({});
+    runs.clear();
+    for (const [runId, ageMs] of [
+      ["recent-a", 60_000],
+      ["stale-a", 3 * 60 * 60_000],
+      ["stale-b", 4 * 60 * 60_000],
+      ["recent-b", 90_000],
+    ] as const) {
+      runs.set(runId, {
+        ...run(),
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        createdAt: Date.now() - ageMs,
+        execution: { status: "running", startedAt: Date.now() - ageMs },
+      });
+    }
+    runs.set("interrupted", {
+      ...run(),
+      runId: "interrupted",
+      childSessionKey: "agent:main:subagent:recovery-priority",
+      terminalOwner: "interrupted-recovery",
+      execution: { status: "terminal", endedAt: Date.now() - 60_000 },
+    });
+
+    await sweeper.sweepOnce();
+    expect(recoverRow.mock.calls.map(([params]) => params.runId)).toEqual([
+      "interrupted",
+      "stale-a",
+      "stale-b",
+      "recent-a",
+      "recent-b",
+    ]);
+
+    recoverRow.mockClear();
+    vi.setSystemTime(Date.now() + 2 * 60 * 60_000);
+    await sweeper.sweepOnce();
+    expect(recoverRow.mock.calls.map(([params]) => params.runId)).toEqual([
+      "interrupted",
+      "recent-a",
+      "stale-a",
+      "stale-b",
+      "recent-b",
+    ]);
+  });
 
   it("observes a sibling completion committed while another completion is awaiting", async () => {
     const actual = await vi.importActual<typeof import("./subagent-session-reconciliation.js")>(
@@ -915,28 +963,16 @@ describe("superseded subagent retirement", () => {
           { runs },
         );
         const clearPendingLifecycleError = vi.fn();
-        const execute = stateWorker.runOpenClawStateWorkerOperation;
-        const worker = vi
-          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-          .mockImplementation((owner, operation, options) =>
-            execute(
-              owner,
-              (scope) =>
-                operation({
-                  execute: async (command, executeOptions) => {
-                    if (
-                      refused &&
-                      command.type === "subagents.persistChanges" &&
-                      (command.input as SubagentRegistryWrite).deleteRunIds.includes(entry.runId)
-                    ) {
-                      throw new Error("registry deletion failed");
-                    }
-                    return scope.execute(command, executeOptions);
-                  },
-                }),
-              options,
-            ),
-          );
+        const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+          if (
+            refused &&
+            command.type === "subagents.persistChanges" &&
+            (command.input as SubagentRegistryWrite).deleteRunIds.includes(entry.runId)
+          ) {
+            throw new Error("registry deletion failed");
+          }
+          return scope.execute(command, executeOptions);
+        });
         try {
           const deletion = retireSupersededSubagentRun({
             runId: entry.runId,

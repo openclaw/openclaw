@@ -4,11 +4,9 @@ import {
   bindSessionPendingInputSources,
   persistSessionTranscriptTurn,
   withSessionPendingInputPersistence,
-  publishTranscriptUpdate,
   type TranscriptEntryAnchor,
 } from "../config/sessions/session-accessor.js";
 import { readWithdrawnSessionPendingInputId } from "../config/sessions/session-accessor.pending-inputs.js";
-import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
@@ -20,6 +18,10 @@ import {
 } from "./user-turn-transcript-admission.js";
 import { stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
+import {
+  capturePersistedModelPromptProjection,
+  confirmPersistedSteerTargetRunId,
+} from "./user-turn-transcript-updates.js";
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
@@ -173,39 +175,6 @@ async function resolveUserTurnTranscriptTarget(
   return typeof target === "function" ? await target() : target;
 }
 
-async function confirmPersistedSteerTargetRunId(params: {
-  admission: UserTurnTranscriptAdmissionReceipt;
-  targetRunId: string;
-}): Promise<
-  | {
-      admission: UserTurnTranscriptAdmissionReceipt;
-      message: PersistedUserTurnMessage;
-    }
-  | undefined
-> {
-  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(params.admission, (message) => {
-    if (!isUserMessage(message)) {
-      return undefined;
-    }
-    const currentTarget = normalizePersistedSteerTargetRunId(
-      message["__openclaw"]?.steerTargetRunId,
-    );
-    return currentTarget === params.targetRunId
-      ? undefined
-      : rewritePersistedSteerTargetRunId(message, params.targetRunId);
-  });
-  if (!rewritten) {
-    return undefined;
-  }
-  const admission = { ...params.admission, generation: rewritten.generation };
-  await publishTranscriptUpdate(admission, {
-    message: rewritten.message,
-    messageId: admission.entryId,
-    messageSeq: admission.activeMessagePosition + 1,
-  });
-  return { admission, message: rewritten.message };
-}
-
 export function createUserTurnTranscriptRecorder(
   params: CreateUserTurnTranscriptRecorderParams,
 ): UserTurnTranscriptRecorder {
@@ -214,6 +183,7 @@ export function createUserTurnTranscriptRecorder(
   let blocked = false;
   let runtimePersisted = false;
   let persistedResult: UserTurnTranscriptPersistResult | undefined;
+  let resolvedPersistenceTarget: UserTurnTranscriptTarget | undefined;
   let admissionReceipt: UserTurnTranscriptAdmissionReceipt | undefined;
   let admittedMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistencePromise: Promise<void> | undefined;
@@ -228,7 +198,6 @@ export function createUserTurnTranscriptRecorder(
     | ((admission: UserTurnTranscriptAdmissionReceipt) => void | Promise<void>)
     | undefined;
   let admissionWrite: Promise<void> | undefined;
-  let resolvedBeforeProvider = false;
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
   let pendingInput: Awaited<ReturnType<typeof stageUserTurnPendingInput>>;
@@ -293,7 +262,6 @@ export function createUserTurnTranscriptRecorder(
               message: params.message,
               input: resolvedInput ?? params.input,
             }) ?? message;
-          resolvedBeforeProvider = !sentToProvider;
           return applyMessageOverrides(resolvedMessage);
         } catch (error) {
           handlePersistenceError(error);
@@ -458,6 +426,7 @@ export function createUserTurnTranscriptRecorder(
         return undefined;
       }
       const resolvedTarget = options.cwd ? { ...target, cwd: options.cwd } : target;
+      resolvedPersistenceTarget = resolvedTarget;
       const updateMode = options.updateMode ?? params.updateMode ?? "inline";
       const persistMessage = async (
         candidate: PersistedUserTurnMessage,
@@ -487,15 +456,16 @@ export function createUserTurnTranscriptRecorder(
           : persist());
       };
       const lateMediaMessage =
-        sentToProvider && !resolvedBeforeProvider
+        sentToProvider || runtimePersisted || persistedResult
           ? buildLateResolvedMediaMessage({
-              admittedMessage: runtimePersistedMessage ?? message,
+              admittedMessage:
+                admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message ?? message,
               resolvedMessage,
             })
           : undefined;
       if (lateMediaMessage) {
-        // The admitted bytes already crossed the LLM boundary. Persisting media as a
-        // second turn preserves that prefix; inline replacement would thrash cache tail (#99495).
+        // Durable admission fixes the original bytes, including while projection
+        // capture is preparing dispatch. New media belongs to a separate turn (#99495).
         if (!runtimePersisted && !persistedResult && message) {
           const admittedResult = await persistMessage(message, updateMode);
           if (admittedResult) {
@@ -636,6 +606,35 @@ export function createUserTurnTranscriptRecorder(
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
+    captureModelPromptProjection: async (text, assertCurrent) => {
+      assertCurrent();
+      await waitForRuntimePersistence();
+      assertCurrent();
+      if (!admissionReceipt && selfPersistencePromise) {
+        await selfPersistencePromise;
+        assertCurrent();
+      }
+      resolvedPersistenceTarget ??= await resolveUserTurnTranscriptTarget(params.target);
+      assertCurrent();
+      const admission = admissionReceipt;
+      if (blocked || !admission || !admittedMessage) {
+        throw new Error("Model prompt projection requires a live, persisted user turn");
+      }
+      return await capturePersistedModelPromptProjection({
+        admission,
+        message: admittedMessage,
+        text,
+        config: resolvedPersistenceTarget?.config,
+        assertCurrent,
+        assertWritable: () => {
+          assertCurrent();
+          if (blocked || sentToProvider) {
+            throw new Error("Model prompt projection must be captured before provider dispatch");
+          }
+        },
+        onCommitted: refreshAdmission,
+      });
+    },
     getAdmissionReceipt: () => admissionReceipt,
     setAdmissionHandler: (handler) => {
       admissionHandler = handler;

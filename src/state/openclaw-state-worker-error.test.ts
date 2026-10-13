@@ -304,6 +304,7 @@ describe("shared-state worker error transport", () => {
     let failure: unknown;
     receiveSqliteWorkerReply(
       {
+        actors: new Set(),
         current: job,
         worker: {
           postMessage: () => {

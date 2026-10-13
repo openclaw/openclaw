@@ -7,6 +7,7 @@ import { assertAuthProfileMigrationStateAtDatabasePath } from "./legacy-source-d
 import { resolveRuntimeStoreKey } from "./mutation-lineage.js";
 import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
 import {
+  captureRuntimeAuthProfileLegacyCandidates,
   cloneRuntimeAuthProfileLegacyCandidates,
   cloneRuntimeAuthSharedOwner,
   runtimeAuthProfileSnapshotSharesOwner,
@@ -17,6 +18,7 @@ import {
   type RuntimeAuthProfileLegacyCandidates,
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
+import type { FreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
 import type { AuthProfileStore, AuthProfileStoreOwner, RuntimeAuthProfileStore } from "./types.js";
 
 export type OwnedRuntimeSnapshot = {
@@ -33,6 +35,29 @@ export type SharedAuthProfileStoreMutation = {
   profileIds: Iterable<string>;
   oauthRefreshClaimIds?: ReadonlyMap<string, string | undefined>;
 };
+
+/** Retain overlays while preparing snapshots for the acknowledged shared-owner handoff. */
+export function prepareRuntimeAuthProfileSharedOwnerHandoff(
+  entries: OwnedRuntimeAuthProfileStoreSnapshotEntry[],
+  { previousSharedDatabasePath, sharedDatabasePath, env }: FreshSharedAuthStoreHandoff,
+): OwnedRuntimeAuthProfileStoreSnapshotEntry[] | undefined {
+  let rebound = false;
+  for (const entry of entries) {
+    if (
+      (entry.owner.kind === "resolved" && entry.owner.location !== "legacy-main") ||
+      !runtimeAuthProfileSnapshotSharesOwner(entry.owner, {
+        sharedDatabasePath: previousSharedDatabasePath,
+        location: "legacy-main",
+      })
+    ) {
+      continue;
+    }
+    rebound = true;
+    entry.owner = { kind: "resolved", sharedDatabasePath, location: "state-db" };
+    entry.legacyCandidates = captureRuntimeAuthProfileLegacyCandidates(entry.agentDir, env);
+  }
+  return rebound ? entries : undefined;
+}
 
 export function sharedMutationAffectsSnapshot(
   mutation?: SharedAuthProfileStoreMutation,

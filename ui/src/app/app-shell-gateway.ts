@@ -202,6 +202,10 @@ export class ShellGatewayOwner {
       this.host.recoverDeletedActiveSession();
       return;
     }
+    if (event.event === "agent.identity.changed") {
+      this.scheduleAgentRosterRefresh();
+      return;
+    }
     if (event.event === "config.changed") {
       // Bootstrap owns upload policy independently of an open configuration editor.
       void this.host.context?.config.refresh();
@@ -480,8 +484,13 @@ export class ShellGatewayOwner {
       },
     })
       .then((applied) => {
-        if (!applied && remainsCurrent()) {
-          context.theme.refresh();
+        if (remainsCurrent()) {
+          if (!applied) {
+            context.theme.refresh({ notify: true });
+          }
+          // Readiness releases both the shell and private-background descendants,
+          // including an unchanged profile snapshot matching the browser mirror.
+          this.host.requestUpdate();
         }
       })
       .catch((error: unknown) => {

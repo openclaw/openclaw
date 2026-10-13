@@ -2,6 +2,12 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { AgentDatabaseAdmissionRefusalSchema } from "./agent-database-admission.js";
+import {
+  AgentCreatedViaSchema,
+  AgentKindSchema,
+  AgentOwnershipSchema,
+} from "./agent-summary-enums.js";
+import { AgentsListPlacementProperties } from "./agents-list-session-placement.js";
 import { closedObject } from "./closed-object.js";
 import {
   GatewayAgentRuntimeSchema,
@@ -13,6 +19,8 @@ import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
 
 export { SkillsDetailResultSchema } from "./skill-detail.js";
+export { AgentKindSchema, AgentOwnershipSchema };
+export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
 export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
 export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
@@ -40,15 +48,6 @@ export type {
  * discovery. Keep public request/result schemas documented because they are
  * shared by gateway RPC, CLI, and UI clients.
  */
-
-/** Semantic owner of an agent roster entry. */
-export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
-
-const AgentCreatedViaSchema = Type.Union([
-  Type.Literal("operator"),
-  Type.Literal("agent"),
-  Type.Literal("claw"),
-]);
 
 /** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = closedObject({
@@ -87,16 +86,8 @@ export const AgentSummarySchema = closedObject({
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
-/** Empty request payload for listing configured agents. */
-export const AgentsListParamsSchema = closedObject({});
-
-export const AgentOwnershipSchema = Type.Union([
-  Type.Literal("sole"),
-  Type.Literal("legacy"),
-  Type.Literal("explicit"),
-]);
-
 export const AgentsListResultSchema = closedObject({
+  ...AgentsListPlacementProperties,
   defaultId: NonEmptyString,
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
@@ -755,7 +746,6 @@ export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
-export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
 export type ModelsAuthSetApiKeyResult = Static<typeof ModelsAuthSetApiKeyResultSchema>;

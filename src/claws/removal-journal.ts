@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  assertAgentSessionStoreDeletionTargetsCurrent,
+  prepareAgentSessionStoreDeletionSafety,
+} from "../agents/agent-delete-session-store-safety.targets.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
 import { withCronReceiptAuthorityMutation } from "../cron/store/receipt-authority-owner.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -9,7 +13,9 @@ import type {
   SqliteWorkerNativeSettlementOwner,
   SqliteWorkerOperationSettlement,
 } from "../infra/sqlite-worker-operation-settlement.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { captureAgentDatabasePreparationDeletionForIdentity } from "../state/agent-database-admission.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
@@ -19,7 +25,7 @@ import {
 
 /** Only the serving Cron owner publishes a journal mutation; native settlement precedes its reply. */
 export async function mutateClawRemovalJournal(
-  input: Omit<ClawRemovalJournalWorkerInput, "nonce">,
+  input: Omit<ClawRemovalJournalWorkerInput, "nonce" | "sessionStoreSafety">,
   assertRequestCurrent: () => void,
 ) {
   const context = captureOpenClawStateWorkerContext();
@@ -30,7 +36,18 @@ export async function mutateClawRemovalJournal(
     }
   };
   assertSourceCurrent();
-  const command = { ...structuredClone(input), nonce: randomUUID() };
+  const command = {
+    ...structuredClone(input),
+    nonce: randomUUID(),
+    sessionStoreSafety:
+      input.request.phase === "begin"
+        ? prepareAgentSessionStoreDeletionSafety(
+            input.config,
+            input.request.agentId,
+            context.environment,
+          )
+        : null,
+  };
   const cancel = captureActiveCronJobAgentDeletion(
     input.request.agentId,
     context.admission.identity.key,
@@ -47,6 +64,9 @@ export async function mutateClawRemovalJournal(
       assertSourceCurrent();
       mutation.assertCurrent();
       assertRequestCurrent();
+      if (command.sessionStoreSafety) {
+        assertAgentSessionStoreDeletionTargetsCurrent(command.sessionStoreSafety.targets);
+      }
     };
     let native: SqliteWorkerNativeSettlementOwner | undefined;
     let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -98,6 +118,14 @@ export async function mutateClawRemovalJournal(
       if (input.request.phase === "begin") {
         invalidatePreparation();
         cancel();
+      }
+      try {
+        (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+        sessionChanges.emit({ all: true, scope: "stores" });
+      } catch (error) {
+        if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+          throw error;
+        }
       }
       return result;
     }

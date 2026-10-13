@@ -88,23 +88,25 @@ describe("session sharing store", () => {
       raw: ReturnType<typeof reclamation.runSqliteSessionReclamation>;
     }>();
     const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
-    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-      const worker = spawn(data);
-      if (
-        expect
-          .objectContaining({
-            type: "sqlite-transcript-archive-v2",
-            operation: "reclaim",
-            databaseOptions: expect.objectContaining({
-              env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
-            }),
-          })
-          .asymmetricMatch(data)
-      ) {
-        workers.push(worker);
-      }
-      return worker;
-    });
+    vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation(
+      (data, nativeLocations) => {
+        const worker = spawn(data, nativeLocations);
+        if (
+          expect
+            .objectContaining({
+              type: "sqlite-transcript-archive-v2",
+              operation: "reclaim",
+              databaseOptions: expect.objectContaining({
+                env: expect.objectContaining({ OPENCLAW_STATE_DIR: fixtureRoot }),
+              }),
+            })
+            .asymmetricMatch(data)
+        ) {
+          workers.push(worker);
+        }
+        return worker;
+      },
+    );
     const run = reclamation.runSqliteSessionReclamation;
     vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
       const raw = run(params);

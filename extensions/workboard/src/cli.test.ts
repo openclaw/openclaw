@@ -244,6 +244,35 @@ describe("registerWorkboardCli", () => {
     });
   });
 
+  it.each([false, true])("reports each dispatch failure with JSON=%s", async (json) => {
+    const store = createWorkboardSqliteTestStore();
+    const program = createProgram(store);
+    const result = {
+      started: [{ cardId: "started-card", runId: "run-started" }],
+      startFailures: [
+        { cardId: "12345678-first-card", error: "Workspace is unavailable." },
+        { cardId: "abcdef01-second-card", error: "Model is unavailable." },
+      ],
+    };
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "dispatch", ...(json ? ["--json"] : [])], {
+        from: "user",
+      });
+    });
+
+    if (json) {
+      expect(JSON.parse(output)).toEqual(result);
+    } else {
+      expect(output).toBe(
+        "dispatch complete: started=1 failures=2\n" +
+          "12345678: Workspace is unavailable.\n" +
+          "abcdef01: Model is unavailable.\n",
+      );
+    }
+  });
+
   it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
     const store = createWorkboardSqliteTestStore();
     const program = createProgram(store);

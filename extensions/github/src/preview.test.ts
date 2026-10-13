@@ -345,6 +345,66 @@ describe("loadControlUiGitHubPreview", () => {
     }
   });
 
+  it.each(["issue", "pull"] as const)(
+    "overlaps %s avatars with final visibility validation without publishing private metadata",
+    async (kind) => {
+      vi.useFakeTimers();
+      for (const isPublic of [true, false]) {
+        let repositoryReads = 0;
+        const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+          });
+          const url = requestUrl(input);
+          if (url.includes("avatars.githubusercontent.com")) {
+            return pngResponse();
+          }
+          if (url.includes("/commits")) {
+            return githubJson([
+              { commit: { message: "Co-authored-by: Ada <20+ada@users.noreply.github.com>" } },
+            ]);
+          }
+          if (url.endsWith("/repos/openclaw/openclaw")) {
+            repositoryReads += 1;
+            return repositoryReads === 1 || isPublic
+              ? publicRepository()
+              : githubJson({ private: true, visibility: "private" });
+          }
+          return githubJson(previewPayload());
+        });
+        const settled = vi.fn();
+        const pending = loadControlUiGitHubPreview(
+          previewTarget(88128, kind),
+          managedIdentity(`overlap-${kind}-${isPublic}`),
+          fetchMock,
+        ).then(
+          (preview) => settled({ preview }),
+          (error: unknown) => settled({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(299);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toHaveBeenCalledExactlyOnceWith(
+          isPublic
+            ? {
+                preview: expect.objectContaining({
+                  avatarDataUrl: "data:image/png;base64,iVBORw==",
+                  ...(kind === "pull"
+                    ? {
+                        coAuthors: [
+                          { login: "ada", avatarDataUrl: "data:image/png;base64,iVBORw==" },
+                        ],
+                      }
+                    : {}),
+                }),
+              }
+            : { error: expect.objectContaining({ statusCode: 404 }) },
+        );
+        await pending;
+      }
+    },
+  );
+
   it("keeps concurrent readers and later cache hits independent of a disconnected caller", async () => {
     const started = createDeferred<void>();
     const repository = createDeferred<Response>();

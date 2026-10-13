@@ -108,9 +108,13 @@ class SecretsPage extends OpenClawLightDomElement {
     this.dialogMode = entry ? "edit" : "add";
   }
 
-  private closeDialog() {
+  private closeDialog(bulk = false) {
     if (!this.store.busy) {
-      this.dialogMode = null;
+      if (bulk) {
+        this.bulkOpen = false;
+      } else {
+        this.dialogMode = null;
+      }
       this.formError = null;
     }
   }
@@ -194,13 +198,6 @@ class SecretsPage extends OpenClawLightDomElement {
     this.bulkRaw = "";
     this.bulkAutoDetect = true;
     this.bulkOpen = true;
-  }
-
-  private closeBulk() {
-    if (!this.store.busy) {
-      this.bulkOpen = false;
-      this.formError = null;
-    }
   }
 
   private get bulkParsed() {
@@ -312,7 +309,7 @@ class SecretsPage extends OpenClawLightDomElement {
       },
       onSubmitDraft: () => this.submitDraft(),
       onOpenBulk: () => this.openBulk(),
-      onCloseBulk: () => this.closeBulk(),
+      onCloseBulk: () => this.closeDialog(true),
       onBulkRawChange: (raw) => {
         this.bulkRaw = raw;
         this.formError = null;

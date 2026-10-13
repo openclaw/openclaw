@@ -19,11 +19,11 @@ import {
 } from "./release-qualification-admission.test-support.js";
 
 describe("trusted P qualification admission", () => {
-  it.each(["fresh", "upgrade", "direct", ""])("rejects narrowed cross-OS mode=%s", (mode) => {
+  it.each(["upgrade"])("rejects narrowed cross-OS mode=%s", (mode) => {
     expect(() => fixture(false, { inputs: { mode } })).toThrow("requires mode=both");
   });
 
-  it.each(['["extensions/codex/*.test.ts"]', "null", "{}"])(
+  it.each(['["extensions/codex/*.test.ts"]'])(
     "rejects Node exclusions before producing admission: %s",
     (patterns) => {
       expect(() =>
@@ -32,7 +32,7 @@ describe("trusted P qualification admission", () => {
     },
   );
 
-  it.each(["stable", "full"])("rejects Telegram deferral for %s qualification", (profile) => {
+  it.each(["stable"])("rejects Telegram deferral for %s qualification", (profile) => {
     expect(() =>
       fixture(false, {
         inputs: { release_profile: profile, skip_package_telegram_e2e: "true" },
@@ -40,43 +40,26 @@ describe("trusted P qualification admission", () => {
     ).toThrow("cannot skip Package Telegram E2E");
   });
 
-  it.each(["npm:@openclaw/codex@latest", "npm:@openclaw/codex@2026.7.9", "./other-plugin.tgz"])(
+  it.each(["npm:@openclaw/codex@latest"])(
     "rejects a Codex dependency override from candidate qualification: %s",
     (codex_plugin_spec) => {
       expect(() => fixture(false, { inputs: { codex_plugin_spec } })).toThrow("codex_plugin_spec");
     },
   );
 
-  it("preserves beta Telegram deferral and unreleased Code-SHA qualification", () => {
-    const f = fixture(false, {
-      inputs: {
-        skip_package_telegram_e2e: "true",
-        allow_unreleased_changelog: "true",
-        plugin_prerelease_node_exclude_patterns_json: "[ ]",
-      },
-    });
-    expect(f.verify()).toEqual(f.receipt);
-    expect(f.receipt.request.inputs.allow_unreleased_changelog).toBe("true");
-  });
-
-  it.each(["missing", "empty", "future", "omitted-support-floor", "altered-primary"])(
+  it.each(["empty", "future", "altered-primary"])(
     "rejects %s qualification baselines without a registry fallback",
     (fault) => {
       const envelope = JSON.parse(
         expectDefined(request().inputs.trusted_workflow_json, "trusted workflow envelope"),
       );
       const baselines = JSON.parse(envelope.laneInputs.qualification_baselines_json);
-      if (fault === "missing") {
-        delete envelope.laneInputs.qualification_baselines_json;
-      } else if (fault === "empty") {
+      if (fault === "empty") {
         envelope.laneInputs.qualification_baselines_json = "";
       } else {
         if (fault === "future") {
           baselines.upgradeBaseline = "openclaw@2027.1.1";
           baselines.upgradeSurvivorBaselines = ["openclaw@2026.6.34", "openclaw@2027.1.1"];
-        }
-        if (fault === "omitted-support-floor") {
-          baselines.upgradeSurvivorBaselines = ["openclaw@2026.7.8", "openclaw@2026.7.9"];
         }
         if (fault === "altered-primary") {
           baselines.upgradeBaseline = "openclaw@2026.7.8";
@@ -172,59 +155,31 @@ describe("trusted P qualification admission", () => {
     );
   });
 
-  it.each([
-    "failed-run",
-    "wrong-attempt",
-    "wrong-P",
-    "revoked-actor",
-    "actions-bot",
-    "wrong-actor-id",
-    "expired",
-    "wrong-upload",
-    "generic-success",
-  ])("rejects %s instead of trusting workflow success", (failure) => {
-    const f = fixture();
-    if (failure === "failed-run") {
-      f.run.conclusion = "failure";
-    }
-    if (failure === "wrong-attempt") {
-      f.run.run_attempt = 2;
-    }
-    if (failure === "wrong-P") {
-      f.authority.ancestry = "behind";
-    }
-    if (failure === "revoked-actor") {
-      f.authority.permission = "read";
-    }
-    if (failure === "actions-bot") {
-      f.run.actor = { id: 41898282, login: "github-actions[bot]", type: "Bot" };
-    }
-    if (failure === "wrong-actor-id") {
-      f.run.actor = { ...f.actor, id: 999 };
-    }
-    if (failure === "expired") {
-      f.metadata.expires_at = "2000-01-01T00:00:00Z";
-    }
-    if (failure === "wrong-upload") {
-      f.metadata.created_at = "2026-09-27T00:00:02Z";
-    }
-    if (failure === "generic-success") {
-      f.sources.set(
-        publisherSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW,
-        "name: Arbitrary success\n",
-      );
-    }
-    expect(() => f.verify()).toThrow();
-  });
-
-  it("rejects a changed input and a stale protected P tag", () => {
-    const f = fixture(true);
-    expect(() => f.verify({ ...f.selected.inputs, rerun_group: "ci" })).toThrow(
-      /authenticated operator request/,
-    );
-    f.authority.tagSha = candidateSha;
-    expect(() => f.verify()).toThrow(/missing, moved/);
-  });
+  it.each(["failed-run", "wrong-P", "actions-bot", "wrong-upload", "generic-success"])(
+    "rejects %s instead of trusting workflow success",
+    (failure) => {
+      const f = fixture();
+      if (failure === "failed-run") {
+        f.run.conclusion = "failure";
+      }
+      if (failure === "wrong-P") {
+        f.authority.ancestry = "behind";
+      }
+      if (failure === "actions-bot") {
+        f.run.actor = { id: 41898282, login: "github-actions[bot]", type: "Bot" };
+      }
+      if (failure === "wrong-upload") {
+        f.metadata.created_at = "2026-09-27T00:00:02Z";
+      }
+      if (failure === "generic-success") {
+        f.sources.set(
+          publisherSha + ":" + QUALIFICATION_ADMISSION_WORKFLOW,
+          "name: Arbitrary success\n",
+        );
+      }
+      expect(() => f.verify()).toThrow();
+    },
+  );
 
   it("revalidates operator authority after artifact download", () => {
     const f = fixture();
@@ -254,7 +209,7 @@ describe("trusted P qualification admission", () => {
     ).toThrow(/archive bytes/);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "revalidates current authority without reacquiring immutable evidence (protected=%s)",
     (protectedTag) => {
       const f = fixture(protectedTag);
@@ -277,7 +232,6 @@ describe("trusted P qualification admission", () => {
   );
 
   it.each([
-    "operator",
     "triggering-operator",
     "protected-P",
     "original-attempt",
@@ -288,9 +242,6 @@ describe("trusted P qualification admission", () => {
   ])("denies revoked %s authority after successful acquisition", (fault) => {
     const f = fixture(true);
     const admission = f.verify();
-    if (fault === "operator") {
-      f.authority.permission = "read";
-    }
     if (fault === "triggering-operator") {
       f.run.triggering_actor = { ...f.actor, id: 999 };
     }

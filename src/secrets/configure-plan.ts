@@ -62,70 +62,62 @@ export function buildConfigureCandidatesForScope(params: {
   };
 }): ConfigureCandidate[] {
   const authoredConfig = params.authoredOpenClawConfig ?? params.config;
-
-  const openclawCandidates = discoverConfigSecretTargets(params.config)
-    .filter((entry) => entry.entry.includeInConfigure)
-    .map((entry) => {
+  const candidates: ConfigureCandidate[] = [];
+  for (const configFile of ["openclaw.json", "auth-profile-store"] as const) {
+    const authProfiles = configFile === "auth-profile-store" ? params.authProfiles : undefined;
+    if (configFile === "auth-profile-store" && authProfiles === undefined) {
+      continue;
+    }
+    const targets =
+      authProfiles === undefined
+        ? discoverConfigSecretTargets(params.config)
+        : discoverAuthProfileSecretTargets(authProfiles.store);
+    for (const entry of targets.filter((candidate) => candidate.entry.includeInConfigure)) {
+      const authProfileProvider =
+        authProfiles === undefined
+          ? undefined
+          : resolveAuthProfileProvider(authProfiles.store, entry.pathSegments);
       const resolved = resolveSecretInputRef({
         value: entry.value,
         refValue: entry.refValue,
         defaults: params.config.secrets?.defaults,
       });
-      const pathExists = hasPath(authoredConfig, entry.pathSegments);
-      const refPathExists = entry.refPathSegments
-        ? hasPath(authoredConfig, entry.refPathSegments)
-        : false;
-      // Generated/defaulted target paths are still configurable, but mark them derived so
-      // prompts can distinguish authored config from normalized aliases.
-      return Object.assign(
-        {
-          type: entry.entry.targetType,
-          path: entry.path,
-          pathSegments: [...entry.pathSegments],
-          label: entry.path,
-          configFile: `openclaw.json` as const,
-          expectedResolvedValue: entry.entry.expectedResolvedValue,
-        },
-        resolved.ref ? { existingRef: resolved.ref } : {},
-        pathExists || refPathExists ? {} : { isDerived: true },
-        entry.providerId ? { providerId: entry.providerId } : {},
-        entry.accountId ? { accountId: entry.accountId } : {},
-      );
-    });
-
-  const authProfiles = params.authProfiles;
-  const authCandidates =
-    authProfiles === undefined
-      ? []
-      : discoverAuthProfileSecretTargets(authProfiles.store)
-          .filter((entry) => entry.entry.includeInConfigure)
-          .map((entry) => {
-            const authProfileProvider = resolveAuthProfileProvider(
-              authProfiles.store,
-              entry.pathSegments,
-            );
-            // Auth-profile apply can create missing profiles only when the provider is known.
-            const resolved = resolveSecretInputRef({
-              value: entry.value,
-              refValue: entry.refValue,
-              defaults: params.config.secrets?.defaults,
-            });
-            return Object.assign(
-              {
-                type: entry.entry.targetType,
-                path: entry.path,
-                pathSegments: [...entry.pathSegments],
-                label: `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
-                configFile: `auth-profile-store` as const,
-                expectedResolvedValue: entry.entry.expectedResolvedValue,
-              },
-              resolved.ref ? { existingRef: resolved.ref } : {},
-              { agentId: authProfiles.agentId },
-              authProfileProvider ? { authProfileProvider } : {},
-            );
-          });
-
-  return [...openclawCandidates, ...authCandidates].toSorted((a, b) =>
+      const candidate: ConfigureCandidate = {
+        type: entry.entry.targetType,
+        path: entry.path,
+        pathSegments: [...entry.pathSegments],
+        label:
+          authProfiles === undefined
+            ? entry.path
+            : `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
+        configFile,
+        expectedResolvedValue: entry.entry.expectedResolvedValue,
+        ...(resolved.ref ? { existingRef: resolved.ref } : {}),
+      };
+      if (authProfiles === undefined) {
+        const pathExists = hasPath(authoredConfig, entry.pathSegments);
+        const refPathExists = entry.refPathSegments
+          ? hasPath(authoredConfig, entry.refPathSegments)
+          : false;
+        // Generated/defaulted paths remain configurable but are marked as derived.
+        Object.assign(
+          candidate,
+          pathExists || refPathExists ? {} : { isDerived: true },
+          entry.providerId ? { providerId: entry.providerId } : {},
+          entry.accountId ? { accountId: entry.accountId } : {},
+        );
+      } else {
+        // Auth-profile apply can create missing profiles only when the provider is known.
+        Object.assign(
+          candidate,
+          { agentId: authProfiles.agentId },
+          authProfileProvider ? { authProfileProvider } : {},
+        );
+      }
+      candidates.push(candidate);
+    }
+  }
+  return candidates.toSorted((a, b) =>
     configureCandidateSortKey(a).localeCompare(configureCandidateSortKey(b)),
   );
 }

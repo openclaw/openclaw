@@ -6,6 +6,7 @@ import {
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import {
+  backfillMemoryPathFtsRows,
   dropDisabledMemoryFts,
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
@@ -16,14 +17,19 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
+  reconcileMemoryChunkFtsRows,
 } from "./memory-schema-fts.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import {
   canReuseSqliteSchemaInTransaction,
+  getSqliteDatabaseAdmission,
   migrateSqliteSchemaToStrict,
   migrateSqliteSchemaToStrictInTransaction,
+  publishSqliteDatabaseAdmission,
+  runSqliteImmediateTransactionSync,
+  type SqliteDatabaseAdmissionKey,
 } from "./openclaw-runtime-sqlite.js";
 export {
   markInvalidImportedMemoryEmbeddings,
@@ -83,6 +89,20 @@ type TableColumnInfo = {
   hidden: number;
 };
 
+type MemoryIndexSchemaAdmission = { ftsAvailable: boolean };
+
+function readMemoryIndexSchemaAdmission(value: unknown): MemoryIndexSchemaAdmission | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("ftsAvailable" in value) ||
+    typeof value.ftsAvailable !== "boolean"
+  ) {
+    return undefined;
+  }
+  return { ftsAvailable: value.ftsAvailable };
+}
+
 function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
   const rows = db.prepare(`PRAGMA main.table_xinfo(${tableName})`).all() as Array<{
     name?: unknown;
@@ -120,24 +140,16 @@ function tableHasExactColumns(
   return columns.size === expected.length && expected.every((column) => columns.has(column));
 }
 
-function tablePrimaryKeyColumns(
-  db: DatabaseSync,
-  tableName: string,
-  preparedColumns?: TableColumnInfo[],
-): string[] {
-  return (preparedColumns ?? tableColumnInfo(db, tableName))
-    .filter((row) => row.pk > 0)
-    .toSorted((left, right) => left.pk - right.pk)
-    .map((row) => row.name);
-}
-
 function tableHasPrimaryKey(
   db: DatabaseSync,
   tableName: string,
   expectedColumns: readonly string[],
   preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = tablePrimaryKeyColumns(db, tableName, preparedColumns);
+  const columns = (preparedColumns ?? tableColumnInfo(db, tableName))
+    .filter((row) => row.pk > 0)
+    .toSorted((left, right) => left.pk - right.pk)
+    .map((row) => row.name);
   return (
     columns.length === expectedColumns.length &&
     columns.every((column, index) => column === expectedColumns[index])
@@ -329,6 +341,46 @@ export function ensureMemoryIndexSchema(params: {
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
+  const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
+  const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
+  const tokenizer = params.ftsTokenizer ?? "unicode61";
+  const admissionKey: SqliteDatabaseAdmissionKey<MemoryIndexSchemaAdmission> = {
+    name: `memory.index-schema:${JSON.stringify([
+      embeddingCacheTable,
+      params.cacheEnabled,
+      ftsTable,
+      params.ftsEnabled,
+      tokenizer,
+    ])}`,
+    schemaDependent: true,
+    read: readMemoryIndexSchemaAdmission,
+  };
+  const admitted = getSqliteDatabaseAdmission(params.db, admissionKey);
+  if (admitted) {
+    provenanceSchema.backfillMemoryChunkProvenance(params.db);
+    if (admitted.ftsAvailable) {
+      try {
+        const reconcile = () => {
+          reconcileMemoryChunkFtsRows(params.db, ftsTable);
+          if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+            backfillMemoryPathFtsRows(params.db);
+          }
+        };
+        if (params.db.isTransaction) {
+          reconcile();
+        } else {
+          runSqliteImmediateTransactionSync(params.db, reconcile);
+        }
+      } catch (err) {
+        if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
+          dropMemoryChunkFtsTriggers(params.db);
+          dropMemoryPathFtsTriggers(params.db);
+        }
+        return { ftsAvailable: false, ftsError: formatErrorMessage(err) };
+      }
+    }
+    return admitted;
+  }
   if (
     tableHasExactColumns(params.db, "meta", ["key", "value"]) &&
     tableHasExactColumns(params.db, "files", ["path", "source", "hash", "mtime", "size"]) &&
@@ -349,8 +401,6 @@ export function ensureMemoryIndexSchema(params: {
       "Retired memory index format detected. Preserve a complete copy of your state and configuration, then use OpenClaw 2026.9.7 to migrate a compatible copy of this index before retrying the upgrade.",
     );
   }
-  const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
-  const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   params.db.exec(
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
@@ -413,7 +463,6 @@ export function ensureMemoryIndexSchema(params: {
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
-      const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
       ensureMemoryChunkFtsSchema({ db: params.db, ftsTable, tokenizeClause });
       // Deprecated custom FTS tables preserve their body-only contract. The
@@ -431,5 +480,8 @@ export function ensureMemoryIndexSchema(params: {
     }
   }
 
+  if (!params.ftsEnabled || ftsAvailable) {
+    publishSqliteDatabaseAdmission(params.db, admissionKey, { ftsAvailable });
+  }
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }

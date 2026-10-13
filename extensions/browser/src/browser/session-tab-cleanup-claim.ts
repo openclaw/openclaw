@@ -215,10 +215,7 @@ async function deleteClaimedTab(
     }
     await deleteBrowserSessionTabIf(
       tab.storageKey,
-      (current) => {
-        const record = parseBrowserSessionTabRecord(current);
-        return matchesCleanupAttempt(record, tab);
-      },
+      (current) => matchesCleanupAttempt(parseBrowserSessionTabRecord(current), tab),
       authority,
     );
   } catch (error) {
@@ -354,8 +351,6 @@ export async function closeDurableTab(
   }
   if (outcome.status === "ownership-mismatch") {
     params.onWarn?.(`retired tracked browser tab ${tab.nativeTargetId}: ownership mismatch`);
-    await deleteClaimedTab(tab, authority, params.onWarn);
-    return 0;
   }
   await deleteClaimedTab(tab, authority, params.onWarn);
   return outcome.status === "closed" ? 1 : 0;

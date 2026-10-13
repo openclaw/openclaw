@@ -9,9 +9,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
-  assignHumanOwner,
   databasePath,
-  humanOwner,
   outcomeKinds,
   readClaim,
   recordHarnessDeletions,
@@ -28,7 +26,7 @@ import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js"
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 
-const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
+const { createFixture } = setupLegacyMainSessionMigrationTests();
 
 function repair(fixture: ReturnType<typeof createFixture>) {
   return migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" });
@@ -169,37 +167,6 @@ describe("legacy main session history handoff", () => {
         { agentId: source.databaseAgentId, path: source.databasePath },
       ),
     ).toEqual([]);
-  });
-
-  it.each([
-    { kind: "migrated-in-place", sharedStore: true },
-    { kind: "migrated-cross-store", sharedStore: false },
-  ])("preserves the assigned human owner when $kind", async ({ kind, sharedStore }) => {
-    const storePath = sharedStore
-      ? path.join(tempDirs.make("owned-in-place-migration-"), "sessions.sqlite")
-      : undefined;
-    const fixture = createFixture({
-      agents: { entries: { ops: {} } },
-      ...(storePath ? { session: { store: storePath } } : {}),
-    });
-    const sourcePath = storePath ?? databasePath(fixture.stateDir, "main");
-    seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" });
-    assignHumanOwner(sourcePath);
-
-    const result = await repair(fixture);
-
-    expect(result.complete).toBe(true);
-    expect(outcomeKinds(result)).toContain(kind);
-    expect(
-      readClaim({
-        databaseAgentId: sharedStore ? "main" : "ops",
-        databasePath: storePath ?? databasePath(fixture.stateDir, "ops"),
-        key: "agent:ops:chat",
-      })?.entry.owner,
-    ).toEqual(humanOwner);
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" }),
-    ).toBeUndefined();
   });
 
   it("preserves anchored history and recorded idempotency ownership across stores", async () => {

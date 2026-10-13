@@ -99,7 +99,7 @@ function openStore() {
 
 function normalizeStoredProvenance(
   value: StoredMemoryArtifactProvenance | undefined,
-  address: MemoryArtifactAddress,
+  address: Pick<MemoryArtifactAddress, "workspaceKey" | "relativePath">,
 ): StoredMemoryArtifactProvenance | undefined {
   if (
     value?.version !== 1 ||
@@ -219,12 +219,10 @@ export async function listMemoryArtifactProvenance(params: {
   return entries
     .toSorted((left, right) => left.createdAt - right.createdAt)
     .flatMap((entry) => {
-      const address = {
+      const stored = normalizeStoredProvenance(entry.value, {
         workspaceKey,
         relativePath: entry.value.relativePath,
-        storeKey: entry.key,
-      };
-      const stored = normalizeStoredProvenance(entry.value, address);
+      });
       return stored
         ? [{ relativePath: stored.relativePath, provenance: toPublicProvenance(stored) }]
         : [];

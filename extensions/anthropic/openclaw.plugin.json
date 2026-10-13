@@ -1,7 +1,9 @@
 {
   "id": "anthropic",
   "categories": ["models"],
-  "doctorContract": {},
+  "doctorContract": {
+    "configRepair": true
+  },
   "sessionRouteStateOwners": [
     {
       "id": "anthropic",

@@ -4,14 +4,17 @@ import {
   validateTalkVoiceSetParams,
   type TalkVoiceGetParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { resolveClientVoiceRunBinding } from "../../../talk/client-voice-session.js";
 import { resolveRealtimeVoiceSelectionRun } from "../../../talk/voice-selection-control.js";
 import { respondUnavailable } from "../../server-methods/response.js";
+import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
+import { captureSessionMutationRouting } from "../../session-sharing-preparation.js";
 import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { assertTalkSessionStorageTarget } from "../session-target.js";
 import {
@@ -43,24 +46,24 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
   const binding = identity
     ? resolveClientVoiceRunBinding(identity.operationalRunInstance.runId)
     : undefined;
-  const assertCallerCurrent = () => {
-    options.sessionMutationCommitGuard?.();
-    options.sessionMutationAuthorization?.assertCurrent();
-    if (
-      client.invalidated ||
-      client.connectionSignal?.aborted ||
-      options.signal?.aborted ||
-      options.hasCurrentClientAuthority?.() === false
-    ) {
-      throw new Error("Voice selection caller disconnected");
-    }
-    if (
-      identity &&
-      (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true || !identity.sessionKey)
-    ) {
-      throw new Error("The agent no longer owns this voice call");
-    }
-  };
+  const assertCallerCurrent = composeSessionSourceAssertion(
+    [
+      readGatewayRequestMutationAuthority(options).assertCurrent,
+      options.sessionMutationAuthorization?.assertCurrent,
+    ],
+    (assertSources) => {
+      if (client.invalidated || client.connectionSignal?.aborted || options.signal?.aborted) {
+        throw new Error("Voice selection caller disconnected");
+      }
+      assertSources();
+      if (
+        identity &&
+        (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true || !identity.sessionKey)
+      ) {
+        throw new Error("The agent no longer owns this voice call");
+      }
+    },
+  );
   assertCallerCurrent();
   const managed = identity
     ? resolveRealtimeVoiceSelectionRun(identity.operationalRunInstance.runId)
@@ -85,17 +88,20 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
       },
     };
   }
-  const assertBrowserBindingCurrent = () => {
-    assertCallerCurrent();
-    if (
-      identity &&
-      (!binding ||
-        resolveClientVoiceRunBinding(identity.operationalRunInstance.runId) !== binding ||
-        binding.agentId !== identity.agentId)
-    ) {
-      throw new Error("The agent no longer owns this voice call");
-    }
-  };
+  const assertBrowserBindingCurrent = composeSessionSourceAssertion(
+    [assertCallerCurrent],
+    (assertSource) => {
+      assertSource();
+      if (
+        identity &&
+        (!binding ||
+          resolveClientVoiceRunBinding(identity.operationalRunInstance.runId) !== binding ||
+          binding.agentId !== identity.agentId)
+      ) {
+        throw new Error("The agent no longer owns this voice call");
+      }
+    },
+  );
   assertBrowserBindingCurrent();
   const session = resolveTalkVoiceSession(
     identity && binding ? { kind: "run", ...binding } : { kind: "client", connId, ...target },
@@ -122,15 +128,21 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
     session.sessionTarget.agentId,
     session.sessionTarget.canonicalKey,
   );
+  const assertRoutingCurrent = captureSessionMutationRouting(
+    context.getRuntimeConfig(),
+    () => new Error("Talk session storage target changed; retry the request"),
+  );
   return {
     kind: "browser" as const,
     session,
     connId,
-    assertCurrent: () => {
-      assertBrowserBindingCurrent();
-      assertTalkSessionStorageTarget(context.getRuntimeConfig(), session.sessionTarget);
-      authorization?.assertCurrent();
-    },
+    assertCurrent: composeSessionSourceAssertion(
+      [assertBrowserBindingCurrent, authorization?.assertCurrent],
+      (assertSources) => {
+        assertRoutingCurrent(context.getRuntimeConfig());
+        assertSources();
+      },
+    ),
   };
 }
 

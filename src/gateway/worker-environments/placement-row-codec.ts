@@ -42,6 +42,49 @@ type PlacementDatabase = Pick<
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
 
+export function selectWorkerPlacementRows(db: DatabaseSync, sessionIds: readonly string[]) {
+  return query(db)
+    .selectFrom("worker_session_placements")
+    .select([
+      "session_id",
+      "agent_id",
+      "session_key",
+      "execution_mode",
+      "state",
+      "environment_id",
+      "transition_generation",
+      "active_owner_epoch",
+      "workspace_base_manifest_ref",
+      "remote_workspace_dir",
+      "worker_bundle_hash",
+      "last_transcript_ack_cursor",
+      "last_live_event_ack_cursor",
+      "recovery_error",
+      "terminal_reason",
+      "terminal_at_ms",
+      "turn_claim_owner",
+      "turn_claim_id",
+      "turn_claim_run_id",
+      "turn_claim_generation",
+      "turn_claim_owner_epoch",
+      "created_at_ms",
+      "updated_at_ms",
+      "state_changed_at_ms",
+    ])
+    .where("session_id", "in", sqliteStringSet(sessionIds))
+    .$assertType<PlacementRow>();
+}
+
+export function revivePlacementProjectionInteger(column: string, value: unknown): unknown {
+  // These STRICT tables project INTEGER numbers; preserve native reads' refusal to round them.
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new RangeError(
+      `Worker placement projection column ${column} is outside JavaScript's safe integer range`,
+    );
+  }
+  return value;
+}
+
 export function turnClaimValues(claim: PersistedTurnClaim | null) {
   return {
     turn_claim_owner: claim?.owner ?? null,

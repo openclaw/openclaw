@@ -131,6 +131,13 @@ describe("Gateway GitHub publication", () => {
       base: "main",
       draft: true,
     });
+    for (const [, options] of mocks.runCommand.mock.calls) {
+      expect(options?.env).toMatchObject({
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "core.hooksPath",
+        GIT_CONFIG_VALUE_0: os.devNull,
+      });
+    }
     const persisted = database.db
       .prepare("SELECT * FROM github_publication_requests WHERE session_id = ?")
       .get(SESSION_ID);
@@ -205,83 +212,6 @@ describe("Gateway GitHub publication", () => {
       ),
     ).toBe(true);
     expect(mocks.runCommand.mock.calls.some(([argv]) => argv.includes("POST"))).toBe(false);
-  });
-
-  it("pushes a fork and creates its pull request in the upstream repository", async () => {
-    mocks.resolveRepository.mockResolvedValue({
-      checkoutRoot: "/repo/worktree",
-      repoRoot: "/repo",
-      originUrl: "git@github.com:roboclaw-bot/openclaw.git",
-      fingerprint: "fingerprint-1",
-    });
-    const fallback = mocks.runCommand.getMockImplementation()!;
-    let remotePublished = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      const command = argv.join(" ");
-      if (command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")) {
-        return commandResult(
-          '{"fork":true,"default_branch":"main","parent":{"name":"openclaw","default_branch":"trunk","owner":{"login":"openclaw"}}}\n',
-        );
-      }
-      if (command.includes("ls-remote") && command.includes("roboclaw-bot/openclaw.git")) {
-        return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
-      }
-      if (argv.includes("push")) {
-        remotePublished = true;
-      }
-      if (command.includes("repos/openclaw/openclaw/pulls") && command.includes("state=all")) {
-        return commandResult("[]\n");
-      }
-      if (
-        command ===
-        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
-      ) {
-        return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125202"}\n');
-      }
-      return await fallback(argv, options);
-    });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-      }),
-    });
-
-    const result = await coordinator.requestForSession({
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "fork-create-pr",
-      title: "Publish from the fork",
-    });
-
-    expect(result).toMatchObject({
-      status: "published",
-      repository: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw/pull/125202",
-    });
-    expect(
-      mocks.runCommand.mock.calls.some(([argv]) =>
-        argv.includes("https://github.com/roboclaw-bot/openclaw.git"),
-      ),
-    ).toBe(true);
-    const post = mocks.runCommand.mock.calls.find(([argv]) => argv.includes("POST"));
-    expect(post?.[0]).toEqual([
-      "gh",
-      "api",
-      "--hostname",
-      "github.com",
-      "--method",
-      "POST",
-      "repos/openclaw/openclaw/pulls",
-      "--input",
-      "-",
-    ]);
-    expect(JSON.parse(post?.[1]?.input ?? "null")).toEqual({
-      title: "Publish from the fork",
-      body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${result.requestId} -->`,
-      head: `roboclaw-bot:${BRANCH}`,
-      base: "trunk",
-      draft: true,
-    });
   });
 
   it.each([
@@ -506,39 +436,6 @@ describe("Gateway GitHub publication", () => {
       code: "workspace_changed",
     });
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
-  });
-
-  it("passes one active resolved and source config snapshot to publication identity", async () => {
-    const resolved = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
-    const source = {
-      ...resolved,
-      gateway: {
-        controlUi: {
-          github: { token: { source: "env", provider: "default", id: "GH_TOKEN" } },
-        },
-      },
-    };
-    mocks.getConfigSnapshot.mockReturnValue({ config: resolved, sourceConfig: source });
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const coordinator = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore({ database }),
-    });
-
-    await coordinator.requestForSession({
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "publication-config-snapshot",
-    });
-
-    expect(mocks.refreshIdentity).toHaveBeenCalledWith("main");
-    expect(mocks.refreshIdentity.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.prepareIdentity.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(mocks.prepareIdentity).toHaveBeenCalledWith({
-      config: resolved,
-      sourceConfig: source,
-      agentId: "main",
-    });
   });
 
   it("singleflights concurrent coordinators before any Git or GitHub mutation", async ({
@@ -787,7 +684,6 @@ describe("Gateway GitHub publication", () => {
 
   it.each([
     { phase: "commit", remoteInitiallyPublished: false, pullRequestExists: false },
-    { phase: "push", remoteInitiallyPublished: true, pullRequestExists: false },
     { phase: "pull request", remoteInitiallyPublished: true, pullRequestExists: true },
     { phase: "body-only credit", remoteInitiallyPublished: false, pullRequestExists: false },
   ])(

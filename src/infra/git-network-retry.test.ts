@@ -112,7 +112,7 @@ describe("Git network recovery", () => {
       expect(calls.map((call) => call.input)).toEqual([input, input]);
       expect(calls.map((call) => call.timeoutMs)).toEqual([10_000, 9_000]);
       expect(networkLog.warn).toHaveBeenCalledExactlyOnceWith(
-        "Git fetch hit a transient transport failure; retrying once",
+        "Git fetch hit a transient failure; retrying once",
         { operation: "fetch", attempt: 1, maxAttempts: 2, delayMs: 1_000, exitCode: 1 },
       );
     });
@@ -196,6 +196,15 @@ describe("Git network recovery", () => {
       args: ["-C", "/repo", "fetch", "origin"],
       stderr: "error: RPC failed; curl 56 Recv failure: Connection reset by peer",
     },
+    {
+      args: ["fetch", "origin"],
+      stderr: "error: cannot lock ref 'refs/remotes/origin/main': is at aaaa but expected bbbb",
+    },
+    {
+      args: ["fetch", "origin"],
+      stderr:
+        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create '/repo/.git/refs/remotes/origin/main.lock': File exists.",
+    },
   ])("recovers transport errors with Git global options: $stderr", async ({ args, stderr }) => {
     results({ ...failure, stderr }, success);
     const pending = executeGitCommand("/repo", args, { timeoutMs: 10_000 });
@@ -211,6 +220,14 @@ describe("Git network recovery", () => {
     },
     { args: ["fetch", "origin"], stderr: "fatal: repository not found" },
     { args: ["fetch", "origin"], stderr: "fatal: couldn't find remote ref main" },
+    {
+      args: ["fetch", "origin"],
+      stderr: "error: cannot lock ref 'refs/remotes/origin/main': Permission denied",
+    },
+    {
+      args: ["worktree", "add", "-b", "feature", "/target", "origin/main"],
+      stderr: "error: cannot lock ref 'refs/heads/feature': is at aaaa but expected bbbb",
+    },
     {
       args: ["fetch", "origin"],
       stderr: "fatal: No space left on device\nerror: origin did not send all necessary objects",

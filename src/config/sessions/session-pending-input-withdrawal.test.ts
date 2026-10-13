@@ -8,6 +8,7 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -196,18 +197,13 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
     const receipts: SessionPendingInputReceipt[] = [];
     const receipt = await stage(target, "revoked", receipts);
     const original = readPendingRow(database, receipt.inputId);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     try {
       await expect(
         discardSessionPendingInput(target, "revoked", () => {

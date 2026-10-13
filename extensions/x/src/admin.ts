@@ -12,6 +12,7 @@ import {
 import { getXApi } from "./client.js";
 import { getXGuestStatus } from "./guests.js";
 import { openXSpend, XBudgetExceededError, type XSpendStatus } from "./spend.js";
+import { getXGitHubStatus } from "./verified-github.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
 
@@ -21,6 +22,7 @@ export type XAllowlistSnapshot = {
   entries: XEffectiveAllowlistEntry[];
   guests: Awaited<ReturnType<typeof getXGuestStatus>>;
   spend: XSpendStatus;
+  verifiedFromGitHub?: Awaited<ReturnType<typeof getXGitHubStatus>>;
 };
 
 class XAdminError extends Error {
@@ -89,7 +91,7 @@ export function registerXAllowlistMethods(
       ? resolveXAccount(cfg, selectedAccountId)
       : accountFor(request, cfg).account;
     const readConfig = createRuntimeConfigReader(cfg);
-    const [entries, guests, spend] = await Promise.all([
+    const [entries, guests, spend, verifiedFromGitHub] = await Promise.all([
       getAllowlist().list(account.accountId),
       getXGuestStatus(api.runtime, account, cfg),
       openXSpend(
@@ -97,6 +99,7 @@ export function registerXAllowlistMethods(
         account.accountId,
         () => resolveXAccount(readConfig(), account.accountId).costLimits,
       ).status(),
+      getXGitHubStatus(api.runtime, account),
     ]);
     assertAdmin(request);
     return {
@@ -108,6 +111,7 @@ export function registerXAllowlistMethods(
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
       guests,
       spend,
+      verifiedFromGitHub,
     };
   };
   const handlers: Record<string, (request: Request) => Promise<unknown>> = {

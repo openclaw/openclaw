@@ -11,6 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { defineGitHubPublicationAccountTests } from "./chat-github-publication-accounts.test-support.ts";
 import {
   personalAccount,
@@ -129,6 +130,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:main"));
         await showPublicationBranch(gateway, confirmation.branch);
+        await openDetailsPullRequests(page);
         const optionRequest = await gateway.waitForRequest("sessions.github.options");
         expect(optionRequest.params).toEqual(target);
         await page.getByRole("button", { name: "Publication account", exact: true }).click();
@@ -231,14 +233,25 @@ suite.define(() => {
     await expect.poll(() => panes.count()).toBe(2);
     const first = panes.nth(0);
     const second = panes.nth(1);
-    await first.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
+    await openDetailsPullRequests(second);
     await second.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
+    await openDetailsPullRequests(first);
+    await first.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
+    // Only the focused pane's Details is open. Its sibling must still project the
+    // admitted publication state before another user interaction reconciles it.
+    expect(await second.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     await gateway.deferNext("sessions.github.publish");
     await first.getByRole("button", { name: "Publish PR", exact: true }).click();
     const original = await gateway.waitForRequest("sessions.github.publish");
     await first.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
     const pendingProjectionError = await expect
-      .poll(() => second.getByRole("button", { name: "Publishing…", exact: true }).count())
+      .poll(() =>
+        second
+          .getByRole("button", { name: "Publishing…", exact: true, includeHidden: true })
+          .count(),
+      )
       .toBe(1)
       .then(
         () => undefined,
@@ -257,7 +270,11 @@ suite.define(() => {
     });
     await first.getByRole("button", { name: "Retry publication", exact: true }).waitFor();
     const retryProjectionError = await expect
-      .poll(() => second.getByRole("button", { name: "Retry publication", exact: true }).count())
+      .poll(() =>
+        second
+          .getByRole("button", { name: "Retry publication", exact: true, includeHidden: true })
+          .count(),
+      )
       .toBe(1)
       .then(
         () => undefined,
@@ -274,6 +291,7 @@ suite.define(() => {
     // Exercise the normal pointer/focus path separately: it may reconcile a
     // stale pane, but it must never create another publication identity.
     await second.click({ position: { x: 20, y: 80 } });
+    await openDetailsPullRequests(second);
     const retry = second.getByRole("button", { name: "Retry publication", exact: true });
     await retry.waitFor();
     await gateway.deferNext("sessions.github.publish");
@@ -318,6 +336,7 @@ suite.define(() => {
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await showPublicationBranch(gateway, undefined, sessionA);
+    await openDetailsPullRequests(page);
     const activePane = page.locator(".chat-pane-cache__pane--active");
     await activePane.getByRole("button", { name: "Publication account", exact: true }).click();
     await activePane.locator(`wa-dropdown-item[value="${source}"]`).click();
@@ -352,6 +371,7 @@ suite.define(() => {
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await showPublicationBranch(gateway, undefined, sessionA);
+    await openDetailsPullRequests(page);
     const publication = activePane.locator('.chat-pr[data-state="branch"]');
     await publication.waitFor();
     await expect
@@ -418,6 +438,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await showPublicationBranch(gateway, "fix/publisher-recovery");
+      await openDetailsPullRequests(page);
       await page.getByRole("button", { name: "Publication account", exact: true }).click();
       await page.locator(`wa-dropdown-item[value="${source}"]`).click();
       await gateway.deferNext("sessions.github.publish");
@@ -552,6 +573,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await showPublicationBranch(gateway);
+    await openDetailsPullRequests(page);
     const chooser = page.getByRole("button", { name: "Publication account", exact: true });
     await chooser.click();
     const shared = page.getByRole("menuitemradio", { name: "@system-bot", exact: true });
@@ -693,11 +715,13 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await showPublicationBranch(gateway);
+      await openDetailsPullRequests(page);
       await page.getByRole("button", { name: "Confirm original publication" }).waitFor();
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       await page.reload();
       await showPublicationBranch(gateway);
+      await openDetailsPullRequests(page);
       const details = page.locator(".chat-pr__publication-outcome");
       await expect.poll(() => details.textContent()).toContain("Publish as @alice-tools");
       await expect.poll(() => details.textContent()).toContain("team/demo → main");
@@ -766,6 +790,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await showPublicationBranch(gateway);
+    await openDetailsPullRequests(page);
     await page
       .getByText("The original publication is still running.", { exact: true })
       .waitFor({ state: "attached" });
@@ -839,6 +864,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await showPublicationBranch(gateway);
+    await openDetailsPullRequests(page);
     await page.getByRole("button", { name: "Publication account" }).click();
     await page.locator('wa-dropdown-item[value="personal"]').click();
     await gateway.deferNext("sessions.github.publish");
@@ -849,6 +875,7 @@ suite.define(() => {
     await gateway.closeLatest();
     await gateway.waitForRequest("connect", { after: previousConnects });
     await showPublicationBranch(gateway);
+    await openDetailsPullRequests(page);
     await expect
       .poll(() => page.getByRole("button", { name: "Publication account", exact: true }).count())
       .toBe(0);

@@ -18,7 +18,7 @@ import {
   globalBeforeAll0,
   installCaptionedVoiceTestPlugin,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -219,6 +219,13 @@ describe("source completion", () => {
       const patch = actualSessions.patchSessionEntryCore;
       vi.spyOn(sessionAccessors, "patchSessionEntryCore").mockImplementation((...args) =>
         patch(...args),
+      );
+      const sqliteEntries = await import("../../config/sessions/session-accessor.sqlite-entry.js");
+      const actualSqliteEntries = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+      >("../../config/sessions/session-accessor.sqlite-entry.js");
+      vi.spyOn(sqliteEntries, "applySessionEntryOperation").mockImplementation(
+        actualSqliteEntries.applySessionEntryOperation,
       );
     }
     let buffered = false;

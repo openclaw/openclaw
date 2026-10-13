@@ -148,6 +148,13 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
       (mimeType === "text/markdown" ||
         mimeType === "text/x-markdown" ||
         /\.(?:md|markdown)$/i.test(this.label));
+    const textSource = html`<pre
+      class="sidebar-attachment-preview__text"
+      tabindex="0"
+      aria-label=${this.label}
+      ?hidden=${htmlDocument && !this.source}
+    >
+${this.text}</pre>`;
     const reader =
       this.text === null
         ? renderAttachmentPreviewSkeleton()
@@ -159,13 +166,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
                 ? html`<div class="chat-html-preview" ?hidden=${this.source}>
                       ${renderHtmlPreview(this.htmlPreviewLoader, this.text, this.sourceIdentity || this.src, this.label, this.embedSandboxMode)}
                     </div>
-                    <pre
-                      class="sidebar-attachment-preview__text"
-                      tabindex="0"
-                      aria-label=${this.label}
-                      ?hidden=${!this.source}
-                    >
-${this.text}</pre>`
+                    ${textSource}`
                 : markdown && !this.source
                   ? html`<article
                       class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
@@ -183,12 +184,7 @@ ${this.text}</pre>`
                         }),
                       )}
                     </article>`
-                  : html`<pre
-                      class="sidebar-attachment-preview__text"
-                      tabindex="0"
-                      aria-label=${this.label}
-                    >
-${this.text}</pre>`,
+                  : textSource,
             )}`,
           )}`;
     return html`

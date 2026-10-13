@@ -3,8 +3,11 @@ import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
+const REQUEST_BUDGET_OVERFLOW_RE =
+  /context window exceeded: estimated input \d+ leaves only \d+ output tokens within the \d+-token context\./i;
 
 const ASSISTANT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
   /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
@@ -35,6 +38,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
 ];
 
 const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /request_too_large/i, // Anthropic request byte-size overflow
   /context_overflow/i,
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server

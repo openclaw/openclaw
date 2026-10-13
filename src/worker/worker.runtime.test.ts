@@ -1111,7 +1111,7 @@ describe("worker runtime", () => {
     ]);
     expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
       descriptor: launch.assignment.browser,
-      sessionKey: `worker:${SESSION_ID}`,
+      sessionKey: `agent:worker-agent:worker:${SESSION_ID}`,
       stateDir: expect.any(String),
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });

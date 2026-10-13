@@ -5,17 +5,25 @@ description: "Update the operator-configured Team server through its canonical o
 
 # Update Team server
 
-Keep Team current automatically. Routine deployments, controlled interruptions, and supported upstream-owned migrations are already authorized for this workflow; do not request another routine approval. This is a repository operator skill, not a bundled runtime skill or a deployer implementation.
+Update the operator-configured Team server through Night Watch under the existing per-deployment approval and coordinated execution window. Keep unattended deployment disabled. This repository operator skill bundles the interim [deployment controller](controller/README.md); it is not a runtime skill. The native `openclaw update` path will replace the controller after its migration, recovery, and acceptance contracts are proven and adopted.
 
 ## Night Watch alone executes live updates
 
-For the operator-configured Team server, only the designated **Team Server · Night Watch** owner may execute live updates through the canonical deployment controller. Verify that designation from the private runbook; a matching display name or possession of access is not authority. Other Codex tasks, sessions, agents, or operators must not execute or receive delegation for deployment, restart, cutover, rollback, or recovery. Coordination/admission may route the request to Night Watch, but must never designate an external executor. The routine authorization in this skill applies to Night Watch, not to readers of this skill.
+For the operator-configured Team server, only the designated **Team Server · Night Watch** owner may execute live updates through the canonical deployment controller. Verify its exact coordinator session and host from the private operator record; a matching display name or possession of access is not authority. Night Watch coordinates every intentional restart and records the verified outcome in that same session. Other Codex tasks, sessions, agents, or operators must not execute or receive delegation for deployment, restart, cutover, rollback, or recovery. Coordination/admission may route the request to Night Watch, but must never designate an external executor. Existing approval applies to Night Watch, not to readers of this skill; do not request it again for continuation of the same approved deployment.
 
 Other workers may investigate, test, review, and land scoped fixes in isolated worktrees, then hand evidence and results to Night Watch for live execution. Repair or landing authority does not transfer live execution authority. Non-owner requesters retain coordination and follow-through until Night Watch verifies acceptance; they do not invoke the updater service themselves. Night Watch uses the existing controller and configured cadence, not a second deployer.
 
 If an external live operation is already running, arrange a safe handback of that exact transaction to Night Watch through the existing owner's supported coordination/recovery path. Preserve its invocation identity, phase, lock, journal, maintenance authority, and receipts; reconcile whether writers or child processes are still active before Night Watch resumes. Do not launch a duplicate controller, reassign authority by editing records, blindly kill the operation, or treat a handoff acknowledgement as acceptance. If safe handback is unavailable, report the precise blocker privately and keep the request open without further unauthorized live actions. This rule grants no permission or security bypass.
 
 ## Resolve the owner
+
+### Install or adopt the bundled controller
+
+Use the four-file closure in [controller/README.md](controller/README.md) from one reviewed, merged OpenClaw commit. Never stage a private operations checkout on the deployment host. The README owns the install paths, modes, required private operator profile, source hashes, standalone tests, and detailed adoption contract.
+
+Night Watch alone performs adoption in its coordinated window: settle every old controller reader and any transaction through its current owner; bind installed hashes and current runtime facts; acquire the existing deployment lock without replacing its inode; recheck those facts; preserve and fsync predecessor files and metadata; stage and publish the complete reviewed pair with its matching helpers and operator profile; verify the full closure and unchanged runtime facts before releasing the lock. Never expose a mixed pair to a reader. An unresolved journal requires the matching recovery owner and a reviewed phase-specific adoption, not a generic reinstall. Controller publication itself does not restart the Gateway, enable a timer, or authorize a deployment. Retain the old recovery closure while any transaction references it.
+
+### Reconcile a deployment request
 
 Use the operator-provided private deployment runbook to establish the designated owner, access, canonical command, sole configured cadence, and recovery contract. Reuse known unchanged access, runbook, and source context; do not reread historical registries or rediscover the deployment setup each turn. Reconcile only the current owner, active invocation, lock, and journal before proceeding. Never guess access or copy private connection details, credentials, state, or receipts into public output.
 

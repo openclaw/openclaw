@@ -25,6 +25,7 @@ import {
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
@@ -120,6 +121,8 @@ suite.define(() => {
       await restoredPage.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:restart-draft"),
       );
+      // Chat admission precedes durable cleanup; keep its document alive until retirement commits.
+      await waitForCommittedComposerDraft(restoredPage, JSON.stringify(["", "", ""]), null, 0);
       await restoredPage.close();
 
       const clearedPage = await context.newPage();

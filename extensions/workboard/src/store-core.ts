@@ -7,7 +7,7 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -559,13 +559,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ) {
         // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
         effectivePatch = { ...patch, status: undefined };
-        if (
-          patch.metadata &&
-          typeof patch.metadata === "object" &&
-          !Array.isArray(patch.metadata)
-        ) {
-          const metadataPatch = patch.metadata as Record<string, unknown>;
-          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = metadataPatch;
+        if (isRecord(patch.metadata)) {
+          const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
           effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
         }
         const hasSemanticPatch = Object.entries(effectivePatch).some(
@@ -646,10 +641,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
             ? existing.notes
             : normalizeNotes(effectivePatch.notes),
         status,
-        priority:
-          effectivePatch.priority === undefined
-            ? existing.priority
-            : normalizePriority(effectivePatch.priority, existing.priority),
+        priority: normalizePriority(effectivePatch.priority, existing.priority),
         labels:
           effectivePatch.labels === undefined
             ? existing.labels
@@ -899,28 +891,19 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     if (await this.dependsOn(parent.id, child.id)) {
       throw new Error("dependency link would create a cycle.");
     }
-    const parentLinks = parent.metadata?.links ?? [];
-    const childLinks = child.metadata?.links ?? [];
-    const nextParentLinks = parentLinks.some(
-      (link) => link.type === "child" && link.targetCardId === child.id,
-    )
-      ? parentLinks
-      : appendLinkPreservingDependencies(parentLinks, {
-          id: randomUUID(),
-          type: "child" as const,
-          targetCardId: child.id,
-          createdAt: now,
-        });
-    const nextChildLinks = childLinks.some(
-      (link) => link.type === "parent" && link.targetCardId === parent.id,
-    )
-      ? childLinks
-      : appendLinkPreservingDependencies(childLinks, {
-          id: randomUUID(),
-          type: "parent" as const,
-          targetCardId: parent.id,
-          createdAt: now,
-        });
+    const linkTo = (card: WorkboardCard, targetCardId: string, type: "parent" | "child") => {
+      const links = card.metadata?.links ?? [];
+      return links.some((link) => link.type === type && link.targetCardId === targetCardId)
+        ? links
+        : appendLinkPreservingDependencies(links, {
+            id: randomUUID(),
+            type,
+            targetCardId,
+            createdAt: now,
+          });
+    };
+    const nextParentLinks = linkTo(parent, child.id, "child");
+    const nextChildLinks = linkTo(child, parent.id, "parent");
     await this.updateCard(
       await this.requireCard(parent.id),
       {

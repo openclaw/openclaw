@@ -544,11 +544,8 @@ export function reconcileSessionChangedRow(
   ) {
     return { applied: false, key, agentId: null, row: existing };
   }
-  if (reason === "delete" && !info.sessionId) {
-    return { applied: false, key, agentId: info.agentId, row: existing };
-  }
   if (reason === "delete") {
-    if (existing && existing.sessionId !== info.sessionId) {
+    if (!info.sessionId || (existing && existing.sessionId !== info.sessionId)) {
       return { applied: false, key, agentId: info.agentId, row: existing };
     }
     return { applied: true, key, agentId: info.agentId, deletedKey: existing?.key ?? key };

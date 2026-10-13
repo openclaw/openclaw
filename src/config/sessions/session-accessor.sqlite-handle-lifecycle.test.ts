@@ -13,7 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   applySessionEntryLifecycleMutation,
   appendTranscriptMessage,
@@ -53,10 +53,10 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
-    materializeSessionStateDeletePlans: async (
-      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
+    materializeSessionHistoryEvictionPlan: async (
+      ...args: Parameters<typeof actual.materializeSessionHistoryEvictionPlan>
     ) => {
-      const result = await actual.materializeSessionStateDeletePlans(...args);
+      const result = await actual.materializeSessionHistoryEvictionPlan(...args);
       archiveMaterializationHook.afterMaterialize?.();
       return result;
     },

@@ -459,11 +459,10 @@ class MeetingsPage extends OpenClawLightDomElement {
       return;
     }
     this.lastReaderRefresh = this.now;
-    if (this.summaryTask.status !== TaskStatus.PENDING) {
-      void this.summaryTask.run();
-    }
-    if (this.readerTask.status !== TaskStatus.PENDING) {
-      void this.readerTask.run();
+    for (const task of [this.summaryTask, this.readerTask]) {
+      if (task.status !== TaskStatus.PENDING) {
+        void task.run();
+      }
     }
   }
 

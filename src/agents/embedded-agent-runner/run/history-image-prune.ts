@@ -35,41 +35,31 @@ type PrunableContextAgent = {
   ) => AgentMessage[] | Promise<AgentMessage[]>;
 };
 
-/**
- * Number of most-recent completed turns whose preceding user/toolResult image
- * blocks are kept intact. Counts all completed turns, not just image-bearing
- * ones, so text-only turns consume the window.
- */
+// Start cleanup after three completed turns; subsequent cuts retire eight turns at once.
+// Derive the boundary from canonical history so replay after a restart keeps the same bytes.
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
+const PRUNE_TURN_BATCH = 8;
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
-  let turnsToKeep = PRESERVE_RECENT_COMPLETED_TURNS;
-  let pruneBefore = -1;
+  const completedTurns: number[] = [];
+  let turnStart = -1;
   let hasAssistantReply = false;
-  let firstToolResult = -1;
-  // Only a later user message closes a turn; ignore the active tool loop.
-  const lastUser = messages.findLastIndex((message) => message?.role === "user");
-  for (let index = lastUser - 1; index >= 0; index--) {
-    const role = messages[index]?.role;
-    if (role === "assistant") {
-      hasAssistantReply = true;
-    } else if (role === "toolResult" && hasAssistantReply) {
-      firstToolResult = index;
-    } else if (role === "user") {
-      if (hasAssistantReply) {
-        if (turnsToKeep === 0) {
-          return pruneBefore;
-        }
-        turnsToKeep -= 1;
-        if (turnsToKeep === 0) {
-          pruneBefore = index;
-        }
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "user") {
+      // Only a later user closes a turn; an active tool loop never advances the boundary.
+      if (turnStart >= 0 && hasAssistantReply) {
+        completedTurns.push(turnStart);
       }
+      turnStart = index;
       hasAssistantReply = false;
-      firstToolResult = -1;
+    } else if (message.role === "toolResult" && turnStart < 0) {
+      turnStart = index;
+    } else if (message.role === "assistant" && turnStart >= 0) {
+      hasAssistantReply = true;
     }
   }
-  // History can start with an orphan tool-result turn, without an initial user.
-  return turnsToKeep === 0 && firstToolResult >= 0 ? pruneBefore : -1;
+  const eligible = completedTurns.length - PRESERVE_RECENT_COMPLETED_TURNS;
+  const pruneCount = 1 + Math.floor((eligible - 1) / PRUNE_TURN_BATCH) * PRUNE_TURN_BATCH;
+  return eligible > 0 ? completedTurns[pruneCount]! : -1;
 }
 
 function replaceLegacyFactlessMediaText(text: string): string {

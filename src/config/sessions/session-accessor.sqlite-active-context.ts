@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
@@ -182,6 +183,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     ignoreReadFence?: boolean;
     readOnly?: boolean;
     resolvedScope?: ResolvedTranscriptReadScope;
+    onRead?: (projection: CurrentTranscriptProjection) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
@@ -461,6 +463,11 @@ export function readSessionTranscriptBoundedActiveContextCore(
       projection.database,
       projection.resolved.sessionId,
     );
+    const consumed = options.onRead?.(projection);
+    if (isPromiseLike(consumed)) {
+      void Promise.resolve(consumed).catch(() => {});
+      throw new Error("Transcript snapshot consumers must remain synchronous");
+    }
     return {
       version,
       activeLeafEntryId,

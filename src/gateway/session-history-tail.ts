@@ -55,6 +55,56 @@ export function buildPaginatedSessionHistory(params: {
   };
 }
 
+export function paginateSessionMessages(
+  messages: SessionHistoryMessage[],
+  limit: number | undefined,
+  cursor: string | undefined,
+): PaginatedSessionHistory {
+  // Cursors point at transcript sequence watermarks. The returned page is the
+  // window before that cursor, matching "older messages" pagination.
+  const cursorSeq = resolveCursorSeq(cursor);
+  let endExclusive = messages.length;
+  if (typeof cursorSeq === "number") {
+    endExclusive = messages.findIndex((message, index) => {
+      const seq = readChatHistoryMessageSeq(message);
+      if (typeof seq === "number") {
+        return seq >= cursorSeq;
+      }
+      return index + 1 >= cursorSeq;
+    });
+    if (endExclusive < 0) {
+      endExclusive = messages.length;
+    }
+  }
+  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  // Projection can interleave several rows from the same transcript records.
+  // Close the page over their seq groups because the public cursor cannot split one.
+  if (start > 0) {
+    const pageSeqs = new Set<number>();
+    let indexedStart = endExclusive;
+    for (let index = start - 1; index >= 0; index--) {
+      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
+      while (indexedStart > start) {
+        const pageSeq = readChatHistoryMessageSeq(messages[--indexedStart]);
+        if (pageSeq !== undefined) {
+          pageSeqs.add(pageSeq);
+        }
+      }
+      const seq = readChatHistoryMessageSeq(messages[index]);
+      if (seq !== undefined && pageSeqs.has(seq)) {
+        start = index;
+      }
+    }
+  }
+  const paginatedMessages = messages.slice(start, endExclusive);
+  const firstSeq = readChatHistoryMessageSeq(paginatedMessages[0]);
+  return buildPaginatedSessionHistory({
+    messages: paginatedMessages,
+    hasMore: start > 0,
+    ...(start > 0 && typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
+  });
+}
+
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
   return typeof id === "string" && id ? id : undefined;
@@ -227,6 +277,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readScope: SessionTranscriptReadScope;
   readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
+  toolResultMaxChars?: number;
   max: number;
   maxBytes: number;
   offset?: number;
@@ -339,6 +390,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         subagentCoordination: params.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: params.effectiveMaxChars,
+        toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }

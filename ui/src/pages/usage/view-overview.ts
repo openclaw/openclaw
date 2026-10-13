@@ -8,12 +8,12 @@ import { renderSettingsSection, renderSettingsSegmented } from "../../components
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatIsoDate } from "./helpers.ts";
 import {
   buildUsageCostWindows,
   formatAnalysisCost,
   formatDayLabel,
   formatFullDate,
-  formatIsoDate,
   formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
@@ -239,8 +239,8 @@ function focusSummaryHint(event: MouseEvent) {
 
 function renderSummaryStat(params: {
   hintId: string;
-  title: string;
-  hint: string;
+  metric: string;
+  hint?: string;
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
@@ -248,6 +248,7 @@ function renderSummaryStat(params: {
   compactValue?: boolean;
 }) {
   const hintId = `usage-summary-hint-${params.hintId}`;
+  const title = t(`usage.overview.${params.metric}`);
   const classes = [
     "stat",
     "usage-summary-card",
@@ -267,13 +268,13 @@ function renderSummaryStat(params: {
   return html`
     <div class=${classes}>
       <div class="usage-summary-title">
-        ${params.title}
+        ${title}
         <openclaw-tooltip open-on-click>
           <button
             id=${hintId}
             type="button"
             class="usage-summary-hint"
-            aria-label=${params.title}
+            aria-label=${title}
             @click=${focusSummaryHint}
           >
             ?
@@ -282,7 +283,7 @@ function renderSummaryStat(params: {
                strand one open. This hint exists only to be read, so it opts in to
                click-to-open; the click handler still normalizes browsers that do
                not focus buttons on pointer activation. -->
-          <span slot="content">${params.hint}</span>
+          <span slot="content">${params.hint ?? t(`usage.overview.${params.metric}Hint`)}</span>
         </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
@@ -341,45 +342,44 @@ function renderUsageInsights(
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
-  const costShare = (cost: number) =>
-    showCostShares && totals.totalCost > 0
-      ? t("usage.overview.costShare", { percent: ((cost / totals.totalCost) * 100).toFixed(1) })
-      : null;
-  const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
-    [
-      costShare(cost),
-      formatUsageTokens(tokens),
-      messageCount === undefined ? null : `${messageCount} ${t("usage.overview.messagesAbbrev")}`,
+  const costAttribution = (
+    label: string,
+    { totals: entryTotals, count }: { totals: UsageTotals; count?: number },
+    agent = false,
+  ) => ({
+    label,
+    ...(agent ? { agentId: label } : {}),
+    value: formatAnalysisCost(entryTotals.totalCost),
+    sub: [
+      showCostShares && totals.totalCost > 0
+        ? t("usage.overview.costShare", {
+            percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
+          })
+        : null,
+      formatUsageTokens(entryTotals.totalTokens),
+      count === undefined ? null : `${count} ${t("usage.overview.messagesAbbrev")}`,
     ]
       .filter((part): part is string => part !== null)
-      .join(" · ");
+      .join(" · "),
+  });
 
-  const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
-    label: entry.model ?? t("usage.common.unknown"),
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
-  }));
-  const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
-    label: entry.provider ?? t("usage.common.unknown"),
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens, entry.count),
-  }));
+  const topModels = aggregates.byModel
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.model ?? t("usage.common.unknown"), entry));
+  const topProviders = aggregates.byProvider
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.provider ?? t("usage.common.unknown"), entry));
   const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
     label: tool.name,
     value: `${tool.count}`,
     sub: t("usage.overview.calls"),
   }));
-  const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
-    label: entry.agentId,
-    agentId: entry.agentId,
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
-  }));
-  const topChannels = aggregates.byChannel.slice(0, 5).map((entry) => ({
-    label: entry.channel,
-    value: formatAnalysisCost(entry.totals.totalCost),
-    sub: costAttributionSub(entry.totals.totalCost, entry.totals.totalTokens),
-  }));
+  const topAgents = aggregates.byAgent
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.agentId, entry, true));
+  const topChannels = aggregates.byChannel
+    .slice(0, 5)
+    .map((entry) => costAttribution(entry.channel, entry));
   const insightLists = [
     ["usage.overview.topModels", topModels, "usage.overview.noModelData"],
     ["usage.overview.topProviders", topProviders, "usage.overview.noProviderData"],
@@ -396,16 +396,14 @@ function renderUsageInsights(
           <div class="usage-summary-grid">
             ${renderSummaryStat({
               hintId: "messages",
-              title: t("usage.overview.messages"),
-              hint: t("usage.overview.messagesHint"),
+              metric: "messages",
               value: aggregates.messages.total,
               sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
               className: "usage-summary-card--hero",
             })}
             ${renderSummaryStat({
               hintId: "throughput",
-              title: t("usage.overview.throughput"),
-              hint: t("usage.overview.throughputHint"),
+              metric: "throughput",
               value: throughputLabel,
               sub: throughputCostLabel,
               className: "usage-summary-card--hero usage-summary-card--throughput",
@@ -413,16 +411,14 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "tool-calls",
-              title: t("usage.overview.toolCalls"),
-              hint: t("usage.overview.toolCallsHint"),
+              metric: "toolCalls",
               value: aggregates.tools.totalCalls,
               sub: `${aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`,
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
               hintId: "average-tokens",
-              title: t("usage.overview.avgTokens"),
-              hint: t("usage.overview.avgTokensHint"),
+              metric: "avgTokens",
               value: formatUsageTokens(avgTokens),
               sub: t("usage.overview.acrossMessages", {
                 count: String(aggregates.messages.total || 0),
@@ -431,7 +427,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "cache-hit-rate",
-              title: t("usage.overview.cacheHitRate"),
+              metric: "cacheHitRate",
               hint: t("usage.overview.cacheHint"),
               value: cacheHitLabel,
               sub: `${formatUsageTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(cacheBase)} ${t("usage.overview.prompt")}`,
@@ -440,7 +436,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "error-rate",
-              title: t("usage.overview.errorRate"),
+              metric: "errorRate",
               hint: t("usage.overview.errorHint"),
               value: `${errorRatePct.toFixed(2)}%`,
               sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
@@ -449,7 +445,7 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "average-cost",
-              title: t("usage.overview.avgCost"),
+              metric: "avgCost",
               hint: t(
                 showCostHint ? "usage.overview.avgCostHintMissing" : "usage.overview.avgCostHint",
               ),
@@ -459,16 +455,14 @@ function renderUsageInsights(
             })}
             ${renderSummaryStat({
               hintId: "sessions",
-              title: t("usage.overview.sessions"),
-              hint: t("usage.overview.sessionsHint"),
+              metric: "sessions",
               value: sessionCount,
               sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
               hintId: "errors",
-              title: t("usage.overview.errors"),
-              hint: t("usage.overview.errorsHint"),
+              metric: "errors",
               value: aggregates.messages.errors,
               sub: `${aggregates.messages.toolResults} ${t("usage.overview.toolResults")}`,
               className: "usage-summary-card--compact",

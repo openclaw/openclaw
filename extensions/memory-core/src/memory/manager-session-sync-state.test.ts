@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
   resolveMemorySessionStartupState,
   resolveMemorySessionSyncPlan,
@@ -49,15 +50,12 @@ describe("memory session sync state", () => {
     expect(plan.existingHashes).toBeNull();
   });
 
-  it("marks identity-targeted syncs as session work", async () => {
-    const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
-
+  it("marks identity-targeted syncs as session work", () => {
     expect(
-      shouldSyncSessionsForReindex({
-        hasSessionSource: true,
-        sessionsDirty: false,
-        sync: { sessions: [{ agentId: "main", sessionId: "targeted" }] },
-      }),
+      MemoryManagerSessionSyncOps.prototype["shouldSyncSessions"].call(
+        { sources: new Set(["sessions"]), sessionsDirty: false },
+        { sessions: [{ agentId: "main", sessionId: "targeted" }] },
+      ),
     ).toBe(true);
   });
 

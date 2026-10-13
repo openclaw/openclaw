@@ -19,10 +19,12 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   CommandProcessCleanupError,
   recordCommandProcessFailure,
 } from "../../process/exec-result.js";
+import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -270,6 +272,96 @@ describe("post-plugin update readiness", () => {
         expect.arrayContaining(["doctor", "--repair"]),
         expect.objectContaining({ timeoutMs: expected }),
       );
+    },
+  );
+
+  it.each([
+    "success",
+    "advisory",
+    "exit",
+    "timeout",
+    "post-plugin-exit",
+    "post-plugin-timeout",
+  ] as const)(
+    "records the fresh Doctor's traced sections without printing the trace (%s)",
+    async (outcome) => {
+      const phase = outcome.startsWith("post-plugin-") ? "post-plugin" : "pre-plugin";
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
+      vi.mocked(defaultRuntime.error).mockClear();
+      const stderr = [
+        "[gateway] startup trace: doctor.config-flow 4100.0ms total=4200.0ms start=100.0ms\n",
+        "real Doctor warning\n",
+        "[gateway] startup trace: doctor.contribution.doctor:plugins 2500.0ms total=6800.0ms start=4300.0ms\n",
+        "[gateway] startup trace: doctor.contributions 2600.0ms total=6900.0ms start=4300.0ms",
+      ].join("");
+      let traceEnv: string | undefined;
+      mocks.command.mockImplementationOnce(async (_command, _args, options: CommandOptions) => {
+        traceEnv = options.env?.OPENCLAW_GATEWAY_STARTUP_TRACE;
+        const bytes = Buffer.from(stderr);
+        for (let offset = 0; offset < bytes.length; offset += 11) {
+          options.onOutputChunk?.(bytes.subarray(offset, offset + 11), "stderr");
+        }
+        if (outcome === "advisory") {
+          await writeUpdatePostInstallDoctorResult({
+            resultPath: options.env![UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]!,
+            result: createDeferredConfiguredPluginRepairDoctorResult(["Plugin repair deferred"]),
+          });
+        }
+        if (outcome !== "success") {
+          throw Object.assign(new Error("Doctor did not finish"), {
+            failed: true,
+            exitCode:
+              outcome === "advisory"
+                ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
+                : outcome.endsWith("exit")
+                  ? 23
+                  : undefined,
+            timedOut: outcome.endsWith("timeout"),
+            stderr,
+          });
+        }
+        return { stdout: "", stderr };
+      });
+      const onDoctorStep = vi.fn();
+      const pending = runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase,
+        onDoctorStep,
+        root: tempDirs.make("fresh-doctor-sections-"),
+      });
+      if (phase === "post-plugin") {
+        await expect(pending).resolves.toMatchObject({ reason: "doctor-advisory" });
+      } else if (outcome === "success" || outcome === "advisory") {
+        await pending;
+      } else {
+        await expect(pending).rejects.toThrow("Updated pre-plugin Doctor failed");
+      }
+
+      expect(traceEnv).toBe("1");
+      expect(onDoctorStep).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          name: `${phase} doctor`,
+          exitCode:
+            outcome === "success"
+              ? 0
+              : outcome === "advisory"
+                ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
+                : outcome.endsWith("exit")
+                  ? 23
+                  : null,
+          durationMs: expect.any(Number),
+          diagnostics: [
+            "Doctor sections: config-flow 4.1 s, contributions 2.6 s; slowest contributions: plugins 2.5 s",
+          ],
+        }),
+      );
+      const step = onDoctorStep.mock.calls[0]![0];
+      expect(updateRunStepsFromResultStep(step)[0]?.status).toBe(
+        outcome === "success" || outcome === "advisory" || phase === "post-plugin"
+          ? "completed"
+          : "failed",
+      );
+      expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("real Doctor warning");
     },
   );
 

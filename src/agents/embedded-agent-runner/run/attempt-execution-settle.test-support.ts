@@ -163,6 +163,7 @@ export function createFixture(mocks: {
     },
     cacheTrace,
     contextGuards: {
+      checkMidTurnPrecheck: vi.fn(),
       getAfterTurnCheckpoint: vi.fn(() => 2),
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },

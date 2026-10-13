@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { execSystemctl, execSystemctlUser } from "./systemd-exec.js";
 
@@ -105,7 +106,7 @@ export async function listLoadedSystemdUnits(
   }
   const run = (args: string[]) =>
     scope === "user"
-      ? execSystemctlUser(env, args, INSPECTION_TIMEOUT_MS)
+      ? withServiceInspectionBudget(() => execSystemctlUser(env, args, INSPECTION_TIMEOUT_MS))
       : execSystemctl(["--system", ...args], undefined, INSPECTION_TIMEOUT_MS);
   const listed = await run([
     "list-units",

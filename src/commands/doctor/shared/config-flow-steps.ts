@@ -1,6 +1,6 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
@@ -178,9 +178,7 @@ function retainValuePreservingMigrationRefs(
   const values = new Map<string, unknown>();
   const ambiguous = new Set<string>();
   const resolvedEntry = (resolved: unknown, key: string): unknown =>
-    resolved && typeof resolved === "object"
-      ? (resolved as Record<string, unknown>)[key] // SAFETY: non-null object; indexed values remain unknown.
-      : undefined;
+    asOptionalObjectRecord(resolved)?.[key];
   const collect = (authored: unknown, resolved: unknown): void => {
     if (typeof authored === "string" && /\$\{[A-Z_][A-Z0-9_]*\}/.test(authored)) {
       if (values.has(authored) && !isDeepStrictEqual(values.get(authored), resolved)) {
@@ -235,14 +233,13 @@ export function restoreDoctorConfigEnvRefs(
     return candidate;
   }
   // Both views use the original resolved roster identity, including escaped-id facts.
-  const canonicalAuthored = projectAuthoredAgentRosterForWrite({
-    rootAuthoredConfig: source.authored,
-    sourceConfigBeforeMigrations: source.resolved,
-  });
-  const canonicalResolved = projectAuthoredAgentRosterForWrite({
-    rootAuthoredConfig: source.resolved,
-    sourceConfigBeforeMigrations: source.resolved,
-  });
+  const projectRoster = (rootAuthoredConfig: OpenClawConfig) =>
+    projectAuthoredAgentRosterForWrite({
+      rootAuthoredConfig,
+      sourceConfigBeforeMigrations: source.resolved,
+    });
+  const canonicalAuthored = projectRoster(source.authored);
+  const canonicalResolved = projectRoster(source.resolved);
   const unchanged = restoreEnvVarRefsFromResolved(
     candidate,
     canonicalAuthored,

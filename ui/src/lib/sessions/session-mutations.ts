@@ -118,9 +118,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
-        void reconciliation.catch((error: unknown) => {
-          reportError(scope, error);
-        });
+        void reconciliation.catch((error: unknown) => reportError(scope, error));
       } else {
         await reconciliation;
         if (!host.connection.isCurrent(scope)) {
@@ -189,7 +187,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let rowPatchConfirmed = false;
     let writeConfirmed = false;
     let permissionProjection: SessionPermissionClaim | undefined;
-    const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
@@ -439,7 +436,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (uncertainCategory) {
         throw reportUncertainCategory(error, options.agentId);
       }
-      if (ownsModelOverride() && !settingsTargetWasReplaced()) {
+      if (options.ownsModelOverride?.() !== false && !settingsTargetWasReplaced()) {
         host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;

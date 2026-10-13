@@ -277,7 +277,7 @@ export async function executeNodeClaudeRun(params: {
     if (skillRuntime?.signal.aborted) {
       nodeAbortController.abort();
     }
-    skillRuntime?.close();
+    await skillRuntime?.close();
     clearTimeout(hardDeadlineTimer);
     detachReplyBackend?.();
     contextParams.abortSignal?.removeEventListener("abort", abortNodeRun);

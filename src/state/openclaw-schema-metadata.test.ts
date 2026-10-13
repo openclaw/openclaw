@@ -1,5 +1,10 @@
+import path from "node:path";
 import { DatabaseSync, StatementSync, constants } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { probeSqliteIteratorBehavior } from "../infra/sqlite-native-observer.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
   runSqliteReadOperationSync,
@@ -18,8 +23,10 @@ const readers = [
   },
 ] as const;
 
-function createMetadata(role: string): DatabaseSync {
-  const database = new DatabaseSync(":memory:");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createMetadata(role: string, location = ":memory:"): DatabaseSync {
+  const database = new DatabaseSync(location);
   database.exec(`
     CREATE TABLE schema_meta (
       meta_key TEXT PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,
@@ -137,12 +144,66 @@ it("keeps absent agent ownership separate from malformed metadata", () => {
   }
 });
 
+it.each(["transaction", "pinned snapshot"] as const)(
+  "keeps raw ownership reads within a %s and observes foreign ownership after release",
+  (snapshot) => {
+    const filename = path.join(tempDirs.make("openclaw-schema-metadata-"), "agent.sqlite");
+    const writer = createMetadata("agent", filename);
+    writer.exec("PRAGMA journal_mode=WAL");
+    const reader = new DatabaseSync(filename, { readOnly: true });
+    const read = () =>
+      runSqliteReadOperationSync(reader, () => readExistingAgentSchemaMeta(reader));
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    const metadataReads = () =>
+      observation.queries.filter((sql) => /^SELECT role, schema_version, agent_id/iu.test(sql));
+    try {
+      const readSnapshot = () => {
+        expect(read()?.agentId).toBe("main");
+        expect(read()?.agentId).toBe("main");
+        writer.exec("UPDATE schema_meta SET agent_id = 'foreign'");
+        expect(read()?.agentId).toBe("main");
+        expect(metadataReads()).toHaveLength(3);
+      };
+      if (snapshot === "transaction") {
+        reader.exec("BEGIN");
+        try {
+          readSnapshot();
+        } finally {
+          reader.exec("ROLLBACK");
+        }
+      } else {
+        runSqliteSchemaReadSnapshotSync(reader, readSnapshot);
+      }
+      expect(read()?.agentId).toBe("foreign");
+      expect(read()?.agentId).toBe("foreign");
+      expect(metadataReads()).toHaveLength(5);
+    } finally {
+      observation.restore();
+      reader.close();
+      writer.close();
+    }
+  },
+);
+
 it("keeps admitted ownership current through local writes, rollback, and authorizers", () => {
   const database = createMetadata("agent");
-  trackSqliteSchema(database, { DatabaseSync, StatementSync });
+  database.exec(`
+    CREATE TABLE selected_owner (agent_id TEXT);
+    CREATE TRIGGER replace_owner AFTER INSERT ON selected_owner
+      BEGIN UPDATE schema_meta SET agent_id = new.agent_id; END;
+  `);
+  trackSqliteSchema(
+    database,
+    {
+      DatabaseSync,
+      StatementSync,
+      iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")),
+    },
+    true,
+  );
   admitSqliteSchema(database);
   const read = () =>
-    runSqliteReadOperationSync(database, () => readExistingAgentSchemaMeta(database), "fresh");
+    runSqliteReadOperationSync(database, () => readExistingAgentSchemaMeta(database));
   try {
     const first = read();
     expect(first?.agentId).toBe("main");
@@ -154,13 +215,18 @@ it("keeps admitted ownership current through local writes, rollback, and authori
     expect(read()?.agentId).toBe("local");
     database.exec("BEGIN; UPDATE schema_meta SET agent_id = 'temporary'");
     expect(read()?.agentId).toBe("temporary");
+    database.prepare("INSERT INTO selected_owner VALUES (?)").run("triggered");
+    expect(read()?.agentId).toBe("triggered");
     database.exec("ROLLBACK");
     expect(read()?.agentId).toBe("local");
+    let allowRead = true;
     database.setAuthorizer((action, table) =>
-      action === constants.SQLITE_READ && table === "schema_meta"
+      !allowRead && action === constants.SQLITE_READ && table === "schema_meta"
         ? constants.SQLITE_DENY
         : constants.SQLITE_OK,
     );
+    expect(read()?.agentId).toBe("local");
+    allowRead = false;
     expect(read).toThrow();
     database.setAuthorizer(null);
     expect(read()?.agentId).toBe("local");

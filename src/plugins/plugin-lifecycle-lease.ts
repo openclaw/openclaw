@@ -20,7 +20,8 @@ import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identi
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
-export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+export type PluginLifecycleLeaseContext = Omit<OpenClawStateLeaseContext, "assertOwned"> & {
+  assertOwned: () => void;
   databasePath: string;
   /** Original state owner; wrapper identity cannot authorize worker writes. */
   stateLease: OpenClawStateLeaseContext;

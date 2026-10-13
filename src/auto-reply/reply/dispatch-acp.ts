@@ -35,7 +35,6 @@ import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -97,40 +96,6 @@ function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
     normalizeOptionalString(id) ??
     (typeof id === "number" || typeof id === "bigint" ? String(id) : generateSecureUuid())
   );
-}
-
-function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
-  return (
-    toolsAllow !== undefined &&
-    !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*")
-  );
-}
-
-async function hasBoundConversationForSession(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  channelRaw: string | undefined;
-  accountIdRaw: string | undefined;
-}): Promise<boolean> {
-  const channel = normalizeOptionalLowercaseString(params.channelRaw) ?? "";
-  if (!channel) {
-    return false;
-  }
-  const accountId = normalizeOptionalLowercaseString(params.accountIdRaw) ?? "";
-  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
-  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  const normalizedAccountId =
-    accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
-  const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
-  const bindings = await listSessionBindingsBySessionAsync(params.sessionKey);
-  return bindings.some((binding) => {
-    return (
-      normalizeOptionalLowercaseString(binding.conversation.channel) === channel &&
-      (normalizeOptionalLowercaseString(binding.conversation.accountId) || "default") ===
-        normalizedAccountId &&
-      Boolean(normalizeOptionalString(binding.conversation.conversationId))
-    );
-  });
 }
 
 export type AcpDispatchAttemptResult = {
@@ -210,19 +175,38 @@ export async function tryDispatchAcpReplyCore(
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
+  const hasBoundConversationForSession = async (): Promise<boolean> => {
+    const channel =
+      normalizeOptionalLowercaseString(
+        params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+      ) ?? "";
+    if (!channel) {
+      return false;
+    }
+    const accountId = normalizeOptionalLowercaseString(params.ctx.AccountId) ?? "";
+    const channels = params.cfg.channels as Record<
+      string,
+      { defaultAccount?: unknown } | undefined
+    >;
+    const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+    const normalizedAccountId =
+      accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
+    const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
+    const bindings = await listSessionBindingsBySessionAsync(canonicalSessionKey);
+    return bindings.some(
+      (binding) =>
+        normalizeOptionalLowercaseString(binding.conversation.channel) === channel &&
+        (normalizeOptionalLowercaseString(binding.conversation.accountId) || "default") ===
+          normalizedAccountId &&
+        Boolean(normalizeOptionalString(binding.conversation.conversationId)),
+    );
+  };
+
   const shouldEmitResolvedIdentityNotice =
     !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
-    (Boolean(
-      params.ctx.MessageThreadId != null &&
-      (normalizeOptionalString(String(params.ctx.MessageThreadId)) ?? ""),
-    ) ||
-      (await hasBoundConversationForSession({
-        cfg: params.cfg,
-        sessionKey: canonicalSessionKey,
-        channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-        accountIdRaw: params.ctx.AccountId,
-      })));
+    ((params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim() !== "") ||
+      (await hasBoundConversationForSession()));
 
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
@@ -496,7 +480,8 @@ export async function tryDispatchAcpReplyCore(
       throw dispatchPolicyError;
     }
     if (
-      isRestrictiveRuntimeToolsAllow(params.toolsAllow) ||
+      (params.toolsAllow !== undefined &&
+        !params.toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*")) ||
       toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)
     ) {
       auditTerminalOutcome = "blocked";

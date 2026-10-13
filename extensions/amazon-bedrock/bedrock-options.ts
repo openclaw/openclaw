@@ -45,9 +45,17 @@ export function resolveBedrockCachePoint(
   if (!policy || retention === "none") {
     return undefined;
   }
+  const supportsLongTtl = getModelMatchCandidates(
+    resolveClaudeModelIdentity(model),
+    model.name,
+  ).some((candidate) =>
+    /claude-(?:haiku-(?:4-5|5-5)|sonnet-(?:4-[56]|5(?:-5)?)|opus-(?:4-[5-8]|5(?:-5)?)|(?:fable|mythos)-5(?:-1)?)(?:$|-v\d|-\d{8}(?:-|$))/.test(
+      candidate,
+    ),
+  );
   return {
     type: "default",
-    ...(policy === "claude" && retention === "long" ? { ttl: "1h" } : {}),
+    ...(policy === "claude" && retention === "long" && supportsLongTtl ? { ttl: "1h" } : {}),
   };
 }
 

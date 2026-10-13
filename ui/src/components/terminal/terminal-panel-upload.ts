@@ -377,10 +377,7 @@ export class TerminalPanelUploadController {
     if (this.batch !== batch) {
       return;
     }
-    batch.abortController.abort();
-    this.batch = null;
-    this.dragActive = false;
-    this.dragDepth = 0;
+    this.dispose();
     this.host.requestUpdate();
   }
 

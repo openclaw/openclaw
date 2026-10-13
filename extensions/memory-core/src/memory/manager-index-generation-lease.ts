@@ -163,11 +163,9 @@ async function acquireLocal(
   throwIfGenerationLeaseAborted(signal);
   const state = stateFor(key);
   return await new Promise<() => void>((resolve, reject) => {
-    let admitted = false;
     const waiter: Waiter = {
       kind,
       resolve: (release) => {
-        admitted = true;
         signal?.removeEventListener("abort", onAbort);
         if (signal?.aborted) {
           release();
@@ -178,9 +176,6 @@ async function acquireLocal(
       },
     };
     const onAbort = () => {
-      if (admitted) {
-        return;
-      }
       const index = state.queue.indexOf(waiter);
       if (index < 0) {
         return;

@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { matchesAgentLifecycleBinding } from "../agents/agent-lifecycle-registry.js";
+import {
+  matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
+} from "../agents/agent-lifecycle-registry.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import type {
@@ -39,6 +42,20 @@ export function authorizationStillOwned(
       (record.agentLifecycleBinding !== undefined &&
         matchesAgentLifecycleBinding(config, record.agentLifecycleBinding)))
   );
+}
+
+export async function authorizationStillOwnedAsync(
+  getConfig: () => OpenClawConfig,
+  record: GitHubDeviceAuthorizationRecord,
+): Promise<boolean> {
+  if (
+    record.scope !== "system" &&
+    (!record.agentLifecycleBinding ||
+      !(await matchesAgentLifecycleBindingAsync(getConfig, record.agentLifecycleBinding)))
+  ) {
+    return false;
+  }
+  return identityStillSelected(getConfig(), record, record.expectedIdentity);
 }
 
 export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAuthIdentity[] {

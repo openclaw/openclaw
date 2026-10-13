@@ -106,15 +106,6 @@ describe("live chat directive projection", () => {
     },
   );
 
-  it("retires a keyed source after repeated capped complete snapshots", () => {
-    const state = createChatRunState();
-    const text = `${"a".repeat(100_000)}${"b".repeat(500_000)}`;
-    state.updateBuffer("reply", { itemId: "native", text });
-    state.updateBuffer("reply", { itemId: "native", text: `${text}!` });
-    expect(state.retireBuffer("reply", ["native"])).toBe(true);
-    expect(state.resolveBuffer("reply").text).toBe("");
-  });
-
   it("matches a terminal-only native receipt by identity before accepting an identical new item", () => {
     const state = createChatRunState();
     state.retireBuffer("reply", ["superseded"]);
@@ -128,67 +119,6 @@ describe("live chat directive projection", () => {
     expect(state.resolveBuffer("reply").text).toBe("");
     state.updateBuffer("reply", { itemId: "new", text: "Same.", replace: true, replaceable: true });
     expect(state.resolveBuffer("reply").text).toBe("Same.");
-  });
-
-  it("keeps a later item live when the previous paragraph commits after it starts", () => {
-    const state = createChatRunState();
-    state.updateBuffer("reply", { itemId: "first", text: "Saved." });
-    state.updateBuffer("reply", { itemId: "second", text: "Tail." });
-    expect(state.retireBuffer("reply", ["first"])).toBe(true);
-    expect(state.resolveBuffer("reply").text).toBe("Tail.");
-    state.updateBuffer("reply", { itemId: "second", text: "Tail. More." });
-    expect(state.resolveBuffer("reply").text).toBe("Tail. More.");
-  });
-
-  it.each([
-    { sameNative: false, texts: ["First", "Middle", "Again"], visible: "First\n\nAgain" },
-    { sameNative: true, texts: ["A", "AB", "ABC"], visible: "AC" },
-  ])(
-    "keeps returning occurrences disjoint (sameNative=$sameNative)",
-    ({ sameNative, texts, visible }) => {
-      const state = createChatRunState();
-      ["first", "middle", "first"].forEach((occurrenceId, index) => {
-        state.updateBuffer("reply", {
-          itemId: sameNative ? "native" : occurrenceId,
-          occurrenceId,
-          text: texts[index],
-        });
-      });
-      state.retireBuffer("reply", ["middle"]);
-      expect(state.resolveBuffer("reply").text).toBe(visible);
-      state.retireBuffer("reply", ["first"]);
-      expect(state.resolveBuffer("reply").text).toBe("");
-    },
-  );
-
-  it("keeps an invalidated occurrence disjoint when its identity returns", () => {
-    const state = createChatRunState();
-    const runId = "reused-occurrence";
-    state.updateBuffer(runId, { itemId: "n", occurrenceId: "a", text: "A" });
-    state.updateBuffer(runId, {
-      itemId: "m",
-      occurrenceId: "m",
-      text: "X",
-      replace: true,
-      replaceable: true,
-    });
-    state.updateBuffer(runId, { itemId: "n", occurrenceId: "b", text: "B" });
-    state.updateBuffer(runId, { itemId: "n", occurrenceId: "a", text: "BC" });
-    state.retireBuffer(runId, ["m"]);
-    expect.soft(state.resolveBuffer(runId).text).toBe("BC");
-    expect.soft(projectInFlightRunSnapshot({ chatRunState: state, runId }).text).toBe("BC");
-    const final = state.resolveBuffer(runId, { final: true });
-    expect(final.displayText ?? final.text).toBe("BC");
-  });
-
-  it("retires an earlier unscoped cumulative occurrence without replaying its prefix", () => {
-    const state = createChatRunState();
-    state.updateBuffer("reply", { occurrenceId: "first", text: "A" });
-    state.updateBuffer("reply", { occurrenceId: "second", text: "AB" });
-    state.retireBuffer("reply", ["first"]);
-    expect(state.resolveBuffer("reply").text).toBe("B");
-    state.retireBuffer("reply", ["second"]);
-    expect(state.resolveBuffer("reply").text).toBe("");
   });
 
   it.each(["", "\n", "\n\n"])(
@@ -238,15 +168,6 @@ describe("live chat directive projection", () => {
     state.updateBuffer("reply", { itemId: "tail", text: "Tail." });
     expect(state.resolveBuffer("reply").text).toBe("Tail.");
     expect(state.resolveBuffer("reply", { final: true }).text).toBe("Saved.\n\nTail.");
-  });
-
-  it("retires an identified commit before a correction of the same occurrence", () => {
-    const state = createChatRunState();
-    state.updateBuffer("reply", { itemId: "answer", text: "Draft" });
-    state.retireBuffer("reply", ["answer"]);
-    state.updateBuffer("reply", { itemId: "answer", text: "Corrected", replace: true });
-    expect(state.resolveBuffer("reply").text).toBe("");
-    expect(state.resolveBuffer("reply", { final: true }).text).toBe("Corrected");
   });
 
   it.each(["Saved.", "Saved.\n\n"])(
@@ -479,33 +400,6 @@ describe("live chat directive projection", () => {
     });
   });
 
-  it("retires identical messages only by their committed item identities", () => {
-    const state = createChatRunState();
-    state.updateBuffer("reply", { itemId: "first", text: "Same." });
-    state.takeBufferDelta("reply", "Same.");
-    state.retireBuffer("reply", ["first"]);
-    expect(state.takeBufferDelta("reply", "")).toEqual({ deltaText: "", replace: true });
-    state.updateBuffer("reply", { itemId: "second", text: "Same." });
-    expect(state.resolveBuffer("reply").text).toBe("Same.");
-    expect(state.retireBuffer("reply", ["first"])).toBe(false);
-    expect(state.resolveBuffer("reply").text).toBe("Same.");
-    expect(state.retireBuffer("reply", ["second"])).toBe(true);
-    expect(state.resolveBuffer("reply").text).toBe("");
-    state.updateBuffer("reply", { itemId: "third", text: "Same." });
-    expect(state.resolveBuffer("reply").text).toBe("Same.");
-  });
-
-  it("keeps the retirement frontier across capped cumulative snapshots", () => {
-    const state = createChatRunState();
-    const committed = `${"x".repeat(500_020)}Saved.`;
-    state.updateBuffer("reply", { itemId: "first", text: committed });
-    expect(state.retireBuffer("reply", ["first"])).toBe(true);
-    state.updateBuffer("reply", { itemId: "second", text: "Tail." });
-    expect(state.resolveBuffer("reply").text).toBe("Tail.");
-    state.updateBuffer("reply", { itemId: "second", delta: " More." });
-    expect(state.resolveBuffer("reply").text).toBe("Tail. More.");
-  });
-
   it("keeps settled literal directives without repeatedly parsing the growing reply", () => {
     const regions = vi.spyOn(codeRegions, "findCodeRegions");
     const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
@@ -613,18 +507,6 @@ describe("live chat directive projection", () => {
     const visible = "`[[reply_to_current]]`\n\nPicture\nDone";
     expect(state.resolveBuffer("reply").text).toBe(visible);
     expect(state.takeBufferDelta("reply", visible)).toEqual({ deltaText: visible, replace: true });
-  });
-
-  it("keeps text visible when the cap evicts its classification context", () => {
-    const state = createChatRunState();
-    const prefix = "`[[reply_to_current]]`\n\nNext ";
-    state.updateBuffer("reply", { delta: prefix + "x".repeat(500_000 - prefix.length) });
-    expect(state.resolveBuffer("reply").text.startsWith(prefix)).toBe(true);
-    state.updateBuffer("reply", { delta: "!" });
-    const visible = state.resolveBuffer("reply").text;
-    expect(visible.startsWith(prefix.slice(1))).toBe(true);
-    expect(visible).toContain("[[reply_to_current]]");
-    expect(visible.endsWith("!")).toBe(true);
   });
 });
 

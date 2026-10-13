@@ -17,6 +17,7 @@ import {
 } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
+  isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
@@ -95,12 +96,11 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  // Exec completions have a dedicated heartbeat prompt; leave those entries queued
-  // so the heartbeat path can consume and deliver them.
+  // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isExecCompletionSystemEvent(event),
+      (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),
     ),
     { deferredEventIds: params.deferredEventIds },
   );

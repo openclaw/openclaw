@@ -69,19 +69,21 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     : input;
   const forceDirectMessageTool =
     presentation?.forceDirectMessageTool ?? messageToolOwnsVisibleReply(params);
-  const plan = presentation
-    ? {
-        codeModeControlsEnabled: presentation.codeMode.enabled,
-        toolSearchControlsEnabled: presentation.toolSearch.enabled,
-        toolSearchConfig: presentation.toolSearch,
-        toolSearchRuntimeConfig: params.config,
-      }
-    : resolveAgentToolSurfacePlan({
-        ...params,
-        forceDirectMessageTool,
-        toolsEnabled: params.modelToolsEnabled,
-        isRawModelRun: params.isRawModelRun === true,
-      });
+  // Placement facts cannot restore general execution on a persistence-only turn.
+  const plan =
+    presentation && params.trigger !== "memory"
+      ? {
+          codeModeControlsEnabled: presentation.codeMode.enabled,
+          toolSearchControlsEnabled: presentation.toolSearch.enabled,
+          toolSearchConfig: presentation.toolSearch,
+          toolSearchRuntimeConfig: params.config,
+        }
+      : resolveAgentToolSurfacePlan({
+          ...params,
+          forceDirectMessageTool,
+          toolsEnabled: params.modelToolsEnabled,
+          isRawModelRun: params.isRawModelRun === true,
+        });
   if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
     plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
     plan.toolSearchRuntimeConfig = {

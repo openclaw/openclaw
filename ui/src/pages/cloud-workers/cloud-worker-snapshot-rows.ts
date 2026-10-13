@@ -87,23 +87,21 @@ function renderImageAction(
     : nothing;
 }
 
-function renderPin(image: SnapshotImage, options: SnapshotRowOptions, previous = false) {
-  const checkpoint = previous ? image.previous : image;
-  if (!checkpoint?.checkpointId || !options.onPin) {
-    return nothing;
-  }
-  const reason =
-    image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : "";
-  return renderImageAction(
-    checkpoint.pinned ? "unpin" : "pin",
-    checkpoint.checkpointId,
-    () => options.onPin?.(previous),
-    Boolean(reason) || options.busy,
-    reason,
-  );
-}
-
 export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOptions) {
+  const changeReason =
+    image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : "";
+  const renderPin = (previous = false) => {
+    const checkpoint = previous ? image.previous : image;
+    return checkpoint?.checkpointId && options.onPin
+      ? renderImageAction(
+          checkpoint.pinned ? "unpin" : "pin",
+          checkpoint.checkpointId,
+          () => options.onPin?.(previous),
+          Boolean(changeReason) || options.busy,
+          changeReason,
+        )
+      : nothing;
+  };
   const phase = image.capture?.phase;
   const retiringCurrentImage = Boolean(
     image.retirement && image.retirement.checkpointId === image.checkpointId,
@@ -155,15 +153,13 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
               ${t("cloudWorkersPage.snapshots.created", { age: formatRelativeTimestamp(image.previous.createdAtMs) })}
               ${image.previous.baseCommit ? t("cloudWorkersPage.snapshots.baseCommit", { commit: image.previous.baseCommit.slice(0, 8) }) : nothing}
               ${image.previous.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
-              ${renderPin(image, options, true)}
+              ${renderPin(true)}
               ${renderImageAction(
                 "rollback",
                 image.previous.checkpointId,
                 options.onRollback,
                 Boolean(image.capture || image.retirement) || options.busy,
-                image.capture || image.retirement
-                  ? t("cloudWorkersPage.snapshots.captureOrRetirement")
-                  : "",
+                changeReason,
               )}
             </div>`
           : nothing
@@ -190,7 +186,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
         label: t(`cloudWorkersPage.snapshots.${imageState}`),
       })}
       ${image.pinned ? renderSettingsStatus({ kind: "accent", label: t("cloudWorkersPage.snapshots.pinned") }) : nothing}
-      ${renderPin(image, options)}
+      ${renderPin()}
       ${renderImageAction(
         "delete",
         image.checkpointId,

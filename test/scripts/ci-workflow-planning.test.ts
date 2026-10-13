@@ -2230,8 +2230,7 @@ describe("ci workflow guards", () => {
       const fixtureTier = JSON.stringify({
         includeReleaseOnlyTests: scenario.includeReleaseOnlyTests,
         includePrExemptRuntimeTests: true,
-        changedPaths:
-          scenario.eventName === "pull_request" ? selectedTestTargets : scenario.changedPaths,
+        changedPaths: scenario.changedPaths,
       });
       for (const [name, config, output, job, stepName] of [
         ["ui", "ui/vitest.config.ts", "ui_test_groups_gzip_base64", "checks-ui", "Test Control UI"],
@@ -3615,7 +3614,7 @@ describe("ci workflow guards", () => {
     { eventName: "push" as const, changedPaths: ["ui/src/main.ts"], qa: false, performance: true },
     {
       eventName: "push" as const,
-      changedPaths: ["src/gateway/control-ui-asset-manifest.ts"],
+      changedPaths: ["src/gateway/control-ui-route-preloads.ts"],
       qa: false,
       performance: true,
     },

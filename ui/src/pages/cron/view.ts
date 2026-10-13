@@ -308,6 +308,10 @@ export function renderCron(props: CronProps) {
   `;
 }
 
+function renderErrorBanner(error: string | null) {
+  return error ? html`<div class="cron-error-banner" role="alert">${error}</div>` : nothing;
+}
+
 function renderAdminRequired(props: CronProps) {
   return props.canManage
     ? nothing
@@ -356,16 +360,7 @@ function renderListView(props: CronProps) {
               `
             : nothing
         }
-        ${
-          props.listError
-            ? html`<div class="cron-error-banner" role="alert">${props.listError}</div>`
-            : nothing
-        }
-        ${
-          props.error
-            ? html`<div class="cron-error-banner" role="alert">${props.error}</div>`
-            : nothing
-        }
+        ${renderErrorBanner(props.listError)} ${renderErrorBanner(props.error)}
         ${renderToolbar(props, hasAdvancedJobsFilters)}
       </div>
     `,
@@ -749,7 +744,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
     renderDetailHeader(props, mode, selectedJob),
     renderAdminRequired(props),
     hasDetailTabs ? renderDetailTabs(props) : nothing,
-    props.error ? html`<div class="cron-error-banner" role="alert">${props.error}</div>` : nothing,
+    renderErrorBanner(props.error),
     html`
       <div
         id="cron-detail-panel"

@@ -20,6 +20,7 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
     agent: {
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
+        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
       },
     },
     channel: {

@@ -74,7 +74,7 @@ describe("worker environment store", () => {
   it("revalidates agent incarnation inside worker admission without joining its writer lock", async () => {
     const options = { path: database.path };
     const config = { agents: { entries: { worker: {} } } };
-    const binding = captureAgentLifecycleBinding(config, "worker", options);
+    const binding = await captureAgentLifecycleBinding(() => config, "worker", options);
     expect(binding).toBeDefined();
     const assertCurrent = () => {
       if (!binding || !matchesAgentLifecycleBinding(config, binding, options)) {
@@ -95,7 +95,7 @@ describe("worker environment store", () => {
 
     await expect(create("live-agent")).resolves.toMatchObject({ state: "requested" });
     await withOpenClawStateDatabaseReadSnapshot(async () => {
-      recordAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
+      await recordAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
       await expect(create("replaced-agent")).rejects.toThrow("Agent incarnation changed");
     }, options);
     expect(store.get("replaced-agent")).toBeUndefined();

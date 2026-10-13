@@ -612,6 +612,8 @@ it.each([
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
               skipMaintenance: true,
+              // Native fixture writes isolate request-reader lifetimes; worker writes have owner coverage.
+              assertCommitAllowed: () => {},
             });
           } else if (changeEntry) {
             const writer = scenario.external ? new DatabaseSync(database.path) : database.db;

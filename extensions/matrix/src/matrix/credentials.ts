@@ -10,6 +10,7 @@ import type {
   MatrixStoredCredentialRecord,
   MatrixStoredCredentials,
 } from "./credentials-state.js";
+import { updateMatrixKeyedState } from "./sqlite-state.js";
 
 export {
   clearMatrixCredentials,
@@ -103,24 +104,8 @@ async function updateMatrixCredentials(
 ): Promise<void> {
   const store = openMatrixCredentialsAsyncStore(env);
   const key = matrixCredentialsStoreKey(accountId);
-  if (!store.observe || !store.compareAndApply) {
+  await updateMatrixKeyedState(store, key, update, () => {
     // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
-    openMatrixCredentialsStore(env).update(key, update);
-    return;
-  }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+    return openMatrixCredentialsStore(env).update(key, update);
+  });
 }

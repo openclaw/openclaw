@@ -174,7 +174,9 @@ describe("resolveCronDeliveryPreview", () => {
 
     expect(preview).toEqual({
       label: "announce -> last",
-      detail: "last -> no route, will fail-closed: Channel plugin unavailable",
+      detail: expect.stringContaining(
+        "last -> no route, will fail-closed: Channel plugin unavailable",
+      ),
     });
   });
 

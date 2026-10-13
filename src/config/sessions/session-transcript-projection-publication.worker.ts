@@ -13,6 +13,11 @@ import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-data
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import {
+  publishUnchangedSessionTranscriptAuthority,
+  readStagedSessionTranscriptAuthority,
+  type SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.js";
+import {
   isSessionTranscriptIndexStatusClean,
   maintainSessionTranscriptIndexStatus,
 } from "./session-transcript-index-status.worker.js";
@@ -39,7 +44,11 @@ export type TranscriptProjectionRebuildOperations = {
   };
   finalize: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
-    output: { finalized: boolean; sessionKey?: string };
+    output: {
+      finalized: boolean;
+      sessionKey?: string;
+      transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[];
+    };
   };
 };
 
@@ -63,7 +72,9 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   function execute(
     command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"];
-  function execute(command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>) {
+  function execute(
+    command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
+  ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
     if (
       (command.type === "preflight" || command.type === "sweep") &&
       isSessionTranscriptIndexStatusClean(db)
@@ -103,7 +114,17 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
                       .where("session_id", "=", command.input.plan.sessionId),
                   )
                 : undefined;
-              return { finalized, ...(session ? { sessionKey: session.session_key } : {}) };
+              if (session) {
+                publishUnchangedSessionTranscriptAuthority(
+                  { db, path: context.databasePath },
+                  session.session_key,
+                );
+              }
+              return {
+                finalized,
+                ...(session ? { sessionKey: session.session_key } : {}),
+                transcriptPublication: readStagedSessionTranscriptAuthority({ db }),
+              };
             }
           }
           throw new Error("Unknown transcript projection publication operation");

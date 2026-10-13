@@ -16,7 +16,7 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -345,7 +345,7 @@ export function readArtifactSummariesFromProjection(
   query: Extract<SessionArtifactReadQuery, { kind: "list" }>,
 ): ArtifactRecord[] {
   const cacheable =
-    !hasSqlitePostCommitScope(projection.database.db) &&
+    !hasUncommittedSqliteWrites(projection.database.db) &&
     !resolveSessionTranscriptReadFence(projection.resolved);
   let cache = summaryLists.get(projection.database.db);
   if (!cache && cacheable) {

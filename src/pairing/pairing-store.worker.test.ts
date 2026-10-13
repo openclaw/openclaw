@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -70,14 +71,10 @@ it.each([
     seed(channel, operation === "missing-approve" ? [] : [request("alice", "alpha", createdAt)]);
     const before = readChannelPairingStateSnapshot(channel, env);
     let currentStage: workerAdmission.SqliteWorkerAdmissionRequest["stage"] | undefined;
-    const original = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        original((admission, grant) => {
-          currentStage = admission.stage;
-          admit(admission, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (admission, grant, admit) => {
+      currentStage = admission.stage;
+      admit(admission, grant);
+    });
     const refusal = new Error("owner authority revoked");
     const assertCurrent = () => {
       if (currentStage === refusedStage) {
@@ -104,16 +101,12 @@ it("settles an accepted approval when authority is revoked after the commit gran
   const channel = "accepted-approval";
   seed(channel, [request("alice")]);
   let revoked = false;
-  const original = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      original((admission, grant) => {
-        admit(admission, grant);
-        if (admission.stage === "commit") {
-          revoked = true;
-        }
-      }, attachment),
-  );
+  probe.admission(workerAdmission, (admission, grant, admit) => {
+    admit(admission, grant);
+    if (admission.stage === "commit") {
+      revoked = true;
+    }
+  });
   const result = approveChannelPairingCode({
     channel,
     code: "ABCDEFGH",

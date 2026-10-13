@@ -165,10 +165,7 @@ function resolveActiveSqliteTranscriptFile(
   }
   const sessionsDir = canonicalFilePath(path.dirname(target.storePath));
   const activePath = canonicalFilePath(transcriptPath);
-  if (path.dirname(activePath) !== sessionsDir) {
-    return undefined;
-  }
-  return activePath;
+  return path.dirname(activePath) === sessionsDir ? activePath : undefined;
 }
 
 export function summarizeDoctorSessionSqliteReport(

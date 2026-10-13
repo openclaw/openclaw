@@ -128,10 +128,10 @@ test("sessions.delete rejects main and aborts active runs", async () => {
       [{ sessionKeys?: string[]; onWarn?: unknown }]
     >
   )[0]?.[0];
-  expect(closeTabsCall?.sessionKeys).toHaveLength(3);
-  expect(closeTabsCall?.sessionKeys).toContain("discord:group:dev");
-  expect(closeTabsCall?.sessionKeys).toContain("agent:main:discord:group:dev");
-  expect(closeTabsCall?.sessionKeys).toContain("sess-active");
+  expect(closeTabsCall?.sessionKeys).toEqual([
+    "agent:main:discord:group:dev",
+    "agent:main:sess-active",
+  ]);
   expect(typeof closeTabsCall?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(

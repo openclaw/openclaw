@@ -27,10 +27,11 @@ import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   createDiscordModelPickerModelToken,
   createDiscordModelPickerRuntimeToken,
-  findModelBucketId,
   findProviderBucketLocation,
+  getDiscordModelPickerRecentModelRefs,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
+  resolveDiscordModelPickerPageForModel,
   type DiscordModelPickerState,
 } from "./model-picker.state.js";
 import {
@@ -92,24 +93,16 @@ function resolveSubmittedModelRef(params: {
   if (params.parsed.modelToken) {
     return resolveDiscordModelPickerModelRefByToken(params.data, params.parsed.modelToken);
   }
-  if (params.parsed.action === "quick") {
+  if (params.parsed.action === "quick" || params.parsed.view === "recents") {
     if (params.requireModelToken) {
       return null;
     }
+    const models =
+      params.parsed.action === "quick"
+        ? params.quickModels
+        : getDiscordModelPickerRecentModelRefs(params.data, params.quickModels);
     const slot = params.parsed.recentSlot ?? 0;
-    return slot >= 1 ? (params.quickModels[slot - 1] ?? null) : null;
-  }
-  if (params.parsed.view === "recents") {
-    if (params.requireModelToken) {
-      return null;
-    }
-    const defaultModelRef = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
-    const dedupedRecents = params.quickModels.filter((ref) => ref !== defaultModelRef);
-    const slot = params.parsed.recentSlot ?? 0;
-    if (slot === 1) {
-      return defaultModelRef;
-    }
-    return slot >= 2 ? (dedupedRecents[slot - 2] ?? null) : null;
+    return slot >= 1 ? (models[slot - 1] ?? null) : null;
   }
 
   const provider = params.parsed.provider;
@@ -189,13 +182,12 @@ function resolveDiscordModelPickerModelSelection(params: {
   return models[params.modelIndex - 1] ?? null;
 }
 
-async function handleDiscordModelPickerInteraction(params: {
-  interaction: ButtonInteraction | StringSelectMenuInteraction;
-  data: ComponentData;
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}) {
+async function handleDiscordModelPickerInteraction(
+  params: DiscordModelPickerFallbackParams & {
+    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    data: ComponentData;
+  },
+) {
   const { interaction, data, ctx } = params;
   const parsed = parseDiscordModelPickerData(data);
   if (!parsed) {
@@ -414,12 +406,17 @@ async function handleDiscordModelPickerInteraction(params: {
       pendingRuntime = selectedRuntime;
       // Pending IDs omit the bucket; recover browse position from the pending or current model.
       modelBucket ??= runtimeModel
-        ? findModelBucketId(pickerData, provider, runtimeModel)
+        ? resolveDiscordModelPickerPageForModel({ data: pickerData, provider, model: runtimeModel })
+            .bucket
         : undefined;
     } else {
       pendingRuntime = resolvePendingRuntime(provider);
       if (selectingModel && selectedModel) {
-        modelBucket ??= findModelBucketId(pickerData, provider, selectedModel);
+        modelBucket ??= resolveDiscordModelPickerPageForModel({
+          data: pickerData,
+          provider,
+          model: selectedModel,
+        }).bucket;
       }
     }
     await updateModelsView(provider, {

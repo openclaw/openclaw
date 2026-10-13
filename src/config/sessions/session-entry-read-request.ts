@@ -24,6 +24,13 @@ export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) 
     : { sessionKeys: [...new Set(input.sessionKeys)], projection: input.projection };
   return {
     ...selection,
+    expectedIdentity: input.preparedSource
+      ? {
+          key: `file:${input.preparedSource.databaseIdentity}` as const,
+          canonicalPath: input.preparedSource.path,
+          birthtime: input.preparedSource.databaseBirthtime,
+        }
+      : undefined,
     snapshotFields: input.snapshotFields,
     lifecycleSessionKey: input.lifecycleSessionKey,
     includeMembers: input.includeMembers,

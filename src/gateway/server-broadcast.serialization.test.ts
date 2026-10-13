@@ -568,17 +568,24 @@ describe("presence payload encoding", () => {
       revoked = true;
     });
     const stringify = vi.spyOn(JSON, "stringify");
+    const encode = vi.spyOn(Buffer, "from");
     const stateVersion = { presence: 3 };
     broadcast("presence", { presence: visible }, { stateVersion });
     const encodings = stringify.mock.calls.filter(
       ([value]) => value?.payload?.presence === visible || value?.payload?.presence === hidden,
     );
+    const byteEncodings = encode.mock.calls.filter(
+      ([value]) => typeof value === "string" && value.includes('"presence":['),
+    );
     stringify.mockRestore();
+    encode.mockRestore();
 
     expect(encodings).toHaveLength(2);
+    expect(byteEncodings.length).toBeLessThanOrEqual(2);
     expect(project).toHaveBeenCalledTimes(4);
     for (const [index, peer] of peers.entries()) {
-      expect(peer.socket.send.mock.lastCall![0]).toBe(
+      expect(Buffer.isBuffer(peer.socket.send.mock.lastCall![0])).toBe(true);
+      expect(String(peer.socket.send.mock.lastCall![0])).toBe(
         JSON.stringify({
           type: "event",
           event: "presence",

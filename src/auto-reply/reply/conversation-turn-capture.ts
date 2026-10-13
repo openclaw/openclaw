@@ -69,6 +69,11 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     params.ctx.MessageThreadId == null
       ? undefined
       : normalizeOptionalString(String(params.ctx.MessageThreadId));
+  const replyTarget = {
+    messageId,
+    ...(replyToId ? { replyToId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
   const scope = resolveConversationRegistryScope({ agentId, config: params.cfg });
@@ -100,9 +105,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     transport: {
       channel: conversation.channel,
       conversationRef: conversation.conversationRef,
-      messageId,
-      ...(replyToId ? { replyToId } : {}),
-      ...(threadId ? { threadId } : {}),
+      ...replyTarget,
     },
     sender:
       conversation.kind === "group" || conversation.kind === "channel"
@@ -176,9 +179,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
           lifecycleRevision: sessionEntry.lifecycleRevision,
         },
         reply: {
-          messageId,
-          ...(replyToId ? { replyToId } : {}),
-          ...(threadId ? { threadId } : {}),
+          ...replyTarget,
           text: persistedReplyText,
           timestamp: timestamp ?? Date.now(),
         },
@@ -215,9 +216,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
             data: {
               turnId: claim.turnId,
               conversationRef: conversation.conversationRef,
-              messageId,
-              ...(replyToId ? { replyToId } : {}),
-              ...(threadId ? { threadId } : {}),
+              ...replyTarget,
               message: persistedMessage,
             },
           },

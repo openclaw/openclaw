@@ -108,11 +108,12 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(paramsLocal.metadata ? { metadata: paramsLocal.metadata } : {}),
     };
   };
-  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, {
+  const providerLookup = {
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
-  });
+  };
+  const legacyChoice = resolveLegacyOnboardAuthChoice(authChoice, providerLookup);
   if (legacyChoice.deprecated) {
     // Only provider aliases normalize here; the onboarding entry point owns
     // the separate oauth spelling before local dispatch.
@@ -120,17 +121,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice = legacyChoice.authChoice;
   }
 
-  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, {
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  });
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice, providerLookup);
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
     : resolveDeprecatedProviderInstallCatalogEntry(authChoice, {
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
+        ...providerLookup,
         includeUntrustedWorkspacePlugins: false,
       });
   const replacementChoiceId = deprecatedChoice?.choiceId ?? deprecatedInstallChoice?.choiceId;
@@ -140,11 +135,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
   }
 
-  const validAuthChoices = formatAuthChoiceChoicesForCli({
-    config: nextConfig,
-    workspaceDir: params.target.workspaceDir,
-    env: process.env,
-  }).split("|");
+  const validAuthChoices = formatAuthChoiceChoicesForCli(providerLookup).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     return reject(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,

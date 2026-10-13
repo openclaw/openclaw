@@ -289,6 +289,7 @@ async function run(
       },
       {
         timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
+        hostTimeout: "owner",
         signal,
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {

@@ -28,6 +28,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
+  findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
   listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
   inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus>;

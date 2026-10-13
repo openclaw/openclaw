@@ -44,6 +44,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     assertCurrent?: WorkerPlacementAuthorization,
     assertNewSource?: (placement: WorkerSessionPlacementRecord) => void,
   ) => {
+    command.input = { ...command.input, nowMs: runtime.now?.() };
     const captured = structuredClone(command);
     captured.input.sessionId = required(captured.input.sessionId, "session id");
     let published = false;
@@ -153,7 +154,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       guard: Guard & { assertNewSource?: (placement: WorkerSessionPlacementRecord) => void } = {},
     ) {
       const receipt = await execute(
-        { type: "workerPlacements.beginMove", input: { ...input, nowMs: runtime.now?.() } },
+        { type: "workerPlacements.beginMove", input },
         guard.assertCurrent,
         guard.assertNewSource,
       );
@@ -163,40 +164,25 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       return { intent: receipt.intent, placement: placement(receipt), joined: receipt.joined };
     },
     async recordPlacementMoveError(input: Parameters<Moves["recordPlacementMoveError"]>[0]) {
-      return (
-        (
-          await execute({
-            type: "workerPlacements.moveError",
-            input: { ...input, nowMs: runtime.now?.() },
-          })
-        ).changed === true
-      );
+      const receipt = await execute({ type: "workerPlacements.moveError", input });
+      return receipt.changed === true;
     },
     async cancelPlacementMove(
       input: Parameters<Moves["cancelPlacementMove"]>[0],
       guard: Guard = {},
     ) {
-      return (
-        (
-          await execute(
-            { type: "workerPlacements.cancelMove", input: { ...input, nowMs: runtime.now?.() } },
-            guard.assertCurrent,
-          )
-        ).changed === true
+      const receipt = await execute(
+        { type: "workerPlacements.cancelMove", input },
+        guard.assertCurrent,
       );
+      return receipt.changed === true;
     },
     async completePlacementMoveSourceToLocal(
       input: Parameters<Moves["completePlacementMoveSourceToLocal"]>[0],
       guard: Guard = {},
     ) {
       return placement(
-        await execute(
-          {
-            type: "workerPlacements.completeMoveSource",
-            input: { ...input, nowMs: runtime.now?.() },
-          },
-          guard.assertCurrent,
-        ),
+        await execute({ type: "workerPlacements.completeMoveSource", input }, guard.assertCurrent),
       );
     },
     async completeAbandonedPlacementMoveSourceToLocal(
@@ -205,10 +191,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
     ) {
       return placement(
         await execute(
-          {
-            type: "workerPlacements.completeAbandonedMoveSource",
-            input: { ...input, nowMs: runtime.now?.() },
-          },
+          { type: "workerPlacements.completeAbandonedMoveSource", input },
           guard.assertCurrent,
         ),
       );
@@ -218,25 +201,15 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       guard: Guard = {},
     ) {
       return placement(
-        await execute(
-          { type: "workerPlacements.completeMove", input: { ...input, nowMs: runtime.now?.() } },
-          guard.assertCurrent,
-        ),
+        await execute({ type: "workerPlacements.completeMove", input }, guard.assertCurrent),
       );
     },
     async bindPreparedEnvironment({ assertCurrent, ...input }: PreparedEnvironmentSelection) {
-      return (
-        await execute(
-          { type: "workerPlacements.bindPrepared", input: { ...input, nowMs: runtime.now?.() } },
-          assertCurrent,
-        )
-      ).placement;
+      return (await execute({ type: "workerPlacements.bindPrepared", input }, assertCurrent))
+        .placement;
     },
     async retireSessionPlacementAsync(input: WorkerSessionPlacementRetirement, guard: Guard = {}) {
-      await execute(
-        { type: "workerPlacements.retire", input: { ...input, nowMs: runtime.now?.() } },
-        guard.assertCurrent,
-      );
+      await execute({ type: "workerPlacements.retire", input }, guard.assertCurrent);
     },
   };
 }

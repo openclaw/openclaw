@@ -2,6 +2,7 @@ import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { wrapOpenAIResponsesStream } from "./responses-stream.runtime.js";
 
 const params = vi.hoisted(() => [] as unknown[]);
@@ -87,3 +88,16 @@ describe("Daybreak Responses requests", () => {
     },
   );
 });
+
+it.each([false, true])(
+  "uses host-admitted prompt updates on native Responses (enabled=%s)",
+  (inHistorySystemUpdates) => {
+    const policy = buildOpenAIReplayPolicy({
+      provider: "openai",
+      modelApi: "openai-responses",
+      modelId: "gpt-5.4",
+      inHistorySystemUpdates,
+    });
+    expect(policy.inHistorySystemUpdates).toBe(inHistorySystemUpdates || undefined);
+  },
+);

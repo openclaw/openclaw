@@ -57,25 +57,12 @@ vi.mock("openai", () => {
         create: (params: unknown, requestOptions: unknown) => {
           mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
-          return {
-            withResponse: async () => {
-              if (mockChunksRef.stream) {
-                return {
-                  data: mockChunksRef.stream,
-                  response: { status: 200, headers: new Headers() },
-                };
-              }
-              async function* generate() {
-                for (const chunk of mockChunksRef.chunks) {
-                  yield chunk;
-                }
-              }
-              return {
-                data: generate(),
-                response: { status: 200, headers: new Headers() },
-              };
-            },
-          };
+          async function* generate() {
+            yield* mockChunksRef.chunks;
+          }
+          return Object.assign(Promise.resolve(mockChunksRef.stream ?? generate()), {
+            asResponse: async () => new Response(null, { status: 200 }),
+          });
         },
       },
     };

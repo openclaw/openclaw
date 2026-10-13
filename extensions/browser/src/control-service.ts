@@ -59,7 +59,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
   });
 
   // Extension relays listen from service start so the Chrome extension can

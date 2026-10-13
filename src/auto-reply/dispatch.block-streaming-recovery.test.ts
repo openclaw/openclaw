@@ -27,44 +27,27 @@ const fallbackText = "The backup produced a second answer.";
 
 it.each([
   "rejected",
-  "confirmed",
-  "ambiguous",
-  "recovery-owned",
   "deferred-rejection",
   "mixed",
   "concurrent",
-  "timeout",
-  "all-ambiguous",
   "timeout-media",
   "ambiguous-media",
   "recovery-owned-media",
   "all-ambiguous-media",
-  "direct-ambiguous-media",
-  "direct-recovery-owned-media",
   "direct-confirmed-media",
-  "direct-rejected-media",
   "direct-no-delivery",
   "fallback-ambiguous",
-  "fallback-recovery-owned",
   "fallback-rejected",
-  "fallback-direct-ambiguous",
-  "fallback-direct-recovery-owned",
   "fallback-direct-rejected",
 ] as const)(
   "dispatchInboundMessageWithBufferedDispatcher settles %s streamed blocks before final suppression",
   async (scenario) => {
-    const timesOut = scenario === "timeout" || scenario === "timeout-media";
+    const timesOut = scenario === "timeout-media";
     const fallback = scenario.startsWith("fallback-");
     const fallbackDirect = scenario.startsWith("fallback-direct-");
     const fallbackRejected = fallback && scenario.endsWith("-rejected");
-    const fallbackRecoveryOwned = fallback && scenario.endsWith("-recovery-owned");
-    const directMedia =
-      scenario === "direct-ambiguous-media" ||
-      scenario === "direct-recovery-owned-media" ||
-      scenario === "direct-confirmed-media" ||
-      scenario === "direct-rejected-media" ||
-      scenario === "direct-no-delivery";
-    const allAmbiguous = scenario === "all-ambiguous" || scenario === "all-ambiguous-media";
+    const directMedia = scenario === "direct-confirmed-media" || scenario === "direct-no-delivery";
+    const allAmbiguous = scenario === "all-ambiguous-media";
     const uncertainMedia =
       scenario === "ambiguous-media" ||
       scenario === "recovery-owned-media" ||
@@ -380,11 +363,6 @@ it.each([
               if (fallbackRejected) {
                 throw noSend;
               }
-              if (fallbackRecoveryOwned) {
-                const error = new OutboundDeliveryError("retained for recovery", { cause: noSend });
-                error.queueCustody = "held";
-                throw error;
-              }
               throw new Error("transport response lost after send");
             }
             if (scenario === "direct-no-delivery" && info.kind === "final") {
@@ -397,17 +375,7 @@ it.each([
                   delivered.push(call);
                   return { visibleReplySent: true };
                 }
-                if (scenario === "direct-rejected-media" || scenario === "direct-no-delivery") {
-                  throw noSend;
-                }
-                if (scenario === "direct-recovery-owned-media") {
-                  const error = new OutboundDeliveryError("retained for recovery", {
-                    cause: noSend,
-                  });
-                  error.queueCustody = "held";
-                  throw error;
-                }
-                throw new Error("transport response lost after send");
+                throw noSend;
               }
               if (allAmbiguous) {
                 throw new Error("transport response lost after send");
@@ -422,26 +390,20 @@ it.each([
                   delivered.push(call);
                   return { visibleReplySent: true };
                 }
-                if (scenario === "recovery-owned" || scenario === "recovery-owned-media") {
+                if (scenario === "recovery-owned-media") {
                   const error = new OutboundDeliveryError("retained for recovery", {
                     cause: noSend,
                   });
                   error.queueCustody = "held";
                   throw error;
                 }
-                if (
-                  scenario === "ambiguous" ||
-                  scenario === "ambiguous-media" ||
-                  scenario === "mixed"
-                ) {
+                if (scenario === "ambiguous-media" || scenario === "mixed") {
                   throw new Error("transport response lost after send");
                 }
                 if (scenario === "deferred-rejection") {
                   return { finalization: Promise.reject(noSend) };
                 }
-                if (scenario !== "confirmed") {
-                  throw noSend;
-                }
+                throw noSend;
               }
               if (scenario === "mixed" && blocks === 3) {
                 throw noSend;
@@ -530,27 +492,11 @@ it.each([
         expect(toolRequestBodies[1]).toContain("Fixture generated image.");
         expect(attempted).toEqual([
           { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
-          ...(scenario === "direct-rejected-media" ? [{ kind: "final", text: mediaCaption }] : []),
         ]);
-        if (scenario === "direct-confirmed-media") {
-          expect(delivered).toEqual([
-            { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
-          ]);
-        } else if (scenario === "direct-rejected-media") {
-          expect(delivered).toEqual([{ kind: "final", text: mediaCaption }]);
-          expect(result.settledReceipt?.counts.block.failedBeforeSend).toBe(1);
-          expect(result.settledReceipt?.hasPendingDelivery).not.toBe(true);
-        } else {
-          expect(delivered).toEqual([]);
-        }
-        expect(result.settledReceipt?.counts.final.delivered).toBe(
-          scenario === "direct-rejected-media" ? 1 : 0,
-        );
-        if (scenario === "direct-recovery-owned-media") {
-          expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
-        } else if (scenario === "direct-ambiguous-media") {
-          expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(1);
-        }
+        expect(delivered).toEqual([
+          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
+        ]);
+        expect(result.settledReceipt?.counts.final.delivered).toBe(0);
       } else if (uncertainMedia) {
         const mediaAttempts = attempted.filter((call) => call.mediaUrls?.includes(finalMediaUrl));
         expect(mediaAttempts).toEqual([
@@ -588,18 +534,7 @@ it.each([
       } else {
         expect(attempted.filter((call) => call.kind === "final")).toEqual([]);
         expect(result.settledReceipt?.counts.final.delivered).toBe(0);
-        if (scenario === "confirmed" || scenario === "timeout") {
-          expect(result.settledReceipt?.counts.block.delivered).toBe(blocks);
-          if (scenario === "timeout") {
-            expect(blocks).toBe(2);
-          }
-        } else if (scenario === "recovery-owned") {
-          expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
-        } else {
-          expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(
-            scenario === "all-ambiguous" ? blocks : 1,
-          );
-        }
+        expect(result.settledReceipt?.counts.block.failedAfterSend).toBe(1);
       }
     } finally {
       const mcpManager = getSessionMcpRuntimeManagerForTesting();

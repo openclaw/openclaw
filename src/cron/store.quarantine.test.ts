@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -67,18 +68,13 @@ describe("cron quarantine", () => {
           }
         },
       });
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage) {
-              witnessed = true;
-              current = false;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          witnessed = true;
+          current = false;
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           scope.run(() =>

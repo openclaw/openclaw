@@ -17,6 +17,7 @@ import {
   formatPriorityLabel,
   formatStatusLabel,
   renderPriorityIcon,
+  workboardMutationContext,
   type WorkboardProps,
 } from "./view-helpers.ts";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -137,11 +138,9 @@ export function renderInlinePriority(
     disabled: disabled || !props.connected || !props.client,
     onSelect: (priority) => {
       return updateWorkboardCardProperties({
-        host: props.host,
-        client: props.client,
+        ...workboardMutationContext(props),
         card,
         patch: { priority },
-        requestUpdate: props.onRequestUpdate,
       });
     },
   });
@@ -182,11 +181,9 @@ export function renderInlineAgent(props: WorkboardProps, card: WorkboardCard, di
       onSelect: (agentId) => {
         if (agentId !== (card.agentId ?? "")) {
           void updateWorkboardCardProperties({
-            host: props.host,
-            client: props.client,
+            ...workboardMutationContext(props),
             card,
             patch: { agentId },
-            requestUpdate: props.onRequestUpdate,
           });
         }
       },
@@ -301,11 +298,9 @@ export class WorkboardInlineText extends LitElement {
     const patch =
       field === "labels" ? { labels: normalizeDraftLabels(this.value) } : { [field]: this.value };
     const saved = await updateWorkboardCardProperties({
-      host: owner.host,
-      client: owner.client,
+      ...workboardMutationContext(owner),
       card: base,
       patch,
-      requestUpdate: owner.onRequestUpdate,
     });
     document.removeEventListener("focusin", trackFocus);
     document.removeEventListener("pointerdown", trackPointer);

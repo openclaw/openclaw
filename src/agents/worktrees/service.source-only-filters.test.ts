@@ -135,6 +135,72 @@ it.each([
   },
 );
 
+it("fast-forwards the source default without executing clean or smudge filters", async () => {
+  await git(repo, "add", ".openclaw");
+  await git(repo, "commit", "-qm", "source setup");
+  await fs.writeFile(path.join(repo, "README.md"), "remote update\n");
+  await git(repo, "add", "README.md");
+  const tree = await git(repo, "write-tree");
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+  await git(repo, "add", "README.md");
+  const commit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "remote update");
+  await git(repo, "push", "origin", `${commit}:refs/heads/main`);
+  await git(path.join(root, "remote.git"), "symbolic-ref", "HEAD", "refs/heads/main");
+  await configure("repository", "clean", repo);
+  await configure("repository", "smudge", repo);
+  // Force status to examine file contents instead of reusing its index stat cache.
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+
+  const created = await service.create({
+    repoRoot: repo,
+    name: "fresh-guest",
+    ownerKind: "session",
+    ownerId: "agent:main:fresh-guest",
+    runSetupScript: false,
+    provisionIgnoredFiles: false,
+  });
+
+  expect(await git(repo, "rev-parse", "HEAD")).toBe(commit);
+  expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("remote update\n");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("remote update\n");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32")(
+  "reads signed commit age without running the host signature verifier",
+  async () => {
+    const unsigned = await git(repo, "cat-file", "commit", "HEAD");
+    const signed = unsigned.replace(
+      "\n\n",
+      "\ngpgsig -----BEGIN PGP SIGNATURE-----\n test-only\n -----END PGP SIGNATURE-----\n\n",
+    );
+    const objectFile = path.join(root, "signed-commit");
+    await fs.writeFile(objectFile, signed);
+    const commit = await git(repo, "hash-object", "-t", "commit", "-w", objectFile);
+    const verifier = path.join(root, "verify-signature");
+    await fs.writeFile(
+      verifier,
+      `#!${process.execPath}\nrequire("node:fs").appendFileSync(${JSON.stringify(marker)}, "verified\\n");\n`,
+      { mode: 0o755 },
+    );
+    await git(repo, "config", "log.showSignature", "true");
+    await git(repo, "config", "gpg.program", verifier);
+    // Prove the configured verifier is executable before exercising creation.
+    await git(repo, "show", "-s", "--format=%ct", commit);
+    expect(await fs.readFile(marker, "utf8")).toContain("verified");
+    await fs.unlink(marker);
+
+    await service.create({
+      repoRoot: repo,
+      name: "signed",
+      baseRef: commit,
+      runSetupScript: false,
+      provisionIgnoredFiles: false,
+    });
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
 it("archives before first execution and restores without running late clean/smudge programs", async () => {
   const created = await createSourceOnly("before-run", "first-run-not-admitted");
   const ignore = path.join(root, "global-ignore");

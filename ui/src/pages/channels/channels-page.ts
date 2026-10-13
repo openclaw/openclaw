@@ -173,8 +173,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       !pairingAccess
     ) {
       this.pairingPrompt = null;
-      this.pairingChannelFilter = null;
-      this.pairingAccountFilter = null;
+      this.setPairingFilter(null, null);
       this.pairingNotice = null;
     }
     this.gatewayPairingAuthSignature = pairingAuthSignature;
@@ -244,8 +243,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.channelsSource = undefined;
     this.gatewayPairingAuthSignature = null;
     this.pairingPrompt = null;
-    this.pairingChannelFilter = null;
-    this.pairingAccountFilter = null;
+    this.setPairingFilter(null, null);
     this.pairingNotice = null;
     this.pairingPolling.stop();
     this.pluginPresentation.reset();
@@ -469,8 +467,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       (account) => account.channel === this.pairingChannelFilter,
     );
     if (channelAccounts.length === 0) {
-      this.pairingChannelFilter = null;
-      this.pairingAccountFilter = null;
+      this.setPairingFilter(null, null);
       return;
     }
     if (
@@ -547,17 +544,17 @@ class ChannelsPage extends OpenClawLightDomElement {
       return;
     }
     this.pairingPrompt = null;
-    if (result.notification === "failed" && result.commandOwnerBootstrap === "unavailable") {
-      this.pairingNotice = t("channels.pairing.approvedFollowupsFailedNotice");
-    } else if (result.commandOwnerBootstrap === "unavailable") {
-      this.pairingNotice = t("channels.pairing.approvedOwnerFailedNotice");
-    } else if (result.notification === "failed") {
-      this.pairingNotice = t("channels.pairing.approvedNotificationFailedNotice");
-    } else if (result.commandOwnerBootstrap === "configured") {
-      this.pairingNotice = t("channels.pairing.approvedOwnerNotice");
-    } else {
-      this.pairingNotice = t("channels.pairing.approvedNotice");
-    }
+    this.pairingNotice = t(
+      result.commandOwnerBootstrap === "unavailable"
+        ? result.notification === "failed"
+          ? "channels.pairing.approvedFollowupsFailedNotice"
+          : "channels.pairing.approvedOwnerFailedNotice"
+        : result.notification === "failed"
+          ? "channels.pairing.approvedNotificationFailedNotice"
+          : result.commandOwnerBootstrap === "configured"
+            ? "channels.pairing.approvedOwnerNotice"
+            : "channels.pairing.approvedNotice",
+    );
   }
 
   override render() {

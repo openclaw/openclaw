@@ -357,6 +357,11 @@ export function createCodexAttemptServerRequestController(
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
+        recordDynamicToolResult({
+          call,
+          response: { contentItems: [], success: false },
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
         if (!terminalDiagnosticObserved && !diagnostics.hasPendingTerminal()) {
           diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }

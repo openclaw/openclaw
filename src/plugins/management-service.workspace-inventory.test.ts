@@ -8,9 +8,11 @@ import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
@@ -21,6 +23,7 @@ import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import {
@@ -57,7 +60,8 @@ beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(roots);
   vi.unstubAllEnvs();
@@ -89,7 +93,7 @@ function mockConfigFile(
   });
 }
 
-it("refreshes an externally changed install ledger before publishing management inventory", async () => {
+it("refreshes foreign install facts and requires live authority before publishing management inventory", async () => {
   const root = makeTrackedTempDir("managed-external-ledger", roots);
   const pluginRoot = path.join(root, "external-install");
   const loadPath = path.join(root, "configured-plugins");
@@ -124,7 +128,43 @@ it("refreshes an externally changed install ledger before publishing management 
     );
   });
 
-  refreshManagedPluginMetadata({ config });
+  let current = true;
+  const prepareMetadata = metadataWorker.readPluginMetadataStateRow;
+  const preparation = vi
+    .spyOn(metadataWorker, "readPluginMetadataStateRow")
+    .mockImplementationOnce(async (...params) => {
+      const snapshot = await prepareMetadata(...params);
+      current = false;
+      return snapshot;
+    });
+  try {
+    await expect(
+      refreshManagedPluginMetadata({
+        config,
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Plugin management authority was revoked after preparation");
+          }
+        },
+      }),
+    ).rejects.toThrow("Plugin management authority was revoked after preparation");
+    expect(
+      (await listManagedPlugins({ config })).plugins.some(
+        (plugin) => plugin.id === fixture.pluginId,
+      ),
+    ).toBe(false);
+    expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+  } finally {
+    preparation.mockRestore();
+  }
+
+  const sql = observeMainThreadSql();
+  try {
+    await refreshManagedPluginMetadata({ config });
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
 
   expect((await listManagedPlugins({ config })).plugins).toContainEqual(
     expect.objectContaining({ id: fixture.pluginId, installed: true }),

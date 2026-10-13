@@ -9,7 +9,10 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
-import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import {
+  markCanonicalSessionValidationPending,
+  setCanonicalSqliteSessionMainKey,
+} from "../config/sessions/session-canonical-key.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -337,7 +340,7 @@ it.each(["missing", "successor", "retained"] as const)(
   },
 );
 
-it("keeps canonical key validation on each admitted reader handle", async () => {
+it("revalidates canonical keys when repair publishes pending rows", async () => {
   await withHistory(async ({ target, database }) => {
     const reader = createReadonlySessionHistoryReader(target);
     const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
@@ -356,6 +359,7 @@ it("keeps canonical key validation on each admitted reader handle", async () => 
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run("Agent:main:readonly-history");
+    markCanonicalSessionValidationPending(database, ["Agent:main:readonly-history"]);
     await expect(
       reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
     ).rejects.toThrow("openclaw doctor --fix");

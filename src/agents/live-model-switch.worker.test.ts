@@ -4,6 +4,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -69,6 +70,27 @@ describe("live model switch worker persistence", () => {
       });
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
 
+      const withoutPendingSwitch = loadSessionEntry(scope);
+      const writeGrants: string[] = [];
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const observeAdmission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((callback, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === "transaction" || request.stage === "commit") {
+              writeGrants.push(request.stage);
+            }
+            callback(request, grant);
+          }, attachment),
+        );
+      try {
+        await apply();
+        expect(writeGrants).toEqual([]);
+        expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
+      } finally {
+        observeAdmission.mockRestore();
+      }
+
       await replaceSessionEntry(scope, { ...initial, modelOverride: "gpt-5.5" });
       await apply();
       expect(loadSessionEntry(scope)).toMatchObject({
@@ -114,15 +136,11 @@ it("propagates model-guard read cancellation instead of treating it as missing m
     const controller = new AbortController();
     const reason = new Error("model read owner cancelled");
     let cancelledAtAdmission = false;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          cancelledAtAdmission = true;
-          controller.abort(reason);
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, callback) => {
+      cancelledAtAdmission = true;
+      controller.abort(reason);
+      callback(request, grant);
+    });
     await expect(
       createAgentPatchedSessionModelRunGuard({
         ...scope,

@@ -216,17 +216,6 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]) {
   return source ? getFollowupOriginRouting(source) : {};
 }
 
-function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(
-    item,
-    idx,
-    resolveCollectedSourceText(
-      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
-      item.prompt,
-    ),
-  );
-}
-
 function resolveCollectedSourceText(
   message: PersistedUserTurnMessage | undefined,
   fallback: string,
@@ -1005,7 +994,15 @@ export function scheduleFollowupDrain(
           const prompt = buildCollectPrompt({
             title: "[Queued messages while agent was busy]",
             items: activeGroupItems,
-            renderItem: renderCollectItem,
+            renderItem: (item, index) =>
+              renderCollectItemPrompt(
+                item,
+                index,
+                resolveCollectedSourceText(
+                  item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+                  item.prompt,
+                ),
+              ),
           });
           const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
           const userTurnTranscriptRecorder =

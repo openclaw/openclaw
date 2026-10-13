@@ -1,5 +1,6 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -32,10 +33,22 @@ export function readSessionRuntimeOwnership(params: {
     return undefined;
   }
   const { config, agentId, sessionKey, storePath } = params;
+  const privateSource = sessionKey
+    ? captureIncognitoSessionSource({ agentId, sessionKey, storePath })
+    : undefined;
+  const claim =
+    privateSource && !("kind" in privateSource)
+      ? privateSource.actor.sessions.captureCurrent(sessionKey!)
+      : undefined;
   let active = true;
   const assertCurrent = () => {
     if (active) {
       params.assertCurrent?.();
+      privateSource?.admissionSignal?.throwIfAborted();
+      if (privateSource && "kind" in privateSource) {
+        privateSource.assertCurrent();
+      }
+      claim?.assertCurrent();
     }
     if (
       !active ||
@@ -67,6 +80,14 @@ export function readSessionRuntimeOwnership(params: {
         const key = sessionKey?.trim();
         if (!key) {
           return undefined;
+        }
+        if (privateSource) {
+          const current =
+            "kind" in privateSource
+              ? undefined
+              : privateSource.actor.sessions.readSharing(key)?.entry;
+          assertCurrent();
+          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
         }
         const { sessionAgentId } = resolveSessionAgentIdsStrict({ config, agentId, sessionKey });
         const current = loadSessionEntryReadOnly({

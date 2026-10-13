@@ -83,8 +83,11 @@ export function postNativeExternalLink(url: string): boolean {
   if (!poster) {
     return false;
   }
-  const parsed = URL.parse(url);
-  return parsed !== null && postNativeLink(poster, parsed);
+  try {
+    return postNativeLink(poster, new URL(url));
+  } catch {
+    return false;
+  }
 }
 
 function openBrowserPanel(url: URL): void {

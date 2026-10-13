@@ -75,6 +75,12 @@ export function registerOpenAIServiceTierCatalogTests(params: {
             serviceTiers: [],
           },
         ],
+        listedModelIds: [
+          "synthetic-tier-model",
+          "synthetic-empty",
+          "synthetic-unknown",
+          "synthetic-invalid",
+        ],
       },
     ]);
     expect(result.provider.models.every((model) => !("serviceTiers" in model))).toBe(true);

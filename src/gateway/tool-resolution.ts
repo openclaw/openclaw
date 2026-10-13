@@ -301,7 +301,10 @@ export async function resolveGatewayScopedTools(
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
-  const inheritedToolDenylist = [...explicitDenylist];
+  const inheritedToolDenylist = [
+    ...explicitDenylist,
+    ...(requesterPolicies.inheritedToolPolicyForSpawn?.deny ?? []),
+  ];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
@@ -328,7 +331,33 @@ export async function resolveGatewayScopedTools(
     admittedRunId: surface === "loopback" ? params.runId : undefined,
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
+  const commonToolOptions = () => ({
+    runId: params.runId,
+    inboundEventKind: params.inboundEventKind,
+    sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    currentMessageId: params.currentMessageId,
+    currentInboundAudio: params.currentInboundAudio,
+    sessionId: params.sessionId,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+    senderIsOwner: params.senderIsOwner,
+    config: params.cfg,
+    sessionConfigSource: "runtime" as const,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    modelHasVision: params.modelHasVision,
+    requesterModel: params.requesterModel,
+    pairedNodeComputerUse: params.pairedNodeComputerUse,
+    clientCaps: params.clientCaps,
+    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+    workspaceDir,
+    sessionPermissionPolicy,
+    // Transport dispatchers own hooks for both tool factories.
+    wrapBeforeToolCallHook: false,
+    agentAccountId: params.accountId,
+  });
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
+    ...commonToolOptions(),
     sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
@@ -344,7 +373,6 @@ export async function resolveGatewayScopedTools(
             filterGatewayToolPolicies(config).some((tool) => tool.name === "message"),
         })
       : undefined,
-    runId: params.runId,
     assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent,
     ...(swarmCollectorContext
@@ -366,7 +394,6 @@ export async function resolveGatewayScopedTools(
       : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
-    agentAccountId: params.accountId,
     questionPrompt: createChannelQuestionPromptDelivery({
       cfg: params.cfg,
       channel: params.messageProvider,
@@ -377,21 +404,13 @@ export async function resolveGatewayScopedTools(
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
-    inboundEventKind: params.inboundEventKind,
-    sourceReplyDeliveryMode,
     sourceReplyOnly: params.sourceReplyOnly,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
-    currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,
-    currentInboundAudio: params.currentInboundAudio,
-    sessionId: params.sessionId,
     onYield: params.onYield,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
     sessionControlAuthority,
     sandboxSessionRenameOnly,
@@ -400,22 +419,10 @@ export async function resolveGatewayScopedTools(
     skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
-    wrapBeforeToolCallHook: false,
-    config: params.cfg,
-    sessionConfigSource: "runtime",
     agentDir: params.agentDir,
     authProfileStore: params.authProfileStore,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelHasVision: params.modelHasVision,
-    requesterModel: params.requesterModel,
-    pairedNodeComputerUse: params.pairedNodeComputerUse,
-    clientCaps: params.clientCaps,
-    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
-    workspaceDir,
     sandboxed,
-    sessionPermissionPolicy,
     pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
@@ -423,6 +430,7 @@ export async function resolveGatewayScopedTools(
     inheritedToolAllowlist,
     inheritedToolDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    delegatedToolPolicyUnavailable: Boolean(requesterPolicies.delegatedToolPolicy),
   };
   const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
   assertCurrent();
@@ -453,31 +461,16 @@ export async function resolveGatewayScopedTools(
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? await createOpenClawCodingToolsAsync({
-          config: params.cfg,
-          sessionConfigSource: "runtime",
+          ...commonToolOptions(),
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
           operationalRunInstance: params.admittedRunContext?.operationalRunInstance,
-          workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
-          sessionPermissionPolicy,
-          modelProvider: params.modelProvider,
-          modelId: params.modelId,
-          modelHasVision: params.modelHasVision,
-          requesterModel: params.requesterModel,
-          pairedNodeComputerUse: params.pairedNodeComputerUse,
           messageProvider: params.messageProvider,
           messageChannel: params.messageProvider,
-          clientCaps: params.clientCaps,
-          gatewayUiCommandTarget: params.gatewayUiCommandTarget,
-          agentAccountId: params.accountId,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
-          currentMessageId: params.currentMessageId,
-          currentInboundAudio: params.currentInboundAudio,
           channelContext: params.channelContext,
           groupId: params.groupId,
           groupChannel: params.groupChannel,
@@ -487,17 +480,12 @@ export async function resolveGatewayScopedTools(
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
-          senderIsOwner: params.senderIsOwner,
           conversationToolPolicy: params.conversationToolPolicy,
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
           continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-          sourceReplyDeliveryMode,
-          taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-          inboundEventKind: params.inboundEventKind,
-          requireExplicitMessageTarget: params.requireExplicitMessageTarget,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults
             ? {
@@ -521,8 +509,6 @@ export async function resolveGatewayScopedTools(
             includeOpenClawTools: false,
             includePluginTools: false,
           },
-          // The MCP dispatcher is the shared hook and abort boundary for these tools.
-          wrapBeforeToolCallHook: false,
         })
       : [];
   assertCurrent();

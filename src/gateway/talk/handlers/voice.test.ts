@@ -59,7 +59,7 @@ describe("Talk voice RPC ownership", () => {
     };
   }
 
-  function runtimeClient(bindVoice = true) {
+  async function runtimeClient(bindVoice = true) {
     const runId = `voice-rpc-run-${authorities.length}`;
     registerAgentRunContext(runId, {
       agentId: sessionTarget.agentId,
@@ -68,7 +68,7 @@ describe("Talk voice RPC ownership", () => {
     const authority = claimAgentRunDelegatedAuthority({ instanceId: `${runId}-instance`, runId });
     authorities.push(authority);
     if (bindVoice) {
-      registerClientVoiceConsultRun({
+      await registerClientVoiceConsultRun({
         agentId: sessionTarget.agentId,
         sessionKey: sessionTarget.sessionKey,
         voiceSessionId: originalId,
@@ -146,7 +146,7 @@ describe("Talk voice RPC ownership", () => {
     return payload.changeId;
   }
 
-  function replace(changeId: string, retireOriginal = true) {
+  async function replace(changeId: string, retireOriginal = true) {
     const launch = prepareTalkVoiceReplacement({
       voiceChangeId: changeId,
       connId: browser.connId,
@@ -158,7 +158,7 @@ describe("Talk voice RPC ownership", () => {
     if (retireOriginal) {
       unregisterTalkVoiceSession(originalId, browser.connId, sessionTarget.agentId);
     }
-    const voiceSessionId = createOrResumeClientVoiceSession({
+    const voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
       provider: launch.provider,
@@ -193,7 +193,7 @@ describe("Talk voice RPC ownership", () => {
     // Calls retain the supplied alias; the backing runtime uses its canonical key.
     sessionTarget = prepareTalkSessionTarget({}, "main");
     browser = client("voice-browser");
-    originalId = createOrResumeClientVoiceSession({
+    originalId = await createOrResumeClientVoiceSession({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
       provider: "openai",
@@ -249,7 +249,7 @@ describe("Talk voice RPC ownership", () => {
   it.each(["unbound", "retired", "missing-validator"])(
     "rejects an agent with %s authority before requesting a replacement",
     async (condition) => {
-      const runtime = runtimeClient(condition !== "unbound");
+      const runtime = await runtimeClient(condition !== "unbound");
       if (condition === "retired") {
         releaseAgentRunDelegatedAuthority(runtime.authority);
       } else if (condition === "missing-validator") {
@@ -282,7 +282,7 @@ describe("Talk voice RPC ownership", () => {
   });
 
   it("resolves an agent's exact binding and rejects a forged call target", async () => {
-    const runtime = runtimeClient();
+    const runtime = await runtimeClient();
     expect(await invoke("talk.voice.get", {}, runtime.client)).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ voiceSessionId: originalId, sessionKey: "main", voice: "cove" }),
@@ -361,10 +361,10 @@ describe("Talk voice RPC ownership", () => {
   );
 
   it("requires the original browser's ready acknowledgement for an agent-requested replacement", async () => {
-    const runtime = runtimeClient();
+    const runtime = await runtimeClient();
     const changing = start("talk.voice.set", { voice: "ember" }, runtime.client);
     const changeId = requestedChangeId();
-    const replacementId = replace(changeId);
+    const replacementId = await replace(changeId);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
     expect(changing.respond).not.toHaveBeenCalled();
     const completion = { changeId, voiceSessionId: replacementId, outcome: "ready" };
@@ -389,7 +389,7 @@ describe("Talk voice RPC ownership", () => {
   it("keeps the handoff pending until the original call retires", async () => {
     const changing = start("talk.voice.set", { voice: "ember" });
     const changeId = requestedChangeId();
-    const replacementId = replace(changeId, false);
+    const replacementId = await replace(changeId, false);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
     const ready = start("talk.voice.complete", {
       changeId,
@@ -420,7 +420,7 @@ describe("Talk voice RPC ownership", () => {
   it.each(["run", "gateway"])(
     "rejects replacement allocation when %s authority retires after dispatch",
     async (owner) => {
-      const runtime = runtimeClient();
+      const runtime = await runtimeClient();
       const changing = start("talk.voice.set", { voice: "ember" }, runtime.client);
       const changeId = requestedChangeId();
       if (owner === "run") {
@@ -453,10 +453,10 @@ describe("Talk voice RPC ownership", () => {
   it.each(["client-failure", "replacement-close", "requester-disconnect"])(
     "does not report voice selection success after %s",
     async (ending) => {
-      const runtime = runtimeClient();
+      const runtime = await runtimeClient();
       const changing = start("talk.voice.set", { voice: "ember" }, runtime.client);
       const changeId = requestedChangeId();
-      const replacementId = replace(changeId);
+      const replacementId = await replace(changeId);
       if (ending === "client-failure") {
         await invoke("talk.voice.complete", {
           changeId,

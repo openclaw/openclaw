@@ -103,20 +103,6 @@ describe("prepareWatchedSessionsPrompt", () => {
     expect(prepared?.listToolAvailable).toBe(false);
   });
 
-  it("accepts capability-provided read tools regardless of casing", async () => {
-    stubStateDir();
-    await watchGroup("agent:main:telegram:group:beta");
-
-    const prepared = await prepareWatchedSessionsPrompt({
-      enabled: true,
-      sessionKey: mainSessionKey,
-      toolNames: [],
-      capabilityToolNames: [" Sessions_Search "],
-    });
-
-    expect(prepared?.readToolNames).toEqual(["sessions_search"]);
-  });
-
   it("keeps the section for sandboxed sessions only when the clamp allows non-spawned reads", async () => {
     stubStateDir();
     await watchGroup("agent:main:telegram:group:beta");

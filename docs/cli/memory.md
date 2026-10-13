@@ -125,6 +125,13 @@ up to five attempts. Retries honor valid provider cooldown hints, capped at
 budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
 
+For OpenAI and OpenAI-compatible embeddings, set
+`OPENCLAW_DEBUG_MEMORY_EMBEDDINGS=1` to log remote request counts, HTTP status,
+response sizes when provided, and vector shape. These diagnostics omit headers,
+URLs, input text, and vector contents. Validation errors identify the provider,
+model, batch size, and rejected condition. A rejected batch still aborts indexing;
+full rebuilds publish only a complete index.
+
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
 interrupts its retry wait.

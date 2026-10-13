@@ -17,6 +17,7 @@ import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -81,12 +82,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "node-host runtime cleanup failed");
-  }
+  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {

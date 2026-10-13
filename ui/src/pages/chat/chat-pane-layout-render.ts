@@ -7,6 +7,7 @@ import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { renderSessionBackground } from "../../components/session-background-view.ts";
 import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -155,6 +156,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const ownsSubagentsPanel = !catalog && !this.compact;
     const chat = renderChat({
       ...chatProps,
+      detailsEnabled: !catalog && !this.compact,
+      detailsWorkspace: {
+        ...resolveSessionWorkspace({
+          session: selectedSession,
+          agentWorkspace,
+          worktreePath: selectedSession?.worktree
+            ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+            : undefined,
+        }),
+        branch:
+          selectedSession?.repository?.branch ??
+          selectedSession?.worktree?.branch ??
+          chatProps.pullRequestsBranch?.branch,
+      },
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? () => this.showSubagents(null) : undefined,
       composerRecovery: recovery,
@@ -168,7 +183,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     });
-    const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
     const subagentStop =
       chatProps.disabledBanner?.presentation &&
       chatProps.canAbort &&
@@ -205,12 +219,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const companionPresented = slotPresentation("companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
     this.syncSessionCompanionPresentation(companionPresented.isPresented());
-    const browserPresented = slotPresentation("browser", "active");
-    const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
-    const terminalTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "terminal";
     // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented = slotPresentation("desktop");
-    const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const discoveredDesktopSource = this.activeSessionResources.desktopSource(
       state.client,
       state.sessionKey,
@@ -259,19 +269,19 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       state,
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
-      browserPresented,
-      browserTabsInHeader,
+      browserPresented: slotPresentation("browser", "active"),
+      browserTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "browser",
       linkReaders: availableLinkReaders(this.context.gateway.snapshot),
       linkReaderPresented: slotPresentation("link-reader"),
       linkReaderTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "link-reader",
       onCloseLinkReader: () => closePanelSlot("link-reader"),
-      terminalTabsInHeader,
+      terminalTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "terminal",
       onCloseTerminal: () => closePanelSlot("terminal"),
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
-      desktopRefreshOnPresentation,
+      desktopRefreshOnPresentation: !this.pendingPanelToggleRequests.has("desktop"),
       desktopAvailable,
       desktopSource,
       portalPresented: slotPresentation("portal"),
@@ -370,7 +380,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       header,
-      primary,
+      primary: html`<div class="chat-pane-primary-column">${chat}</div>`,
+      background: renderSessionBackground(
+        this.context,
+        "session",
+        this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "conversation"),
+      ),
       requestUpdate: state.requestUpdate!,
     });
     const overlays = presentedContent(

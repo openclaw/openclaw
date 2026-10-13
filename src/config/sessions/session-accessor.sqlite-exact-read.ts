@@ -3,7 +3,6 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { executeSqliteQueryTakeFirstSync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -47,6 +46,7 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-row.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
@@ -235,34 +235,6 @@ type PhysicalSessionEntryReadScope = {
   projection?: SessionEntryReadScope["projection"];
 };
 
-export function assertCapturedSessionEntryReadSource(
-  source: CapturedSessionEntryReadSource,
-  database?: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
-): void {
-  if (typeof source.databaseIdentity === "string" && (!database || database.path !== source.path)) {
-    assertExistingDatabaseIdentity(
-      source.path,
-      `file:${source.databaseIdentity}`,
-      source.databaseBirthtime,
-    );
-  }
-  if (!database) {
-    if (typeof source.databaseIdentity === "symbol") {
-      throw new Error("Captured session database is no longer open");
-    }
-    return;
-  }
-  const physical = readOpenClawAgentDatabaseIdentity(database);
-  if (
-    database.agentId !== source.agentId ||
-    physical.identity !== source.databaseIdentity ||
-    physical.birthtime !== source.databaseBirthtime ||
-    !isOpenClawAgentDatabasePathCurrent(database)
-  ) {
-    throw new Error("Captured session database changed before read");
-  }
-}
-
 /** Retained windows occupy a key even when they have no current readable entry. */
 export function retainSessionEntryKeyAbsence(params: {
   source: CapturedSessionEntryReadSource;
@@ -379,7 +351,10 @@ export function loadExactSessionEntryCandidates(
 
 /** Loads a visible current ID, falling back to legacy trimmed IDs only on an exact miss. */
 export function loadSessionEntryByIdReadOnly(
-  scope: Omit<SessionEntryReadScope, "sessionKey"> & { sessionId: string },
+  scope: Omit<SessionEntryReadScope, "sessionKey"> & {
+    sessionId: string;
+    orderBy?: "updatedAt";
+  },
 ): ExactSessionEntry | undefined {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -469,22 +444,30 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
       const read = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           readWithCanonicalSessionAdmission(database, () => {
-            // Admission failures affect this store; an invalid requested row must not
-            // suppress healthy logical targets after a warm handle was validated.
-            assertCanonicalSqliteSessionKeysCurrent(database);
-            const source = { agentId: database.agentId, path: database.path };
-            const grouped = readExactSessionEntryCandidatesInDatabase(
-              database,
-              group.requests.map((request) => request.sessionKeys),
-              group.projection,
-              { clone: group.clone },
-            );
-            for (const [ordinal, request] of group.requests.entries()) {
-              const result = grouped[ordinal]!;
-              results[request.index] = result;
-              if (result.ok) {
-                scopes[request.index]!.onReadSource?.(source);
+            try {
+              // Admission failures affect this store; an invalid requested row must not
+              // suppress healthy logical targets after a warm handle was validated.
+              assertCanonicalSqliteSessionKeysCurrent(database);
+              const source = { agentId: database.agentId, path: database.path };
+              const grouped = readExactSessionEntryCandidatesInDatabase(
+                database,
+                group.requests.map((request) => request.sessionKeys),
+                group.projection,
+                { clone: group.clone },
+              );
+              for (const [ordinal, request] of group.requests.entries()) {
+                const result = grouped[ordinal]!;
+                results[request.index] = result;
+                if (result.ok) {
+                  scopes[request.index]!.onReadSource?.(source);
+                }
               }
+            } catch (error) {
+              if (sqlitePrimaryResultCode(error) === 1) {
+                // Preserve failed-snapshot schema facts before the admission owner rolls back.
+                throw new SessionEntryDataReadError(error, database.db);
+              }
+              throw error;
             }
           }),
         group.options,
@@ -498,8 +481,13 @@ export function loadExactSessionEntryCandidatesReadOnlyBatch(
         }
       }
     } catch (error) {
+      let readError = error;
+      if (error instanceof SessionEntryDataReadError) {
+        error.assertSettled();
+        readError = error.readError;
+      }
       for (const { index } of group.requests) {
-        results[index] = err(error);
+        results[index] = err(readError);
       }
     }
   }

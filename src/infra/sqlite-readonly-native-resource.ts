@@ -26,8 +26,11 @@ import type {
   NativeWorkerResourcePort,
 } from "./worker-native-lifecycle.types.js";
 
+function isId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
 function readId(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+  if (!isId(value)) {
     throw new Error("SQLite native resource requires a positive request identity");
   }
   return value;
@@ -187,13 +190,7 @@ export function createNativeWorkerResource(
     return ownerUnavailable;
   };
   ownerPort.on("message", (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      typeof value.id !== "number" ||
-      !Number.isSafeInteger(value.id) ||
-      value.id < 1 ||
-      (value.ok !== true && value.ok !== false)
-    ) {
+    if (!isRecord(value) || !isId(value.id) || (value.ok !== true && value.ok !== false)) {
       loseOwner();
       return;
     }
@@ -364,10 +361,7 @@ export function createNativeWorkerResource(
         }
         throw error;
       }
-      if (
-        (request.mode === "staging-create" || request.mode === "staging-create-legacy") &&
-        typeof result === "string"
-      ) {
+      if (allocating && typeof result === "string") {
         const owned = {
           preparationId: request.preparationId,
           session,
@@ -388,12 +382,7 @@ export function createNativeWorkerResource(
     try {
       request = readRequest(value);
     } catch (error) {
-      if (
-        isRecord(value) &&
-        typeof value.id === "number" &&
-        Number.isSafeInteger(value.id) &&
-        value.id > 0
-      ) {
+      if (isRecord(value) && isId(value.id)) {
         fail(value.id, error);
       } else {
         available = false;

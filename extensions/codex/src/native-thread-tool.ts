@@ -2,9 +2,11 @@
  * Owner-only access to native Codex threads stored in the user's Codex home.
  */
 import { isDeepStrictEqual } from "node:util";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   asBoolean,
   asOptionalRecord,
@@ -151,17 +153,30 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
+      const runtimeConfig = () =>
+        options.context.getRuntimeConfig?.() ??
+        options.context.runtimeConfig ??
+        options.context.config;
+      const context = options.context;
+      const sessionKey = context.sessionKey?.trim();
+      const config = runtimeConfig();
+      const agentId = sessionKey
+        ? resolveSessionAgentIdsStrict({
+            config: config ?? {},
+            sessionKey,
+            agentId: context.agentId,
+          }).sessionAgentId
+        : undefined;
+      const storePath = agentId
+        ? options.runtime.agent.session.resolveStorePath(config?.session?.store, { agentId })
+        : undefined;
+      let prepared: Awaited<ReturnType<typeof captureSessionEntryCurrentCheck>> | undefined;
       const currentSession = () => {
-        const context = options.context;
-        const sessionKey = context.sessionKey?.trim();
         if (!sessionKey) {
           return undefined;
         }
-        const entry = options.runtime.agent.session.getSessionEntry({
-          agentId: context.agentId,
-          sessionKey,
-          readConsistency: "latest",
-        });
+        prepared?.assertCurrent();
+        const entry = prepared?.entry;
         const sessionId = context.sessionId?.trim() || entry?.sessionId?.trim();
         if (!sessionId) {
           return undefined;
@@ -173,10 +188,6 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         };
       };
 
-      const runtimeConfig = () =>
-        options.context.getRuntimeConfig?.() ??
-        options.context.runtimeConfig ??
-        options.context.config;
       const currentIdentity = (sessionId: string) =>
         sessionBindingIdentity({
           sessionId,
@@ -203,11 +214,32 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           "Codex native thread mutations are disabled for this codex plugin supervision config.",
         );
       }
-      const run = async (archiveAdmission?: {
-        threadId: string;
-        session: NonNullable<ReturnType<typeof currentSession>>;
-        identity: ReturnType<typeof currentIdentity>;
-      }) => {
+      const run = async (archiveThreadId?: string) => {
+        const { captureSessionEntryCurrentCheck } =
+          await import("openclaw/plugin-sdk/session-binding-runtime");
+        prepared =
+          sessionKey && agentId
+            ? await captureSessionEntryCurrentCheck({
+                agentId,
+                sessionKey,
+                storePath,
+                fields: ["modelSelectionLocked"],
+                errorMessage: "Codex native thread ownership changed; retry the request.",
+              })
+            : undefined;
+        options.context.assertInvocationCurrent?.();
+        const archiveSession = archiveThreadId ? currentSession() : undefined;
+        if (archiveThreadId && !archiveSession) {
+          throw new Error("cannot safely archive a native Codex thread without a session identity");
+        }
+        const archiveAdmission =
+          archiveThreadId && archiveSession
+            ? {
+                threadId: archiveThreadId,
+                session: archiveSession,
+                identity: currentIdentity(archiveSession.sessionId),
+              }
+            : undefined;
         const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
         const { isModelSelectionLocked, ModelSelectionLockedError } =
           await import("openclaw/plugin-sdk/model-session-runtime");
@@ -217,10 +249,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           await import("./app-server/config-runtime.js");
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
           const base = {
+            agentId,
             agentDir: options.context.agentDir,
             config: runtimeConfig(),
             sessionId: options.context.sessionId,
             sessionKey: options.context.sessionKey,
+            storePath,
           };
           const session = currentSession();
           const identity = session ? currentIdentity(session.sessionId) : undefined;
@@ -493,16 +527,9 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         if (params.confirm !== true) {
           throw new Error("confirm=true is required to archive a native Codex thread");
         }
-        const session = currentSession();
-        if (!session) {
-          throw new Error("cannot safely archive a native Codex thread without a session identity");
-        }
-        const identity = currentIdentity(session.sessionId);
         // The binding store reserves archive ownership synchronously. Do not let
         // cold execution imports yield before later mutations are fenced out.
-        return options.bindingStore.withThreadArchiveFence(() =>
-          run({ threadId, session, identity }),
-        );
+        return options.bindingStore.withThreadArchiveFence(() => run(threadId));
       }
       return run();
     },

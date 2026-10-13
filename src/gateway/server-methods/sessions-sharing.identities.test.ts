@@ -1,6 +1,8 @@
+import { DatabaseSync } from "node:sqlite";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -8,24 +10,44 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sharingStore from "../../config/sessions/session-sharing-store.js";
+import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import * as userProfileReads from "../../state/user-profile-reads.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
+import {
+  authorizeResolvedSessionMutation,
+  resolveSessionMutationAuthorization,
+} from "../session-sharing.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import {
+  initializeSessionReadContext,
+  identifiedClient as preparedClient,
+} from "./sessions-read-cache.test-support.js";
+import { sessionSharingHandlers } from "./sessions-sharing.js";
 import {
   callSessionSharingHandler as call,
   identifiedClient,
   sessionSharingTestContext as context,
 } from "./sessions-sharing.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -282,6 +304,390 @@ describe("session member picker identities", () => {
         target: { canonicalKey: "global", storeKeys: ["global"] },
       });
       expect(await list()).toContainEqual({ type: "agent", id: "next-creator" });
+    });
+  });
+});
+
+describe("session sharing authority", () => {
+  it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-authority";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "sharing-authority",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: "owner" },
+        },
+      );
+      // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
+      await sharingStore.removeSessionMember(
+        { agentId: "main", sessionKey },
+        "absent-admission-fixture-member",
+      );
+      const manager = preparedClient("owner");
+      const requestContext = context(vi.fn());
+      await initializeSessionReadContext(requestContext);
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      try {
+        expect(
+          (
+            await call(
+              "session.members.add",
+              { sessionKey, identityId: "owner" },
+              requestContext,
+              manager,
+            )
+          )[0]?.[0],
+        ).toBe(true);
+        expect(
+          (
+            await call("session.members.listEvidence", { sessionKey }, requestContext, manager)
+          )[0]?.[1],
+        ).toMatchObject({ role: "owner", members: [{ identityId: "owner", addedBy: "owner" }] });
+        expect(
+          (
+            await call(
+              "session.members.remove",
+              { sessionKey, identityId: "owner" },
+              requestContext,
+              manager,
+            )
+          )[0]?.[0],
+        ).toBe(true);
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
+    });
+  });
+
+  it("refuses membership evidence after a published foreign ownership change", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-snapshot-owner";
+      const scope = { agentId: "main", sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "sharing-snapshot-owner",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "owner" },
+      });
+      addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
+      const manager = preparedClient("owner");
+      const requestContext = context(vi.fn());
+      await initializeSessionReadContext(requestContext);
+      const projection = getSessionRowProjection(requestContext)!;
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const readMembers = sharingStore.readSessionMembersInWorker;
+      vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(async (input) => {
+        const snapshot = await readMembers(input);
+        const writer = new DatabaseSync(database.path);
+        try {
+          writer
+            .prepare(
+              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?) WHERE session_key = ?",
+            )
+            .run("other", sessionKey);
+        } finally {
+          writer.close();
+        }
+        sessionChanges.emit({ agentId: "main", sessionKey });
+        await projection.prepareSelection();
+        const current = projection.sharingTarget({ key: sessionKey, agentId: "main" });
+        expect(current?.entry.sessionId).toBe(snapshot.entry?.sessionId);
+        expect(current?.entry.lifecycleRevision).toBe(snapshot.entry?.lifecycleRevision);
+        expect(current?.entry.createdActor).toMatchObject({ id: "other" });
+        return snapshot;
+      });
+      await expect(
+        call("session.members.listEvidence", { sessionKey }, requestContext, manager),
+      ).rejects.toThrow("session ownership changed before sharing read");
+    });
+  });
+
+  it("refuses revoked managers and dirty membership at the worker commit grant", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:sharing-guest" },
+        {
+          sessionId: "sharing-guest",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: "guest" },
+        },
+      );
+      for (const method of ["session.members.add", "session.members.remove"] as const) {
+        for (const change of ["caller", "role", "dirty"] as const) {
+          const sessionKey = `agent:main:${method}-${change}`;
+          const scope = { agentId: "main", sessionKey };
+          await upsertSessionEntryCore(scope, {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "owner" },
+          });
+          addSessionMember(scope, { identityId: "owner", addedBy: "owner" });
+          const manager = preparedClient(change === "role" ? "admin" : "owner");
+          if (change === "role") {
+            manager.connect.scopes = ["operator.admin"];
+          }
+          const requestContext = context(vi.fn());
+          await initializeSessionReadContext(requestContext);
+          const projection = getSessionRowProjection(requestContext)!;
+          const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
+          const before = await sharingStore.readSessionMembersInWorker(scope);
+          const createAdmission = admission.createSqliteWorkerOperationAdmission;
+          let reachedCommit = false;
+          const gate = vi
+            .spyOn(admission, "createSqliteWorkerOperationAdmission")
+            .mockImplementation((callback, attachment) =>
+              createAdmission((request, grant) => {
+                if (request.stage === "commit") {
+                  reachedCommit = true;
+                  if (change === "caller") {
+                    manager.invalidated = true;
+                  } else if (change === "role") {
+                    manager.connect.scopes = ["operator.read", "operator.write"];
+                  } else {
+                    sessionChanges.emit({ all: true, scope: "stores" });
+                    expect(
+                      projection.hasMembership(target.storePath, target.storeKey, "owner"),
+                    ).toBe(true);
+                    expect(
+                      projection.sharingTargetState({ key: sessionKey, agentId: "main" }).status,
+                    ).toBe("pending");
+                  }
+                }
+                return callback(request, grant);
+              }, attachment),
+            );
+          try {
+            // Add a new member or remove an existing one so rollback has an observable result.
+            await expect(
+              call(
+                method,
+                {
+                  sessionKey,
+                  identityId: method === "session.members.add" ? "guest" : "owner",
+                },
+                requestContext,
+                manager,
+              ),
+            ).rejects.toThrow(
+              change === "dirty"
+                ? "Session access facts are unavailable"
+                : "session ownership changed before sharing mutation",
+            );
+            expect(reachedCommit, `${method}: ${change}`).toBe(true);
+            expect(requestContext.broadcast).not.toHaveBeenCalled();
+          } finally {
+            gate.mockRestore();
+          }
+          expect(await sharingStore.readSessionMembersInWorker(scope)).toEqual(before);
+        }
+      }
+    });
+  });
+
+  it("keeps the original session bound while membership preparation yields", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:sharing-preparation";
+      const scope = { agentId: "main", sessionKey };
+      await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 1 });
+      addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
+      const manager = preparedClient("admin");
+      manager.connect.scopes = ["operator.admin"];
+      const requestContext = context(vi.fn());
+      await initializeSessionReadContext(requestContext);
+      const projection = getSessionRowProjection(requestContext)!;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const prepare = projection.prepareMembership.bind(projection);
+      vi.spyOn(projection, "prepareMembership").mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        await prepare();
+      });
+      sessionChanges.emit({ agentId: "main", sessionKey, factsInvalidated: "category" });
+      const pending = call(
+        "session.members.remove",
+        { sessionKey, identityId: "guest" },
+        requestContext,
+        manager,
+      );
+      const outcome = pending.catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "sharing skipped membership preparation",
+        );
+        replaceSessionEntrySync(scope, { sessionId: "replacement", updatedAt: Date.now() });
+        addSessionMember(scope, { identityId: "guest", addedBy: "replacement-owner" });
+      } finally {
+        release.resolve();
+      }
+      expect(await outcome).toBeInstanceOf(SessionMutationFactsUnavailableError);
+      expect((await sharingStore.readSessionMembersInWorker(scope)).members).toMatchObject([
+        { identityId: "guest", addedBy: "replacement-owner" },
+      ]);
+      expect(requestContext.broadcast).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["session.members.list", "session.members.add"] as const)(
+    "rechecks the current manager after profile enumeration for %s",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:profile-enumeration-authority";
+        const owner = ensureProfileForEmail("owner-enumeration@example.test");
+        const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
+        const member = ensureProfileForEmail("member-enumeration@example.test");
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "profile-enumeration-authority",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          },
+        );
+        const client = identifiedClient(owner.id);
+        const requestContext = context(vi.fn());
+        await initializeSessionReadContext(requestContext);
+        const ready = createDeferredCore();
+        const release = createDeferredCore();
+        const enumerate = userProfileReads.listProfiles;
+        const read = vi.spyOn(userProfileReads, "listProfiles").mockImplementationOnce(async () => {
+          const profiles = await enumerate().catch((error: unknown) => {
+            ready.reject(error);
+            throw error;
+          });
+          ready.resolve();
+          await release.promise;
+          return profiles;
+        });
+        const respond = vi.fn();
+        const pending = sessionSharingHandlers[method]!({
+          params: {
+            sessionKey,
+            ...(method === "session.members.add" ? { identityId: member.id } : {}),
+          },
+          context: requestContext,
+          client,
+          respond,
+        } as never);
+        const rejected = expect(pending).rejects.toThrow(/session .* before sharing/);
+        try {
+          await ready.promise;
+          client.authenticatedUserProfile = identifiedClient(foreign.id).authenticatedUserProfile;
+          release.resolve();
+          await rejected;
+          expect(respond).not.toHaveBeenCalled();
+          expect(listSessionMembers({ agentId: "main", sessionKey })).toEqual([]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending]);
+          read.mockRestore();
+        }
+      });
+    },
+  );
+});
+
+describe("session sharing board ticket authority", () => {
+  afterEach(() => closeOpenClawAgentDatabasesForTest());
+  it("authorizes tickets against their signed agent and issuing Gateway", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
+      );
+      await upsertSessionEntryCore(
+        { agentId: "work", sessionKey: "global" },
+        {
+          sessionId: "session-work-global",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+        },
+      );
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      let gatewayAActive = true;
+      const gatewayARef: { value?: GatewayRequestContext } = {};
+      const gatewayA: GatewayRequestContext = {
+        ...context(vi.fn(), cfg),
+        resolveGatewayContext: () => (gatewayAActive ? gatewayARef.value : undefined),
+      };
+      gatewayARef.value = gatewayA;
+      const gatewayBRef: { value?: GatewayRequestContext } = {};
+      const gatewayB: GatewayRequestContext = {
+        ...context(vi.fn(), cfg),
+        resolveGatewayContext: () => gatewayBRef.value,
+      };
+      gatewayBRef.value = gatewayB;
+      const issueTicket = (agentId?: string) =>
+        createBoardViewTicket({
+          sessionKey: "global",
+          ...(agentId ? { agentId } : {}),
+          name: "status",
+          revision: 1,
+          viewGeneration: agentId ? "a".repeat(32) : "b".repeat(32),
+          authority: {
+            gatewayContext: gatewayA,
+            resolveGatewayContext: gatewayA.resolveGatewayContext!,
+          },
+        }).ticket;
+      const ticket = issueTicket("work");
+      const unscopedTicket = issueTicket();
+      const memberClient = identifiedClient("outsider@example.com");
+
+      expect(
+        resolveSessionMutationAuthorization({
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      expect(
+        resolveSessionMutationAuthorization({
+          client: identifiedClient("owner@example.com"),
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }).error,
+      ).toBeNull();
+      expect(
+        resolveSessionMutationAuthorization({
+          client: identifiedClient("owner@example.com"),
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayB,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+      gatewayAActive = false;
+      expect(
+        resolveSessionMutationAuthorization({
+          client: identifiedClient("owner@example.com"),
+          method: "board.event",
+          requestParams: { ticket, agentId: "work" },
+          context: gatewayA,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+      expect(
+        resolveSessionMutationAuthorization({
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket: unscopedTicket, agentId: "work" },
+          context: gatewayA,
+        }).error,
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     });
   });
 });

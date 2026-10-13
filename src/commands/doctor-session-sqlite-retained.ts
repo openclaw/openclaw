@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
@@ -16,11 +17,11 @@ import {
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
 import {
-  DeferredPluginSessionImportSchema,
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   readDeferredPluginSessionImportReceipt,
+  readStaleDeferredPluginSessionImport,
   rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
@@ -49,6 +50,7 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -78,6 +80,9 @@ export function retireDeferredPluginSessionImport(
     return;
   }
   const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
+  if (recorded.superseded) {
+    return;
+  }
   const hasRemainingSources = () =>
     statMigrationPath(params.target.storePath) ||
     recorded.sources.some((source) => statMigrationPath(source.path));
@@ -192,10 +197,12 @@ export async function prepareRetainedSessionImport(
     try {
       if (params.mode === "import" || params.mode === "recover") {
         if (await rebuildDeferredPluginSessionSourceIndex(sourceVerification)) {
-          issues.push({
-            code: "retained_plugin_source_index_rebuilt",
-            message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
-          });
+          if (!readStaleDeferredPluginSessionImport(sourceVerification)) {
+            issues.push({
+              code: "retained_plugin_source_index_rebuilt",
+              message: `Rebuilt the verified source index and database binding from the deferred import receipt: ${params.target.storePath}. Canonical SQLite sessions were not replayed.`,
+            });
+          }
         }
         retireDeferredPluginSessionImport(sourceVerification);
       }
@@ -203,6 +210,37 @@ export async function prepareRetainedSessionImport(
     } catch (error) {
       issues.push({ code: "retained_plugin_source_conflict", message: formatErrorMessage(error) });
       return undefined;
+    }
+  }
+  const staleImport = isSqliteStore
+    ? undefined
+    : readStaleDeferredPluginSessionImport(sourceVerification);
+  if (staleImport) {
+    issues.push({
+      code: "retained_plugin_receipt_superseded",
+      message: `Session import receipt is bound to a different database (${staleImport.databaseIdentity}); it cannot certify ${sqlitePath}. ${staleImport.superseded ? "Preserved the superseded receipt in migration_runs." : "Doctor import will preserve and supersede it."} Retained originals will be checked against live session state without replacing current settings.`,
+    });
+    for (const source of staleImport.sources) {
+      if (!isPrimarySessionTranscriptFileName(path.basename(source.path))) {
+        continue;
+      }
+      let detail = "";
+      try {
+        const current = statMigrationPath(source.path);
+        // The importer validates present inputs; a foreign receipt cannot veto their current bytes.
+        if (current?.isFile() && current.size > 0) {
+          continue;
+        }
+        if (resolveVerifiedSessionSource(source, sourceVerification.resolvedTarget, params.env)) {
+          continue;
+        }
+      } catch (error) {
+        detail = ` ${formatErrorMessage(error)}`;
+      }
+      issues.push({
+        code: "historical_transcript_deferred",
+        message: `Retained history source unavailable: ${source.path}.${detail} The foreign receipt cannot prove its history exists in ${sqlitePath}; restore this original from a verified backup and rerun openclaw doctor --fix.`,
+      });
     }
   }
   const retainedIndex = retainedImport?.sources.find(
@@ -231,7 +269,7 @@ export async function prepareRetainedSessionImport(
     );
     sourceVerification.verification.clear();
   }
-  return { retainedImport, sourceConflicts, sourceVerification, retainedIndexPath };
+  return { retainedImport, staleImport, sourceConflicts, sourceVerification, retainedIndexPath };
 }
 
 /** Compare current rows for diagnosis only; changed index values never gain receipt authority. */

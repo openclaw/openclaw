@@ -6,7 +6,9 @@ import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/n
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -15,6 +17,12 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import {
+  createStateSchemaAdmission,
+  getStateRuntimeSchemaAdmission,
+  getStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
@@ -22,6 +30,7 @@ import {
   prepareStateDatabaseInitialization,
   type StateDatabaseInitialization,
 } from "./openclaw-state-db-initialization.js";
+import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -45,8 +54,39 @@ const NATIVE_STARTUP_BOOTSTRAP_OBJECTS = new Set([
   "index:idx_state_leases_owner",
 ]);
 
+const STARTUP_CHECKPOINT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS schema_meta (
+    meta_key TEXT NOT NULL PRIMARY KEY,
+    role TEXT NOT NULL,
+    schema_version INTEGER NOT NULL,
+    agent_id TEXT,
+    app_version TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS state_leases (
+    scope TEXT NOT NULL,
+    lease_key TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    expires_at INTEGER,
+    heartbeat_at INTEGER,
+    payload_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (scope, lease_key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
+    ON state_leases(expires_at, scope, lease_key)
+    WHERE expires_at IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_state_leases_owner
+    ON state_leases(owner, updated_at DESC);
+`;
+const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint", (value) =>
+  value === true ? true : undefined,
+);
+
 export function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
-  if (readSqliteUserVersion(db) !== 0) {
+  if ((getStateSchemaVersionAdmission(db)?.userVersion ?? readSqliteUserVersion(db)) !== 0) {
     return false;
   }
   const objects = db // sqlite-allow-raw -- Pre-bootstrap schema ownership is checked before Kysely exposure.
@@ -91,33 +131,7 @@ function ensureStartupMigrationCheckpointSchema(
     () => {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
       assertSupportedStateSchemaVersion(db, pathname);
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          agent_id TEXT,
-          app_version TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS state_leases (
-          scope TEXT NOT NULL,
-          lease_key TEXT NOT NULL,
-          owner TEXT NOT NULL,
-          expires_at INTEGER,
-          heartbeat_at INTEGER,
-          payload_json TEXT,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (scope, lease_key)
-        );
-        CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
-          ON state_leases(expires_at, scope, lease_key)
-          WHERE expires_at IS NOT NULL;
-        CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-          ON state_leases(owner, updated_at DESC);
-      `);
+      db.exec(STARTUP_CHECKPOINT_SCHEMA);
       ensureColumn(db, "schema_meta", "app_version TEXT");
     },
     {
@@ -178,6 +192,10 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
     let result: { value: T } | undefined;
     try {
       setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+      if (getStateRuntimeSchemaAdmission(db) || checkpointAdmission.get(db)) {
+        admitSqliteSchema(db);
+      }
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
       ownershipAdmitted = true;
       ensureOpenClawStatePermissions(pathname, env);
@@ -187,7 +205,10 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
         });
       }
       const operate = () => {
-        assertSqliteIntegrity(db, pathname);
+        if (getStateRuntimeSchemaAdmission(db) || checkpointAdmission.get(db)) {
+          return { value: callback(db) };
+        }
+        assertStateDatabaseIntegrityOnce(db, pathname);
         assertSupportedStateSchemaVersion(db, pathname);
         const initialize = isUninitializedNativeStartupDatabase(db);
         const needsSchema = initialize || !hasStartupMigrationCheckpointSchema(db);
@@ -206,12 +227,16 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
         if (schemaCookie !== undefined && readSqliteSchemaCookie(db) !== schemaCookie) {
           assertSqliteIntegrity(db, pathname);
         }
+        admitSqliteSchema(db);
+        checkpointAdmission.publish(db, true);
         return { value: callback(db) };
       };
       // Native bootstrap can rebuild checkpoint tables as STRICT. Foreign keys
       // must be disabled before the enclosing inspection transaction begins.
       const restoreForeignKeys =
         options.atomic === true &&
+        !getStateRuntimeSchemaAdmission(db) &&
+        !checkpointAdmission.get(db) &&
         isUninitializedNativeStartupDatabase(db) &&
         Number(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys) === 1;
       if (restoreForeignKeys) {
@@ -222,11 +247,13 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
         // A deferred snapshot lets WAL writers proceed during verification. A changed
         // snapshot cannot upgrade to a writer, so no proof crosses an intervening commit.
         result = options.atomic
-          ? runSqliteDeferredTransactionSync(db, operate, {
-              busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-              databaseLabel: pathname,
-              operationLabel: "state.startup-checkpoint.inspect-and-claim",
-            })
+          ? withSqlitePostCommitPublications(db, () =>
+              runSqliteDeferredTransactionSync(db, operate, {
+                busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+                databaseLabel: pathname,
+                operationLabel: "state.startup-checkpoint.inspect-and-claim",
+              }),
+            )
           : operate();
       } finally {
         if (restoreForeignKeys && db.isOpen) {
@@ -277,7 +304,7 @@ export function initializeNativeOpenClawStateConnection(
       if (!isUninitializedNativeStartupDatabase(db)) {
         return;
       }
-      assertSqliteIntegrity(db, pathname);
+      assertStateDatabaseIntegrityOnce(db, pathname);
       initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);

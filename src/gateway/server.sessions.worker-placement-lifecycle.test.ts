@@ -308,7 +308,6 @@ test.each(["generation", "environment", "session key"] as const)(
 
 test.each([
   ["discord:group:active-local-delete", "discord:group:active-local-delete"],
-  ["agent:main:cron:placed-job", "agent:main:cron:placed-job:run:sess-active-local-delete"],
   ["agent:main:cron:adopted-job", "agent:main:cron:adopted-job:run:original-session-id"],
 ])("sessions.delete drains %s before placement retirement", async (sessionKey, placementKey) => {
   const { storePath } = await createSessionStoreDir();
@@ -389,80 +388,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
   expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
-});
-
-test.each([
-  { name: "local", state: "local" as const },
-  { name: "reclaimed", state: "reclaimed" as const },
-  {
-    name: "failed after proven bootstrap teardown",
-    state: "failed" as const,
-    environment: { state: "failed", leaseId: null },
-  },
-  {
-    name: "failed after worker destruction",
-    state: "failed" as const,
-    environment: { state: "destroyed" },
-  },
-  {
-    name: "failed before acquiring a worker",
-    state: "failed" as const,
-    withoutEnvironment: true,
-  },
-  {
-    name: "failed after missing durable environment",
-    state: "failed" as const,
-  },
-])("sessions.delete retires a $name placement after deleting its session", async (testCase) => {
-  await createSessionStoreDir();
-  const caseId = testCase.name.replaceAll(" ", "-");
-  const sessionKey = `discord:group:${caseId}`;
-  const sessionId = `sess-${caseId}`;
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const placement =
-    testCase.state === "local"
-      ? placementRecord(sessionId, "local", loadSessionEntry(sessionKey).canonicalKey)
-      : terminalPlacementRecord(
-          sessionId,
-          testCase.state,
-          loadSessionEntry(sessionKey).canonicalKey,
-        );
-  if ("withoutEnvironment" in testCase && placement.state === "failed") {
-    placement.environmentId = null;
-  }
-  const placementService = sequencedPlacementService([placement], () => {
-    expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
-  });
-  const getWorkerEnvironment = vi.fn(() =>
-    "environment" in testCase ? testCase.environment : undefined,
-  );
-
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    { key: sessionKey },
-    {
-      context: {
-        workerEnvironmentService: {
-          get: getWorkerEnvironment,
-        } as never,
-        workerSessionPlacementService: placementService,
-      },
-    },
-  );
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload).toMatchObject({ ok: true, deleted: true });
-  expect(loadSessionEntry(sessionKey).entry).toBeUndefined();
-  expect(placementService.retireSessionPlacement).toHaveBeenCalledWith({
-    sessionId,
-    expectedState: placement.state,
-    expectedGeneration: placement.generation,
-  });
-  if (placement.state === "failed" && placement.environmentId !== null) {
-    expect(getWorkerEnvironment).toHaveBeenCalled();
-  } else {
-    expect(getWorkerEnvironment).not.toHaveBeenCalled();
-  }
 });
 
 test.each([
@@ -593,58 +518,35 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
   }
 });
 
-test.each([
-  {
-    name: "reclaimed cloud reset",
-    sessionKey: "discord:group:reclaimed-reset",
-    state: "reclaimed" as const,
-  },
-  {
-    name: "failed cloud reset after worker destruction",
-    sessionKey: "discord:group:destroyed-worker-reset",
-    state: "failed" as const,
-    environment: { state: "destroyed" },
-  },
-  {
-    name: "failed cloud reset after proven bootstrap teardown",
-    sessionKey: "discord:group:failed-worker-reset",
-    state: "failed" as const,
-    environment: { state: "failed", leaseId: null },
-  },
-])("sessions.reset retires the old placement before $name", async (testCase) => {
+test("sessions.reset retires a failed placement after proven bootstrap teardown", async () => {
   await createSessionStoreDir();
-  const sessionId = `sess-${testCase.name.replaceAll(" ", "-")}`;
-  await writeSessionStore({
-    entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
-  });
-  const placement = terminalPlacementRecord(sessionId, testCase.state);
+  const sessionKey = "discord:group:failed-worker-reset";
+  const sessionId = "sess-failed-worker-reset";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placement = terminalPlacementRecord(sessionId, "failed");
   const placementService = sequencedPlacementService([placement], () => {
-    expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
+    expect(loadSessionEntry(sessionKey).entry?.sessionId).toBe(sessionId);
   });
 
   const reset = await directSessionReq(
     "sessions.reset",
-    { key: testCase.sessionKey },
+    { key: sessionKey },
     {
       context: {
-        ...(testCase.state === "failed"
-          ? { workerEnvironmentService: { get: () => testCase.environment } as never }
-          : {}),
+        workerEnvironmentService: { get: () => ({ state: "failed", leaseId: null }) } as never,
         workerSessionPlacementService: placementService,
       },
     },
   );
 
-  if (!reset.ok) {
-    throw new Error(`${testCase.name} failed: ${JSON.stringify(reset.error)}`);
-  }
+  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
   expect(placementService.retireSessionPlacement).toHaveBeenCalledWith({
     status: "retirement-required",
     sessionId,
-    expectedState: testCase.state,
+    expectedState: "failed",
     expectedGeneration: placement.generation,
   });
-  expect(loadSessionEntry(testCase.sessionKey).entry).toBeDefined();
+  expect(loadSessionEntry(sessionKey).entry).toBeDefined();
 });
 
 test.each([

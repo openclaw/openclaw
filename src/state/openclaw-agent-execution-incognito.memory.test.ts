@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import * as memoryRuntime from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
 import * as sessionFiles from "../../packages/memory-host-sdk/src/host/session-files.js";
 import {
@@ -10,11 +10,13 @@ import {
 } from "../../packages/memory-host-sdk/src/host/session-files.js";
 import { readSessionResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-reset-recall-read.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
 import type {
   IncognitoComputeOperations,
   IncognitoComputeTarget,
@@ -27,39 +29,54 @@ import type {
 import * as incognitoCorpus from "../config/sessions/session-incognito-memory-corpus.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { createIncognitoSessionComputeReader } from "../gateway/session-history-snapshot.js";
+import {
+  loadArchivedSessions,
+  loadArchivedSessionsAsync,
+  loadMemorySessionMetadata,
+  loadMemorySessionMetadataBatch,
+  readTranscriptStatsBatchReadOnlySync,
+  resolveMemorySessionTargets,
+  resolveMemorySessionTargetsAsync,
+  statSessionEntrySync,
+} from "../plugin-sdk/memory-core-host-engine-sessions.js";
+import { createPluginStateKeyedStoreForTests } from "../plugin-sdk/plugin-state-test-runtime.js";
+import { buildPluginApi } from "../plugins/api-builder.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type {
+  OpenClawPluginCommandDefinition,
+  OpenClawPluginDefinition,
+  PluginHookHandlerMap,
+} from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  IncognitoSessionEndedError,
+  IncognitoSessionSyncAccessError,
+} from "./incognito-session-error.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  useIncognitoActorProbe,
+  openIncognitoTestActor,
+  useIncognitoNoHostSql,
+} from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
+const probe = useIncognitoActorProbe();
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
-let sql: ReturnType<typeof observeHostDataSql>;
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-memory-wiring-") };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await openIncognitoTestActor(env, authority);
 });
-beforeEach(() => {
-  sql = observeHostDataSql();
-});
-afterEach(() => {
-  try {
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
-});
+useIncognitoNoHostSql();
 afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
@@ -123,7 +140,7 @@ it("fences an empty Memory corpus against earlier queued creation", async () => 
         listSessionTranscriptCorpusEntriesForAgent("main"),
       ),
     ).toEqual([]);
-    held = actor.run(authority, async () => {
+    held = probe.read(actor, authority, async () => {
       entered.resolve();
       await resume.promise;
     });
@@ -150,6 +167,21 @@ it("fences an empty Memory corpus against earlier queued creation", async () => 
 
 it("wires Memory callbacks, corpus and reset recall through the captured actor without caller SQL", async () => {
   const { reader, scope } = await session("callbacks-corpus");
+  await withIncognitoSessionActor(actor, async () => {
+    for (const read of [
+      () => loadArchivedSessions({ ...scope, sessionIds: [scope.sessionId] }),
+      () => loadMemorySessionMetadata(scope),
+      () => loadMemorySessionMetadataBatch({ ...scope, sessions: [scope] }),
+      () => resolveMemorySessionTargets({ ...scope, sessionIds: [scope.sessionId] }),
+      () => readTranscriptStatsBatchReadOnlySync([scope]),
+      () => statSessionEntrySync("actor-memory", scope),
+    ]) {
+      expect(read).toThrow(IncognitoSessionSyncAccessError);
+    }
+    expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: [scope.sessionId] })).toEqual(
+      [],
+    );
+  });
   const observed: unknown[] = [];
   const entry = await withIncognitoSessionActor(actor, () =>
     buildSessionEntry("actor-memory", {
@@ -246,6 +278,150 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
   }
   await expect(listSessionTranscriptCorpusEntriesForAgent("foreign", {}, reader)).rejects.toThrow(
     "another agent",
+  );
+});
+
+it("keeps selected Memory absence separate from a retained ended actor", async () => {
+  const missingEnv = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-memory-absence-") };
+  const scope = {
+    agentId: "main",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: missingEnv }),
+    sessionKey: "agent:main:dashboard:incognito-missing-memory",
+    sessionId: "missing-memory",
+  };
+  const config = vi.spyOn(memoryRuntime, "getRuntimeConfig").mockReturnValue({
+    session: { store: scope.storePath },
+  });
+  const readMissing = async () => {
+    expect(await buildSessionEntry("actor-memory", scope)).toBeNull();
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
+    expect(await listSessionTranscriptCorpusEntriesForAgent("main")).toEqual([]);
+    expect(await loadArchivedSessionsAsync({ ...scope, sessionIds: [scope.sessionId] })).toEqual(
+      [],
+    );
+    expect(
+      await resolveMemorySessionTargetsAsync({ ...scope, sessionIds: [scope.sessionId] }),
+    ).toEqual([expect.objectContaining({ sessionId: scope.sessionId, resolution: "unresolved" })]);
+  };
+  let missingActor: IncognitoAgentDatabaseExecution | undefined;
+  try {
+    await withEnvAsync(missingEnv, () =>
+      withIncognitoSessionBinding(
+        { kind: "absent", agentId: "main", env: missingEnv, authority },
+        readMissing,
+      ),
+    );
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(missingEnv)).toEqual([]);
+    missingActor = await openIncognitoTestActor(missingEnv, authority);
+    await withEnvAsync(missingEnv, () => withIncognitoSessionActor(missingActor!, readMissing));
+    await missingActor.close();
+    await withIncognitoSessionBinding({ actor: missingActor }, async () => {
+      await expect(buildSessionEntry("actor-memory", scope)).rejects.toBeInstanceOf(
+        IncognitoSessionEndedError,
+      );
+      await expect(readSessionResetRecallCutoff(scope)).rejects.toBeInstanceOf(
+        IncognitoSessionEndedError,
+      );
+      await expect(
+        loadArchivedSessionsAsync({ ...scope, sessionIds: [scope.sessionId] }),
+      ).rejects.toBeInstanceOf(IncognitoSessionEndedError);
+    });
+  } finally {
+    await missingActor?.close();
+    config.mockRestore();
+  }
+});
+
+it("prepares real Active Memory prompt and status hooks from the actor SDK without durable ingestion", async () => {
+  const { scope } = await session("active-memory-hooks");
+  const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
+    pluginId: "active-memory",
+    artifactBasename: "index.js",
+  });
+  assert(plugin.register);
+  const pluginConfig = { agents: ["main"], mode: "escalate" };
+  const config = {
+    session: { store: actor.path },
+    plugins: { entries: { "active-memory": { enabled: true, config: pluginConfig } } },
+  };
+  const runtime = createPluginRuntime();
+  runtime.config.current = () => config;
+  runtime.agent.resolveCliBackendDispatchEligibility = () => undefined;
+  runtime.state.openKeyedStore = (options) =>
+    createPluginStateKeyedStoreForTests("active-memory", { ...options, env });
+  let beforePrompt: PluginHookHandlerMap["before_prompt_build"] | undefined;
+  let command: OpenClawPluginCommandDefinition | undefined;
+  const warnings = vi.fn();
+  plugin.register(
+    buildPluginApi({
+      id: "active-memory",
+      name: "Active Memory",
+      source: "test",
+      registrationMode: "full",
+      config,
+      pluginConfig,
+      runtime,
+      logger: { info() {}, warn: warnings, error() {}, debug() {} },
+      resolvePath: (value) => value,
+      handlers: {
+        on(name, handler) {
+          if (name === "before_prompt_build") {
+            beforePrompt = handler as PluginHookHandlerMap["before_prompt_build"];
+          }
+        },
+        registerCommand(value) {
+          command = value;
+        },
+      },
+    }),
+  );
+  assert(beforePrompt);
+  assert(command);
+  const promptHook = beforePrompt;
+  const statusCommand = command;
+  const context = {
+    agentId: "main",
+    sessionKey: scope.sessionKey,
+    sessionId: scope.sessionId,
+    trigger: "user",
+    messageProvider: "webchat",
+    toolAuthority: { fingerprint: "memory-test", allows: () => true, assertActive() {} },
+  };
+  const event = { prompt: "Hello there", messages: [] };
+  await withEnvAsync(env, () =>
+    withIncognitoSessionActor(actor, async () => {
+      expect(await promptHook(event, context)).toEqual({
+        prependContext: expect.stringContaining("intentionally skipped deep recall"),
+      });
+      expect(
+        await statusCommand.handler({
+          channel: "webchat",
+          sessionId: scope.sessionId,
+          args: "status",
+          isAuthorizedSender: true,
+          commandBody: "/active-memory status",
+          config,
+          requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+          detachConversationBinding: async () => ({ removed: false }),
+          getCurrentConversationBinding: async () => null,
+        }),
+      ).toEqual({
+        text: [
+          "Active Memory: on for this session.",
+          "Trigger recall configuration: on for agent main.",
+          "Remember across conversations setting: on.",
+        ].join("\n"),
+      });
+      expect(
+        await promptHook(event, {
+          ...context,
+          assertMemoryAudienceCurrent() {
+            throw new Error("Memory audience revoked");
+          },
+        }),
+      ).toBeUndefined();
+      expect(warnings).toHaveBeenCalledWith(expect.stringContaining("Memory audience revoked"));
+    }),
   );
 });
 

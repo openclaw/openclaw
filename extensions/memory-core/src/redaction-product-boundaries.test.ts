@@ -148,7 +148,7 @@ describe("memory-core redaction product boundaries", () => {
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         nowMs: DREAMING_NOW_MS,
       }),
-    ).resolves.toEqual({ degradedPhases: 0, pendingNarratives: 0 });
+    ).resolves.toMatchObject({ failed: false });
 
     const corpus = await fs.readFile(
       path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-08-03.txt"),

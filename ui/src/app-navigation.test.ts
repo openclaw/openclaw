@@ -6,7 +6,6 @@ import {
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -23,6 +22,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
+import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
 
 /**
@@ -113,6 +113,14 @@ describe("settingsSearchTextMatches", () => {
 });
 
 describe("formatDocumentTitle", () => {
+  it("uses the themed brand while preserving attention and duplicate suffix rules", () => {
+    expect(
+      formatDocumentTitle({ context: "About", brandName: "Northstar", attentionCount: 2 }),
+    ).toBe("(2) About — Northstar");
+    expect(formatDocumentTitle({ context: "Ask Northstar", brandName: "Northstar" })).toBe(
+      "Ask Northstar",
+    );
+  });
   it("does not duplicate a context ending in the brand", () => {
     expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
     expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");

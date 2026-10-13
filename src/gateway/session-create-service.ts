@@ -1,5 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -31,7 +29,6 @@ import {
   type SessionEntryCreateWithTranscriptOptions,
   deleteSessionEntryLifecycle,
   loadExactSessionEntryFromStoreReadOnly,
-  patchSessionEntryCore,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -75,7 +72,10 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import { existingSessionSelectionWouldChange } from "./session-create-existing-selection.js";
+import {
+  existingSessionSelectionWouldChange,
+  sessionCreatePolicyAdoptionError,
+} from "./session-create-existing-selection.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
   inheritSessionCreateParentFields,
@@ -88,6 +88,7 @@ import {
   resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
+  projectSessionCreateSpawnModelSelection,
   resolveSessionCreateModelInputError,
   resolveSessionForkMaxTokens,
 } from "./session-create-model-selection.js";
@@ -98,7 +99,7 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { readSessionCreateTarget } from "./session-create-target.js";
+import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -775,6 +776,7 @@ export async function createGatewaySession(
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
             ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+            ...(params.communication !== undefined ? { communication: params.communication } : {}),
             ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           },
           loadGatewayModelCatalogSnapshot: loadModelCatalog
@@ -791,18 +793,13 @@ export async function createGatewaySession(
         if (!patched.ok) {
           return patched;
         }
-        // Bind automatic intent before using the patch owner's canonical selection.
-        const spawnModelAutoSelection =
-          params.creation?.spawnModelAutoSelection?.model === requestedModel
-            ? params.creation?.spawnModelAutoSelection
-            : undefined;
-        if (
-          requestedToolOverrides &&
-          existingEntry !== undefined &&
-          stableStringify(existingEntry.toolOverrides) !==
-            stableStringify(patched.entry.toolOverrides)
-        ) {
-          return invalidSessionRequest("sessions.create toolOverrides requires a new session");
+        const adoptionError = sessionCreatePolicyAdoptionError(
+          existingEntry,
+          patched.entry,
+          params,
+        );
+        if (adoptionError) {
+          return invalidSessionRequest(adoptionError);
         }
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);
@@ -828,17 +825,12 @@ export async function createGatewaySession(
           ...patched.entry,
           ...inheritedWorkspace,
           ...(createdNewEntry && displayName ? { displayName } : {}),
-          ...(createdNewEntry && spawnModelAutoSelection
-            ? {
-                modelOverrideSource: "auto" as const,
-                ...(spawnModelAutoSelection.hasFallbackOrigin
-                  ? {
-                      modelOverrideFallbackOriginProvider: patched.entry.providerOverride,
-                      modelOverrideFallbackOriginModel: patched.entry.modelOverride,
-                    }
-                  : {}),
-              }
-            : {}),
+          ...projectSessionCreateSpawnModelSelection({
+            entry: patched.entry,
+            creation: params.creation,
+            requestedModel,
+            createdNewEntry,
+          }),
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
           ...(existingEntry === undefined && patched.entry.delivery === undefined
@@ -920,14 +912,11 @@ export async function createGatewaySession(
           ...inheritSessionCreateParentFields({
             parent: currentParentSessionEntry,
             overrides: params,
+            newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
+            newDashboardRoot:
+              createdNewEntry && Boolean(dashboardParentSessionKey) && !explicitParentSessionKey,
+            selectedModel: initializedEntry.modelOverride,
           }),
-          // Main groups dashboard roots; it must not supply their reply-time model.
-          ...(createdNewEntry &&
-          dashboardParentSessionKey &&
-          !explicitParentSessionKey &&
-          !initializedEntry.modelOverride
-            ? { modelOverrideSource: "default" as const }
-            : {}),
           ...buildSessionParentLink({
             parentSessionKey: explicitParentSessionKey ?? dashboardParentSessionKey,
             parent: canonicalParentSessionKey ? currentParentSessionEntry : undefined,
@@ -1252,27 +1241,11 @@ export async function createGatewaySession(
     const expectedEntry = structuredClone(stored);
     try {
       await params.afterCreate(initializingSession);
-      const finalized = await patchSessionEntryCore(
-        { sessionKey: initializingSession.key, storePath: initializingSession.storePath },
-        (current) => {
-          if (!isDeepStrictEqual(current, expectedEntry)) {
-            throw new Error(
-              `created session ${initializingSession.key} changed before finalization`,
-            );
-          }
-          return { initializationPending: undefined };
-        },
-        {
-          preserveActivity: true,
-          requireWriteSuccess: true,
-          ...(params.commitGuard ? { assertCommitAllowed: params.commitGuard } : {}),
-        },
+      const finalized = await finalizeSessionCreateTarget(
+        initializingSession,
+        expectedEntry,
+        params.commitGuard,
       );
-      if (!finalized) {
-        throw new Error(
-          `created session ${initializingSession.key} disappeared before finalization`,
-        );
-      }
       return {
         ...result,
         entry: projectPublicSessionEntry(finalized),

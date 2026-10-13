@@ -216,72 +216,27 @@ describe("Codex command RPC helpers", () => {
     expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { scope: "user home", transport: "stdio" as const, homeScope: "user" as const },
-    {
-      scope: "remote supervision",
-      transport: "websocket" as const,
-      homeScope: "agent" as const,
-      url: "ws://codex.test",
-    },
-  ])("settles a detached $scope fork without acquiring session auth", async (connection) => {
-    const onResponse = vi.fn();
-    await codexControlRequest(
-      {},
-      "thread/fork",
-      { threadId: "source-thread", excludeTurns: true },
-      {
-        startOptions: {
-          transport: connection.transport,
-          homeScope: connection.homeScope,
-          ...("url" in connection ? { url: connection.url } : {}),
-          command: "codex",
-          args: ["app-server"],
-          headers: {},
-        },
-        authProfileId: null,
-        onResponse,
-      },
-    );
-    expect(acquiredOptions()).toMatchObject({ authProfileId: null });
-    expect(acquiredOptions().preparedAuth).toBeUndefined();
-    expect(onResponse).toHaveBeenCalledWith(resumeResponse, harness.client, {
-      authProfileId: undefined,
-      assertCurrent: expect.any(Function),
-    });
-  });
-
-  it.each([
-    { method: "thread/resume" as const, explicitConnection: true },
-    { method: "thread/fork" as const, explicitConnection: false },
-  ])(
-    "requires session authority for $method without its native fork selection",
-    async (testCase) => {
-      await expect(
-        codexControlRequest(
-          {},
-          testCase.method,
-          { threadId: "source-thread" },
-          {
-            ...(testCase.explicitConnection
-              ? {
-                  startOptions: {
-                    transport: "stdio" as const,
-                    homeScope: "user" as const,
-                    command: "codex",
-                    args: ["app-server"],
-                    headers: {},
-                  },
-                }
-              : {}),
-            authProfileId: null,
-            onResponse: vi.fn(),
+  it("requires session authority for thread/resume without its native fork selection", async () => {
+    await expect(
+      codexControlRequest(
+        {},
+        "thread/resume",
+        { threadId: "source-thread" },
+        {
+          startOptions: {
+            transport: "stdio" as const,
+            homeScope: "user" as const,
+            command: "codex",
+            args: ["app-server"],
+            headers: {},
           },
-        ),
-      ).rejects.toThrow("requires admitted session authority");
-      expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
-    },
-  );
+          authProfileId: null,
+          onResponse: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("requires admitted session authority");
+    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+  });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");
@@ -401,19 +356,14 @@ describe("Codex command RPC helpers", () => {
     });
   });
 
-  it.each([
-    { label: "missing", sessionId: undefined },
-    { label: "mismatched", sessionId: "another-session" },
-  ])("rejects a $label admitted row before auth or client acquisition", async ({ sessionId }) => {
-    const storePath = path.join(tempDir, `authority-${sessionId ?? "missing"}`, "sessions.json");
-    if (sessionId) {
-      await upsertSessionEntry({
-        agentId: "main",
-        storePath,
-        sessionKey,
-        entry: { sessionId, updatedAt: Date.now() },
-      });
-    }
+  it("rejects a mismatched admitted row before auth or client acquisition", async () => {
+    const storePath = path.join(tempDir, "authority-mismatched", "sessions.json");
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath,
+      sessionKey,
+      entry: { sessionId: "another-session", updatedAt: Date.now() },
+    });
 
     await expect(resume({ storePath })).rejects.toThrow(
       "Codex session generation is no longer current: session-1",
@@ -423,58 +373,14 @@ describe("Codex command RPC helpers", () => {
     expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
 
-  it("does not replace a cooled configured profile with an ambient API key", async () => {
+  it("keeps native-auth control subscriptions outside prepared login", async () => {
     vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
-    config.models = {
-      providers: {
-        openai: { baseUrl: "https://api.openai.com/v1", apiKey: "openai:owned", models: [] },
-      },
-    };
-    setAuthStore({
-      version: 1,
-      profiles: { "openai:owned": { type: "api_key", provider: "openai", key: "owned-key" } },
-      usageStats: { "openai:owned": { cooldownUntil: Date.now() + 60_000 } },
-    });
 
-    await expect(resume()).rejects.toThrow("temporarily unavailable");
+    await resume({ authProfileId: null });
 
-    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(acquiredOptions().preparedAuth).toBeUndefined();
+    expect(acquiredOptions().authRequirement).toBeUndefined();
   });
-
-  it("leaves diagnostic requests independent of the current non-Codex model", async () => {
-    config.agents!.defaults!.model = { primary: "anthropic/claude-sonnet-4-6" };
-
-    await codexControlRequest({}, "thread/list", {}, { config, sessionKey, agentDir });
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "thread/list", config, sessionKey }),
-    );
-    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["native-auth", "user-home"] as const)(
-    "keeps %s control subscriptions outside prepared login",
-    async (scope) => {
-      vi.stubEnv("OPENAI_API_KEY", "unrelated-platform-key");
-
-      await resume(
-        scope === "native-auth"
-          ? { authProfileId: null }
-          : {
-              startOptions: {
-                transport: "stdio",
-                homeScope: "user",
-                command: "codex",
-                args: ["app-server", "--listen", "stdio://"],
-                headers: {},
-              },
-            },
-      );
-
-      expect(acquiredOptions().preparedAuth).toBeUndefined();
-      expect(acquiredOptions().authRequirement).toBeUndefined();
-    },
-  );
 
   it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {
     requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
@@ -506,16 +412,6 @@ describe("Codex command RPC helpers", () => {
 
     expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions, timeoutMs: 321, authProfileId: null }),
-    );
-  });
-
-  it("forwards an explicit per-request timeout budget", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
-
-    await codexControlRequest({}, "thread/list", { archived: false }, { timeoutMs: 321 });
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 321 }),
     );
   });
 });

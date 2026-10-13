@@ -7,7 +7,7 @@ import { live } from "lit/directives/live.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { renderAppearancePicker, renderDialog } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast, updateWorkboardToastOutcome } from "../../components/toast.ts";
+import { renderWorkboardErrorToast, updateWorkboardToastOutcome } from "../../components/toast.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -242,12 +242,7 @@ export function renderBoardModal(props: {
           </button>
         </div>
       </form>
-      ${renderWorkboardToast({
-        owner: draft.error ? draft : props.toastOwner,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
-      })}`,
+      ${renderWorkboardErrorToast(draft.error ? draft : props.toastOwner, visibleError)}`,
   );
 }
 

@@ -288,17 +288,14 @@ export function createGatewayUnattributableProxyReporter(log: {
   let emittedInWindow = 0;
   return (attribution) => {
     const now = Date.now();
-    // A wall-clock rollback invalidates both schedules; otherwise future-dated source
-    // records could suppress warnings until the clock catches up and their TTL elapses.
-    if (now < lastObservedAt) {
+    // Reset the aggregate budget on expiry or rollback. Only rollback invalidates
+    // per-source TTLs; an ordinary refill must retain peers warned beside it.
+    if (now < lastObservedAt || now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
       windowStartedAt = now;
       emittedInWindow = 0;
-      reportedSources.clear();
-    } else if (now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
-      // The aggregate budget refills on its own schedule. Source suppression is left to
-      // the cache's TTL so a peer warned just before a refill waits out its own window.
-      windowStartedAt = now;
-      emittedInWindow = 0;
+      if (now < lastObservedAt) {
+        reportedSources.clear();
+      }
     }
     lastObservedAt = now;
     if (

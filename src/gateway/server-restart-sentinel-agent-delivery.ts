@@ -387,6 +387,14 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
           const stateDir = params.queueContext.environment.OPENCLAW_STATE_DIR;
+          const attachMedia = async (
+            messageId: string,
+            blocks: Parameters<typeof attachManagedOutgoingMediaToMessage>[0]["blocks"],
+          ) => {
+            if (!(await attachManagedOutgoingMediaToMessage({ messageId, blocks, stateDir }))) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
+          };
           const preparedMediaBlocks = { ...entry.preparedMediaBlocks };
           const content: Array<Record<string, unknown>> = [];
           for (const mediaUrl of mediaUrls) {
@@ -485,17 +493,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
                 onMessageCommitted: (receipt, acceptCompletion) => {
-                  acceptCompletion(async () => {
-                    if (
-                      !(await attachManagedOutgoingMediaToMessage({
-                        messageId: receipt.messageId,
-                        blocks: readAssistantDisplayContent(receipt.message),
-                        stateDir,
-                      }))
-                    ) {
-                      throw new Error("queued internal generated-media artifact attachment failed");
-                    }
-                  });
+                  acceptCompletion(() =>
+                    attachMedia(receipt.messageId, readAssistantDisplayContent(receipt.message)),
+                  );
                 },
               });
           if (!appended.ok) {
@@ -512,15 +512,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           }
           params.queueContext.admission.assertCurrent();
           if (enriched) {
-            if (
-              !(await attachManagedOutgoingMediaToMessage({
-                messageId: enriched.messageId,
-                blocks: content,
-                stateDir,
-              }))
-            ) {
-              throw new Error("queued internal generated-media artifact attachment failed");
-            }
+            await attachMedia(enriched.messageId, content);
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }

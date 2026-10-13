@@ -338,8 +338,10 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
           @click=${(event: MouseEvent) => {
             if (active) {
               event.preventDefault();
+              // The controller owns hold suppression: releasing a latched hold
+              // also clicks this button, and that click must not mean Stop.
               if (!finalizing) {
-                void props.dictation?.finishActive();
+                props.dictation?.handleClick(event);
               }
               return;
             }
@@ -507,6 +509,38 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const cameraLabel = t(
     props.voiceVideoEnabled ? "chat.composer.turnCameraOff" : "chat.composer.turnCameraOn",
   );
+  const renderTalkAction = (action: "start" | "camera") => {
+    const camera = action === "camera";
+    const label = camera ? cameraLabel : t("chat.composer.realtimeTalkCapability");
+    return html`
+      <openclaw-tooltip
+        class=${camera ? nothing : "chat-mobile-talk-action"}
+        .content=${camera ? label : (props.submitDisabledReason ?? label)}
+      >
+        <button
+          class=${`chat-send-btn chat-send-btn--${camera ? "voice" : "talk-mode"}`}
+          type=${camera ? nothing : "button"}
+          @pointerdown=${camera ? undefined : props.onPrimaryActionPointerDown}
+          @click=${camera ? props.onToggleCamera : props.onToggleVoice}
+          ?disabled=${
+            camera
+              ? props.voiceVideoPending ||
+                props.voiceStatus === "connecting" ||
+                props.voiceStatus === "error"
+              : !props.connected ||
+                props.sending ||
+                props.isBusy ||
+                Boolean(props.submitDisabledReason)
+          }
+          aria-label=${label}
+          aria-pressed=${camera ? String(Boolean(props.voiceVideoEnabled)) : nothing}
+        >
+          ${camera ? (props.voiceVideoEnabled ? icons.cameraOff : icons.camera) : icons.audioLines}
+          <span class="agent-chat__control-label">${label}</span>
+        </button>
+      </openclaw-tooltip>
+    `;
+  };
   // Dictation edits the draft; only Talk-only controls depend on turn activity.
   const voiceButton = renderComposerVoiceButton({
     ...props,
@@ -528,26 +562,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
     : nothing;
   const mobileTalkAction =
     !hasComposedContent && !props.dictation?.active && props.onToggleVoice
-      ? html`
-          <openclaw-tooltip
-            class="chat-mobile-talk-action"
-            .content=${props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability")}
-          >
-            <button
-              class="chat-send-btn chat-send-btn--talk-mode"
-              type="button"
-              @pointerdown=${props.onPrimaryActionPointerDown}
-              @click=${props.onToggleVoice}
-              ?disabled=${!props.connected || props.sending || props.isBusy || Boolean(props.submitDisabledReason)}
-              aria-label=${t("chat.composer.realtimeTalkCapability")}
-            >
-              ${icons.audioLines}
-              <span class="agent-chat__control-label"
-                >${t("chat.composer.realtimeTalkCapability")}</span
-              >
-            </button>
-          </openclaw-tooltip>
-        `
+      ? renderTalkAction("start")
       : nothing;
   const sendDisabledReason =
     props.canSend && canSubmitBeforeChatHistory(props.draft) ? null : props.submitDisabledReason;
@@ -647,26 +662,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
                   `
             }
             ${
-              props.voiceVideoCapable && props.onToggleCamera
-                ? html`
-                    <openclaw-tooltip .content=${cameraLabel}>
-                      <button
-                        class="chat-send-btn chat-send-btn--voice"
-                        @click=${props.onToggleCamera}
-                        ?disabled=${
-                          props.voiceVideoPending ||
-                          props.voiceStatus === "connecting" ||
-                          props.voiceStatus === "error"
-                        }
-                        aria-label=${cameraLabel}
-                        aria-pressed=${props.voiceVideoEnabled ? "true" : "false"}
-                      >
-                        ${props.voiceVideoEnabled ? icons.cameraOff : icons.camera}
-                        <span class="agent-chat__control-label">${cameraLabel}</span>
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing
+              props.voiceVideoCapable && props.onToggleCamera ? renderTalkAction("camera") : nothing
             }
             <span class="chat-mobile-primary-action chat-desktop-primary-action"
               >${abortAction}</span

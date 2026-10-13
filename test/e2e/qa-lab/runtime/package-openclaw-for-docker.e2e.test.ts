@@ -844,6 +844,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/check-limits.mts",
       "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
       "scripts/lib/vitest-resource-ownership.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",

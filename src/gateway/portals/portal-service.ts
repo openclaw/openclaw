@@ -21,6 +21,7 @@ import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { getTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import {
@@ -224,7 +225,12 @@ function createPortalProxyHandlers(
     upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => {
       const runtime = resolveRuntime(req);
       if (!runtime) {
-        socket.destroy();
+        // HTTP relinquishes upgraded sockets; own errors while the 404 flushes.
+        socket.once("error", () => socket.destroy());
+        rejectWebSocketUpgrade(socket, {
+          status: 404,
+          body: { contentType: "text/plain; charset=utf-8", text: "Unknown portal" },
+        });
         return;
       }
       handlePortalProxyUpgrade({

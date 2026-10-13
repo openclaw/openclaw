@@ -138,6 +138,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         },
         cacheTrace: {},
         contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
           getAfterTurnCheckpoint: vi.fn(() => 7),
           takePendingMidTurnPrecheckRequest: vi.fn(() => null),
         },

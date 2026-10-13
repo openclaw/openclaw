@@ -6,7 +6,7 @@ import {
   renderDialog,
 } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderWorkboardToast } from "../../components/toast.ts";
+import { renderWorkboardErrorToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
 import {
   workboardCardBoardId,
@@ -43,6 +43,7 @@ import {
   formatLifecycle,
   formatPriorityLabel,
   workboardErrorMessage,
+  workboardMutationContext,
   renderPriorityIcon,
   renderLifecycleIcon,
   formatStatusLabel,
@@ -581,11 +582,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                             ?disabled=${busy || !state.detailCommentBody.trim()}
                             @click=${() =>
                               addWorkboardCardComment({
-                                host: props.host,
-                                client: props.client,
+                                ...workboardMutationContext(props),
                                 cardId: card.id,
                                 body: state.detailCommentBody,
-                                requestUpdate: props.onRequestUpdate,
                               })}
                           >
                             ${t("workboard.detailAddNote")}
@@ -622,12 +621,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           </div>
         </div>
       </aside>
-      ${renderWorkboardToast({
-        owner: state,
-        message: visibleError ?? "",
-        key: visibleError,
-        tone: "error",
-      })}
+      ${renderWorkboardErrorToast(state, visibleError)}
     `,
   );
   return html`

@@ -10,10 +10,8 @@ import {
   applySessionEntryLifecycleMutation,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import {
-  readExpiredCronRunEntriesInWorker,
-  readSessionEntriesFromStoreInWorker,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";

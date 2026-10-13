@@ -80,6 +80,8 @@ Catalog listings, searches, and pagination use one complete snapshot per request
 
 A cold listing returns an explicit loading host immediately. Progressive callers receive the snapshot through the catalog's normal host update; other callers can refresh the catalog. Unavailable or expired snapshots return no rows, including while a refresh is running. Warm callers receive a complete page from the snapshot without waiting for the source. Configuration changes, observed node disconnections or reconnections, and service retirement invalidate snapshots and pending publications. The receiver checks node connections during catalog requests, background discovery, and before publishing a refresh. There is no remote share-change subscription: source changes reach the receiver on the next successful background refresh. Updating the receiver requires no configuration or stored-state migration.
 
+The source reads its session metadata inventory in a background worker and reuses it across pages and refreshes while the database revision is unchanged. Writes from the source Gateway, database replacement, and configuration changes invalidate that inventory. Every page still prepares current creator identities and rechecks whether its selected sessions remain shared before publication.
+
 Listings leave cold transcript archives untouched and use any stored title metadata. To read cold history, open the session on the source Gateway first so its normal history owner restores the archive. Each source page also bounds raw transcript reads to 8 MiB; a single larger entry returns an explicit error instead of being silently skipped. Inspect that entry on the source Gateway.
 
 ## Attribute the source node

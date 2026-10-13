@@ -122,7 +122,11 @@ class DebugPage extends OpenClawLightDomElement {
       this.callEpoch += 1;
     },
     onSnapshot: () => {
-      this.syncPolling();
+      if (this.gateway.connected && this.gateway.client) {
+        this.polling.start();
+      } else {
+        this.polling.stop();
+      }
       if (this.diagnosticsNeedsRefresh) {
         void this.loadDiagnostics();
       }
@@ -154,14 +158,6 @@ class DebugPage extends OpenClawLightDomElement {
     this.diagnosticsAgentId = null;
     this.callEpoch += 1;
     super.disconnectedCallback();
-  }
-
-  private syncPolling() {
-    if (!this.gateway.connected || !this.gateway.client) {
-      this.polling.stop();
-      return;
-    }
-    this.polling.start();
   }
 
   private invalidateDiagnostics() {

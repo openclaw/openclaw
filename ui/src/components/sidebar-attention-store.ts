@@ -9,6 +9,7 @@ import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-re
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -146,7 +147,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.healthRefreshTimer = undefined;
     if (
       this.disposed ||
-      this.sources.gateway.snapshot.phase !== "connected" ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
       document.visibilityState === "hidden"
     ) {
       return;
@@ -271,7 +272,7 @@ export class SidebarAttentionStoreController implements StoreController {
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (gateway.phase !== "connected" || !client) {
+    if (!isGatewayAvailable(gateway) || !client) {
       return;
     }
     const owner = this.owner();
@@ -282,7 +283,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.loadedAgentScope = agentScope;
     const current = () =>
       generation === this.loadGeneration &&
-      this.sources.gateway.snapshot.phase === "connected" &&
+      isGatewayAvailable(this.sources.gateway.snapshot) &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
       this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
@@ -432,6 +433,12 @@ export class SidebarAttentionStoreController implements StoreController {
       this.loadedClient = null;
       this.clearHealth();
       this.onChange();
+      return;
+    }
+    if (!isGatewayAvailable(snapshot)) {
+      this.loadGeneration += 1;
+      this.loadedClient = null;
+      this.scheduleHealthRefresh();
       return;
     }
     const owner = this.owner();

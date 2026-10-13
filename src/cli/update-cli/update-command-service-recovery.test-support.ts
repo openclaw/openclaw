@@ -11,7 +11,7 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
+import { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
 import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -91,7 +91,9 @@ function createServingOwnerFixture() {
     },
     async restart() {
       if (lease) {
-        expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "gateway.restart" });
+        expect(await prepareGatewayRestartIntentConsumption(env)()).toEqual({
+          reason: "gateway.restart",
+        });
         await release();
       }
     },

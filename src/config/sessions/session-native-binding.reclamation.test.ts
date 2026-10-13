@@ -4,11 +4,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { createSessionInitialization } from "../../sessions/session-initialization.js";
 import {
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
@@ -137,71 +139,53 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "reclaims lifecycle artifacts with the native veto off the caller thread (rollback: %s)",
-  async (rollback) => {
-    await withNativeBindingFixture("agentsapi", async (fixture) => {
-      const before = fixture.readEntry();
-      const binding = fixture.readBinding();
-      const history = loadTranscriptEventsSync(fixture.scope);
-      const refusal = new Error("synthetic reclamation commit refusal");
-      const published = vi.fn();
-      const stop = onSessionIdentityMutation((change) => {
-        if (change.previous.sessionKeys.includes(fixture.scope.sessionKey)) {
-          published(change.kind);
-        }
-      });
-      let granted = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-            if (
-              request.stage === "commit" &&
-              isRecord(facts) &&
-              facts.kind === "session-native-binding"
-            ) {
-              granted = true;
-              if (rollback) {
-                throw refusal;
-              }
-            }
-            callback(request, grant);
-          }, attachment),
-      );
-      const sql = observeHostDataSql();
-      try {
-        if (rollback) {
-          await expect(fixture.cleanup()).rejects.toBe(refusal);
-        } else {
-          await expect(fixture.cleanup()).resolves.toMatchObject({ removedEntries: 1 });
-        }
-        expect(granted).toBe(true);
-        // Other-owner live authority reads remain outside the moved A transaction.
-        expect(
-          sql.queries.filter((query) =>
-            /\b(?:session_nodes|session_windows|transcript_events)\b/i.test(query),
-          ),
-        ).toEqual([]);
-        expect(
-          sql.queries.filter((query) =>
-            /\b(?:delete\s+from|insert(?:\s+or\s+\w+)?\s+into)\s+["`]?plugin_state_entries\b/i.test(
-              query,
-            ),
-          ),
-        ).toEqual([]);
-      } finally {
-        sql.restore();
-        stop();
+it("reclaims lifecycle artifacts with the native veto off the caller thread", async () => {
+  await withNativeBindingFixture("agentsapi", async (fixture) => {
+    const published = vi.fn();
+    const stop = onSessionIdentityMutation((change) => {
+      if (change.previous.sessionKeys.includes(fixture.scope.sessionKey)) {
+        published(change.kind);
       }
-      expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
-      expect(fixture.readBinding()).toEqual(rollback ? binding : undefined);
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(rollback ? history : []);
-      expect(published.mock.calls).toEqual(rollback ? [] : [["delete"]]);
     });
-  },
-);
+    let granted = false;
+    probe.admission(admission, (request, grant, callback) => {
+      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      if (
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.kind === "session-native-binding"
+      ) {
+        granted = true;
+      }
+      callback(request, grant);
+    });
+    const sql = observeHostDataSql();
+    try {
+      await expect(fixture.cleanup()).resolves.toMatchObject({ removedEntries: 1 });
+      expect(granted).toBe(true);
+      // Other-owner live authority reads remain outside the moved A transaction.
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:session_nodes|session_windows|transcript_events)\b/i.test(query),
+        ),
+      ).toEqual([]);
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:delete\s+from|insert(?:\s+or\s+\w+)?\s+into)\s+["`]?plugin_state_entries\b/i.test(
+            query,
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+      stop();
+    }
+    expect(fixture.readEntry()).toEqual(undefined);
+    expect(fixture.readBinding()).toEqual(undefined);
+    expect(loadTranscriptEventsSync(fixture.scope)).toEqual([]);
+    expect(published.mock.calls).toEqual([["delete"]]);
+  });
+});
 
 it.each([false, true])(
   "settles maintenance participants only for rows actually reclaimed (changed: %s)",
@@ -227,6 +211,91 @@ it.each([false, true])(
       }
       expect(fixture.readEntry()).toEqual(changed ? successor : undefined);
       expect(fixture.readBinding()).toEqual(changed ? binding : undefined);
+    });
+  },
+);
+
+it.each([false, true])(
+  "retains rollback authority without a same-database grant reread (binding: %s)",
+  async (withBinding) => {
+    await withNativeBindingFixture("agentsapi", async (fixture) => {
+      if (!withBinding) {
+        fixture.registry.agentHarnesses.length = 0;
+      }
+      const entry = fixture.readEntry();
+      assert(entry);
+      let grantDatabasePath: string | undefined;
+      let agentGrants = 0;
+      let authorityReads = 0;
+      let otherOwnerAuthorityReads = 0;
+      let revoked = true;
+      const refusal = new Error("synthetic rollback authority revoked");
+      const create = admission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) => {
+          let databasePath: string | undefined;
+          const owned = create((request, grant) => {
+            const previous = grantDatabasePath;
+            const identity = isRecord(request.facts) ? request.facts.identity : undefined;
+            grantDatabasePath =
+              isRecord(identity) && typeof identity.nativeLocation === "string"
+                ? identity.nativeLocation
+                : databasePath;
+            if (grantDatabasePath === fixture.database.path) {
+              agentGrants++;
+            }
+            try {
+              callback(request, grant);
+            } finally {
+              grantDatabasePath = previous;
+            }
+          }, attachment);
+          const bind = owned.bindDatabaseAuthority.bind(owned);
+          owned.bindDatabaseAuthority = (authority) => {
+            databasePath = authority.databasePath;
+            bind(authority);
+          };
+          return owned;
+        },
+      );
+      const initializer = createSessionInitialization(
+        { ...fixture.scope, lifecycleRevision: entry.lifecycleRevision },
+        () => {
+          expect(grantDatabasePath).not.toBe(fixture.database.path);
+          fixture.readEntry();
+          authorityReads++;
+          if (grantDatabasePath === fixture.shared.path) {
+            otherOwnerAuthorityReads++;
+          }
+          if (revoked) {
+            throw refusal;
+          }
+        },
+        { config: {}, agentId: fixture.scope.agentId, entry },
+      );
+      try {
+        await expect(initializer.rollback(() => fixture.remove())).rejects.toBe(refusal);
+        expect(fixture.readEntry()).toEqual(entry);
+        expect(fixture.readBinding()).toBeDefined();
+        revoked = false;
+        await expect(initializer.rollback(() => fixture.remove())).resolves.toMatchObject({
+          deleted: true,
+        });
+        expect(authorityReads).toBeGreaterThan(0);
+        expect(agentGrants).toBeGreaterThan(0);
+        expect(fixture.readEntry()).toBeUndefined();
+        expect(() => initializer.handle.assertCurrent()).toThrow(
+          "Session initialization is rolling back",
+        );
+        if (withBinding) {
+          expect(fixture.readBinding()).toBeUndefined();
+          expect(otherOwnerAuthorityReads).toBeGreaterThan(0);
+        } else {
+          expect(fixture.readBinding()).toBeDefined();
+        }
+      } finally {
+        initializer.close();
+      }
     });
   },
 );

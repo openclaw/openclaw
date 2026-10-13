@@ -87,7 +87,10 @@ type PluginStateKeyedStoreBase<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
+  delete(
+    key: string,
+    opts?: { assertCurrent?: () => void; signal?: AbortSignal },
+  ): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;

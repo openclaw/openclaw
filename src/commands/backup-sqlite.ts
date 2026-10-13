@@ -23,23 +23,6 @@ type BackupSqliteCreateOptions = {
   json?: boolean;
 };
 
-type BackupSqliteRepositoryOptions = {
-  repository?: string;
-  json?: boolean;
-};
-
-type BackupSqliteJsonOptions = {
-  json?: boolean;
-};
-
-type BackupSqliteVerifyOptions = BackupSqliteJsonOptions & {
-  scratch?: string;
-};
-
-type BackupSqliteRestoreOptions = BackupSqliteJsonOptions & {
-  target?: string;
-};
-
 const OPENCLAW_SNAPSHOT_READ_OPTIONS = {
   allowedDatabaseRoles: ["global", "agent"],
 } as const;
@@ -87,7 +70,7 @@ export async function backupSqliteCreateCommand(
 
 export async function backupSqliteListCommand(
   runtime: RuntimeEnv,
-  options: BackupSqliteRepositoryOptions,
+  options: { repository?: string; json?: boolean },
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const snapshots = await createLocalSqliteSnapshotProvider({
@@ -119,7 +102,7 @@ export async function backupSqliteListCommand(
 export async function backupSqliteVerifyCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteVerifyOptions,
+  options: { scratch?: string; json?: boolean },
 ) {
   const resolved = resolveSnapshot(snapshot, options.scratch);
   const verified = await resolved.provider.verify(resolved.ref);
@@ -141,7 +124,7 @@ export async function backupSqliteVerifyCommand(
 export async function backupSqliteRestoreCommand(
   runtime: RuntimeEnv,
   snapshot: string,
-  options: BackupSqliteRestoreOptions,
+  options: { target?: string; json?: boolean },
 ) {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");

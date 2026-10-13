@@ -58,7 +58,17 @@ const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
 const SESSION_SEND_DM_ROUTING_E2E_TIMEOUT_MS = 30_000;
 
 function getSessionsSendTool(options?: Parameters<typeof createOpenClawTools>[0]) {
-  const tool = createOpenClawTools(options).find((candidate) => candidate.name === "sessions_send");
+  const tool = createOpenClawTools(
+    options?.config
+      ? {
+          ...options,
+          config: {
+            ...options.config,
+            session: { ...options.config.session, store: testState.sessionStorePath },
+          },
+        }
+      : options,
+  ).find((candidate) => candidate.name === "sessions_send");
   if (!tool) {
     throw new Error("missing sessions_send tool");
   }

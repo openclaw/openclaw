@@ -68,10 +68,15 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
-    const routing = await resolveRouting({ bootstrapFiles: [bootstrapFile] });
+    const isWorkspaceBootstrapPending = vi.fn(async () => false);
+    const routing = await resolveRouting({
+      bootstrapFiles: [bootstrapFile],
+      isWorkspaceBootstrapPending,
+    });
 
     expect(routing.bootstrapMode).toBe("full");
     expect(routing.includeBootstrapInSystemContext).toBe(true);
+    expect(isWorkspaceBootstrapPending).not.toHaveBeenCalled();
   });
 
   it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {

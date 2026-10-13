@@ -2,16 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
+  waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
@@ -21,8 +26,20 @@ import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  completedTurnMessageAnchor,
+  captureCompletedTurnMessageAnchor,
+  sessionManagerReadMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { finalizeHarnessContextEngineTurn } from "./context-engine-lifecycle.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
+import {
+  drainPendingContextEngineTurnsBeforeRun,
+  finalizeAcceptedContextEngineTurn,
+  type ContextEngineTurnAttemptFacts,
+} from "./context-engine-turn-attempt.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
 import {
   acceptContextEngineTurnIntent,
@@ -165,6 +182,125 @@ async function createTranscript(sessionId: string, content = "current") {
 }
 
 describe("context-engine turn outbox", () => {
+  it.each(["unchanged", "rewrite", "branch", "reset"] as const)(
+    "validates the committed terminal receipt at consumption after %s without pre-reading it",
+    async (change) => {
+      const { target, admission } = await createTranscript(`terminal-receipt-${change}`);
+      const manager = await SessionManager.openAsync(target);
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "committed reply" }],
+      });
+      const appended = await manager.appendMessageWithTranscriptAnchorAsync(message);
+      const completed = captureCompletedTurnMessageAnchor(manager, appended.entryId);
+      const terminal = completed?.anchor;
+      expect(terminal).toEqual(appended.anchor);
+      expect(Object.isFrozen(terminal)).toBe(true);
+      await manager.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 1 });
+      expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toEqual(terminal);
+
+      if (change === "rewrite") {
+        await replaceTranscriptEvents(
+          target,
+          manager.getPersistedEntries().map((entry) =>
+            asOptionalRecord(entry)?.id === appended.entryId
+              ? Object.assign({}, entry, {
+                  message: { ...message, content: [{ type: "text", text: "rewritten" }] },
+                })
+              : entry,
+          ),
+        );
+        await manager.reloadPersistedTranscriptAsync();
+        expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toBeUndefined();
+      } else if (change === "branch") {
+        await manager.appendLeafControlAsync({
+          targetId: admission.entryId,
+          appendParentId: admission.entryId,
+        });
+        await waitForSessionTranscriptProjection(target);
+      } else if (change === "reset") {
+        // Append-only resets keep closed historical turns; later messages must not replace the receipt.
+        await manager.appendResetBoundaryAsync("reset");
+        await manager.appendMessageAsync({ role: "user", content: "next turn", timestamp: 2 });
+        await manager.appendMessageAsync(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "next reply" }] }),
+        );
+        expect(manager[sessionManagerReadMessageAnchor](appended.entryId)).toBeUndefined();
+      }
+
+      const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+        status: "committed",
+      }));
+      const lease = createLease(createEngine(commitTurn));
+      const record = vi.fn<(facts: ContextEngineTurnAttemptFacts) => void>();
+      const prepareRead = vi.spyOn(transcriptHydration, "prepareSessionTranscriptHydration");
+      const finalization = {
+        contextEngine: lease.engine,
+        sessionIdUsed: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionFile: target.storePath,
+        messagesSnapshot: [],
+        prePromptMessageCount: 0,
+        promptError: false,
+        aborted: false,
+        yieldAborted: false,
+        turnCandidate: {
+          admission,
+          terminalEntryId: appended.entryId,
+          [completedTurnMessageAnchor]: completed,
+          record,
+        },
+        warn: vi.fn(),
+      } satisfies Parameters<typeof finalizeHarnessContextEngineTurn>[0];
+      try {
+        await finalizeHarnessContextEngineTurn(finalization);
+        expect(prepareRead).not.toHaveBeenCalled();
+      } finally {
+        prepareRead.mockRestore();
+      }
+      expect(record).toHaveBeenCalledOnce();
+      const facts = record.mock.calls[0]![0];
+      expect(facts.boundary.terminal).toEqual(terminal);
+      const warn = vi.fn();
+      await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      if (change === "unchanged" || change === "reset") {
+        expect(commitTurn).toHaveBeenCalledOnce();
+        expect(commitTurn.mock.calls[0]![0].messages).toEqual([
+          { role: "user", content: "current" },
+          message,
+        ]);
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        expect(commitTurn).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript range is stale"));
+      }
+      if (change === "unchanged") {
+        let active = true;
+        await withSessionTranscriptWriteAssertion(
+          target,
+          () => {
+            if (!active) {
+              throw new Error("writer revoked");
+            }
+          },
+          async () => {
+            const receipt = captureCompletedTurnMessageAnchor(manager, appended.entryId);
+            active = false;
+            await expect(
+              finalizeHarnessContextEngineTurn({
+                ...finalization,
+                turnCandidate: {
+                  ...finalization.turnCandidate,
+                  [completedTurnMessageAnchor]: receipt,
+                },
+              }),
+            ).rejects.toThrow("writer revoked");
+          },
+        );
+        expect(record).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("retries only transcript failures that can make progress", () => {
     expect(isRetryableContextEngineTurnReadFailure("projection-unavailable")).toBe(true);
     expect(isRetryableContextEngineTurnReadFailure("too-large")).toBe(false);

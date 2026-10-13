@@ -26,6 +26,10 @@ import {
   restartRecoveryStoreTargetKey,
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
+import {
+  loadExpectedRestartRecoveryTarget,
+  captureExpectedRestartRecoveryCurrent,
+} from "./main-session-restart-recovery-exact-target.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -36,10 +40,7 @@ import {
   RETRY_BACKOFF_MULTIPLIER,
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
-import {
-  loadExpectedRestartRecoveryTarget,
-  recoverStore,
-} from "./main-session-restart-recovery-store.js";
+import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
 
@@ -188,14 +189,22 @@ async function recoverExpectedRestartRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
+  const expected = {
+    ...params.expectedTarget,
+    claim: params.expectedTarget.claim && { ...params.expectedTarget.claim },
+  };
+  const isCurrent = captureExpectedRestartRecoveryCurrent({
+    expected,
+    storePath: params.storePath,
+  });
   const preparation = prepareRestartRecovery(params.gatewayRuntime, params.signal);
   if (preparation && (await preparation) !== undefined) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  const expected = params.expectedTarget;
-  const loadExpected = () =>
-    loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
-  if (!loadExpected()) {
+  if (
+    !(await loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath })) ||
+    !isCurrent()
+  ) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
   return (
@@ -203,7 +212,7 @@ async function recoverExpectedRestartRecovery(
       ...params,
       canonicalSessionKey: expected.canonicalSessionKey,
       sessionId: expected.sessionId,
-      isCurrent: () => Boolean(loadExpected()),
+      isCurrent,
       run: (recoveryAdmission) =>
         recoverStore({
           ...params,
@@ -244,7 +253,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
     shouldContinue: () => true,
     attempt: async (finalAttempt) => {
       const result = await recover();
-      const stillPending = loadExpectedRestartRecoveryTarget({
+      const stillPending = await loadExpectedRestartRecoveryTarget({
         expected: {
           agentId: params.agentId,
           sessionId: params.expectedSessionId,

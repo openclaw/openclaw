@@ -139,6 +139,23 @@ describe("worker placement runtime capabilities", () => {
     ).toBe(expected);
   });
 
+  it("does not let a persisted runtime override bypass required worker inference", () => {
+    expect(
+      resolveWorkerPlacementSessionRuntime({
+        cfg: { cloudWorkers: { requiredProfile: "dedicated-native" } },
+        entry: {
+          sessionId: "required-placement-runtime",
+          updatedAt: 0,
+          providerOverride: "openai",
+          modelOverride: "gpt-test",
+          agentRuntimeOverride: "codex",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:required-placement-runtime",
+      }),
+    ).toBe("openclaw");
+  });
+
   it.each([
     {
       name: "embedded worker turns support paired devices",

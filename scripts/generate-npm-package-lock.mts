@@ -59,6 +59,9 @@ const NPM_LOCK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const NPM_LOCK_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const NPM_LOCK_DEFAULT_JOBS = 4;
 const NPM_LOCK_MAX_JOBS = 16;
+// Observed nested-override locks settle after one reload; a lock still changing after
+// this many reloads is oscillating and must fail instead of shipping an unstable lock.
+const NPM_LOCK_MAX_RELOAD_PASSES = 3;
 const NPM_LOCK_WORKER_KIND = "openclaw-npm-lock-package";
 
 function usage() {
@@ -1151,6 +1154,17 @@ const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map([
       ]),
     },
   ],
+  [
+    "12.2.0",
+    {
+      allowMissingBundleMarker: false,
+      exceptions: new Map([
+        ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+      ]),
+    },
+  ],
 ]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
@@ -1551,21 +1565,33 @@ function describeOverrideViolations(violations: ReturnType<typeof collectOverrid
     .join("; ");
 }
 
-function normalizeNpmLockOverrides(
-  tempDir: string,
-  npmInstallArgs: string[],
-  env: NodeJS.ProcessEnv,
-) {
+function installNpmPackageLock(tempDir: string, npmInstallArgs: string[], env: NodeJS.ProcessEnv) {
   const npmLockPath = path.join(tempDir, "package-lock.json");
   const enforcedOverrides = readWorkspaceOverrides();
   const overrideRules = validationOverrideRulesFromOverrides(enforcedOverrides);
   const disabledSources = new Set<string>();
   const disabledPaths = new Set<string>();
+  let previousLockText: string | undefined;
+  let reloadPasses = 0;
   while (true) {
-    const npmLock = parseJsonObject(readFileSync(npmLockPath, "utf8"));
+    runNpm(npmInstallArgs, tempDir, env);
+    const npmLockText = readFileSync(npmLockPath, "utf8");
+    const npmLock = parseJsonObject(npmLockText);
     const remaining = collectUnallowedOverrideViolations(npmLock, overrideRules, enforcedOverrides);
     if (remaining.length === 0) {
-      return;
+      // npm can assign nested override sets differently on a fresh tree than when it
+      // reloads that lock, so `npm ci` rejects a first-pass lock as out of sync.
+      // Rerun from the written lock until npm's own reload leaves it unchanged.
+      if (npmLockText === previousLockText) {
+        return;
+      }
+      if (++reloadPasses > NPM_LOCK_MAX_RELOAD_PASSES) {
+        throw new Error(
+          `generated package-lock.json did not stabilize after ${NPM_LOCK_MAX_RELOAD_PASSES} npm reloads`,
+        );
+      }
+      previousLockText = npmLockText;
+      continue;
     }
     // npm 11 ignores root overrides inside dependency-owned shrinkwraps. Disable every
     // current source, rerun npm, then rescan the whole graph because its placement can change.
@@ -1591,8 +1617,8 @@ function normalizeNpmLockOverrides(
       disabledSources.add(`${source}\0${typeof version === "string" ? version : ""}`);
       disabledPaths.add(source);
     }
-    writeFileSync(npmLockPath, `${JSON.stringify(npmLock, null, 2)}\n`);
-    runNpm(npmInstallArgs, tempDir, env);
+    previousLockText = `${JSON.stringify(npmLock, null, 2)}\n`;
+    writeFileSync(npmLockPath, previousLockText);
   }
 }
 
@@ -1663,10 +1689,9 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       `${JSON.stringify(normalizedPackageJson, null, 2)}\n`,
     );
     copyLocalFileDependencies(normalizedPackageJson, packageDir, tempDir);
-    runNpm(npmInstallArgs, tempDir, env);
     // Lock-derived overrides steer npm placement. Only explicit workspace overrides
     // are policy that dependency shrinkwraps must not violate.
-    normalizeNpmLockOverrides(tempDir, npmInstallArgs, env);
+    installNpmPackageLock(tempDir, npmInstallArgs, env);
     const generated = normalizeNpmVersionDrift(
       applyPackageExtensionPeerMetadata(
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),

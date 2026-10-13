@@ -210,20 +210,14 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       const inspected = await inspectServing(state.command);
       const serving = inspected?.serving;
       const disjoint = inspected?.disjoint ?? false;
-      if (
-        !inspected &&
-        (state.command ||
-          state.installed ||
-          state.loadState.status !== "not-loaded" ||
-          !state.runtime?.missingUnit)
-      ) {
-        refuse();
-      }
       const absent =
         !state.command &&
         !state.installed &&
         state.loadState.status === "not-loaded" &&
         state.runtime?.missingUnit === true;
+      if (!inspected && !absent) {
+        refuse();
+      }
       if (
         !disjoint &&
         (state.running ||

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -166,6 +167,8 @@ export async function continueMigratedUpdateInFreshProcess(
           }),
         ),
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        // This worker finishes the run, including the deferred post-activation inspections.
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.shouldRestart ? "1" : "0",
         TMPDIR: scratchDir,
         TMP: scratchDir,
         TEMP: scratchDir,

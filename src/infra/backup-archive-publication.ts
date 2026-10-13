@@ -122,15 +122,14 @@ function retainArchiveForCleanup(
     if (!pathsEqual(candidate.archivePath, receipt.archivePath)) {
       continue;
     }
-    if (!candidate.identity || !receipt.identity) {
-      if (!candidate.identity && receipt.identity) {
-        plan.pendingCleanupArchives[index] = receipt;
+    if (candidate.identity && receipt.identity) {
+      if (!sameFileIdentity(candidate.identity, receipt.identity)) {
+        continue;
       }
-      return;
+    } else if (!candidate.identity && receipt.identity) {
+      plan.pendingCleanupArchives[index] = receipt;
     }
-    if (sameFileIdentity(candidate.identity, receipt.identity)) {
-      return;
-    }
+    return;
   }
   plan.pendingCleanupArchives.push(receipt);
 }
@@ -142,22 +141,18 @@ async function removePendingBackupArchive(
   if (!pathsEqual(path.dirname(receipt.archivePath), plan.stagingDir)) {
     return false;
   }
-  if (receipt.identity) {
-    return removePreparedBackupArchive(receipt as PreparedBackupArchive);
+  let identity = receipt.identity;
+  if (!identity) {
+    try {
+      identity = await fs.lstat(receipt.archivePath);
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+    if (!identity.isFile()) {
+      return false;
+    }
   }
-  let currentIdentity: Stats;
-  try {
-    currentIdentity = await fs.lstat(receipt.archivePath);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  if (!currentIdentity.isFile()) {
-    return false;
-  }
-  return removePreparedBackupArchive({
-    archivePath: receipt.archivePath,
-    identity: currentIdentity,
-  });
+  return removePreparedBackupArchive({ archivePath: receipt.archivePath, identity });
 }
 
 export async function cleanupBackupArchivePublication(
@@ -187,7 +182,7 @@ export async function publishPreparedBackupArchive(params: {
 }): Promise<void> {
   const { plan, prepared } = params;
   let publicationPreserved = false;
-  let committed = false;
+  let publicationFailure: { error: unknown } | undefined;
   try {
     try {
       const publication = await publishFileExclusive({
@@ -200,58 +195,49 @@ export async function publishPreparedBackupArchive(params: {
       });
       publicationPreserved = true;
       requireDirectorySync(publication.directorySync, "Backup publication directory");
-      committed = true;
     } catch (error) {
       const details = getPublishFileExclusiveFailureDetails(error);
       publicationPreserved ||= details?.cleanup === "preserved";
+      let message: string;
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(
-          `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`,
-          { cause: error },
-        );
+        message = `Refusing to overwrite existing backup archive: ${plan.requestedOutputPath}`;
+      } else if (isHardlinkFallbackError(error)) {
+        message = `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`;
+      } else if ((error as { code?: unknown }).code === "path-mismatch") {
+        message = `Backup archive changed during publication: ${plan.requestedOutputPath}`;
+      } else {
+        throw error;
       }
-      if (isHardlinkFallbackError(error)) {
-        throw new Error(
-          `Atomic backup publication requires hard-link support in ${plan.requestedParentPath}.`,
-          { cause: error },
-        );
-      }
-      if ((error as { code?: unknown }).code === "path-mismatch") {
-        throw new Error(`Backup archive changed during publication: ${plan.requestedOutputPath}`, {
-          cause: error,
-        });
-      }
-      throw error;
+      throw new Error(message, { cause: error });
     }
-
-    if (!removePreparedBackupArchive(prepared)) {
-      retainArchiveForCleanup(plan, prepared);
+  } catch (error) {
+    publicationFailure = { error };
+  }
+  if (publicationFailure && publicationPreserved) {
+    params.log?.(
+      `Backup archiver preserved the final archive after publication failed: ${plan.requestedOutputPath}.`,
+    );
+  }
+  if (!removePreparedBackupArchive(prepared)) {
+    retainArchiveForCleanup(plan, prepared);
+    if (!publicationFailure) {
       params.log?.(`Backup archiver preserved changed staging file ${prepared.archivePath}.`);
     }
-    if (!(await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity))) {
-      params.log?.(
-        `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
-      );
-    }
-    await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
-      params.log?.(
-        `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
-          (error as NodeJS.ErrnoException).code ?? String(error)
-        }.`,
-      );
-    });
-  } catch (error) {
-    if (!committed) {
-      if (publicationPreserved) {
-        params.log?.(
-          `Backup archiver preserved the final archive after publication failed: ${plan.requestedOutputPath}.`,
-        );
-      }
-      if (!removePreparedBackupArchive(prepared)) {
-        retainArchiveForCleanup(plan, prepared);
-      }
-      await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
-    }
-    throw error;
   }
+  const removed = await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
+  if (publicationFailure) {
+    throw publicationFailure.error;
+  }
+  if (!removed) {
+    params.log?.(
+      `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
+    );
+  }
+  await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
+    params.log?.(
+      `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
+        (error as NodeJS.ErrnoException).code ?? String(error)
+      }.`,
+    );
+  });
 }

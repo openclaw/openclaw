@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -30,13 +30,13 @@ afterEach(async () => {
 });
 
 it.each(["idle inspection", "placement write"] as const)(
-  "rechecks a foreign commit before %s",
+  "observes a managed schema publication before %s",
   async (operation) => {
     const context = captureOpenClawStateWorkerContext();
     const backend = runWithSqliteWorkerStateContext(context, () =>
       createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
     );
-    const peer = new (requireNodeSqlite().DatabaseSync)(context.admission.databasePath);
+    const peer = openNodeSqliteDatabase(context.admission.databasePath);
     try {
       const command =
         operation === "idle inspection"

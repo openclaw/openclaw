@@ -33,22 +33,37 @@ describe("config boundary guard", () => {
     tempRoots = [];
   });
 
-  it.each([
-    {
-      name: "deprecated API",
-      collect: collectDeprecatedInternalConfigApiViolations,
-      file: "src/example.ts",
-      expected:
-        "src/example.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
-    },
-    {
-      name: "runtime action",
-      collect: collectRuntimeActionLoadConfigViolations,
-      file: "extensions/telegram/src/send.ts",
-      expected: "extensions/telegram/src/send.ts:1: export function run() { return loadConfig(); }",
-    },
-  ])("refreshes $name source between scans", ({ collect, file, expected }) => {
+  it.each(
+    [
+      {
+        name: "deprecated API",
+        collect: collectDeprecatedInternalConfigApiViolations,
+        file: "src/example.ts",
+        expected:
+          "src/example.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
+      },
+      {
+        name: "runtime action",
+        collect: collectRuntimeActionLoadConfigViolations,
+        file: "extensions/telegram/src/send.ts",
+        expected:
+          "extensions/telegram/src/send.ts:1: export function run() { return loadConfig(); }",
+      },
+    ].flatMap((testCase) =>
+      ["ts", "tsx"].map((extension) => ({
+        collect: testCase.collect,
+        name: `${testCase.name} (${extension})`,
+        file: testCase.file.replace(/\.ts$/u, `.${extension}`),
+        expected: testCase.expected.replace(/\.ts:/u, `.${extension}:`),
+      })),
+    ),
+  )("refreshes $name source between scans", ({ collect, file, expected }) => {
     const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "extensions/telegram/src/send.test.tsx",
+      "export function testSend() { return loadConfig(); }\n",
+    );
     writeFixture(repoRoot, file, "export function run() {}\n");
     expect(collect({ repoRoot })).toEqual([]);
 
@@ -132,11 +147,11 @@ describe("config boundary guard", () => {
     ]);
   });
 
-  it("allows narrow config SDK subpaths in production code", () => {
+  it.each(["ts", "tsx"])("allows narrow config SDK subpaths in production %s code", (extension) => {
     const repoRoot = makeRepoFixture();
     writeFixture(
       repoRoot,
-      "extensions/telegram/src/index.ts",
+      `extensions/telegram/src/index.${extension}`,
       [
         'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
         'import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";',

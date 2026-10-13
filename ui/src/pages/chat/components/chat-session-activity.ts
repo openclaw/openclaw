@@ -8,7 +8,7 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import "./chat-session-activity.css";
 
-export function renderInterSessionActivity(
+export function renderSessionActivity(
   group: MessageGroup,
   opts: RenderMessageGroupOptions,
   renderEntry: (
@@ -16,7 +16,7 @@ export function renderInterSessionActivity(
     index: number,
   ) => { content: unknown; actions: unknown },
 ) {
-  const disclosureId = "inter-session:" + group.key;
+  const disclosureId = "session-activity:" + group.key;
   const expanded =
     Boolean(opts.searchResult) || (opts.isToolMessageExpanded?.(disclosureId) ?? false);
   const count = group.messages.reduce((total, message) => total + (message.duplicateCount ?? 1), 0);

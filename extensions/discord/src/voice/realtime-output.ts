@@ -14,6 +14,7 @@ import {
   restoreDiscordAudioError,
   type DiscordAudioEvent,
 } from "./audio-worker-protocol.js";
+import { resolveDiscordOutputAudioDelta } from "./output-activity.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
 
 /** Main retains provider item identity; physical output state belongs to the worker. */
@@ -164,8 +165,8 @@ export class DiscordRealtimeOutput {
       return true;
     }
     const previous = this.activity.snapshot();
-    const sinkBytes = Math.floor((previous.sourceAudioBytes + audio.length) / 2) * 8;
-    const audioMs = (sinkBytes - previous.sinkAudioBytes) / 192;
+    const delta = resolveDiscordOutputAudioDelta(previous, audio.length);
+    const { audioMs } = delta;
     if (item) {
       const last = this.spans.at(-1);
       if (last?.item === item && last.endMs === previous.audioMs) {
@@ -174,11 +175,7 @@ export class DiscordRealtimeOutput {
         this.spans.push({ item, startMs: previous.audioMs, endMs: previous.audioMs + audioMs });
       }
     }
-    this.activity.markAudio({
-      audioMs,
-      sourceAudioBytes: audio.length,
-      sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
-    });
+    this.activity.markAudio(delta);
     this.params.player.audio.send({ type: "output-audio", id: this.id, audio, audible });
     return true;
   }

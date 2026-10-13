@@ -18,6 +18,7 @@ import {
 import * as transcriptScope from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import type { Message } from "../../llm/types.js";
@@ -734,22 +735,17 @@ describe("appendSessionTranscriptNote", () => {
           applyLoggingConfig({ redactPatterns: patterns });
         }
         let changed = 0;
-        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-        const spy = vi
-          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit" && changed === 0) {
-                changed++;
-                if (policy === "registry") {
-                  registerSecretValueForRedaction(marker);
-                } else {
-                  patterns.push(marker);
-                }
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const spy = probe.admission(workerAdmission, (request, grant, admit) => {
+          if (request.stage === "commit" && changed === 0) {
+            changed++;
+            if (policy === "registry") {
+              registerSecretValueForRedaction(marker);
+            } else {
+              patterns.push(marker);
+            }
+          }
+          admit(request, grant);
+        });
         try {
           const rejected = await appendSessionTranscriptNote(target, note).then(
             () => {

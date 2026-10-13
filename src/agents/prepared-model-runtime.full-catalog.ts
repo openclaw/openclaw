@@ -8,6 +8,10 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
+import {
+  buildInlineProviderModels,
+  completeInlineProviderModel,
+} from "./embedded-agent-runner/model.inline-provider.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
@@ -16,7 +20,9 @@ import {
   modelCatalogRouteVariantKey,
   modelCatalogRowToEntry,
 } from "./model-catalog-entry.js";
+import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -26,13 +32,11 @@ import {
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   bindPreparedModelRuntimeAuth,
-  type PreparedModelRuntimeAuth,
-  type PreparedAccountCatalogAccess,
-  type PreparedModelRuntimeAuthScope,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogAccess,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
@@ -44,8 +48,6 @@ import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtim
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
-  PreparedModelCatalogRefreshOptions,
-  PreparedNativeModelSelection,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
@@ -106,15 +108,8 @@ export function retainPreparedModelCatalogPublication(
 
 /** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
-  agentFacts: Pick<
-    PreparedModelRuntimeAgentFacts,
-    | "input"
-    | "env"
-    | "templateAuthStorage"
-    | "credentials"
-    | "configuredModelRefs"
-    | "configuredRuntimeModels"
-  >,
+  agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
+    Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
@@ -172,19 +167,48 @@ export async function prepareFullCatalogFacts(
             ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           })));
+    // Signed-in providers keep their known manifest rows when the account listing fails.
+    const credentialProviders = Object.keys(agentFacts.credentials).map(normalizeProviderId);
+    const scopedProviders =
+      options.providerIds && new Set(options.providerIds.map(normalizeProviderId));
+    const manifestStaticModels = Object.entries(
+      loadManifestModelProviderConfigs({
+        config: input.config,
+        metadataSnapshot: pluginMetadataSnapshot,
+        providerIds: credentialProviders.filter(
+          (provider) => scopedProviders?.has(provider) ?? true,
+        ),
+      }),
+    ).flatMap(([provider, providerConfig]) =>
+      buildInlineProviderModels(
+        { [provider]: providerConfig },
+        { providerMetadataOwners: pluginMetadataSnapshot.owners },
+      ).map((model) => completeInlineProviderModel(model, providerConfig)),
+    );
     const configuredRuntimeModels = completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
       templateModelRegistry,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+      pluginMetadataSnapshot,
+      input.config,
+      input.env,
+    );
     const completeModelCatalog = {
       ...modelCatalog,
       staticEntries:
         input.config.models?.mode === "replace"
           ? []
-          : dedupeByKey(providerStaticModels, createModelCatalogIdentityKeyResolver()).map(
-              modelCatalogRowToEntry,
+          : dedupeByKey(
+              // Static hooks also answer runtime provider aliases; publish canonical rows once.
+              [...providerStaticModels, ...manifestStaticModels].map((model) => {
+                const entry = modelCatalogRowToEntry(model);
+                entry.provider = normalizeProvider(entry.provider);
+                return entry;
+              }),
+              createModelCatalogIdentityKeyResolver(),
             ),
       ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
     };
@@ -358,11 +382,7 @@ export function prepareModelCatalogPublication(
   const acceptedRows = new Map<string, Set<string>>();
   for (const [owner, keys] of hookRows) {
     const provider = normalizeProvider(owner);
-    const accepted = acceptedRows.get(provider) ?? new Set<string>();
-    for (const key of keys) {
-      accepted.add(key);
-    }
-    acceptedRows.set(provider, accepted);
+    acceptedRows.set(provider, new Set([...(acceptedRows.get(provider) ?? []), ...keys]));
   }
   const outcomeProviders = new Set(
     catalog.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
@@ -595,23 +615,6 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
   return snapshot;
 }
 
-export type PreparedModelRuntimeCatalogAccess = Readonly<{
-  initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: PreparedAccountCatalogAccess;
-  isCurrent: () => boolean;
-  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
-  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: () => void;
-  refreshExpiredModelCatalog: () => void;
-  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: (
-    options?: PreparedModelCatalogRefreshOptions,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-}>;
 export function createPreparedModelRuntimeSnapshot(
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"],
   agentFacts: PreparedModelRuntimeAgentFacts,

@@ -4,6 +4,7 @@ type ReleasableSessionWorkAdmission = {
   phase: "pending" | "acquired";
   owner?: symbol;
   released: Promise<void>;
+  isSettling?: () => boolean;
 };
 
 type SessionWorkAdmissionReleaseParams = {
@@ -54,9 +55,13 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   /** Completion of a named owner that is starting or actively working on a session. */
   function getSessionWorkAdmissionOwnerRelease(
-    params: SessionWorkAdmissionReleaseParams & { owner: symbol },
+    params: SessionWorkAdmissionReleaseParams & { owner: symbol; phase?: "acquired" },
   ): Promise<void> | undefined {
-    return sessionWorkAdmissionRelease(params, (admission) => admission.owner === params.owner);
+    return sessionWorkAdmissionRelease(
+      params,
+      (admission) =>
+        admission.owner === params.owner && (!params.phase || admission.phase === params.phase),
+    );
   }
 
   /** Wait for exact prior owners, including queued work, without waiting on inherited admission. */
@@ -76,10 +81,28 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
     );
   }
 
+  /** Capture terminal owners without waiting on a live turn or a later successor. */
+  function getTerminalSessionWorkAdmissionRelease(
+    params: SessionWorkAdmissionReleaseParams,
+  ): Promise<void> | false {
+    const current = currentAdmissions();
+    const admissions = collectSessionWorkAdmissions(
+      normalizeSessionIdentities(params.scope, params.identities),
+      (admission) => admission.phase === "acquired" && !current?.has(admission),
+    );
+    if ([...admissions].some((admission) => !admission.isSettling?.())) {
+      return false;
+    }
+    return Promise.all([...admissions].map((admission) => admission.released)).then(
+      () => undefined,
+    );
+  }
+
   return {
     collectSessionWorkAdmissions,
     getSessionWorkAdmissionRelease,
     getSessionWorkAdmissionOwnerRelease,
     getCompetingSessionWorkAdmissionRelease,
+    getTerminalSessionWorkAdmissionRelease,
   };
 }

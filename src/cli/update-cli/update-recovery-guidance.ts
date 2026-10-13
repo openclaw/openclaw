@@ -1,7 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import {
+  isUpdateGatewayReadinessPending,
+  isUpdatePostInstallVerificationDeferred,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
@@ -42,6 +45,12 @@ export function resolveUpdateResultNextAction(params: {
   environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
+  if (result.status === "skipped" && result.reason === "gateway-readiness-unverified") {
+    const deferred = result.steps.find(isUpdatePostInstallVerificationDeferred)?.advisory;
+    if (deferred) {
+      return deferred.message;
+    }
+  }
   if (isUpdateGatewayReadinessPending(result)) {
     return `The readiness observation ended without confirmation. Leave the Gateway starting and keep recovery backups; check current progress with \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
   }
@@ -161,7 +170,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${params.environment?.stateDir ?? resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Use the same profile, state, and config settings.`;
   }
   return undefined;
 }

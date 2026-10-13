@@ -72,19 +72,6 @@ function isProfileConfigCompatible(params: {
   );
 }
 
-async function buildOAuthApiKey(
-  provider: string,
-  credentials: OAuthCredential,
-  context: { cfg?: OpenClawConfig },
-): Promise<string> {
-  const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
-    provider,
-    config: context.cfg,
-    context: credentials,
-  });
-  return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
-}
-
 type ResolveApiKeyForProfileResult = {
   apiKey: string;
   provider: string;
@@ -161,23 +148,6 @@ async function refreshOAuthCredential(
   return result?.newCredentials ?? null;
 }
 
-async function canRefreshOAuthCredential(
-  credential: OAuthCredential,
-  context: { cfg?: OpenClawConfig } = {},
-): Promise<boolean> {
-  const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
-    provider: credential.provider,
-    config: context.cfg,
-  });
-  if (pluginCapability.status === "available") {
-    return true;
-  }
-  if (pluginCapability.status === "configured-unavailable") {
-    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-  }
-  return OAUTH_PROVIDER_IDS.has(credential.provider);
-}
-
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
@@ -194,9 +164,28 @@ export async function refreshOAuthCredentialForRuntime(params: {
 }
 
 const oauthManager = createOAuthManager({
-  buildApiKey: buildOAuthApiKey,
+  async buildApiKey(provider, credentials, context) {
+    const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
+      provider,
+      config: context.cfg,
+      context: credentials,
+    });
+    return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
+  },
   refreshCredential: refreshOAuthCredential,
-  canRefreshCredential: canRefreshOAuthCredential,
+  async canRefreshCredential(credential, context) {
+    const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
+      provider: credential.provider,
+      config: context.cfg,
+    });
+    if (pluginCapability.status === "available") {
+      return true;
+    }
+    if (pluginCapability.status === "configured-unavailable") {
+      throw new OAuthProviderConfiguredUnavailableError(credential.provider);
+    }
+    return OAUTH_PROVIDER_IDS.has(credential.provider);
+  },
   readBootstrapCredential: readExternalCliBootstrapCredential,
 });
 

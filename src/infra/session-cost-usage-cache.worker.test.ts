@@ -34,6 +34,7 @@ import {
 } from "./session-cost-usage.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as operationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
@@ -180,26 +181,21 @@ it("refuses a foreign cache file appearing after its creating grant", async () =
     const prepared = prepareUsageCostWorker({ agentId, sessionFiles: [sessionFile] });
     const target = prepared.location.databasePath;
     mkdirSync(path.dirname(target), { recursive: true });
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let injected = false;
-    const observer = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((authorize, attachment) =>
-        createAdmission((request, grant) => {
-          authorize(request, () => {
-            if (
-              !injected &&
-              request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              request.facts.kind === "shared-owner"
-            ) {
-              writeFileSync(target, "foreign file");
-              injected = true;
-            }
-            return grant();
-          });
-        }, attachment),
-      );
+    const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
+      authorize(request, () => {
+        if (
+          !injected &&
+          request.stage === "prepare" &&
+          isRecord(request.facts) &&
+          request.facts.kind === "shared-owner"
+        ) {
+          writeFileSync(target, "foreign file");
+          injected = true;
+        }
+        return grant();
+      });
+    });
     try {
       await expect(
         refreshCostUsageCacheForAgent({ agentId, sessionFiles: [sessionFile] }),

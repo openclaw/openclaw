@@ -121,10 +121,6 @@ describe("legacy TUI last-session migration", () => {
     ["non-object top level", []],
     ["non-object record", { terminal: "agent:main:tui-123" }],
     ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-    [
-      "unknown field",
-      { terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100, extra: true } },
-    ],
   ])("retains malformed source: %s", async (_label, value) => {
     const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, value);

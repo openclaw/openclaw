@@ -182,40 +182,38 @@ function buildCrabboxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return next;
 }
 
-function resolveSlackGatewayEnvPayload(env: NodeJS.ProcessEnv): SlackGatewayCredentialPayload {
-  const channelId = trimToValue(env.OPENCLAW_QA_SLACK_CHANNEL_ID);
-  const sutBotToken = trimToValue(env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN);
-  const sutAppToken = trimToValue(env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN);
+function readSlackGatewayCredentialPayload(
+  payload: Record<string, unknown>,
+  missingFieldsMessage: string,
+): SlackGatewayCredentialPayload {
+  const channelId = trimToValue(payload.channelId);
+  const sutBotToken = trimToValue(payload.sutBotToken);
+  const sutAppToken = trimToValue(payload.sutAppToken);
   if (!channelId || !sutBotToken || !sutAppToken) {
-    throw new Error(
-      "Gateway setup requires OPENCLAW_QA_SLACK_CHANNEL_ID, OPENCLAW_QA_SLACK_SUT_BOT_TOKEN, and OPENCLAW_QA_SLACK_SUT_APP_TOKEN when using --credential-source env.",
-    );
+    throw new Error(missingFieldsMessage);
   }
-  return {
-    channelId,
-    sutAppToken,
-    sutBotToken,
-  };
+  return { channelId, sutAppToken, sutBotToken };
+}
+
+function resolveSlackGatewayEnvPayload(env: NodeJS.ProcessEnv): SlackGatewayCredentialPayload {
+  return readSlackGatewayCredentialPayload(
+    {
+      channelId: env.OPENCLAW_QA_SLACK_CHANNEL_ID,
+      sutBotToken: env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN,
+      sutAppToken: env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN,
+    },
+    "Gateway setup requires OPENCLAW_QA_SLACK_CHANNEL_ID, OPENCLAW_QA_SLACK_SUT_BOT_TOKEN, and OPENCLAW_QA_SLACK_SUT_APP_TOKEN when using --credential-source env.",
+  );
 }
 
 function parseSlackGatewayCredentialPayload(payload: unknown): SlackGatewayCredentialPayload {
   if (!payload || typeof payload !== "object") {
     throw new Error("Slack credential payload must be an object.");
   }
-  const candidate = payload as Record<string, unknown>;
-  const channelId = trimToValue(candidate.channelId);
-  const sutBotToken = trimToValue(candidate.sutBotToken);
-  const sutAppToken = trimToValue(candidate.sutAppToken);
-  if (!channelId || !sutBotToken || !sutAppToken) {
-    throw new Error(
-      "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",
-    );
-  }
-  return {
-    channelId,
-    sutAppToken,
-    sutBotToken,
-  };
+  return readSlackGatewayCredentialPayload(
+    payload as Record<string, unknown>,
+    "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",
+  );
 }
 
 async function prepareGatewayCredentialEnv(params: {

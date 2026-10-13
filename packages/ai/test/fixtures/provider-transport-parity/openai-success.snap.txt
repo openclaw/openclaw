@@ -103,6 +103,9 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "contextUsage": {
           "state": "available",
           "promptTokens": 8,
@@ -221,6 +224,9 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "reasoningTokens": 1,
         "contextUsage": {
           "state": "available",

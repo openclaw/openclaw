@@ -94,27 +94,19 @@ function collectTelegramErrorCandidates(err: unknown) {
   });
 }
 
-function normalizeCode(code?: string): string {
+function normalizedErrorCode(err: unknown): string {
+  let code = extractErrorCode(err);
+  if (!code && err && typeof err === "object") {
+    const errno = (err as { errno?: unknown }).errno;
+    if (typeof errno === "string" || typeof errno === "number") {
+      code = String(errno);
+    }
+  }
   return code?.trim().toUpperCase() ?? "";
 }
 
-function getErrorCode(err: unknown): string | undefined {
-  const direct = extractErrorCode(err);
-  if (direct) {
-    return direct;
-  }
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string" || typeof errno === "number") {
-    return String(errno);
-  }
-  return undefined;
-}
-
 function classifyTelegramTransientNetworkError(err: unknown) {
-  const code = normalizeCode(getErrorCode(err));
+  const code = normalizedErrorCode(err);
   return (
     classifyTransientNetworkErrorCode(code) ??
     (TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES.has(code)
@@ -169,7 +161,7 @@ function describeTelegramSupergroupMigration(err: unknown): string | undefined {
 
 export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
+    const code = normalizedErrorCode(candidate);
     if (code === "421" || getNumericHttpStatus(candidate) === 421) {
       return true;
     }

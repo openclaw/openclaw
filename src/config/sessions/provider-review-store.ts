@@ -12,10 +12,8 @@ import type {
   SessionProviderReviewComparison,
 } from "./provider-review.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import {
-  retainSessionEntryWorkerPublication,
-  type SessionEntryReplacementPublication,
-} from "./session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";

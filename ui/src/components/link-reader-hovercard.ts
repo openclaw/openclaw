@@ -526,7 +526,6 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
       this.hovercard.position();
     } else {
       card.addEventListener("pointerleave", this.handleCardPointerLeave);
-      card.addEventListener("keydown", this.hovercard.handleCardKeyDown);
       this.hovercard.markTrigger(anchor);
       this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
     }

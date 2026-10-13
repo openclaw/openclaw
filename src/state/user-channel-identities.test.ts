@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -168,22 +169,17 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     expect(queries).not.toHaveBeenCalled();
     await changeCanonicalUserChannelIdentity("link", ada.id, identity, options);
     expect(prepared?.isCurrent()).toBe(true);
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let observedCommitGrant = false;
-    const admissionSpy = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          admit(request, () => {
-            if (request.stage === "commit") {
-              observedCommitGrant = true;
-              // This executes before the worker receives permission to COMMIT.
-              expect(prepared?.isCurrent()).toBe(false);
-            }
-            return grant();
-          });
-        }, attachment),
-      );
+    const admissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, () => {
+        if (request.stage === "commit") {
+          observedCommitGrant = true;
+          // This executes before the worker receives permission to COMMIT.
+          expect(prepared?.isCurrent()).toBe(false);
+        }
+        return grant();
+      });
+    });
     try {
       await changeCanonicalUserChannelIdentity("unlink", ada.id, identity, options);
       expect(observedCommitGrant).toBe(true);
@@ -210,36 +206,32 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     let rollbackGranted = false;
     let pendingRole: ReturnType<typeof prepareUserProfileRoleAuthority> | undefined;
     let pendingSelection: ReturnType<typeof prepareUserProfileSelectionAuthority> | undefined;
-    const mutationAdmissionSpy = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit" && mutation === "reject") {
-            actorCurrent = false;
-            rejectedBeforeAdmission = true;
-          }
-          admit(request, () => {
-            if (request.stage === "commit" && mutation === "rollback") {
-              rollbackGranted = true;
-            } else if (request.stage === "commit" && mutation === "demote") {
-              queries.mockClear();
-              expect(admin?.isCurrent()).toBe(false);
-              expect(selectedSource?.isCurrent()).toBe(true);
-              expect(queries).not.toHaveBeenCalled();
-              pendingRole = prepareUserProfileRoleAuthority(ada.id, options);
-              void pendingRole.catch(() => undefined);
-            } else if (request.stage === "commit" && mutation === "merge") {
-              queries.mockClear();
-              expect(selectedSource?.isCurrent()).toBe(false);
-              expect(selectedTarget?.isCurrent()).toBe(true);
-              expect(queries).not.toHaveBeenCalled();
-              pendingSelection = prepareUserProfileSelectionAuthority(ada.id, options);
-              void pendingSelection.catch(() => undefined);
-            }
-            return grant();
-          });
-        }, attachment),
-      );
+    const mutationAdmissionSpy = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === "commit" && mutation === "reject") {
+        actorCurrent = false;
+        rejectedBeforeAdmission = true;
+      }
+      admit(request, () => {
+        if (request.stage === "commit" && mutation === "rollback") {
+          rollbackGranted = true;
+        } else if (request.stage === "commit" && mutation === "demote") {
+          queries.mockClear();
+          expect(admin?.isCurrent()).toBe(false);
+          expect(selectedSource?.isCurrent()).toBe(true);
+          expect(queries).not.toHaveBeenCalled();
+          pendingRole = prepareUserProfileRoleAuthority(ada.id, options);
+          void pendingRole.catch(() => undefined);
+        } else if (request.stage === "commit" && mutation === "merge") {
+          queries.mockClear();
+          expect(selectedSource?.isCurrent()).toBe(false);
+          expect(selectedTarget?.isCurrent()).toBe(true);
+          expect(queries).not.toHaveBeenCalled();
+          pendingSelection = prepareUserProfileSelectionAuthority(ada.id, options);
+          void pendingSelection.catch(() => undefined);
+        }
+        return grant();
+      });
+    });
     try {
       await expect(
         setCanonicalUserProfileRole(ada.id, "member", {

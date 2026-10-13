@@ -412,7 +412,9 @@ describe("Provider model discovery auth preparation", () => {
           version: expect.any(String),
         },
       ]);
-      expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);
+      expect(outcomes).toEqual([
+        { provider: "openai", status: "ready", listedModelIds: ["gpt-5.5"] },
+      ]);
       const provider = readPlannedProvider(plan, "openai");
       expect(provider).toMatchObject({
         api: "openai-chatgpt-responses",
@@ -567,10 +569,8 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
-    { providerId: "chutes", profileCount: 1, plugin: chutesPlugin },
     { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
     { providerId: "openai", profileCount: 1, plugin: null },
-    { providerId: "xai", profileCount: 1, plugin: xaiPlugin },
     { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",

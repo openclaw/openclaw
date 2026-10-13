@@ -24,6 +24,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { menuItem, menuItemLabels } from "../session-menu.ts";
 import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -56,6 +57,12 @@ describe("AppSidebar session mutation feedback", () => {
       const [method, params] = args;
       if (method === "users.list") {
         return Promise.resolve(directory as T);
+      }
+      if (method === "sessions.describe") {
+        const { key } = params as { key: string };
+        return Promise.resolve({
+          session: harness.sessions.state.result?.sessions.find((row) => row.key === key),
+        } as T);
       }
       if (method === "sessions.patchMany") {
         const request = params as {
@@ -302,16 +309,12 @@ describe("AppSidebar session mutation feedback", () => {
 
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
-    expect(
-      Array.from(menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"))
-        .map((item) => item.querySelector(".session-menu__text")?.textContent?.trim())
-        .filter((label) => label?.startsWith("Assign to")),
-    ).toEqual(["Assign to…"]);
-    const assignmentMenu = Array.from(
-      menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"),
-    ).find(
-      (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
-    );
+    expect(menuItemLabels(menu)).not.toContain("Assign to…");
+    const settings = menuItem(menu, "Session settings");
+    expect(menuItemLabels(settings).filter((label) => label.startsWith("Assign to"))).toEqual([
+      "Assign to…",
+    ]);
+    const assignmentMenu = menuItem(settings, "Assign to…");
     expect(
       Array.from(
         assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],

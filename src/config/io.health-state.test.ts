@@ -252,7 +252,10 @@ describe("config health-state warnings", () => {
   it("propagates audit migration required from health writes and config snapshots", async () => {
     const deps = createHealthDeps();
     const { path: databasePath } = openOpenClawStateDatabase(deps);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const db = new DatabaseSync(databasePath);
     db.exec(`
       DROP TABLE audit_events;

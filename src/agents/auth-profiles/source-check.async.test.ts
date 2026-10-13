@@ -1,16 +1,39 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import { SHARED_AUTH_STORE_STATE_KEY, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import * as readers from "./sqlite-read.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+
+async function prepareSourceCohort(state: OpenClawTestState) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  const sessionKey = "agent:main:auth-source";
+  writeSessionEntry(database, sessionKey, { sessionId: "auth-source", updatedAt: 1 });
+  const { databaseClaim } = await loadSessionEntryForAdmission({
+    agentId: "main",
+    env: state.env,
+    storePath: database.path,
+    sessionKey,
+  });
+  if (!("reader" in databaseClaim) || !databaseClaim.reader) {
+    await databaseClaim.release();
+    throw new Error("Expected an admitted auth-source cohort");
+  }
+  return { database, claim: databaseClaim, reader: databaseClaim.reader };
+}
 
 it("retains the read failure classification when reader cleanup also fails", async () => {
   await withOpenClawTestState({ label: "auth-source-cleanup" }, async (state) => {
@@ -54,6 +77,83 @@ it("detects an existing auth source without caller-thread SQLite", async () => {
       sql.expectIdle();
     } finally {
       sql.restore();
+    }
+  });
+});
+
+it("reads source presence through the selected cohort and refreshes foreign absence and malformed rows", async () => {
+  await withOpenClawTestState({ label: "auth-source-cohort" }, async (state) => {
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
+    const { database, claim, reader } = await prepareSourceCohort(state);
+    const peer = new DatabaseSync(database.path);
+    const standalone = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead");
+    const cases = [
+      { expected: false },
+      { state: "false", expected: false },
+      { state: "{}", expected: true },
+      { state: "{", expected: false },
+      { store: "{", expected: true },
+      { store: "null", expected: true },
+      { store: '{"version":1,"profiles":{}}', expected: true },
+      { expected: false },
+    ];
+    try {
+      for (const fixture of cases) {
+        peer.exec("DELETE FROM auth_profile_store; DELETE FROM auth_profile_state");
+        if (fixture.store !== undefined) {
+          peer
+            .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+            .run(fixture.store);
+        }
+        if (fixture.state !== undefined) {
+          peer
+            .prepare("INSERT INTO auth_profile_state VALUES ('primary', ?, 1)")
+            .run(fixture.state);
+        }
+        const sql = observeMainThreadSql();
+        try {
+          expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir(), reader)).toBe(
+            fixture.expected,
+          );
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      }
+      expect(
+        standalone.mock.calls.filter(([input]) => input.databasePath === database.path),
+      ).toHaveLength(0);
+    } finally {
+      standalone.mockRestore();
+      peer.close();
+      await claim.release();
+    }
+  });
+});
+
+it("keeps mismatched cohort paths, agent owners, and state roots on the original auth reader", async () => {
+  await withOpenClawTestState({ label: "auth-source-cohort-scope" }, async (state) => {
+    const { database, claim, reader } = await prepareSourceCohort(state);
+    writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+    const readCohort = vi.spyOn(reader, "withRead");
+    const standalone = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead");
+    try {
+      for (const changed of [
+        { path: `${database.path}.other` },
+        { agentId: "other" },
+        { env: { ...reader.database.env, OPENCLAW_STATE_DIR: state.path("another-state-root") } },
+      ]) {
+        const mismatched = { ...reader, database: { ...reader.database, ...changed } };
+        expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir(), mismatched)).toBe(true);
+      }
+      expect(readCohort).not.toHaveBeenCalled();
+      expect(
+        standalone.mock.calls.filter(([input]) => input.databasePath === database.path),
+      ).toHaveLength(3);
+    } finally {
+      standalone.mockRestore();
+      readCohort.mockRestore();
+      await claim.release();
     }
   });
 });

@@ -208,6 +208,7 @@ export function createAgentAdmissionController(params: {
       }) ??
       (await beginSessionWorkAdmission({
         scope,
+        isSettling: () => admittedRunAbort?.entry?.terminalOutcomeObserved === true,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {

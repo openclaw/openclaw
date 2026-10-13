@@ -13,7 +13,7 @@ import {
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
+import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
@@ -43,11 +43,11 @@ import {
 } from "./assistant-media-errors.js";
 import {
   resolveAssistantMediaPolicy,
+  assertAssistantMediaPolicyCurrent,
   createAssistantMediaTicket,
   verifyAssistantMediaTicket,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
-import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -400,27 +400,13 @@ export async function handleControlUiAssistantMediaRequest(
     : ticket?.file && sameSession && policy.canAllow
       ? ticket.file
       : undefined;
-  const assertCurrentPolicy = () => {
-    // Reapply durable profile, role, and session owners after every async preparation.
-    // A global access epoch changes on ordinary session activity, so it cannot revoke tickets.
-    const current = resolveAssistantMediaPolicy({ ...policyParams, reader: policy.reader });
-    if (
-      requestAuth?.hasCurrentClientAuthority?.() === false ||
-      !current ||
-      current.session?.sessionKey !== policy.session?.sessionKey ||
-      current.session?.agentId !== policy.session?.agentId ||
-      current.session?.sessionId !== policy.session?.sessionId ||
-      current.remote !== policy.remote ||
-      current.executionCwd !== policy.executionCwd ||
-      current.workspaceOnly !== policy.workspaceOnly ||
-      current.localRoots.length !== policy.localRoots.length ||
-      current.localRoots.some((root, index) => root !== policy.localRoots[index]) ||
-      (allowance && policy.workspaceOnly && !current.canAllow)
-    ) {
-      throw new FsSafeError("path-mismatch", "Media access changed");
-    }
-    return current;
-  };
+  const assertCurrentPolicy = () =>
+    assertAssistantMediaPolicyCurrent(
+      policyParams,
+      policy,
+      Boolean(allowance),
+      requestAuth ?? undefined,
+    );
   if (isMetaRequest) {
     const requestAbort = createHttpRequestAbortSignal(res.req, res);
     using _ = { [Symbol.dispose]: requestAbort.cleanup };
@@ -850,10 +836,7 @@ export async function handleControlUiHttpRequest(
   const isBundledRoot = rootState.kind === "bundled";
   // Bundled sidecars are implementation artifacts selected through
   // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
-  if (
-    isBundledRoot &&
-    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
-  ) {
+  if (isBundledRoot && [".br", ".gz"].includes(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -921,6 +904,7 @@ export async function handleControlUiHttpRequest(
         publicAssetBuildId,
         opts?.sessionEntryPath,
         opts?.isSessionEntryCurrent,
+        opts?.auth?.mode === "trusted-proxy",
       );
       return true;
     }

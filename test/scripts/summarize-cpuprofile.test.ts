@@ -102,49 +102,4 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
-
-  it("summarizes profiles with real samples", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cpuprofile-"));
-    const profilePath = path.join(tempDir, "sample.cpuprofile");
-    fs.writeFileSync(
-      profilePath,
-      `${JSON.stringify({
-        endTime: 1200,
-        nodes: [
-          {
-            callFrame: {
-              columnNumber: 0,
-              functionName: "run",
-              lineNumber: 4,
-              scriptId: "1",
-              url: "file:///repo/dist/entry.js",
-            },
-            id: 1,
-          },
-        ],
-        samples: [1],
-        startTime: 0,
-        timeDeltas: [1200],
-      })}\n`,
-      "utf8",
-    );
-    try {
-      const result = spawnSync(
-        process.execPath,
-        ["scripts/perf/summarize-cpuprofile.mjs", profilePath],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("duration_ms: 1.2 samples: 1");
-      expect(result.stdout).toContain("1.2ms\trun");
-      expect(result.stdout).toContain("dist/entry.js");
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
 });

@@ -9,6 +9,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
+  DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
   LLAMA_CPP_PROVIDER_ID,
@@ -85,7 +86,6 @@ function resolveProviderPort(provider: ModelProviderConfig): number {
 async function prepareEmbeddingServer(
   options: EmbeddingProviderCreateOptions,
   embeddingSource: string,
-  embeddingModelIsDefault: boolean,
 ): Promise<void> {
   const provider = resolveManagedLlamaCppProviderConfig(options.config);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
@@ -97,7 +97,6 @@ async function prepareEmbeddingServer(
   await prepareManagedLlamaServer({
     chatModel: { mode: "preserve" },
     configuredChatModelIds: provider.models.map((model) => model.id),
-    embeddingModelIsDefault,
     embeddingModelPath,
     port: resolveProviderPort(provider),
     reconcileBaseUrl: provider.baseUrl,
@@ -132,7 +131,8 @@ function wrapProvider(params: {
     id: "local",
     model: params.canonicalModel,
     dimensions: params.provider.dimensions,
-    maxInputTokens: params.provider.maxInputTokens,
+    // Reserve BOS/EOS, a possible SentencePiece prefix, and the causal context boundary.
+    maxInputTokens: params.provider.maxInputTokens ?? DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE - 4,
     embed: (input, callOptions) => withFacts(() => params.provider.embed(input, callOptions)),
     embedBatch: (inputs, callOptions) =>
       withFacts(() => params.provider.embedBatch(inputs, callOptions)),
@@ -159,7 +159,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     const local = readIdentityLocalOptions(options);
     const embeddingModel = resolveLlamaCppEmbeddingModel(local);
     const identity = resolveModelIdentity(local, options.dimensions);
-    await prepareEmbeddingServer(options, embeddingModel.source, embeddingModel.isDefault);
+    await prepareEmbeddingServer(options, embeddingModel.source);
     const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
     if (!genericAdapter) {
       throw new Error("OpenAI-compatible embedding transport is unavailable.");

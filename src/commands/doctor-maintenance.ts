@@ -55,7 +55,9 @@ import {
 } from "./doctor-update-refusal.js";
 
 export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
-  if (!(params.options.repair === true || params.options.yes === true)) {
+  if (
+    !(params.options.repair === true || params.options.yes === true || params.interactiveRepair)
+  ) {
     return undefined;
   }
   const env = { ...process.env, ...(params.runId ? { [UPDATE_RUN_ID_ENV]: params.runId } : {}) };
@@ -65,7 +67,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     ? resolveUpdateParentGatewayActivation(env)
     : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
-  // ownership for every explicit repair before running those inspections.
+  // ownership for every admitted repair before running those inspections.
   let stopped: PreManagedServiceStop | undefined;
   let serviceUpdateVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
@@ -183,6 +185,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         }
       }
       if (
+        // Custody consent restores our own stop; it does not authorize starting
+        // a service the operator had already stopped. Explicit repair retains recovery.
+        (params.interactiveRepair &&
+          params.options.repair !== true &&
+          params.options.yes !== true) ||
         resolveDoctorRepairMode(params.options).updateInProgress ||
         before.offline !== true ||
         verdict?.kind !== "owned" ||
@@ -245,9 +252,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             : {}),
         }),
       );
-      if (health.outcome === "starting") {
+      if (
+        health.outcome === "starting" ||
+        (health.outcome !== "ready" && health.runtime.status === "running")
+      ) {
         warn(
-          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }
@@ -584,6 +594,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   }
   let custody: "held" | "restoring" | "released" = "held";
+  const assertHeld = (receiver: unknown, operation: string) => {
+    if (receiver !== maintenance || custody !== "held") {
+      throw new Error(`${operation} requires its original live maintenance owner.`);
+    }
+  };
   const maintenance = {
     signal: exit.signal,
     serviceUpdateVerdict,
@@ -595,9 +610,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     run: <T>(operation: () => T) => state.run(operation),
     releaseState: () => settle(releaseState),
     async repairSqliteNoCow(paths: readonly string[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite NOCOW repair requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
       for (const message of result.changes) {
         params.runtime.log(message);
@@ -607,18 +620,14 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       }
     },
     async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("SQLite reclamation requires its original live maintenance owner.");
-      }
+      assertHeld(this, "SQLite reclamation");
       const result = await settle(() => state.enableSqliteReclamation(agents));
       for (const message of result.warnings) {
         warn(message);
       }
     },
     async cleanupRetainedRuntimes() {
-      if (this !== maintenance || custody !== "held") {
-        throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
-      }
+      assertHeld(this, "Updater runtime cleanup");
       await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
     },
     async release() {

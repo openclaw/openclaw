@@ -128,16 +128,10 @@ export function listWorkshopChangesInDatabase(
       actor: row.actor,
       summary: row.summary,
       createdAtMs: row.created_at_ms,
+      ...(row.version_id ? { versionId: row.version_id } : {}),
+      ...(row.session_key ? { sessionKey: row.session_key } : {}),
+      ...(row.run_id ? { runId: row.run_id } : {}),
     };
-    if (row.version_id) {
-      change.versionId = row.version_id;
-    }
-    if (row.session_key) {
-      change.sessionKey = row.session_key;
-    }
-    if (row.run_id) {
-      change.runId = row.run_id;
-    }
     return [change];
   });
 }

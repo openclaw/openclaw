@@ -47,7 +47,7 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import type { JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
-import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
+import { prepareCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
   sessionBindingIdentity,
@@ -106,16 +106,18 @@ export async function maybeCompactCodexAppServerSession(
       },
     });
   }
-  const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
+  const nativeExecutionGuard = await prepareCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.sandboxAgentId ?? params.agentId,
+    storePath: params.sessionTarget?.storePath,
+    sessionTarget: params.sessionTarget,
     sandbox: params.sandbox,
     surface: "native compaction",
   });
-  if (nativeExecutionBlock) {
-    return { ok: false, compacted: false, reason: nativeExecutionBlock };
+  if (nativeExecutionGuard.block) {
+    return { ok: false, compacted: false, reason: nativeExecutionGuard.block };
   }
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -157,7 +159,10 @@ export async function maybeCompactCodexAppServerSession(
     return abortedResult(params, threadId, threadId);
   }
   const { binding: initialBinding, authority } = resolvedBinding;
-  const assertCurrent = authority.assertCurrent;
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    nativeExecutionGuard.assertCurrent();
+  };
   // Native admission uses caller authority; terminal settlement keeps captured
   // lineage after cancellation without reusing the caller's aborted signal.
   const settlementAuthority = createNativeSessionBindingAuthority(authority.lineage, () => {});

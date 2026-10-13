@@ -230,9 +230,9 @@ vi.mock("../../config/io.runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Status collection must not read the operator service logs.
 vi.mock("../../daemon/diagnostics.js", () => ({
-  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv, options?: { requirePatternMatch?: boolean }) =>
-    readLastGatewayErrorLine(env, options),
+  readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -1767,7 +1767,8 @@ describe("gatherDaemonStatus", () => {
     const output = capturePrintedDaemonStatus(status, { json: false });
     expect(output.errors).toContain("Gateway runtime PID does not own the listening port");
     expect(output.errors).toContain("openclaw gateway restart");
-    expect(output.logs).toContain("Warm-up: launch agents can take a few seconds");
+    expect(output.logs).toContain("Readiness is not confirmed");
+    expect(output.logs).not.toContain("Warm-up:");
     expect(output.logs).not.toContain("Gateway process is running and owns the gateway port");
   });
 
@@ -1800,7 +1801,6 @@ describe("gatherDaemonStatus", () => {
       expect.objectContaining({
         ...daemonEnvironment,
       }),
-      { requirePatternMatch: true },
     );
     expect(status.port?.status).toBe("busy");
     expect(status.rpc?.ok).toBe(false);
@@ -1811,7 +1811,7 @@ describe("gatherDaemonStatus", () => {
     expect(output).toContain("Connectivity check: failed");
     expect(output).toContain("gateway closed (1000):");
     expect(output).toContain(
-      "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",
+      "Recent Gateway log error (may be from an earlier run): parse/handle error: Error: ENOSPC: no space left on device, write",
     );
   });
 

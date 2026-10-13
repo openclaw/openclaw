@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -15,10 +16,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "./agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "./agent-deletion-journal.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,

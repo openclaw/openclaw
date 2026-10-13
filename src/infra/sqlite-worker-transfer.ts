@@ -39,20 +39,17 @@ export function createSqliteWorkerTransferOwner() {
 
   const cleanup = (transfer: Transfer) => {
     const errors: unknown[] = [];
-    if (!transfer.iteratorClosed) {
-      try {
-        transfer.iterator.return?.();
-        transfer.iteratorClosed = true;
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (!transfer.cleaned) {
-      try {
-        transfer.cleanup?.();
-        transfer.cleaned = true;
-      } catch (error) {
-        errors.push(error);
+    for (const [completed, close] of [
+      ["iteratorClosed", () => transfer.iterator.return?.()],
+      ["cleaned", () => transfer.cleanup?.()],
+    ] as const) {
+      if (!transfer[completed]) {
+        try {
+          close();
+          transfer[completed] = true;
+        } catch (error) {
+          errors.push(error);
+        }
       }
     }
     throwSqliteLifecycleErrors(errors, "SQLite read transfer cleanup failed");

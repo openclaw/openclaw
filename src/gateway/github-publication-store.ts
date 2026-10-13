@@ -13,6 +13,10 @@ import type {
   GitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
 import {
+  githubPublicationReceipts,
+  sharedGitHubPublicationAuthorityColumns,
+} from "../state/github-publication-receipts.js";
+import {
   decodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -192,6 +196,7 @@ export function claimGitHubPublicationExecution(
       if (!claimed) {
         throw new Error("GitHub publication execution ownership changed.");
       }
+      githubPublicationReceipts.stageRow(db, "shared", claimed);
       deferSharedGitHubPublicationChanged(db, claimed);
       return claimed;
     },
@@ -315,6 +320,7 @@ export function insertGitHubPublicationRequest(
   }
   input.assertCurrent();
   if (inserted.numAffectedRows === 1n) {
+    githubPublicationReceipts.stageRow(db, "shared", stored);
     deferSharedGitHubPublicationChanged(db, stored);
   }
   return stored;
@@ -353,6 +359,7 @@ export function createGitHubPublicationExecutionStore(instanceId: string) {
         if (!updated) {
           throw new Error(errors[transition]);
         }
+        githubPublicationReceipts.stageRow(db, "shared", updated);
         deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },
@@ -451,9 +458,10 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
             })
             .where("request_id", "=", requestId)
             .where("status", "in", ["requested", "publishing"])
-            .returning(["session_key", "agent_id", "identity_source"]),
+            .returning(sharedGitHubPublicationAuthorityColumns),
         ).rows;
         for (const row of changed) {
+          githubPublicationReceipts.stageRow(db, "shared", row);
           deferSharedGitHubPublicationChanged(db, row);
         }
       }
@@ -492,14 +500,18 @@ export function markGitHubPublicationReported(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
+      const changed = executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<Pick<StateDatabase, typeof table>>(db)
           .updateTable(table)
           .set({ reported_at_ms: Date.now() })
           .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
-      );
+          .where("status", "in", ["published", "failed"])
+          .returningAll(),
+      ).rows;
+      for (const row of changed) {
+        githubPublicationReceipts.stageRow(db, kind, row);
+      }
     },
     undefined,
     { operationLabel: `github-${kind}-publication.report` },

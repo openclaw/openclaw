@@ -203,10 +203,9 @@ function resolveUpdateMode(input: UpdateFailureReportInput): string {
 }
 
 function resolveRecoveryOutcome(
-  input: UpdateFailureReportInput,
+  { verification, steps }: ReturnType<typeof updateRunReportInputFromResult>,
   context: UpdateFailureReportContext,
 ): string {
-  const { verification, steps } = updateRunReportInputFromResult(input.result, input.recordedRun);
   const recovery = verification.recovery;
   const observation = steps.findLast((step) => step.step === "gateway recovery verification");
   return (
@@ -377,17 +376,15 @@ export async function prepareUpdateFailureReport(
   const target = resolveUpdateTarget(input, context);
   const steps = resolveFailedSteps(input);
   const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
-  const recovery = resolveRecoveryOutcome(input, context);
+  const projection = updateRunReportInputFromResult(input.result, recordedRun);
+  const recovery = resolveRecoveryOutcome(projection, context);
   const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
   const action = recordedRun?.trigger ?? input.action;
   const installation = recordedRun?.target?.installationMethod;
-  const projection =
-    input.result.verification || recordedRun?.verification
-      ? updateRunReportInputFromResult(input.result, recordedRun)
-      : undefined;
-  const verification = projection?.verification;
-  const identity = projection
-    ? formatUpdateRunIdentity(projection.verification, projection.after)
+  const verification =
+    input.result.verification || recordedRun?.verification ? projection.verification : undefined;
+  const identity = verification
+    ? formatUpdateRunIdentity(verification, projection.after)
     : undefined;
   const currentHealth = verification
     ? await readUpdateRunReportHealth(verification, { env })

@@ -26,7 +26,7 @@ async function initializeRepository(repo: string): Promise<void> {
 
 async function addRemote(root: string, repo: string): Promise<string> {
   const remote = path.join(root, "remote.git");
-  await git(root, "init", "--bare", remote);
+  await git(root, "init", "--bare", "-b", "main", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);

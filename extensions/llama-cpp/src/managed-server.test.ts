@@ -324,7 +324,7 @@ describe("managed llama-server", () => {
     },
   );
 
-  it("writes a 2048-token physical batch in the combined preset", async () => {
+  it("bounds embedding capacity independently of chat in the combined preset", async () => {
     const { presetPath } = await createPresetFixture("combined-preset");
     await prepareManagedLlamaServer({
       chatModel: {
@@ -334,19 +334,18 @@ describe("managed llama-server", () => {
         contextSize: 8192,
         maxTokens: 2048,
       },
-      embeddingModelIsDefault: true,
       embeddingModelPath: "/models/embedding.gguf",
       port: 19_432,
     });
     const preset = await fs.readFile(presetPath, "utf8");
     expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
     expect(preset).toContain(
-      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
+      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
     );
     expect(preset).not.toMatch(/mmproj|draft/iu);
   });
 
-  it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {
+  it("bounds a custom embedding model while removing stale chat from the preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-embedding-only-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const asset = selectLlamaServerAsset("darwin", "arm64");
@@ -373,7 +372,7 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[*]\ncache-type-k = q8_0\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\nparallel = 1\nctx-size = 2048\nubatch-size = 2048\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
@@ -427,7 +426,7 @@ describe("managed llama-server", () => {
       expect(preset).toContain(
         `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
       );
-      expect(preset).not.toContain("ubatch-size");
+      expect(preset).toContain("parallel = 1\nctx-size = 2048\nubatch-size = 2048\n");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -851,7 +850,8 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("reports only facts observed from health, models, props, and metrics", async () => {
+  it("reports optional metrics separately from runtime readiness and load errors", async () => {
+    let metricsAvailable = true;
     const server = http.createServer((req, res) => {
       res.setHeader("content-type", "application/json");
       if (req.url === "/health") {
@@ -882,7 +882,7 @@ describe("managed llama-server", () => {
         );
         return;
       }
-      if (req.url?.startsWith("/metrics?")) {
+      if (metricsAvailable && req.url?.startsWith("/metrics?")) {
         res.setHeader("content-type", "text/plain");
         res.end("llamacpp:prompt_tokens_total 1\n");
         return;
@@ -891,21 +891,16 @@ describe("managed llama-server", () => {
       res.end("{}");
     });
     servers.push(server);
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing test server address");
-    }
-
-    await expect(
+    const port = await listen(server);
+    const inspect = (loadError?: string) =>
       inspectLlamaServerRuntime({
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
         modelId: "embedding-model",
         backend: "metal",
-      }),
-    ).resolves.toEqual({
+        loadError,
+      });
+
+    await expect(inspect()).resolves.toEqual({
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
@@ -918,6 +913,17 @@ describe("managed llama-server", () => {
         props: "ready",
         metrics: "ready",
       },
+    });
+
+    metricsAvailable = false;
+    await expect(inspect()).resolves.toMatchObject({
+      state: "ready",
+      endpoints: { health: "ready", models: "ready", props: "ready", metrics: "unavailable" },
+    });
+    await expect(inspect("Model load failed")).resolves.toMatchObject({
+      state: "failed",
+      loadError: "Model load failed",
+      endpoints: { metrics: "unavailable" },
     });
   });
 
@@ -978,7 +984,7 @@ describe("managed llama-server", () => {
 
       body = responseBytes(32 * 1024 * 1024);
       await expect(inspect()).resolves.toMatchObject({
-        state: "failed",
+        state: endpoint === "metrics" ? "ready" : "failed",
         endpoints: {
           health: "ready",
           models: "ready",

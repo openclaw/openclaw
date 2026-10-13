@@ -10,7 +10,6 @@ import {
   mergePrimaryFallbackConfig,
   modelKey,
   resolveModelTarget,
-  resolveModelKeysFromEntries,
   resolveModelRefsFromEntries,
   upsertCanonicalModelConfigEntry,
   updateConfig,
@@ -98,10 +97,10 @@ export async function changeFallbacksCommand(
         ? upsertCanonicalModelConfigEntry(nextModels, resolved, context)
         : modelKey(resolved.provider, resolved.model);
       const existing = getFallbacks(cfg, params.key);
-      const existingKeys = resolveModelKeysFromEntries({
+      const existingKeys = resolveModelRefsFromEntries({
         cfg: runtimeConfig,
         entries: getFallbacks(runtimeConfig, params.key),
-      });
+      }).map((ref) => (ref ? modelKey(ref.provider, ref.model) : undefined));
       // Compare effective refs, but filter their source positions so unrelated
       // placeholders and source-authored values survive the config write.
       const fallbacks =

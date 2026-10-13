@@ -110,6 +110,11 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     const sources = await listSources(params);
     const changes: string[] = [];
     const warnings: string[] = [];
+    const warn = (message: string, recoverable = false) => ({
+      changes,
+      warnings: [message],
+      ...(recoverable ? { warningDisposition: "recoverable" as const } : {}),
+    });
     if (sources.length === 0) {
       return { changes, warnings };
     }
@@ -118,12 +123,9 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     )?.assertCurrent;
     const { backupLegacyStateSource } = migrationSdk;
     if (!assertCurrent || !backupLegacyStateSource) {
-      return {
-        changes,
-        warnings: [
-          "WhatsApp credential import requires offline Doctor repair. Update OpenClaw core and run openclaw doctor --fix; original files remain unchanged.",
-        ],
-      };
+      return warn(
+        "WhatsApp credential import requires offline Doctor repair. Update OpenClaw core and run openclaw doctor --fix; original files remain unchanged.",
+      );
     }
     const backups = [];
     for (const source of sources) {
@@ -158,22 +160,16 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       : undefined;
     const legacy = backups.find(({ source }) => source.name === "creds.json");
     if (!legacy) {
-      return {
-        changes,
-        warnings: [
-          "WhatsApp shared-root key files have no creds.json identity. Kept all original files and private .migrated backups; restore the original creds.json before retrying Doctor.",
-        ],
-        ...(canonical ? { warningDisposition: "recoverable" as const } : {}),
-      };
+      return warn(
+        "WhatsApp shared-root key files have no creds.json identity. Kept all original files and private .migrated backups; restore the original creds.json before retrying Doctor.",
+        Boolean(canonical),
+      );
     }
     if (canonical && !canonical.buffer.equals(legacy.backup.bytes)) {
-      return {
-        changes,
-        warnings: [
-          "WhatsApp canonical credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
-        ],
-        warningDisposition: "recoverable",
-      };
+      return warn(
+        "WhatsApp canonical credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
+        true,
+      );
     }
     const targetNames = await fs
       .readdir(path.join(params.oauthDir, targetDir))
@@ -194,36 +190,27 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       overflowPolicy: "reject-new",
     });
     if (!receiptStore.withCurrent) {
-      return {
-        changes,
-        warnings: [
-          "WhatsApp credential import requires current offline storage authority. Update OpenClaw core and rerun Doctor; original credentials remain unchanged.",
-        ],
-      };
+      return warn(
+        "WhatsApp credential import requires current offline storage authority. Update OpenClaw core and rerun Doctor; original credentials remain unchanged.",
+      );
     }
     const receipts = receiptStore.withCurrent({ assertCurrent });
     const sourceIdentity = legacy.backup.snapshot.sha256;
     const previous = await receipts.lookup(sourceIdentity);
     if (previous && (!canonical || previous.targetDigest !== credentialSetDigest(targetFiles))) {
-      return {
-        changes,
-        warnings: [
-          "WhatsApp credential migration previously started, but its complete canonical credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
-        ],
-        ...(canonical ? { warningDisposition: "recoverable" as const } : {}),
-      };
+      return warn(
+        "WhatsApp credential migration previously started, but its complete canonical credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
+        Boolean(canonical),
+      );
     }
     if (!canonical) {
       const sourceNames = new Set(sources.map((source) => source.name));
       if (
         targetNames.some((name) => isWhatsAppBaileysAuthFileName(name) && !sourceNames.has(name))
       ) {
-        return {
-          changes,
-          warnings: [
-            "WhatsApp default account contains unmatched auth files without creds.json. Kept the incomplete account and legacy credentials separate; choose the intended credential set before retrying Doctor.",
-          ],
-        };
+        return warn(
+          "WhatsApp default account contains unmatched auth files without creds.json. Kept the incomplete account and legacy credentials separate; choose the intended credential set before retrying Doctor.",
+        );
       }
     }
     for (const { source, backup } of backups) {
@@ -232,13 +219,10 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
         (await credentials.exists(relativePath)) &&
         !(await credentials.read(relativePath)).buffer.equals(backup.bytes)
       ) {
-        return {
-          changes,
-          warnings: [
-            `WhatsApp auth ${source.name} differs between the default account and legacy shared root. Kept both copies and a private .migrated backup; choose the intended credential set before retrying Doctor.`,
-          ],
-          ...(canonical ? { warningDisposition: "recoverable" as const } : {}),
-        };
+        return warn(
+          `WhatsApp auth ${source.name} differs between the default account and legacy shared root. Kept both copies and a private .migrated backup; choose the intended credential set before retrying Doctor.`,
+          Boolean(canonical),
+        );
       }
     }
     if (!previous) {

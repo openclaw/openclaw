@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  type SessionPlacementAdmissionProvider,
+  installSessionPlacementAdmissionProvider,
+  withRequiredSessionPlacement,
+} from "../agents/session-placement-admission.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
@@ -11,18 +16,29 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
+import { validateCanonicalSessionRow } from "../config/sessions/session-canonical-row.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as chatSendOwner from "./server-methods/chat-send-external-entry.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import {
+  createGatewayWorkerDispatchAdmission,
+  withGatewayWorkerSessionAdmission,
+} from "./server-worker-placement-dispatch-admission.js";
 import { createRequiredWorkerSessionPreparation as createRequiredPreparation } from "./server-worker-required-profile.js";
+import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
 import * as sessionWorktreePreparation from "./session-worktree-preparation.js";
 import { testState } from "./test-helpers.js";
 import {
+  directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -58,6 +74,10 @@ function createRequiredWorkerSessionPreparation(
   return createRequiredPreparation({ getConfig: options.getConfig, dispatch });
 }
 
+const skipPlacement: NonNullable<SessionPlacementAdmissionProvider["withRequiredSession"]> = async (
+  _identity,
+  task,
+) => await task(() => {});
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const ownedWorktrees = new Set<string>();
 
@@ -71,7 +91,120 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.each(["channel", "shared"] as const)(
+// Real handler, config/session persistence and managed worktree lifecycle. Physical
+// worker preparation is the boundary fixture; this is not provider execution proof.
+test("a write-only ordinary create retains its owned workspace and unsent message when required preparation fails", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const config = await getGatewayConfigModule();
+  await config.writeConfigFile({ cloudWorkers: { requiredProfile: "dedicated-native" } });
+  const key = "agent:main:dashboard:required-worker";
+  let preparationAttempt = 0;
+  const withRequiredSession = vi.fn<ReturnType<typeof createRequiredWorkerSessionPreparation>>(
+    async (identity, task, assertCurrent) => {
+      assertCurrent?.();
+      const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+      expect(identity).toEqual({ agentId: "main", sessionKey: key, sessionId: entry?.sessionId });
+      const workspace = await managedWorktrees.findLiveByOwner("session", key);
+      expect(workspace).toBeDefined();
+      ownedWorktrees.add(workspace!.id);
+      expect(entry).toMatchObject({
+        worktree: { id: workspace!.id },
+        sessionRoot: workspace!.path,
+      });
+      expect(await fs.readdir(workspace!.path)).toEqual([".git"]);
+      preparationAttempt += 1;
+      if (preparationAttempt === 1) {
+        throw new Error("Required worker is offline; reconnect it and retry.");
+      }
+      return await task(() => assertCurrent?.());
+    },
+  );
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ params, respond }) => {
+    expect(params.message).toBe("Keep this message for the required worker.");
+    respond(true, { runId: "required-worker-retry", status: "started" });
+  });
+  const context = { workerPlacementDispatchService: { withRequiredSession } };
+  const params = {
+    key,
+    agentId: "main",
+    message: "Keep this message for the required worker.",
+  };
+  const created = await directSessionReq<{
+    key: string;
+    sessionId: string;
+    runStarted: boolean;
+    runError?: { message: string };
+  }>("sessions.create", params, { ...controlUiClient, context });
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(withRequiredSession).toHaveBeenCalledOnce();
+  expect(created.payload).toMatchObject({
+    key,
+    runStarted: false,
+    runError: { message: expect.stringContaining("Required worker is offline") },
+  });
+  expect(chatSend).not.toHaveBeenCalled();
+  const workspace = (await managedWorktrees.findLiveByOwner("session", key))!;
+  await fs.writeFile(workspace.path + "/retained.txt", "Keep accepted work.");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sessionId).toBe(
+    created.payload?.sessionId,
+  );
+  const retry = await directSessionReq(
+    "sessions.send",
+    { key, message: params.message, idempotencyKey: "required-worker-retry" },
+    { ...controlUiClient, context },
+  );
+  expect(retry.ok, JSON.stringify(retry.error)).toBe(true);
+  expect(retry.payload).toMatchObject({ runId: "required-worker-retry", status: "started" });
+  expect(chatSend).toHaveBeenCalledOnce();
+  expect((await managedWorktrees.findLiveByOwner("session", key))?.id).toBe(workspace.id);
+  expect(await fs.readFile(workspace.path + "/retained.txt", "utf8")).toBe("Keep accepted work.");
+});
+
+test.each([{ execNode: "other-device" }, { agentRuntime: "codex" }])(
+  "required placement rejects an execution override before creating state: %j",
+  async (override) => {
+    const { storePath } = await createSessionStoreDir();
+    const config = await getGatewayConfigModule();
+    await config.writeConfigFile({ cloudWorkers: { requiredProfile: "dedicated-native" } });
+    const key = "agent:main:dashboard:required-worker-override";
+    const created = await directSessionReq(
+      "sessions.create",
+      { key, ...override },
+      controlUiClient,
+    );
+    expect(created).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("requires worker profile"),
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+  },
+);
+
+test("unconfigured ordinary create does not prepare a worker or create a managed worktree", async () => {
+  await createSessionStoreDir();
+  const config = await getGatewayConfigModule();
+  await config.writeConfigFile({});
+  const key = "agent:main:dashboard:optional-worker";
+  const withRequiredSession = vi.fn();
+  const created = await directSessionReq(
+    "sessions.create",
+    { key, message: "" },
+    {
+      ...controlUiClient,
+      context: { workerPlacementDispatchService: { withRequiredSession } },
+    },
+  );
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(withRequiredSession).not.toHaveBeenCalled();
+  expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+});
+
+test.each(["channel", "incognito", "shared"] as const)(
   "required preparation uses the existing %s session owner and joins pending startup",
   async (kind) => {
     const createdStore = await createSessionStoreDir();
@@ -80,7 +213,10 @@ test.each(["channel", "shared"] as const)(
     testState.sessionStorePath = storePath;
     const config = await getGatewayConfigModule();
     const agentId = kind === "shared" ? "ops" : "main";
-    const key = `agent:${agentId}:telegram:direct:required-worker`;
+    const key =
+      kind === "incognito"
+        ? "agent:main:dashboard:incognito-required-worker"
+        : `agent:${agentId}:telegram:direct:required-worker`;
     await config.writeConfigFile({
       ...(kind === "shared" ? { agents: { entries: { main: {}, ops: {} } } } : {}),
       cloudWorkers: {
@@ -99,24 +235,51 @@ test.each(["channel", "shared"] as const)(
         { sessionId: "shared-owner", updatedAt: Date.now() },
       );
     }
-    const inbound = await initSessionState({
-      cfg: config.getRuntimeConfig(),
-      commandAuthorized: true,
-      ctx: finalizeInboundContext({
-        Body: "Inspect my workspace",
-        From: "telegram:synthetic-user",
-        Provider: "telegram",
-        ChatType: "direct",
-        SessionKey: key,
-      }),
-    });
+    const inbound =
+      kind === "incognito"
+        ? await (async () => {
+            const created = await directSessionReq<{ key: string; sessionId: string }>(
+              "sessions.create",
+              { key, incognito: true, message: "" },
+              {
+                client: { connect: { scopes: ["operator.admin"] } } as never,
+                context: {
+                  workerPlacementDispatchService: {
+                    withRequiredSession: skipPlacement,
+                  },
+                },
+              },
+            );
+            expect(created.ok, JSON.stringify(created.error)).toBe(true);
+            const owned = await managedWorktrees.findLiveByOwner("session", key);
+            if (owned) {
+              ownedWorktrees.add(owned.id);
+            }
+            return {
+              sessionKey: created.payload!.key,
+              sessionEntry: { sessionId: created.payload!.sessionId },
+            };
+          })()
+        : await initSessionState({
+            cfg: config.getRuntimeConfig(),
+            commandAuthorized: true,
+            ctx: finalizeInboundContext({
+              Body: "Inspect my workspace",
+              From: "telegram:synthetic-user",
+              Provider: "telegram",
+              ChatType: "direct",
+              SessionKey: key,
+            }),
+          });
     const identity = {
       agentId,
       sessionKey: inbound.sessionKey,
       sessionId: inbound.sessionEntry.sessionId,
     };
     expect(identity.sessionKey).toBe(key);
-    expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    if (kind !== "incognito") {
+      expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+    }
     if (kind === "shared") {
       expect(
         (await prepareSqliteTranscriptReadScope({ ...identity, storePath })).databaseAgentId,
@@ -265,6 +428,156 @@ test("required preparation awaits rejection of a missing repository workspace be
   );
   expect(dispatch).not.toHaveBeenCalled();
 });
+
+test.each(["unchanged", "caller", "runtime"] as const)(
+  "required workspace commit fences %s authority after preparation",
+  async (change) => {
+    const { dir } = await createSessionStoreDir();
+    const storePath = path.join(dir, "sessions.sqlite");
+    testState.sessionStorePath = storePath;
+    const config = await getGatewayConfigModule();
+    await config.writeConfigFile({
+      cloudWorkers: {
+        requiredProfile: "dedicated-native",
+        profiles: {
+          "dedicated-native": { provider: "device", settings: { device: "test-node" } },
+        },
+      },
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:required-commit",
+      sessionId: "required-commit",
+    };
+    const caller = {
+      agentId: "main",
+      sessionKey: "agent:main:required-caller",
+      sessionId: "required-caller",
+    };
+    await upsertSessionEntryCore(
+      { ...identity, storePath },
+      { sessionId: identity.sessionId, updatedAt: 1 },
+    );
+    await upsertSessionEntryCore(
+      { ...caller, storePath },
+      { sessionId: caller.sessionId, updatedAt: 1, thinkingLevel: "high" },
+    );
+    const reachedDispatch = new Error("Reached required worker dispatch");
+    const dispatch = vi.fn<WorkerPlacementDispatchService["dispatch"]>(async () => {
+      throw reachedDispatch;
+    });
+    const prepare = createRequiredWorkerSessionPreparation({
+      getConfig: config.getRuntimeConfig,
+      placements: createWorkerSessionPlacementStore(),
+      environments: { get: () => undefined } as never,
+      warn: vi.fn(),
+      redispatchPlacement: vi.fn(),
+      dispatch: { dispatch, waitForInitialPlacement: vi.fn() } as never,
+    });
+    const uninstall = installSessionPlacementAdmissionProvider({
+      withRequiredSession: prepare,
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, run) => await run(),
+      executeTurn: async (_claim, _params, run) => await run(),
+    });
+    const prepareWorktree = sessionWorktreePreparation.prepareSessionWorktree;
+    let preparedWorktreePath: string | undefined;
+    vi.spyOn(sessionWorktreePreparation, "prepareSessionWorktree").mockImplementation(
+      async (params) => {
+        const result = await prepareWorktree(params);
+        if (!result.ok) {
+          return result;
+        }
+        preparedWorktreePath = result.value.sessionRoot;
+        expect(preparedWorktreePath).toEqual(expect.any(String));
+        // A separate connection cannot publish into either admitted source's host projection.
+        if (change !== "unchanged") {
+          const foreign = new (requireNodeSqlite().DatabaseSync)(storePath);
+          try {
+            const sessionKey = change === "caller" ? caller.sessionKey : identity.sessionKey;
+            const database = { agentId: "main", db: foreign };
+            runSqliteImmediateTransactionSync(foreign, () => {
+              const update = foreign
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                )
+                .run(
+                  change === "caller" ? "$.thinkingLevel" : "$.execNode",
+                  change === "caller" ? "off" : "other-node",
+                  sessionKey,
+                );
+              expect(update.changes).toBe(1);
+              const row = executeSqliteQueryTakeFirstSync(
+                foreign,
+                canonicalSessionValidationQuery(database).where(
+                  "session_nodes.session_key",
+                  "=",
+                  sessionKey,
+                ),
+              );
+              if (!row) {
+                throw new Error("Foreign entry mutation lost its existing row");
+              }
+              // Validate the synthetic external writer's stored bytes; publish no host authority.
+              validateCanonicalSessionRow(row, "read");
+              foreign
+                .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+                .run(sessionKey);
+            });
+          } finally {
+            foreign.close();
+          }
+        }
+        return result;
+      },
+    );
+    try {
+      const pending = withGatewayWorkerSessionAdmission(
+        {
+          identity: caller,
+          getConfig: config.getRuntimeConfig,
+          retainEntryFields: ["thinkingLevel"],
+        },
+        async (source) =>
+          await withRequiredSessionPlacement(
+            identity,
+            { config: config.getRuntimeConfig(), assertCurrent: source.assertCurrent },
+            async () => {
+              throw new Error("A worker turn cannot run before provider dispatch");
+            },
+          ),
+      );
+      if (change === "unchanged") {
+        await expect(pending).rejects.toBe(reachedDispatch);
+        expect(dispatch).toHaveBeenCalledOnce();
+        const worktree = (await managedWorktrees.findLiveByOwner("session", identity.sessionKey))!;
+        expect(loadSessionEntry({ ...identity, storePath })).toMatchObject({
+          worktree: { id: worktree.id },
+          sessionRoot: worktree.path,
+          spawnedCwd: worktree.path,
+        });
+      } else {
+        await expect(pending).rejects.toThrow("Session changed during worker admission");
+        expect(dispatch).not.toHaveBeenCalled();
+        const entry = loadSessionEntry({ ...identity, storePath });
+        expect(entry).not.toHaveProperty("worktree");
+        expect(entry).not.toHaveProperty("sessionRoot");
+        expect(entry).not.toHaveProperty("spawnedCwd");
+        expect(
+          await managedWorktrees.findLiveByOwner("session", identity.sessionKey),
+        ).toBeUndefined();
+        expect(preparedWorktreePath).toBeDefined();
+        await expect(fs.stat(preparedWorktreePath!)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      uninstall();
+      const worktree = await managedWorktrees.findLiveByOwner("session", identity.sessionKey);
+      if (worktree) {
+        ownedWorktrees.add(worktree.id);
+      }
+    }
+  },
+);
 
 test.each(["unallocated", "missing", "different", "matching"] as const)(
   "required retry respects a failed placement with %s recorded environment",

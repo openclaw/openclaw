@@ -717,13 +717,13 @@ export function buildOpenAIImageGenerationProvider(
         (publicOpenAIBaseUrl || chatGPTBaseUrl || codexResponsesConfigured) &&
         !explicitDirectOpenAIConfig &&
         hasCodexResponseTransportProfileConfigured(req, modelAuth);
-      let preResolvedImageAuth:
+      let imageAuth:
         | NonNullable<Awaited<ReturnType<typeof resolveApiKeyForProvider>>>
         | null
         | undefined;
       if (explicitOpenAIApiKeyConfig) {
         const directAuth = await resolveOptionalImageAuth(req, true);
-        preResolvedImageAuth =
+        imageAuth =
           directAuth?.apiKey && (directAuth.mode === undefined || directAuth.mode === "api-key")
             ? directAuth
             : null;
@@ -734,7 +734,7 @@ export function buildOpenAIImageGenerationProvider(
           throw new Error("OpenAI Codex OAuth missing");
         }
         if (codexAuth.mode === "api-key") {
-          preResolvedImageAuth = codexAuth;
+          imageAuth = codexAuth;
         } else {
           return generateOpenAICodexImage({
             req,
@@ -744,13 +744,9 @@ export function buildOpenAIImageGenerationProvider(
         }
       }
 
-      let imageAuth:
-        | NonNullable<Awaited<ReturnType<typeof resolveApiKeyForProvider>>>
-        | null
-        | undefined =
-        preResolvedImageAuth !== undefined
-          ? preResolvedImageAuth
-          : await resolveOptionalImageAuth(req);
+      if (imageAuth === undefined) {
+        imageAuth = await resolveOptionalImageAuth(req);
+      }
       if (
         !explicitDirectOpenAIConfig &&
         imageAuth?.apiKey &&

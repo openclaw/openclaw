@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import {
   legacyAcpMigrationBindingMatches,
@@ -30,7 +29,6 @@ import {
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
 import type {
   AcpSessionMutationCommit,
-  AcpSessionMutationDecision,
   AcpSessionMutationPreparation,
   AcpSessionMutationPrepareInput,
   AcpSessionMutationSource,
@@ -115,28 +113,12 @@ function prepareAcpSessionMutationInWorker(
           ...(entry ? {} : { lifecycleRevision: randomUUID() }),
         }),
       };
-      const { port1, port2 } = new MessageChannel();
-      try {
-        requestSqliteWorkerOperationAdmission(
-          {
-            stage: "transaction",
-            facts: { nonce: input.nonce, preparation, preparationPort: port2 },
-          },
-          [port2],
-        );
-        // SAFETY: only the retained host callback can reply on this command's private port.
-        const decision = receiveMessageOnPort(port1)?.message as
-          | AcpSessionMutationDecision
-          | undefined;
-        if (!decision) {
-          throw new Error("ACP metadata callback returned no admitted decision");
-        }
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
-        return preparation;
-      } finally {
-        port1.close();
-        port2.close();
-      }
+      requestSqliteWorkerOperationAdmission({
+        stage: "transaction",
+        facts: { nonce: input.nonce, preparation },
+      });
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: { nonce: input.nonce } });
+      return preparation;
     },
     { operationLabel: "acp.metadata.prepare" },
   );

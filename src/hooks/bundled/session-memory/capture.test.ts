@@ -6,6 +6,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { captureSessionMemoryTranscript } from "./capture.js";
@@ -45,9 +46,10 @@ describe("session memory capture", () => {
   }
 
   async function captureDuringRepair() {
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
-    );
+    const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
+    // Projection readiness precedes the reconciliation writer's final orphan sweep.
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    const database = openOpenClawAgentDatabase(databaseOptions);
     database.db
       .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
       .run(scope.sessionId);

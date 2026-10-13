@@ -1,9 +1,16 @@
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import {
+  readWorktreeRegistryWorkerReceipt,
+  withWorktreeRegistryPublication,
+} from "./registry-publication.js";
 import { captureWorktreeRegistryMutation } from "./run-end-lifecycle.js";
 import type { WorktreeRunLeaseRowInput } from "./run-lease-store.kernel.js";
 
@@ -55,6 +62,7 @@ async function runLeaseCommand(
   assertCurrent?: () => void,
 ): Promise<void> {
   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let admission: SqliteWorkerOperationAdmission | undefined;
   let mutation: ReturnType<typeof captureWorktreeRegistryMutation> | undefined;
   let failure: { error: unknown } | undefined;
   const ids =
@@ -71,20 +79,20 @@ async function runLeaseCommand(
     const { runOpenClawStateWorkerOperation } =
       await import("../../state/openclaw-state-worker-store.js");
     await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-      createAdmission: (operation) => {
+      createAdmission: withWorktreeRegistryPublication((operation) => {
         settled = operation.settled;
         return {
           nativeLocations: [context.admission.databasePath],
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          admission: (admission = createSqliteWorkerOperationAdmission((request, grant) => {
             if (request.stage === "transaction") {
               retainedMutation.observeTransaction();
             }
             context.admission.assertCurrent();
             retainedMutation.assertAuthority(() => assertCurrent?.());
             grant();
-          }),
+          })),
         };
-      },
+      }, context),
     });
   } catch (error) {
     failure = { error };
@@ -102,7 +110,10 @@ async function runLeaseCommand(
       { cause: failure?.error },
     );
   }
-  if (failure) {
+  if (
+    failure &&
+    !(outcome === "completed" && readWorktreeRegistryWorkerReceipt(admission?.committed?.facts))
+  ) {
     throw failure.error;
   }
 }

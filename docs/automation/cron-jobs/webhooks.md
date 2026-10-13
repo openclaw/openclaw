@@ -143,7 +143,7 @@ limits, routing policy, and error responses.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a trusted notification for the selected agent's main session and optionally request an immediate heartbeat:
+    Enqueue a trusted notification for the selected agent's main session. Immediate wakes use ordinary session execution:
 
     ```bash
     curl --include http://127.0.0.1:18789/hooks/wake \
@@ -152,7 +152,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on heartbeat cadence or active hours. Use `mode: "next-heartbeat"` to retain the event for the next heartbeat.
 
     A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
 

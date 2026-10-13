@@ -13,6 +13,7 @@ import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/sessi
 import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
@@ -133,35 +134,30 @@ test.for([
           }
         }
       });
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const refuse = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            fault === "permission-revoked-at-commit" &&
-            turnBoundary.committing &&
-            request.stage === "commit"
-          ) {
-            hit();
-            const options = expectDefined(initial, "initial request");
-            invalidateGatewayDeviceRevocation(
-              options.context,
-              expectDefined(options.client?.connect.device?.id, "authenticated device"),
-              "operator",
-            );
-          }
-          if (
-            turnBoundary.committing &&
-            ((fault === "transaction-refused" && request.stage === "transaction") ||
-              (fault === "commit-refused" && request.stage === "commit"))
-          ) {
-            hit();
-            throw failure;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
+      if (
+        fault === "permission-revoked-at-commit" &&
+        turnBoundary.committing &&
+        request.stage === "commit"
+      ) {
+        hit();
+        const options = expectDefined(initial, "initial request");
+        invalidateGatewayDeviceRevocation(
+          options.context,
+          expectDefined(options.client?.connect.device?.id, "authenticated device"),
+          "operator",
+        );
+      }
+      if (
+        turnBoundary.committing &&
+        ((fault === "transaction-refused" && request.stage === "transaction") ||
+          (fault === "commit-refused" && request.stage === "commit"))
+      ) {
+        hit();
+        throw failure;
+      }
+      callback(request, grant);
+    });
     if (fault === "after-preparation" || fault === "revoked-after-preparation") {
       turnBoundary.afterPrepare = () => {
         turnBoundary.afterPrepare = undefined;
@@ -432,19 +428,14 @@ test("retains idle chat input custody when its separate transcript commit is ref
   const target = { agentId: "main", sessionKey: key, storePath };
   dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const refused = vi.fn();
-  const refuse = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((callback, attachment) =>
-      createAdmission((request, grant) => {
-        if (turnBoundary.committing && request.stage === "commit") {
-          refused();
-          throw new Error("Idle transcript commit refused");
-        }
-        callback(request, grant);
-      }, attachment),
-    );
+  const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
+    if (turnBoundary.committing && request.stage === "commit") {
+      refused();
+      throw new Error("Idle transcript commit refused");
+    }
+    callback(request, grant);
+  });
   try {
     const created = await rpcReq<{ sessionId: string }>(ws, "sessions.create", {
       agentId: "main",

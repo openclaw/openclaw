@@ -68,6 +68,42 @@ describe("sidebar attention source publication", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
+    "retains attention while pausing retries and events during %j",
+    async (unavailable) => {
+      vi.useFakeTimers();
+      let failed = false;
+      const request = inventoryRequest(() => {
+        if (failed) {
+          throw new Error("temporarily unavailable");
+        }
+        return cronPage("incident");
+      });
+      const harness = startAuthenticatedStore(request);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.attention.entries).toMatchObject([{ label: "incident" }]);
+
+      failed = true;
+      harness.emitEvent("cron", {});
+      await vi.advanceTimersByTimeAsync(0);
+      request.mockClear();
+      harness.update(unavailable);
+      harness.emitEvent("cron", {});
+      harness.emitEvent("config.changed", {});
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(request).not.toHaveBeenCalled();
+      expect(harness.attention.entries).toMatchObject([{ label: "incident" }]);
+
+      failed = false;
+      harness.update({ restartPending: false, suspensionPhase: "accepting" });
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
+      }
+      expect(harness.attention.entries).toMatchObject([{ label: "incident" }]);
+    },
+  );
+
   it.each(["cron.list", "cron.status"])(
     "keeps cron inventory after recovering %s, visibility, and idle time",
     async (failedMethod) => {

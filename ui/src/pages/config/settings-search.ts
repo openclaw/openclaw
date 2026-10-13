@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   isSettingsNavigationRouteVisible,
-  settingsSearchTextMatches,
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
@@ -10,6 +9,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -19,6 +19,7 @@ import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
+import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
@@ -50,7 +51,12 @@ function resolveStaticSettingsBlock(
     label,
     searchText: [
       label,
-      ...[...block.searchKeys, ...nativeKeys].map((key) => t(key)),
+      ...[...block.searchKeys, ...nativeKeys]
+        .filter(
+          (key) =>
+            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
+        )
+        .map((key) => t(key)),
       block.aliases ?? "",
     ].join(" "),
   };

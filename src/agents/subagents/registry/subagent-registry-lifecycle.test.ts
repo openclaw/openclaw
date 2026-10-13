@@ -544,7 +544,7 @@ describe("subagent registry lifecycle hardening", () => {
         readSubagentRun: (id) => controller.options.runs.get(id),
         resolveAgentIdFromSessionKey: () => "main",
         resolveSessionStorePathCore: () => "/unused",
-        readSubagentSessionEntry: () => undefined,
+        readSubagentSessionEntry: async () => undefined,
         findTranscriptEvent: async () => undefined,
         findSessionTranscriptArchiveEventReadOnly: async () => undefined,
       });

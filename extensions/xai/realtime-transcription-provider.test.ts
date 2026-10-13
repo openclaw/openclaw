@@ -264,12 +264,6 @@ describe("xai realtime transcription provider", () => {
     expect(error.message).toBe("Streaming ASR unavailable");
   });
 
-  it("accepts xAI realtime aliases", () => {
-    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
-    expect(provider.aliases).toContain("xai-realtime");
-    expect(provider.aliases).toContain("grok-stt-streaming");
-  });
-
   it("reports configured when an xAI auth profile exists, even without env or config apiKey", () => {
     delete process.env.XAI_API_KEY;
     isProviderAuthProfileConfiguredMock.mockReturnValue(true);

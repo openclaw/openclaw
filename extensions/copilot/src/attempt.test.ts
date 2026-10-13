@@ -227,8 +227,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
 });
 
 async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
-  const prepare =
-    params.prepareMessageAfterIdempotencyCheckAsync ?? params.prepareMessageAfterIdempotencyCheck;
+  const prepare = params.preparation?.prepareMessage;
   const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {

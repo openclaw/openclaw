@@ -39,7 +39,7 @@ import {
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
-import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
@@ -95,6 +95,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
   const { resolvedElevatedLevel, execOverrides, abortedLastRun, sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const isInternalEvent = opts?.internalEventExecution !== undefined;
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
   const traceAttributes = {
@@ -179,7 +180,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
-  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -198,21 +198,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const buildSourceConversationContext = (mode: typeof sourceReplyDeliveryMode) => {
-    const conversationContext = { sourceReplyDeliveryMode: mode, sessionCtx: promptSessionCtx };
-    return isDirectChat
-      ? buildDirectChatContext(conversationContext)
-      : isGroupChat
-        ? buildGroupChatContext({
-            ...conversationContext,
-            silentReplyPolicy: silentReplySettings.policy,
-            silentToken: SILENT_REPLY_TOKEN,
-          })
-        : "";
-  };
+  const sourceConversationContext = (mode: typeof sourceReplyDeliveryMode) =>
+    buildSourceConversationContext({
+      sourceReplyDeliveryMode: mode,
+      sessionCtx: promptSessionCtx,
+      silentReplyPolicy: silentReplySettings.policy,
+      silentToken: SILENT_REPLY_TOKEN,
+    });
   const sourceConversationContextByMode = {
-    automatic: buildSourceConversationContext("automatic"),
-    message_tool_only: buildSourceConversationContext("message_tool_only"),
+    automatic: sourceConversationContext("automatic"),
+    message_tool_only: sourceConversationContext("message_tool_only"),
   };
   // CLI sessions keep their creation-time conversation prompt. Embedded attempts
   // can instead select the variant owned by their final prepared harness.
@@ -228,12 +223,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
-  if (replyOperationRunState) {
-    replyOperationRunState.replyCompletion = resolveReplyCompletion(
-      terminalReplyExpectation,
-      "empty",
-    );
-  }
+  const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
+    if (replyOperationRunState) {
+      replyOperationRunState.replyCompletion = resolveReplyCompletion(
+        terminalReplyExpectation,
+        evidence,
+      );
+    }
+  };
+  setReplyCompletion("empty");
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },
@@ -296,12 +294,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     (!commandAuthorized || !command.isAuthorizedSender) &&
     isRegisteredWholeMessageCommand
   ) {
-    if (replyOperationRunState) {
-      replyOperationRunState.replyCompletion = resolveReplyCompletion(
-        terminalReplyExpectation,
-        "blocked",
-      );
-    }
+    setReplyCompletion("blocked");
     opts?.onDeliberateSilentTerminalReply?.();
     return finishReplyPreparation(typing);
   }
@@ -376,26 +369,27 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           : {}),
       }
     : { ...sessionCtx, ThreadStarterBody: undefined };
-  let inboundContextSessionEntry = isHeartbeat
-    ? undefined
-    : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
-      sessionEntryHandle?.getCurrent() ??
-      sessionEntry);
-  // Heartbeats are synthetic system turns: delivery facts still drive routing and
-  // formatting, but must not be presented to the model as user-role inbound context.
+  let inboundContextSessionEntry =
+    isHeartbeat || isInternalEvent
+      ? undefined
+      : ((sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
+        sessionEntryHandle?.getCurrent() ??
+        sessionEntry);
+  // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
-    inboundUserContext: isHeartbeat
-      ? ""
-      : buildInboundUserContextPrefix(
-          inboundUserContextSessionCtx,
-          envelopeOptions,
-          inboundContextSessionEntry,
-        ),
+    inboundUserContext:
+      isHeartbeat || isInternalEvent
+        ? ""
+        : buildInboundUserContextPrefix(
+            inboundUserContextSessionCtx,
+            envelopeOptions,
+            inboundContextSessionEntry,
+          ),
   });
   let { activeGoalContext, inboundUserContext } = buildInboundContextState();
   const refreshInboundContextAfterAdmissionWait = async () => {
-    if (isHeartbeat) {
+    if (isHeartbeat || isInternalEvent) {
       return;
     }
     inboundContextSessionEntry =

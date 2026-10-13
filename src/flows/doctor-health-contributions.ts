@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
+import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -325,19 +327,23 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function hasUserScopedSystemdGatewayService(env: NodeJS.ProcessEnv): Promise<boolean> {
+async function shouldInspectSystemdLinger(
+  ctx: Pick<HealthCheckContext, "cfg" | "env">,
+): Promise<boolean> {
+  if (
+    process.platform !== "linux" ||
+    resolveDoctorMode(ctx.cfg) !== "local" ||
+    !(await shouldManageGatewayService(ctx.env ?? process.env))
+  ) {
+    return false;
+  }
+  const env = ctx.env ?? process.env;
   const { findInstalledSystemdGatewayScope } = await import("../daemon/systemd.js");
   return (await findInstalledSystemdGatewayScope(env))?.scope === "user";
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (
-    ctx.options.nonInteractive === true ||
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
-    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
-  ) {
+  if (ctx.options.nonInteractive === true || !(await shouldInspectSystemdLinger(ctx))) {
     return;
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
@@ -363,12 +369,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function detectSystemdLingerFindings(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  if (
-    process.platform !== "linux" ||
-    resolveDoctorMode(ctx.cfg) !== "local" ||
-    !(await shouldManageGatewayService(ctx.env ?? process.env)) ||
-    !(await hasUserScopedSystemdGatewayService(ctx.env ?? process.env))
-  ) {
+  if (!(await shouldInspectSystemdLinger(ctx))) {
     return [];
   }
   const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
@@ -444,6 +445,14 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
+function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdateDoctorRun(env) &&
+    !resolveUpdateRehearsalRoot(env) &&
+    isTruthyEnvValue(env[UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV])
+  );
+}
+
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
@@ -464,33 +473,79 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   ];
 }
 
+async function loadCoreHealthChecksById(): Promise<ReadonlyMap<string, DoctorHealthCheck>> {
+  const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
+  return new Map(createCoreHealthChecks().map((check) => [check.id, check]));
+}
+
+function resolveContributionHealthChecks(
+  contribution: DoctorHealthContribution,
+  checksById: ReadonlyMap<string, DoctorHealthCheck>,
+): DoctorHealthCheck[] {
+  if (contribution.healthChecks.length > 0) {
+    return contribution.healthChecks.map((check) => ({
+      ...normalizeHealthCheck(check),
+      updateWork: contribution.updateWork,
+    }));
+  }
+  return contribution.healthCheckIds.map((id) => {
+    const check = checksById.get(id);
+    if (check === undefined) {
+      throw new Error(
+        `doctor contribution ${contribution.id} references unknown core health check ${id}`,
+      );
+    }
+    return { ...check, updateWork: contribution.updateWork };
+  });
+}
+
 export async function resolveDoctorContributionHealthChecks(): Promise<
   readonly DoctorHealthCheck[]
 > {
-  const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
-  const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: DoctorHealthCheck[] = [];
-  for (const contribution of resolveDoctorHealthContributions()) {
-    if (contribution.healthChecks.length > 0) {
-      checks.push(
-        ...contribution.healthChecks.map((check) => ({
-          ...normalizeHealthCheck(check),
-          updateWork: contribution.updateWork,
-        })),
-      );
-      continue;
+  const checksById = await loadCoreHealthChecksById();
+  return resolveDoctorHealthContributions().flatMap((contribution) =>
+    resolveContributionHealthChecks(contribution, checksById),
+  );
+}
+
+/**
+ * Optional inspections whose every finding `doctor --lint` reproduces, so an
+ * updater can run them after the restarted Gateway is ready. Repairs, readiness
+ * checks and inspections without a lint check stay in the stopped window.
+ */
+async function selectPostActivationInspections(
+  contributions: readonly DoctorHealthContribution[],
+): Promise<{ contribution: DoctorHealthContribution; checks: DoctorHealthCheck[] }[]> {
+  const checksById = await loadCoreHealthChecksById();
+  return contributions.flatMap((contribution) => {
+    if (
+      contribution.required ||
+      contribution.updateWork?.kind !== "inspection" ||
+      contribution.updateWork.repairs
+    ) {
+      return [];
     }
-    for (const id of contribution.healthCheckIds) {
-      const check = checksById.get(id);
-      if (check === undefined) {
-        throw new Error(
-          `doctor contribution ${contribution.id} references unknown core health check ${id}`,
-        );
-      }
-      checks.push({ ...check, updateWork: contribution.updateWork });
+    // These runners also report diagnostics their lint checks do not preserve:
+    // snapshot scan errors and the identities of errored workspace plugins.
+    if (
+      contribution.id === "doctor:session-snapshots" ||
+      contribution.id === "doctor:workspace-status"
+    ) {
+      return [];
     }
-  }
-  return checks;
+    const checks = resolveContributionHealthChecks(contribution, checksById);
+    return checks.length > 0 &&
+      checks.every((check) => check.updateReadiness === undefined && check.repair === undefined)
+      ? [{ contribution, checks }]
+      : [];
+  });
+}
+
+/** Lint check ids for the inspections Doctor defers past Gateway activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  return (await selectPostActivationInspections(resolveDoctorHealthContributions())).flatMap(
+    ({ checks }) => checks.map((check) => check.id),
+  );
 }
 
 async function runDoctorHealthContributionList(
@@ -506,11 +561,21 @@ async function runDoctorHealthContributionList(
     preparedAgentCount: ctx.preparedAgentCount,
   });
   const updateDoctorRun = isUpdateDoctorRun(env);
+  const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const rehearsalInspections = new Set(
-    resolveUpdateRehearsalRoot(env)
+    rehearsalRoot
       ? contributions.filter(
           (entry) =>
             !entry.required && entry.updateWork?.kind === "inspection" && !entry.updateWork.repairs,
+        )
+      : [],
+  );
+  // Only an updater that runs these with `doctor --lint` after the restarted
+  // Gateway is ready sets this marker; shipped updaters keep them in this run.
+  const postActivationInspections = new Set(
+    shouldDeferPostActivationInspections(env)
+      ? (await selectPostActivationInspections(contributions)).map(
+          ({ contribution }) => contribution,
         )
       : [],
   );
@@ -542,6 +607,7 @@ async function runDoctorHealthContributionList(
       // required migration readiness and have their own standalone invocation.
       if (
         rehearsalInspections.has(contribution) ||
+        postActivationInspections.has(contribution) ||
         (updateDoctorRun && contribution.updateWork?.kind === "standalone")
       ) {
         continue;
@@ -604,6 +670,11 @@ async function runDoctorHealthContributionList(
       // Scope notices must not displace actionable warnings from the bounded result.
       ctx.runtime.log(
         `Deferred advisory inspections during copied-state rehearsal: ${[...rehearsalInspections].map((entry) => entry.id).join(", ")}. The live post-swap Doctor retains these checks.`,
+      );
+    }
+    if (postActivationInspections.size > 0) {
+      ctx.runtime.log(
+        `Deferred advisory inspections until the restarted Gateway is ready: ${[...postActivationInspections].map((entry) => entry.id).join(", ")}. The updater runs their \`openclaw doctor --lint\` checks after restart.`,
       );
     }
     const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];

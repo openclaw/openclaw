@@ -19,6 +19,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import * as modelsPlan from "./models-config.plan.js";
@@ -32,6 +33,7 @@ import {
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
+  prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -243,6 +245,55 @@ describe("prepared catalog source composition", () => {
       }
     },
   );
+
+  it("publishes failed-discovery static rows once under the canonical provider", async () => {
+    const aliasId = "prepared-source-alias";
+    const { facts, generation, staticConfig } = fixture();
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: pluginId,
+          providers: [providerId],
+          modelCatalog: { aliases: { [aliasId]: { provider: providerId } } },
+        },
+      ],
+    });
+    // Single-provider static hooks answer under the canonical id and every runtime alias.
+    const providerStaticModels = [providerId, aliasId].flatMap((provider) =>
+      staticConfig.models.map((row) => ({
+        ...row,
+        input: ["text" as const],
+        contextWindow: 32000,
+        provider,
+        api: "openai-completions" as const,
+        baseUrl: endpoint,
+      })),
+    );
+    const full = await prepareFullCatalogFacts(
+      facts,
+      { ...generation, pluginMetadataSnapshot, providerStaticModels },
+      "static",
+      {
+        modelsJsonContents: JSON.stringify({ providers: { [aliasId]: staticConfig } }),
+        pluginCatalogs: [],
+        providerOutcomes: [{ provider: providerId, status: "unavailable" }],
+      },
+    );
+    const { catalog } = prepareModelCatalogPublication(
+      full.modelCatalog,
+      new Map(),
+      undefined,
+      { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+      createPreparedModelCatalogProviderNormalizer(pluginMetadataSnapshot, facts.input.config),
+      new Map(),
+    );
+
+    expect(catalog.entries.map(({ provider, id }) => `${provider}/${id}`).toSorted()).toEqual([
+      `${providerId}/configured-only`,
+      `${providerId}/curated-only`,
+      `${providerId}/shared`,
+    ]);
+  });
 
   it("retains inherited catalogs and current request settings without custom model rows", async () => {
     vi.stubEnv("OPENAI_API_KEY", undefined);

@@ -16,6 +16,22 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
 
+export function syncPositionRailVisibility(
+  scroller: HTMLElement | undefined,
+  overflowing: boolean,
+): boolean {
+  const rail = scroller?.closest<HTMLElement>(".chat-position-rail");
+  if (!rail || rail.hasAttribute("data-overflow") === overflowing) {
+    return false;
+  }
+  // A resize can make the whole conversation fit while its rail has focus.
+  if (!overflowing && rail.contains(rail.ownerDocument.activeElement)) {
+    rail.closest<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+  }
+  rail.toggleAttribute("data-overflow", overflowing);
+  return true;
+}
+
 export function syncPositionRailTabStop(
   scroller: HTMLElement | undefined,
   tabStop: HTMLElement | undefined,

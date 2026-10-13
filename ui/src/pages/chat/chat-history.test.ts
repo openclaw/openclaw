@@ -143,7 +143,13 @@ it("requests the configured default agent for the global workspace alias", async
   await loadChatHistory(state);
   expect(request).toHaveBeenCalledWith(
     "chat.history",
-    { sessionKey: "workspace", agentId: "main", limit: 80, maxBytes: 256 * 1024 },
+    {
+      sessionKey: "workspace",
+      agentId: "main",
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
 });

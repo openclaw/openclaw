@@ -88,9 +88,9 @@ skill: the review patches the survivor and archives the rest with
 worked before the stop.
 
 It does not capture environment-specific or transient failures, negative claims
-about tools, unresolved failures or guesses, one-off tasks, personal facts,
-secrets, or generic advice without concrete commands, paths, or ids. When
-nothing durable was learned, it changes nothing.
+about tools, unresolved failures or guesses, knowledge about one codebase,
+one-off tasks, personal facts, secrets, or generic advice without concrete
+commands, paths, or ids. When nothing durable was learned, it changes nothing.
 
 ## What you see
 
@@ -128,7 +128,7 @@ substantial work, not after every message. It can make several requests while
 it views and edits skills. Prompt-cache reuse lowers the cost of re-reading the
 conversation; provider pricing still applies.
 
-**Learn from past conversations** opens a normal chat in which the agent reads
+**Learn from history** in the Control UI opens a normal chat in which the agent reads
 earlier conversations it can access, with its configured model and tools. You
 can watch, steer, or stop it. Starting one does not change the learning mode.
 

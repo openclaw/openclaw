@@ -22,6 +22,7 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
+  icon: string;
   title: string;
   label: string;
   verb?: string;
@@ -74,6 +75,7 @@ export function resolveToolDisplay(params: {
   });
   return {
     name,
+    icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
     verb,

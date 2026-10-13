@@ -102,26 +102,17 @@ export function createTelegramDraftStream(params: {
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  const quoteParams = params.replyQuote
-    ? buildTelegramThreadReplyParams({
-        replyToMessageId,
-        replyQuoteMessageId: replyToMessageId,
-        replyQuoteText: params.replyQuote.text,
-        replyQuotePosition: params.replyQuote.position,
-        replyQuoteEntities: params.replyQuote.entities,
-      }).reply_parameters
-    : undefined;
-  const initialSendMessageParams =
-    replyToMessageId != null
-      ? {
-          ...threadParams,
-          reply_parameters: {
-            message_id: replyToMessageId,
-            allow_sending_without_reply: true,
-            ...quoteParams,
-          },
-        }
-      : (threadParams ?? {});
+  const initialSendMessageParams = {
+    ...threadParams,
+    ...buildTelegramThreadReplyParams({
+      replyToMessageId,
+      replyQuoteMessageId: replyToMessageId,
+      replyQuoteText: params.replyQuote?.text,
+      replyQuotePosition: params.replyQuote?.position,
+      replyQuoteEntities: params.replyQuote?.entities,
+      nativeReply: true,
+    }),
+  };
   const consumesReplyTarget =
     replyToMessageId != null &&
     params.replyToMode !== undefined &&
@@ -608,9 +599,6 @@ export function createTelegramDraftStream(params: {
       // Bounded resume attempts for transient edit failures; flood waits are
       // honored inside each attempt by the account limiter.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (generation !== stopGeneration || streamState.stopped) {
-          return;
-        }
         const sent = await sendOrEditStreamMessage(finalText);
         throwTerminalDeliveryError();
         if (generation !== stopGeneration) {

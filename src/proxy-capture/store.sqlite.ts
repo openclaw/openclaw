@@ -3,6 +3,11 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
 import {
@@ -36,6 +41,11 @@ type PathBasedDebugProxyCaptureStore = {
 };
 
 const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION = 1;
+const legacySchemaAdmission: SqliteDatabaseAdmissionKey<true> = {
+  name: "openclaw.proxyCapture.legacySchema",
+  schemaDependent: true,
+  read: (value) => (value === true ? true : undefined),
+};
 const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS capture_sessions (
     id TEXT PRIMARY KEY,
@@ -133,21 +143,24 @@ function openPathBasedDebugProxyCaptureStore(
       ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
       foreignKeys: true,
     });
-    const versionRow = db.prepare("PRAGMA user_version").get() as
-      | { user_version?: unknown }
-      | undefined;
-    const schemaVersion = Number(versionRow?.user_version ?? 0);
-    if (schemaVersion > DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
-      throw new Error(
-        `Legacy debug proxy capture database uses newer schema version ${schemaVersion}; this build supports ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION}`,
-      );
-    }
-    db.exec(DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL);
-    if (schemaVersion < DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
-      migrateSqliteSchemaToStrict(db, DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL, {
-        databaseLabel: fileBackedPath ?? dbPath,
-      });
-      db.exec(`PRAGMA user_version = ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION};`);
+    if (!getSqliteDatabaseAdmission(db, legacySchemaAdmission)) {
+      const versionRow = db.prepare("PRAGMA user_version").get() as
+        | { user_version?: unknown }
+        | undefined;
+      const schemaVersion = Number(versionRow?.user_version ?? 0);
+      if (schemaVersion > DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+        throw new Error(
+          `Legacy debug proxy capture database uses newer schema version ${schemaVersion}; this build supports ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION}`,
+        );
+      }
+      db.exec(DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL);
+      if (schemaVersion < DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+        migrateSqliteSchemaToStrict(db, DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL, {
+          databaseLabel: fileBackedPath ?? dbPath,
+        });
+        db.exec(`PRAGMA user_version = ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION};`);
+      }
+      publishSqliteDatabaseAdmission(db, legacySchemaAdmission, true);
     }
     if (fileBackedPath) {
       hardenLegacyDatabaseFiles(fileBackedPath);

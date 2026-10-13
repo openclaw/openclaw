@@ -13,6 +13,7 @@ import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
@@ -660,6 +661,10 @@ export type AssistantVisibleTextSanitizerProfile =
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
+function stripInvisibleAssistantText(text: string): string {
+  return /^[\p{White_Space}\p{Default_Ignorable_Code_Point}]*$/u.test(text) ? "" : text;
+}
+
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
@@ -713,6 +718,10 @@ export function assistantVisibleTextFilters(
   }
   filters.push(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
+    {
+      transform: stripInvisibleAssistantText,
+      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+    },
   );
   profileFilters.set(key, filters);
   return filters;

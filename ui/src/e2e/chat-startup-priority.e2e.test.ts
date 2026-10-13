@@ -6,6 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -200,11 +201,31 @@ suite.define(() => {
           await gateway.waitForRequest(method);
           expect(await gateway.getRequests(method)).toHaveLength(1);
         }
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const activePane = page.locator(".chat-pane-cache__pane--active");
+        await expect
+          .poll(() =>
+            activePane.evaluate((element) => {
+              const trigger = element
+                .querySelector(".chat-details-toggle")
+                ?.getBoundingClientRect();
+              const suggestionBounds = element
+                .querySelector(".task-suggestion")
+                ?.getBoundingClientRect();
+              return Boolean(trigger && suggestionBounds && trigger.bottom <= suggestionBounds.top);
+            }),
+          )
+          .toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "details-with-suggestion.png"),
+          });
+        }
+        const details = await openChatDetails(activePane);
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Current rollout progress", { exact: true })
           .waitFor();
+        await details.getByRole("button", { name: "Close details", exact: true }).click();
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -305,8 +326,8 @@ suite.define(() => {
           await gateway.resolveDeferred("progressCard.get");
         }
         // Sidebar hovercards mirror this markdown; verify the active pane's card.
-        await page
-          .locator(".chat-pane-cache__pane--active")
+        const details = await openChatDetails(page.locator(".chat-pane-cache__pane--active"));
+        await details
           .getByRole("region", { name: "Progress note", exact: true })
           .getByText("Resumed progress", { exact: true })
           .waitFor();

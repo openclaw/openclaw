@@ -54,6 +54,7 @@ type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
 type RealtimeVoiceAgentConsultRunRegistration = {
   abortSignal?: AbortSignal;
   cleanup?: () => void;
+  cleanupBeforeRun?: () => void;
 };
 
 /**
@@ -390,7 +391,10 @@ export async function consultRealtimeVoiceAgent(params: {
     runId: string;
     sessionId: string;
     timeoutMs: number;
-  }) => RealtimeVoiceAgentConsultRunRegistration | void;
+  }) =>
+    | RealtimeVoiceAgentConsultRunRegistration
+    | void
+    | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionWorkAdmission }, { resolveSessionWorkStartError }] = await Promise.all([
@@ -493,10 +497,18 @@ export async function consultRealtimeVoiceAgent(params: {
       const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
-      const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
+      const runRegistration = await params.onRunStarted?.({ runId, sessionId, timeoutMs });
       const abortSignal = runRegistration?.abortSignal
         ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
         : lifecycleAbortController.signal;
+      try {
+        abortSignal.throwIfAborted();
+        assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+      } catch (error) {
+        runRegistration?.cleanupBeforeRun?.();
+        runRegistration?.cleanup?.();
+        throw error;
+      }
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.

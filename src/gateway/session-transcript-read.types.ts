@@ -124,6 +124,7 @@ export type SessionTranscriptReader = {
     scope: SessionTranscriptReadScope,
     messageId: string,
     options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean },
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessageByIdResult>;
   readSessionMessagesMatchingIdAsync(
     scope: SessionTranscriptReadScope,
@@ -138,10 +139,12 @@ export type SessionTranscriptReader = {
   readSessionMessagesPageWithStatsAsync(
     scope: SessionTranscriptReadScope,
     options: SessionTranscriptPageOptions,
+    signal?: AbortSignal,
   ): Promise<ReadRecentSessionMessagesResult>;
   readSessionMessagesAroundIdWithStatsAsync(
     scope: SessionTranscriptReadScope,
     options: TranscriptAnchorPageOptions & SessionTranscriptReadOptions,
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessagesAroundIdResult>;
 };
 

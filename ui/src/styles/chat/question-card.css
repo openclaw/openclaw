@@ -109,6 +109,14 @@ openclaw-chat-question-panel {
   gap: 8px;
 }
 
+.chat-question-panel__topline--prompt {
+  align-items: flex-start;
+}
+
+.chat-question-panel__topline--prompt .chat-question-panel__prompt {
+  flex: 1;
+}
+
 .chat-question-panel__title {
   min-width: 0;
   overflow: hidden;
@@ -121,6 +129,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__collapse {
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   color: var(--muted);
@@ -155,6 +164,7 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__progress {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   min-width: 0;
@@ -343,12 +353,6 @@ openclaw-chat-question-panel {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.chat-question-panel__input-hint {
-  margin-top: -6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /*

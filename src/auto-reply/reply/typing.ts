@@ -70,12 +70,8 @@ export function createTypingController(params: {
   // Leave one full cadence for a keepalive call to settle before safety cleanup.
   const typingTtlMs = Math.max(DEFAULT_TYPING_TTL_MS, typingIntervalMs * 2);
 
-  const formatTypingTtl = (ms: number) => {
-    if (ms % 60_000 === 0) {
-      return `${ms / 60_000}m`;
-    }
-    return `${Math.round(ms / 1000)}s`;
-  };
+  const typingTtlLabel =
+    typingTtlMs % 60_000 === 0 ? `${typingTtlMs / 60_000}m` : `${Math.round(typingTtlMs / 1000)}s`;
 
   const cleanup = () => {
     if (sealed) {
@@ -103,7 +99,7 @@ export function createTypingController(params: {
       if (!typingLoop.isRunning()) {
         return;
       }
-      log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
+      log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
       cleanup();
     }, typingTtlMs);
   };

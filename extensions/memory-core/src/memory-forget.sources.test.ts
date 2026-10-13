@@ -19,7 +19,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listMemoryEntryOrigins,
-  listMemorySessionTombstones,
   pruneMemoryEntryOrigins,
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
@@ -32,6 +31,7 @@ import {
 } from "./memory-forget.test-helpers.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
+import { readMemoryForgetTombstonesForTest } from "./test-helpers.js";
 
 describe("memory forget source removal", () => {
   let fixture: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
@@ -46,7 +46,6 @@ describe("memory forget source removal", () => {
 
   function indexSelection() {
     return {
-      agentId: "main",
       changedPaths: new Set<string>(),
       removedPaths: new Set<string>(),
       sessionIds: new Set(["target"]),
@@ -234,7 +233,7 @@ describe("memory forget source removal", () => {
           untargetableEntryKeys: report.untargetableEntryKeys,
           memory: await fs.readFile(memoryPath, "utf8"),
           origins: await listMemoryEntryOrigins({ agentId: "main" }),
-          tombstones: (await listMemorySessionTombstones({ agentId: "main" })).map(
+          tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }).map(
             ({ sessionId }) => sessionId,
           ),
         };
@@ -324,7 +323,7 @@ describe("memory forget source removal", () => {
     const readDurable = async (database: DatabaseSync) => ({
       memory: await fs.readFile(memoryPath, "utf8"),
       origins: await listMemoryEntryOrigins({ agentId: "main" }),
-      tombstones: await listMemorySessionTombstones({ agentId: "main" }),
+      tombstones: readMemoryForgetTombstonesForTest({ agentId: "main" }),
       chunks: database.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all(),
       vectors: database.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all(),
       revision: database.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get(),
@@ -412,7 +411,7 @@ describe("memory forget source removal", () => {
       expect(result).toEqual({ ...preview, dryRun: false });
       expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
       expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject(
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toMatchObject(
         sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
       );
       let sourceDeletes = 0;
@@ -467,7 +466,7 @@ describe("memory forget source removal", () => {
       await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
         "synthetic admission failure",
       );
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+      expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
       expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
       expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
       expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
@@ -479,7 +478,7 @@ describe("memory forget source removal", () => {
     const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
     expect(result.artifacts.indexSources).toBe(1);
     expect(result.artifacts.indexChunks).toBe(1);
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toHaveLength(130);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toHaveLength(130);
     expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
   });
@@ -550,7 +549,7 @@ describe("memory forget source removal", () => {
         memory: await fs.readFile(memoryPath, "utf8"),
         index: db.prepare("SELECT id FROM memory_index_chunks").all(),
         origins: await listMemoryEntryOrigins({ agentId: "main" }),
-        targetTombstoned: (await listMemorySessionTombstones({ agentId: "main" })).some(
+        targetTombstoned: readMemoryForgetTombstonesForTest({ agentId: "main" }).some(
           ({ sessionId }) => sessionId === "target",
         ),
       };
@@ -604,7 +603,7 @@ describe("memory forget source removal", () => {
       expect(report.sessionIds).toEqual([]);
       expect(report.sessionResolutions).toEqual([]);
     }
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+    expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([]);
   });
   it("previews and forgets selected chunks before optional provenance exists", async () => {
     await seedMemoryForgetSession("target");

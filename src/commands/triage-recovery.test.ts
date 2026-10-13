@@ -52,6 +52,7 @@ const agents = [
   "cursor",
   "kimi",
   "qwen",
+  "agy",
 ] as const;
 const printOnlyModes = [
   { mode: "JSON", json: true, nonInteractive: false, terminal: true },
@@ -108,6 +109,31 @@ afterEach(() => {
 });
 
 describe("triage external recovery handoff", () => {
+  it.each([
+    { executable: "codex", detectedAgents: ["codex"] },
+    { executable: "cursor-agent", detectedAgents: ["cursor"] },
+    { executable: "kimi", detectedAgents: ["kimi"] },
+    { executable: "qwen", detectedAgents: ["qwen"] },
+    { executable: "agy", detectedAgents: ["agy"] },
+    { executable: "cursor", detectedAgents: [] },
+    { executable: "agent", detectedAgents: [] },
+  ])(
+    "reports coding agents for $executable without checking credentials or selecting an editor",
+    async ({ executable, detectedAgents }) => {
+      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+        binary === executable ? `/usr/local/bin/${binary}` : undefined,
+      );
+      const runtime = createTriageRuntime();
+
+      await withOpenClawTestState({ layout: "split" }, async () => {
+        await triageCommand(runtime, { json: true, noExport: true });
+      });
+
+      expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents });
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(
     ["first available", "explicit"].flatMap((selection) =>
       agents.map((agent) => ({ agent, selection })),
@@ -135,7 +161,7 @@ describe("triage external recovery handoff", () => {
       `/usr/local/bin/${agent === "cursor" ? "cursor-agent" : agent}`,
       agent === "claude"
         ? ["--safe-mode", expect.any(String)]
-        : agent === "qwen"
+        : agent === "qwen" || agent === "agy"
           ? ["--prompt-interactive", expect.any(String)]
           : agent === "opencode" || agent === "kimi"
             ? ["--prompt", expect.any(String)]
@@ -180,6 +206,7 @@ describe("triage external recovery handoff", () => {
               return [];
             });
             for (const command of [
+              "agy",
               "claude",
               "codex",
               "cursor-agent",
@@ -198,8 +225,8 @@ describe("triage external recovery handoff", () => {
                     ? 'test "$1" = exec && test "$2" = --prompt-file && cat "$3"\n'
                     : command === "grok"
                       ? 'test "$1" = --prompt-file && cat "$2"\n'
-                      : command === "kimi"
-                        ? 'test "$1" = --prompt && prompt_path=${2#Read the debugging prompt at } && prompt_path=${prompt_path% and follow its repair and verification instructions.} && cat "$prompt_path"\n'
+                      : command === "kimi" || command === "agy"
+                        ? 'case "$1" in --prompt|--prompt-interactive) ;; *) exit 1 ;; esac && prompt_path=${2#Read the debugging prompt at } && prompt_path=${prompt_path% and follow its repair and verification instructions.} && cat "$prompt_path"\n'
                         : "cat\n";
               await fs.writeFile(
                 path.join(bin, command),
@@ -241,6 +268,7 @@ describe("triage external recovery handoff", () => {
           { agent: "cursor", command: "cursor-agent --print" },
           { agent: "kimi", command: "kimi --prompt" },
           { agent: "qwen", command: "qwen" },
+          { agent: "agy", command: "agy --prompt-interactive" },
         ] as const
       ).map((agent) => Object.assign({}, mode, agent)),
     ),
@@ -268,7 +296,7 @@ describe("triage external recovery handoff", () => {
             }),
             2,
           );
-          expect(runtime.writeJson.mock.calls[0]?.[0].suggestedCommands).toHaveLength(10);
+          expect(runtime.writeJson.mock.calls[0]?.[0].suggestedCommands).toHaveLength(11);
         } else {
           const output = runtime.log.mock.calls.flat().join("\n");
           const commands = runtime.log.mock.calls.filter(([line]) => String(line).startsWith("  "));
@@ -394,7 +422,7 @@ describe("triage external recovery handoff", () => {
     );
   });
 
-  it.each(["pi", "muse", "grok", "cursor", "kimi", "qwen"] as const)(
+  it.each(["pi", "muse", "grok", "cursor", "kimi", "qwen", "agy"] as const)(
     "reports missing %s without falling back to an available agent",
     async (agent) => {
       mocks.resolveExecutablePath.mockImplementation((binary: string) =>

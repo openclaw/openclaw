@@ -116,15 +116,19 @@ export type SidebarRecentSession = {
   hasActiveRun: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   pinnable: boolean;
+  sidebarRoot?: boolean;
   snoozedUntil?: number;
   archived?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: GatewaySessionRow["sharingRole"];
+  communication?: GatewaySessionRow["communication"];
+  effectiveCommunication?: GatewaySessionRow["effectiveCommunication"];
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
@@ -313,7 +317,16 @@ export type SidebarCatalogSessionMutationScope = SidebarSessionMutationScope & {
 
 export type SidebarSessionPatch = Pick<
   SessionsPatchMutation,
-  "archived" | "pinned" | "snoozedUntil" | "unread" | "label" | "icon" | "color" | "category"
+  | "archived"
+  | "pinned"
+  | "sidebarRoot"
+  | "snoozedUntil"
+  | "unread"
+  | "label"
+  | "icon"
+  | "color"
+  | "category"
+  | "communication"
 >;
 
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;

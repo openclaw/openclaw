@@ -360,6 +360,7 @@ describe("update-cli", () => {
       reason: "managed-service-preflight",
       recovery: { serviceRestartSafe: true },
       steps: [
+        expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
         expect.objectContaining({
           stderrTail: expect.stringContaining("would kill this command"),
         }),

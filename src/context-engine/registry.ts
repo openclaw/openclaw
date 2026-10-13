@@ -12,6 +12,7 @@ import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
 import { pluginIdFromContextEngineOwner } from "./registry-adoption.js";
 import {
@@ -35,6 +36,7 @@ import {
   type ContextEngineFactoryResources,
   type ContextEngineFactoryPreparation,
 } from "./registry.resources.js";
+import { resolveMaxActiveTranscriptBytes } from "./transcript-byte-limit.js";
 import type {
   BootstrapResult,
   ContextEngine,
@@ -65,9 +67,14 @@ type ResolvedContextEngineMetadata = {
   sourceEngine?: ContextEngine;
   source?: ContextEngineFactoryResources;
   ownsSource?: boolean;
+  maxActiveTranscriptBytes?: number;
 };
 
-const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
+// Built SDK artifacts and the host must read the same admitted engine facts.
+const resolvedEngineMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.contextEngine.resolvedMetadata"),
+  () => new WeakMap<ContextEngine, ResolvedContextEngineMetadata>(),
+);
 
 function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
@@ -264,6 +271,7 @@ function wrapResolvedContextEngine(
   );
   resolvedEngineMetadata.set(wrapped, {
     ...metadata,
+    maxActiveTranscriptBytes: resolveMaxActiveTranscriptBytes(metadata.factoryCtx.config),
     sourceEngine: resolvedEngineMetadata.get(rawEngine)?.sourceEngine ?? rawEngine,
   });
   return wrapped;
@@ -394,6 +402,11 @@ export function resolveContextEngineOwnerPluginId(
 export const hasSameContextEngineInstance = (left: ContextEngine, right: ContextEngine): boolean =>
   (resolvedEngineMetadata.get(left)?.sourceEngine ?? left) ===
   (resolvedEngineMetadata.get(right)?.sourceEngine ?? right);
+
+export const resolveContextEngineTranscriptByteLimit = (
+  engine: ContextEngine | undefined,
+): number | undefined =>
+  engine ? resolvedEngineMetadata.get(engine)?.maxActiveTranscriptBytes : undefined;
 
 const CONTEXT_ENGINE_FALLBACK_RESULTS = {
   bootstrap: { bootstrapped: false, reason: "context engine downgraded to legacy" },

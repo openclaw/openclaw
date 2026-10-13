@@ -86,16 +86,6 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function filterEntries(props: ActivityProps): ActivityEntry[] {
-  const needle = normalizeLowercaseStringOrEmpty(props.filterText);
-  return props.entries.filter(
-    (entry) =>
-      props.statusFilters[entry.status] &&
-      (!props.toolFilter || entry.toolName === props.toolFilter) &&
-      matchesEntry(entry, needle),
-  );
-}
-
 function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   return html`
     <label class="activity-status-filter">
@@ -275,7 +265,13 @@ export function renderActivity(props: ActivityProps) {
     "",
   );
   const toolNames = sortUniqueStrings(props.entries.map((entry) => entry.toolName));
-  const filtered = filterEntries(props);
+  const needle = normalizeLowercaseStringOrEmpty(props.filterText);
+  const filtered = props.entries.filter(
+    (entry) =>
+      props.statusFilters[entry.status] &&
+      (!props.toolFilter || entry.toolName === props.toolFilter) &&
+      matchesEntry(entry, needle),
+  );
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain

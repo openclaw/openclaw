@@ -6,6 +6,7 @@ import {
 } from "../../../test/helpers/theme-fixture.js";
 import { ThemesImportParamsSchema } from "./schema/themes.js";
 import {
+  BUILTIN_THEMES,
   isThemeId,
   normalizeThemeDefinition,
   normalizeThemeMode,
@@ -71,6 +72,37 @@ describe("portable theme definition", () => {
     ).toEqual(workingPhrases);
   });
 
+  it.each(["claw", "dots", "brand", "none"] as const)(
+    "accepts independent branding with the %s working indicator",
+    (workingIndicator) => {
+      const fields = {
+        brandName: "Mission Control",
+        brandIcon: "mark",
+        workingIndicator,
+        lobsterdex: false,
+        communityLinks: false,
+      };
+      const definition = createThemeDefinitionFixture(fields);
+      expect(
+        normalizeThemeDefinition({ ...definition, brandName: " Mission Control " }),
+      ).toMatchObject(fields);
+      expect(Value.Check(ThemesImportParamsSchema, { id: "mission", definition })).toBe(true);
+      expect(
+        normalizeThemeDefinition({ ...definition, brandName: "a".repeat(80) }).brandName,
+      ).toHaveLength(80);
+    },
+  );
+
+  it("restricts custom brand icons to the manifest's icon IDs", () => {
+    const definition = createThemeDefinitionFixture({ brandIcon: "rocket" });
+    expect(() => normalizeThemeDefinition(definition)).toThrow("theme.brandIcon");
+    expect(() =>
+      normalizeThemeDefinition(definition, { hatIds: ["rocket"], critterIds: ["rocket"] }),
+    ).toThrow("theme.brandIcon");
+    expect(normalizeThemeDefinition(definition, { iconIds: ["rocket"] }).brandIcon).toBe("rocket");
+    expect(parseThemeDefinition(definition)).toBeNull();
+  });
+
   it("accepts an explicitly empty critter list", () => {
     expect(
       normalizeThemeDefinition(createThemeDefinitionFixture({ critters: [] })).critters,
@@ -114,7 +146,7 @@ describe("portable theme definition", () => {
   it.each(["", "Beret", "a".repeat(33), "beret.svg", "<svg>"])(
     "rejects nonportable artwork ID %j at the wire boundary",
     (id) => {
-      for (const branding of [{ avatarHat: id }, { critters: [id] }]) {
+      for (const branding of [{ brandIcon: id }, { avatarHat: id }, { critters: [id] }]) {
         expect(
           Value.Check(ThemesImportParamsSchema, {
             id: "hat-theme",
@@ -125,7 +157,23 @@ describe("portable theme definition", () => {
     },
   );
 
-  it.each([
+  it.each<[Record<string, unknown>, string]>([
+    ...[
+      "",
+      " ",
+      "a".repeat(81),
+      "hello\nworld",
+      "hello\u0085",
+      "hello\u202e",
+      "hello\ud800",
+      "hello\u2028world",
+      null,
+    ].map((brandName): [Record<string, unknown>, string] => [{ brandName }, "theme.brandName"]),
+    [{ brandIcon: "https://example.test/icon.svg" }, "theme.brandIcon"],
+    [{ brandIcon: "<svg/>" }, "theme.brandIcon"],
+    [{ workingIndicator: "spinner" }, "theme.workingIndicator"],
+    [{ lobsterdex: "false" }, "theme.lobsterdex"],
+    [{ communityLinks: 0 }, "theme.communityLinks"],
     [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
     [{ workingPhrases: "Building" }, "must be an array"],
     [
@@ -250,6 +298,11 @@ describe("portable theme definition", () => {
 it("resolves omitted branding to the claw without critters or a hat and retains authored branding", () => {
   const defaults = {
     mascot: "claw",
+    brandName: "OpenClaw",
+    brandIcon: "claw",
+    workingIndicator: "claw",
+    lobsterdex: true,
+    communityLinks: true,
     workingPhrases: undefined,
     critters: [],
     avatarHat: undefined,
@@ -268,11 +321,62 @@ it("resolves omitted branding to the claw without critters or a hat and retains 
       avatarHat: "fedora",
     }),
   ).toEqual({
+    ...defaults,
     mascot: "none",
+    brandIcon: "mark",
+    workingIndicator: "dots",
     workingPhrases: ["Building"],
     critters: ["penguin", "fedora"],
     avatarHat: "fedora",
   });
+});
+
+it.each(["crt", "phosphor"])("publishes neutral terminal branding for %s", (id) => {
+  const theme = BUILTIN_THEMES.find((entry) => entry.id === id);
+  expect(theme).toMatchObject({
+    mascot: "none",
+    brandIcon: "mark",
+    workingIndicator: "dots",
+    lobsterdex: false,
+  });
+  expect(resolveThemeBranding(theme)).toMatchObject({
+    brandName: "OpenClaw",
+    communityLinks: true,
+    mascot: "none",
+    brandIcon: "mark",
+    workingIndicator: "dots",
+    lobsterdex: false,
+  });
+});
+
+it("keeps other built-in themes on the existing claw presentation", () => {
+  for (const theme of BUILTIN_THEMES.filter(
+    (entry) => entry.id !== "crt" && entry.id !== "phosphor",
+  )) {
+    expect(resolveThemeBranding(theme)).toMatchObject({
+      mascot: "claw",
+      brandIcon: "claw",
+      workingIndicator: "claw",
+      lobsterdex: true,
+      communityLinks: true,
+    });
+  }
+});
+
+it("keeps explicit branding independent from mascot defaults", () => {
+  const source = {
+    mascot: "none",
+    brandName: "Mission Control",
+    brandIcon: "rocket",
+    workingIndicator: "brand",
+    lobsterdex: false,
+    communityLinks: false,
+    artwork: { icons: { rocket: { url: "/icon" } } },
+  } as const;
+  expect(resolveThemeBranding(source)).toMatchObject(source);
+  expect(resolveThemeBranding({ mascot: "claw", workingIndicator: "none" }).workingIndicator).toBe(
+    "none",
+  );
 });
 
 it.each([

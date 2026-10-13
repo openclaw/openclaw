@@ -33,14 +33,9 @@ function beginIMessageApprovalControlBinding(params: {
 }): { close: () => void } {
   const keys = bindingKeys(params.accountId, params.conversation);
   const { promise, resolve } = createDeferred<void>();
-  let closed = false;
   const window: BindingWindow = {
     done: promise,
     close: () => {
-      if (closed) {
-        return;
-      }
-      closed = true;
       for (const key of keys) {
         const windows = pendingByConversation.get(key);
         windows?.delete(window);

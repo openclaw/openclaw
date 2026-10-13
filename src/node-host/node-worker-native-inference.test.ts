@@ -5,8 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { assertNativeInferenceAssignment } from "../worker/native-inference-startup.js";
+import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import {
-  nodeWorkerNativeInferenceSecretsForDescriptor,
   projectNodeWorkerNativeInference,
   snapshotNodeWorkerNativeInference,
 } from "./node-worker-native-inference.js";
@@ -103,8 +103,8 @@ describe("node worker inference config projection", () => {
   it("captures credentials and header bytes for child diagnostics", () => {
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
     const assignment = descriptor(tempDirs.make("node-native-secrets-"));
-    expect(new Set(nodeWorkerNativeInferenceSecretsForDescriptor(snapshot, assignment))).toEqual(
-      new Set([credential, providerHeader, modelHeader]),
+    expect(new Set(nodeWorkerLaunchSecrets(assignment, snapshot))).toEqual(
+      new Set([assignment.admission.credential, credential, providerHeader, modelHeader]),
     );
   });
 

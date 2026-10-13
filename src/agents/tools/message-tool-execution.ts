@@ -75,16 +75,11 @@ import {
   sanitizeMessageToolVisiblePayload,
   type VisibleTextSuppressionReason,
 } from "./message-tool-visible-content.js";
-import { isPollVoteEchoText, resolvePollVoteEchoRoute } from "./poll-vote-echo.js";
-
-const POLL_VOTE_ECHO_TTL_MS = 30_000;
-
-// Share route-checked poll votes across runs in the same conversation: the poll
-// and its following comment can arrive at different tool instances.
-const recentPollVoteBySession = new Map<
-  string,
-  { option: string; route: string; recordedAt: number }
->();
+import {
+  recordPollVote,
+  resolvePollVoteEchoRoute,
+  suppressPollVoteEcho,
+} from "./poll-vote-echo.js";
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -164,7 +159,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         })
       : undefined);
   const pollEchoSessionKey =
-    rawPollEchoSessionKey && resolvedAgentId
+    rawPollEchoSessionKey && resolvedAgentId && sourceReplySinkDeliveryMode === "message_tool_only"
       ? `${resolvedAgentId}\0${rawPollEchoSessionKey}`
       : undefined;
   const turnAuthority = createMessageToolTurnAuthority({
@@ -451,33 +446,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
         preparedMessageToolCatalog,
       });
-      const recentPollVote = pollEchoSessionKey
-        ? recentPollVoteBySession.get(pollEchoSessionKey)
-        : undefined;
-      if (
-        recentPollVote &&
-        pollEchoSessionKey &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
-        (action === "send" || action === "reply")
-      ) {
-        if (Date.now() - recentPollVote.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
-          recentPollVoteBySession.delete(pollEchoSessionKey);
-        } else if (pollVoteEchoRoute === recentPollVote.route) {
-          const vote = recentPollVote;
-          recentPollVoteBySession.delete(pollEchoSessionKey);
-          const outboundText =
-            readToolStringParam(params, "text") ??
-            readToolStringParam(params, "message") ??
-            readToolStringParam(params, "content");
-          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
-            decisions.recordPollVoteEchoSuppressed();
-            return jsonResult({
-              status: "suppressed",
-              reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
-              message: "Suppressed outbound text because it only restated the poll vote just cast.",
-            });
-          }
-        }
+      if (suppressPollVoteEcho(pollEchoSessionKey, pollVoteEchoRoute, action, params)) {
+        decisions.recordPollVoteEchoSuppressed();
+        return jsonResult({
+          status: "suppressed",
+          reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
+          message: "Suppressed outbound text because it only restated the poll vote just cast.",
+        });
       }
 
       const hasCurrentMessageId =
@@ -698,31 +673,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               )?.markSourceReplyDelivered();
             }
           }
-          if (
-            action === "poll-vote" &&
-            pollVoteEchoRoute &&
-            pollEchoSessionKey &&
-            sourceReplySinkDeliveryMode === "message_tool_only"
-          ) {
+          if (action === "poll-vote" && pollVoteEchoRoute && pollEchoSessionKey) {
             const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
-            const option =
-              typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
-            if (option) {
-              const recordedAt = Date.now();
-              // Prune expired entries on write so a session that votes but never
-              // sends a follow-up text can't leak a record forever in a long-lived
-              // gateway; the map stays bounded to sessions that voted within the TTL.
-              for (const [key, entry] of recentPollVoteBySession) {
-                if (recordedAt - entry.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
-                  recentPollVoteBySession.delete(key);
-                }
-              }
-              recentPollVoteBySession.set(pollEchoSessionKey, {
-                option,
-                route: pollVoteEchoRoute,
-                recordedAt,
-              });
-            }
+            recordPollVote(pollEchoSessionKey, pollVoteEchoRoute, details?.pollVotedOption);
           }
           const response = toolResult ?? jsonResult(result.payload);
           const notice =

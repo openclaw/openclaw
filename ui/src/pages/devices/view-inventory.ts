@@ -31,7 +31,7 @@ import { renderCapabilityChips } from "./capability-chips.ts";
 import { deviceDesktopEnvironment, renderDeviceEntryMenu } from "./entry-menu.ts";
 import { renderHostStats } from "./host-stats.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
-import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
+import { deviceIcon, renderDeviceTile, renderDeviceIdentityFacts } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
 
 registerDevicesEnglish();
@@ -295,14 +295,7 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
     <details class="device-entry__details">
       <summary>${t("devices.inventory.details")}</summary>
       <dl class="device-entry__facts">
-        <dt class="settings-row__desc">${t("devices.inventory.deviceIdLabel")}</dt>
-        <dd class="settings-row__value settings-row__value--mono" title=${entry.id}>${entry.id}</dd>
-        ${
-          entry.remoteIp
-            ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
-                <dd class="settings-row__value settings-row__value--mono">${entry.remoteIp}</dd>`
-            : nothing
-        }
+        ${renderDeviceIdentityFacts(entry.id, entry.remoteIp)}
         ${
           scopes.length > 0
             ? html`<dt class="settings-row__desc">${t("devices.inventory.scopesLabel")}</dt>
@@ -363,9 +356,10 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
       : undefined;
   const desktopEnvironment = deviceDesktopEnvironment(props, `node:${entry.id}`);
   const rowConnected = entry.node?.connected ?? entry.connected;
-  const connectionStatus = rowConnected
-    ? renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })
-    : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
+  const connectionStatus = renderSettingsStatus({
+    kind: rowConnected ? "ok" : "muted",
+    label: t(rowConnected ? "devices.inventory.connected" : "devices.inventory.offline"),
+  });
   return html`
     <div class="settings-row device-entry" title=${capacity?.title ?? nothing}>
       ${renderDeviceTile(deviceIcon(entry))}
@@ -443,11 +437,10 @@ function renderPresenceRow(
         <div class="device-entry__heading">
           <span class="settings-row__title">${title}</span>
           <span class="device-entry__status">
-            ${
-              gateway
-                ? renderSettingsStatus({ kind: "accent", label: t("devices.inventory.gateway") })
-                : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.unpaired") })
-            }
+            ${renderSettingsStatus({
+              kind: gateway ? "accent" : "muted",
+              label: t(gateway ? "devices.inventory.gateway" : "devices.inventory.unpaired"),
+            })}
           </span>
         </div>
         ${

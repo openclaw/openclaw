@@ -10,12 +10,13 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
+export { settleReplyDispatcher } from "../auto-reply/dispatch.js";
 export {
-  dispatchInboundMessage,
-  dispatchInboundMessageWithBufferedDispatcher,
-  dispatchInboundMessageWithDispatcher,
-  settleReplyDispatcher,
-} from "../auto-reply/dispatch.js";
+  dispatchInboundMessageForSdk as dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcherForSdk as dispatchInboundMessageWithBufferedDispatcher,
+  dispatchInboundMessageWithDispatcherForSdk as dispatchInboundMessageWithDispatcher,
+  getReplyFromConfigForSdk as getReplyFromConfig,
+} from "./reply-runtime-adapters.js";
 export {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -27,7 +28,6 @@ export {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
-export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
@@ -38,9 +38,9 @@ export {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
-  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
-} from "../auto-reply/reply/provider-dispatcher.js";
+  dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcher,
+} from "./reply-dispatch-runtime.js";
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,

@@ -12,15 +12,11 @@ import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js"
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
-import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  listAgentDatabaseAdmissionRefusals,
-  readAgentDatabaseAdmissionRefusal,
-} from "../state/agent-database-admission.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -289,11 +285,6 @@ async function assertStartupStateReady(params: {
     () => assertSessionStoreMigrationComplete({ ...params, targets }),
     undefined,
     () => ({ targetCount: targets.length }),
-  );
-  recordStartupMigrationWarnings(
-    listAgentDatabaseAdmissionRefusals({ env: params.env }).map(
-      (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
-    ),
   );
   const { assertConfiguredWorkspaceStateReady } = await measureDoctorConfigPreflightStep(
     "admission.workspace-runtime-import",

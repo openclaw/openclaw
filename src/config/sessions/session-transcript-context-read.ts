@@ -1,13 +1,17 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
+import {
+  captureIncognitoSessionHistoryBinding,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -16,6 +20,7 @@ import {
   readSessionTranscriptAnchorsAsync,
   readSessionTranscriptAnchorsFromSource,
 } from "./session-transcript-anchor-read.js";
+import { retainSessionTranscriptContextGeneration } from "./session-transcript-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -24,7 +29,9 @@ import {
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
 export type SessionTranscriptContextProjectionSource = {
   target: SessionTranscriptRuntimeTarget;
@@ -95,6 +102,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
       return result.value;
     },
     signal,
+    targetDiscoveryLane,
   );
 }
 
@@ -107,6 +115,7 @@ export function readSessionTranscriptModelContextAsync<T>(
   through?: TranscriptEntryAnchor,
   limits?: SessionModelContextLimits,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
+  consumeSynchronously = false,
 ): Promise<T> {
   const capturedTarget = { ...target };
   const capturedAdmission = admission ? structuredClone(admission) : undefined;
@@ -118,7 +127,13 @@ export function readSessionTranscriptModelContextAsync<T>(
     assertCurrent: () => void,
     binding?: IncognitoSessionHistoryBinding,
     contextAdmission = capturedAdmission,
+    databaseIdentity?: string,
   ): Promise<T> => {
+    const generation = retainSessionTranscriptContextGeneration(
+      scope,
+      context.version,
+      databaseIdentity,
+    );
     const contextValidation = structuredClone({
       version: context.version,
       admission: contextAdmission,
@@ -132,6 +147,7 @@ export function readSessionTranscriptModelContextAsync<T>(
         signal,
         (facts) => {
           assertCurrent();
+          generation.assertCurrent();
           if (
             !facts.contextValidated &&
             (contextValidation.version || contextAdmission || capturedThrough)
@@ -167,12 +183,27 @@ export function readSessionTranscriptModelContextAsync<T>(
       joined = true;
       return (await validate(() => value)).value;
     } finally {
+      generation.release();
       // Initial acceptance can fail after starting a consumer; its owner still joins that work.
       if (consumerSettlement && !joined) {
         await consumerSettlement.catch(() => undefined);
       }
     }
   };
+  const source = suppliedIncognito ? undefined : captureIncognitoSessionSource(target);
+  if (source && "kind" in source) {
+    signal?.throwIfAborted();
+    if (capturedAdmission || capturedThrough) {
+      return Promise.reject(
+        new SessionTranscriptReadFenceError("Session transcript is unavailable"),
+      );
+    }
+    return Promise.resolve(consume({ events: [] })).then((result) => {
+      signal?.throwIfAborted();
+      source.assertCurrent();
+      return result;
+    });
+  }
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(target);
   if (incognito) {
     const prepared = prepareIncognitoSessionHistoryRead(incognito, target, signal);
@@ -218,6 +249,45 @@ export function readSessionTranscriptModelContextAsync<T>(
     },
     async ({ scope, expectedIdentity, assertCurrent }) => {
       const captured = { ...scope, sessionKey: capturedTarget.sessionKey };
+      const selected =
+        consumeSynchronously && capturedLimits && getOwnedSessionTranscriptReader(captured);
+      if (selected) {
+        const { captureSessionEntryNativeMutationWitness } =
+          await import("./session-entry-read-ordered.js");
+        assertCurrent();
+        const database = selected.database;
+        return runOpenClawAgentWriteAdmission(
+          database,
+          async (_identity, assertOwner) => {
+            assertCurrent();
+            const assertNative = captureSessionEntryNativeMutationWitness([database]);
+            const context = await readSessionTranscriptModelContextInWorker(
+              captured,
+              capturedAdmission,
+              signal,
+              capturedThrough,
+              capturedLimits,
+              expectedIdentity,
+            );
+            signal?.throwIfAborted();
+            assertOwner();
+            assertCurrent();
+            assertNative();
+            const value = consume(context);
+            if (isPromiseLike(value)) {
+              void Promise.resolve(value).catch(() => {});
+              throw new Error("Prepared model-context consumers must remain synchronous");
+            }
+            assertOwner();
+            assertCurrent();
+            assertNative();
+            return value;
+          },
+          true,
+          undefined,
+          signal,
+        );
+      }
       const context = await readSessionTranscriptModelContextInWorker(
         captured,
         capturedAdmission,
@@ -227,7 +297,14 @@ export function readSessionTranscriptModelContextAsync<T>(
         expectedIdentity,
       );
       assertCurrent();
-      return accept(captured, context, assertCurrent);
+      return accept(
+        captured,
+        context,
+        assertCurrent,
+        undefined,
+        capturedAdmission,
+        expectedIdentity?.key.startsWith("file:") ? expectedIdentity.key.slice(5) : undefined,
+      );
     },
     signal,
   );

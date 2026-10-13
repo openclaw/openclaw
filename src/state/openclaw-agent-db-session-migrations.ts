@@ -406,23 +406,6 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-  `);
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );

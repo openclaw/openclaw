@@ -313,6 +313,7 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   }
   const createInner = (allowScripts = true) => {
     const frame = document.createElement("iframe");
+    frame.setAttribute("allow", "fullscreen *");
     // Block native popups here without reserving widget globals such as open.
     frame.setAttribute("sandbox", allowScripts ? "allow-scripts allow-forms" : "");
     return frame;

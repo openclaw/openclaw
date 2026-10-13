@@ -163,6 +163,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/failed-trailer.mts",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",

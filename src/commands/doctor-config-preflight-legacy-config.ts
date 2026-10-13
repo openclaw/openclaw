@@ -34,12 +34,11 @@ export function createDoctorConfigRepairPlanner(params: {
   skipLegacyParentConfigWrite: boolean;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
 }) {
-  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) => {
-    return params.runWithPluginMetadataSnapshot(
+  const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) =>
+    params.runWithPluginMetadataSnapshot(
       { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
       () => planAutomaticConfigRepair(snapshot),
     );
-  };
   const planAdmittedConfigRepair = (
     snapshot: ConfigFileSnapshot,
     prepared: ReturnType<typeof planAutomaticConfigRepair> = null,

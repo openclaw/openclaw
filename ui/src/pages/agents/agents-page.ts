@@ -486,7 +486,7 @@ class AgentsPage
       void this.context.runtimeConfig.ensureLoaded();
     }
     if (!this.agentsList && !this.context.agents.state.agentsLoading) {
-      void this.refreshAgents(false);
+      void this.refreshAgents("ensure");
       return;
     }
     this.ensureAgentIdentities();
@@ -816,41 +816,30 @@ class AgentsPage
     void loadToolsEffective(this, { agentId, sessionKey: this.sessionKey });
   }
 
-  private async refreshAgents(force = true) {
+  private async refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
     const client = this.client;
+    if (mode === "save" && (!client || !this.canCall("config.set", "operator.admin"))) {
+      return;
+    }
     const generation = this.requestGeneration;
     const agents = this.context.agents;
     if (!client) {
       return;
     }
-    await (force ? agents.refreshList() : agents.ensureList());
+    if (mode === "save" && !(await this.context.runtimeConfig.save())) {
+      return;
+    }
+    await (mode === "ensure" ? agents.ensureList() : agents.refreshList());
     if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
+    if (mode === "save") {
+      resetToolsEffectiveState(this);
+    }
     this.syncAgentState(agents);
-    if (!force) {
+    if (mode !== "refresh") {
       this.ensureAgentIdentities();
     }
-    this.loadActivePanelData();
-  }
-
-  private async saveAgentConfig() {
-    const client = this.client;
-    if (!client || !this.canCall("config.set", "operator.admin")) {
-      return;
-    }
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!(await this.context.runtimeConfig.save())) {
-      return;
-    }
-    await agents.refreshList();
-    if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
-      return;
-    }
-    resetToolsEffectiveState(this);
-    this.syncAgentState(agents);
-    this.ensureAgentIdentities();
     this.loadActivePanelData();
   }
 
@@ -932,6 +921,8 @@ class AgentsPage
     const channels = this.context.channels.state;
     const agentsState = this.context.agents.state;
     const selectedAgentId = this.agentsSelectedId;
+    const canEditIdentity = () =>
+      selectedAgentId === this.agentsSelectedId && this.canCall("agents.update", "operator.admin");
     const access = {
       canCreateAgent: this.canCall("openclaw.chat", "operator.admin"),
       canPatchConfig: this.canCall("config.patch", "operator.admin"),
@@ -1040,18 +1031,12 @@ class AgentsPage
               modelCatalogRetired: modelCatalog.retired,
               modelCatalogStatus: this.chatModelCatalogStatus,
               onIdentityFieldChange: (field, value) => {
-                if (
-                  selectedAgentId === this.agentsSelectedId &&
-                  this.canCall("agents.update", "operator.admin")
-                ) {
+                if (canEditIdentity()) {
                   setIdentityDraftField(this, field, value);
                 }
               },
               onIdentityAvatarSelect: (file) => {
-                if (
-                  selectedAgentId === this.agentsSelectedId &&
-                  this.canCall("agents.update", "operator.admin")
-                ) {
+                if (canEditIdentity()) {
                   selectIdentityAvatar(this, file, this.context.config);
                 }
               },
@@ -1109,7 +1094,7 @@ class AgentsPage
               navigateToAgentPanel(this.context, selectedAgentId, this.agentsPanel, panel),
             onConfigReload: () =>
               void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
-            onConfigSave: () => void this.saveAgentConfig(),
+            onConfigSave: () => void this.refreshAgents("save"),
             onOpenMemoryImport: () => this.context.navigate("memory-import"),
             onOpenMemorySettings: () => this.context.navigate("memory"),
             onOpenAgentDefaults: () => this.context.navigate("ai-agents"),

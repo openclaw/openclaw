@@ -10,7 +10,7 @@ import type {
   ShouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.runtime-types.js";
 import type { ShouldHandleTextCommands } from "../../auto-reply/commands-registry.runtime-types.js";
-import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type { DispatchReplyFromConfig as CoreDispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type {
   BuildMentionRegexes,
   MatchesMentionPatterns,
@@ -30,9 +30,13 @@ import type {
   RemoveChannelAllowFromStoreEntryForAccount,
   UpsertChannelPairingRequestForAccount,
 } from "../../pairing/pairing-store.types.js";
+import type { PublicReplyParams } from "../../plugin-sdk/reply-options.js";
 
 type DispatchReplyWithBufferedBlockDispatcher =
-  import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
+  import("../../plugin-sdk/reply-dispatch-runtime.js").DispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyFromConfig = (
+  params: PublicReplyParams<Parameters<CoreDispatchReplyFromConfig>[0]>,
+) => ReturnType<CoreDispatchReplyFromConfig>;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
 type RuntimeThreadBindingLifecycleRecord =
@@ -162,12 +166,12 @@ export type PluginRuntimeChannel = {
       resolveStable: typeof import("../../channels/message-access/runtime.js").resolveStableChannelIngressPolicy;
     };
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
+    run: typeof import("../../plugin-sdk/channel-inbound.js").runChannelInboundEvent;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/execution.js").runPreparedChannelTurn;
-    dispatch: typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn;
+    dispatch: typeof import("../../plugin-sdk/channel-inbound.js").dispatchChannelInboundTurn;
     /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
-    dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
+    dispatchReply: typeof import("../../plugin-sdk/channel-inbound.js").dispatchChannelInboundReply;
   };
   /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
   turn: PluginRuntimeChannel["inbound"];

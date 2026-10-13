@@ -174,10 +174,9 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     const active = state.sidebarLayout.columns.some((column) =>
       column.panels.some((panel) => panel.slot === "discussion"),
     );
-    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return {
       active,
-      label,
+      label: t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show"),
       onToggle: () =>
         active
           ? this.commitSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))

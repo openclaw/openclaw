@@ -5,7 +5,7 @@ import type {
 } from "../../gateway/session-transcript-read.types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
+import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -359,7 +359,7 @@ export function readRecentSessionTranscriptHistoryEventsFromProjection(
     );
   if (
     !projection.generation ||
-    hasSqlitePostCommitScope(projection.database.db) ||
+    hasUncommittedSqliteWrites(projection.database.db) ||
     projection.database.db.location() === null ||
     options.expectedReadWindow ||
     resolveSessionTranscriptReadFence(projection.resolved)

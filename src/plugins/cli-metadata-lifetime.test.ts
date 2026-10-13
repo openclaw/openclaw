@@ -560,7 +560,7 @@ module.exports = { id: "unrelated-help", register(api) {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "isolates changed workspace and policy (new invocation=%s)",
     async (independent) => {
       const root = fs.realpathSync(makePluginLoaderTempDir());

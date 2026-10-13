@@ -27,8 +27,10 @@ export const runtimeProcessEntrypoints = {
   computerHost: runtimeProcessEntrypoint("gateway/desktop/computer.worker"),
   imageProcessor: runtimeProcessEntrypoint("media/image-processor.worker"),
   fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
+  fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
   attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
   gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
+  gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
@@ -49,6 +51,7 @@ export const runtimeProcessEntrypoints = {
   sessionMessageRewriteDomain: runtimeProcessEntrypoint(
     "config/sessions/session-message-rewrite.worker",
   ),
+  sessionDiskBudget: runtimeProcessEntrypoint("config/sessions/disk-budget.worker"),
   sessionTranscriptStats: runtimeProcessEntrypoint(
     "config/sessions/session-transcript-stats.worker",
   ),
@@ -77,6 +80,7 @@ export const runtimeProcessEntrypoints = {
     "agents/embedded-agent-runner/provider-prompt-state.worker",
   ),
   updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
+  immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
   updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
   updateCandidateState: runtimeProcessEntrypoint("infra/update-candidate-state.worker"),
   doctorLint: runtimeProcessEntrypoint("commands/doctor-lint.worker"),

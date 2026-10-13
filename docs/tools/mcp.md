@@ -31,10 +31,13 @@ openclaw mcp doctor <name> --probe
 
 Saving a definition proves nothing about reachability — the check does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
-If a connected server exits or its connection must be replaced, its tools,
-resource utilities, and prompt utilities disappear from new discovery until
-reconnection and catalog loading succeed. Healthy servers remain available
-while the failed server recovers in the background.
+If a connected server exits or its connection must be replaced, OpenClaw keeps
+its last successfully listed tools and utilities in the session's model-facing
+catalog while recovery runs in the background. Connection diagnostics and tool
+call errors still report unavailability; retained schemas do not grant execution
+access. A successful listing replaces the catalog, including tools removed by
+the server. Explicit config changes, removals, and plugin reloads retire the
+changed runtime immediately; unchanged servers keep their catalogs.
 
 When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 

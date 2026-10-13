@@ -102,6 +102,7 @@ import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -118,10 +119,10 @@ export async function writeConfigFileFromContext(
     const original = options;
     options = {
       ...options,
-      assertConfigPathForWrite: () => {
-        sourceGuard();
-        original.assertConfigPathForWrite?.();
-      },
+      assertConfigPathForWrite: composeConfigWriteAssertions(
+        sourceGuard,
+        original.assertConfigPathForWrite,
+      ),
       beforeCommit: async () => {
         await original.beforeCommit?.();
         sourceGuard();

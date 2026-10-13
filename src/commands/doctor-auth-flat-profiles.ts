@@ -215,19 +215,12 @@ function extractProviderFromModelRef(modelRef: string): string | undefined {
 
 function collectLegacyConfigAuthProfileProviderHints(
   cfg: OpenClawConfig,
-): ReadonlyMap<string, string> {
-  const hints = new Map<string, string>();
-  const conflicted = new Set<string>();
+): ReadonlyMap<string, string | null> {
+  const hints = new Map<string, string | null>();
   const addHint = (profileId: string, provider: string): void => {
     const existing = hints.get(profileId);
-    if (existing && existing !== provider) {
-      hints.delete(profileId);
-      conflicted.add(profileId);
-      return;
-    }
-    if (!conflicted.has(profileId)) {
-      hints.set(profileId, provider);
-    }
+    // Ambiguous evidence stays ambiguous even if a later reference repeats one provider.
+    hints.set(profileId, existing === undefined || existing === provider ? provider : null);
   };
   const addModelHints = (models: unknown): void => {
     if (!isRecord(models)) {
@@ -329,6 +322,34 @@ function collectAuthProfileStateProfileIds(state: AuthProfileState): string[] {
   ];
 }
 
+function collectAuthOwnerProfileIds(store: unknown, state: unknown): Set<string> {
+  const profiles = isRecord(store) && isRecord(store.profiles) ? store.profiles : {};
+  return new Set([
+    ...Object.keys(profiles),
+    ...collectRawAuthRotationProfileIds(store),
+    ...collectRawAuthRotationProfileIds(state),
+  ]);
+}
+
+const CONFIG_AUTH_VALUE_FIELDS = {
+  api_key: ["key", "apiKey", "api_key"],
+  token: ["token"],
+} as const;
+
+function readConfigAuthAlias<T>(
+  raw: Record<string, unknown>,
+  fields: readonly string[],
+  read: (value: unknown) => T | null | undefined,
+): T | undefined {
+  for (const field of fields) {
+    const value = read(raw[field]);
+    if (value != null) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function inferLegacyConfigAuthProfileMode(
   raw: Record<string, unknown>,
 ): AuthProfileCredential["type"] | undefined {
@@ -336,23 +357,14 @@ function inferLegacyConfigAuthProfileMode(
   if (explicit === "api_key" || explicit === "token" || explicit === "oauth") {
     return explicit;
   }
-  if (
-    readNonEmptyString(raw.key) ||
-    readNonEmptyString(raw.apiKey) ||
-    readNonEmptyString(raw["api_key"]) ||
-    coerceSecretRef(raw.keyRef) ||
-    coerceSecretRef(raw.key) ||
-    coerceSecretRef(raw.apiKey) ||
-    coerceSecretRef(raw["api_key"])
-  ) {
-    return "api_key";
-  }
-  if (
-    readNonEmptyString(raw.token) ||
-    coerceSecretRef(raw.tokenRef) ||
-    coerceSecretRef(raw.token)
-  ) {
-    return "token";
+  for (const mode of ["api_key", "token"] as const) {
+    const fields = CONFIG_AUTH_VALUE_FIELDS[mode];
+    if (
+      readConfigAuthAlias(raw, fields, readNonEmptyString) ||
+      readConfigAuthAlias(raw, [`${fields[0]}Ref`, ...fields], coerceSecretRef)
+    ) {
+      return mode;
+    }
   }
   if (
     readNonEmptyString(raw.access) &&
@@ -390,24 +402,14 @@ function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileSto
     }
     const next: Record<string, unknown> = { ...raw, provider, mode };
     if (mode === "api_key" || mode === "token") {
-      const valueField = mode === "api_key" ? "key" : "token";
-      const refField = mode === "api_key" ? "keyRef" : "tokenRef";
-      const ref =
-        mode === "api_key"
-          ? (coerceSecretRef(raw.keyRef) ??
-            coerceSecretRef(raw.key) ??
-            coerceSecretRef(raw.apiKey) ??
-            coerceSecretRef(raw["api_key"]))
-          : (coerceSecretRef(raw.tokenRef) ?? coerceSecretRef(raw.token));
-      const value =
-        mode === "api_key"
-          ? (readNonEmptyString(raw.key) ??
-            readNonEmptyString(raw.apiKey) ??
-            readNonEmptyString(raw["api_key"]))
-          : readNonEmptyString(raw.token);
+      const fields = CONFIG_AUTH_VALUE_FIELDS[mode];
+      const valueField = fields[0];
+      const refField = `${valueField}Ref`;
+      const ref = readConfigAuthAlias(raw, [refField, ...fields], coerceSecretRef);
+      const value = readConfigAuthAlias(raw, fields, readNonEmptyString);
       if (ref) {
         next[refField] = ref;
-        for (const field of mode === "api_key" ? ["key", "apiKey", "api_key"] : ["token"]) {
+        for (const field of fields) {
           delete next[field];
         }
       } else if (value) {
@@ -899,15 +901,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         unresolvedSidecarProfileIds.size > 0
           ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
           : undefined;
-      const awsSdkMarkers =
-        isRecord(rawStore) && isRecord(rawStore.profiles)
-          ? readAwsSdkAuthProfileMarkers(candidate)
-          : null;
-      if (awsSdkMarkers && isRecord(rawStore)) {
-        removeAwsSdkProfileMarkers(
-          rawStore,
-          awsSdkMarkers.map((profile) => profile.profileId),
-        );
+      const rawProfiles =
+        isRecord(rawStore) && isRecord(rawStore.profiles) ? rawStore.profiles : undefined;
+      const awsSdkMarkers = rawProfiles ? readAwsSdkAuthProfileMarkers(candidate) : null;
+      if (rawProfiles && awsSdkMarkers) {
+        for (const { profileId } of awsSdkMarkers) {
+          delete rawProfiles[profileId];
+        }
       }
       const canonicalizedSecretRefs = normalizeLegacyAuthProfileFields(rawStore);
       const maybeCanonicalStore =
@@ -1032,16 +1032,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                   owner,
                 );
                 const loaded = loadPersistedAuthProfileStore(candidate.agentDir, { database });
+                const isMainStore =
+                  resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
+                  resolveSharedAuthStorePath(env);
                 const persistedStores = {
-                  isMainStore:
-                    resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
-                    resolveSharedAuthStorePath(env),
+                  isMainStore,
                   localStore: loaded,
-                  mainStore:
-                    resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
-                    resolveSharedAuthStorePath(env)
-                      ? loaded
-                      : loadPersistedSharedAuthProfileStore(env),
+                  mainStore: isMainStore ? loaded : loadPersistedSharedAuthProfileStore(env),
                 };
                 // A non-main store drops an OAuth credential the main store already
                 // owns at the same or newer expiry. That dedup is intentional, so
@@ -1232,15 +1229,6 @@ function readAwsSdkAuthProfileMarkers(
   return markers.length > 0 ? markers : null;
 }
 
-function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
-  if (!isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
-}
-
 function rewriteMappedAuthProfileRefs(
   config: OpenClawConfig,
   profileIdMap: ReadonlyMap<string, string>,
@@ -1355,12 +1343,13 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
   const env = params.env ?? process.env;
   const warnings: string[] = [];
   let incompleteCensus = false;
-  const candidates = listAuthProfileRepairCandidates(params.cfg, env, (pathname) => {
+  const warnUnavailable = (pathname: string) => {
     incompleteCensus = true;
     warnings.push(
       `Skipped auth-profile alias migration because ${shortenHomePath(pathname)} is unavailable.`,
     );
-  });
+  };
+  const candidates = listAuthProfileRepairCandidates(params.cfg, env, warnUnavailable);
   const stores: AuthAliasStoreSnapshot[] = [];
   const planned: Array<{
     databasePath: string;
@@ -1377,10 +1366,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
     try {
       identity = readDatabasePathIdentitySync(databasePath);
     } catch {
-      incompleteCensus = true;
-      warnings.push(
-        `Skipped auth-profile alias migration because ${shortenHomePath(databasePath)} is unavailable.`,
-      );
+      warnUnavailable(databasePath);
       continue;
     }
     const store = agentDir
@@ -1460,13 +1446,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
     if (target.canRenameAliases) {
       continue;
     }
-    const profiles =
-      isRecord(target.store) && isRecord(target.store.profiles) ? target.store.profiles : {};
-    const references = new Set([
-      ...Object.keys(profiles),
-      ...collectRawAuthRotationProfileIds(target.store),
-      ...collectRawAuthRotationProfileIds(target.state),
-    ]);
+    const references = collectAuthOwnerProfileIds(target.store, target.state);
     for (const [from, to] of profileIdMap) {
       if (!target.canReadRotationState || references.has(from) || references.has(to)) {
         profileIdMap.delete(from);
@@ -1525,13 +1505,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
     );
   }
   for (const target of planned) {
-    const profiles =
-      isRecord(target.store) && isRecord(target.store.profiles) ? target.store.profiles : {};
-    const occupied = new Set([
-      ...Object.keys(profiles),
-      ...collectRawAuthRotationProfileIds(target.store),
-      ...collectRawAuthRotationProfileIds(target.state),
-    ]);
+    const occupied = collectAuthOwnerProfileIds(target.store, target.state);
     for (const [from, to] of profileIdMap) {
       if (
         from !== to &&

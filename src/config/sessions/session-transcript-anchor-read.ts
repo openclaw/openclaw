@@ -1,18 +1,12 @@
 import path from "node:path";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
-  prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -22,20 +16,19 @@ import {
   type IncognitoSessionHistoryBinding,
 } from "./session-incognito-history-read.js";
 import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import {
+  prepareSessionTranscriptAnchorMessageReader,
   readSessionTranscriptAnchorFactsInDatabase,
-  type SessionTranscriptAnchorFacts,
   type SessionTranscriptAnchorSelection,
 } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
-import type { SessionTranscriptWorkerReadSource } from "./session-transcript-read-source.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  withSessionTranscriptReadSource,
+  type SessionTranscriptWorkerReadSource,
+} from "./session-transcript-read-source.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
 type AnchorScope = SessionTranscriptReadScope & { sessionKey: string };
 
@@ -48,6 +41,13 @@ export async function readSessionTranscriptAnchorsAsync(
   onRead?: (facts: SessionTranscriptAnchorFacts) => void,
   suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptAnchorFacts> {
+  const consume = (facts: SessionTranscriptAnchorFacts) => {
+    const consumed = onRead?.(facts);
+    if (isPromiseLike(consumed)) {
+      void Promise.resolve(consumed).catch(() => {});
+      throw new Error("Transcript anchor consumers must remain synchronous");
+    }
+  };
   const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
@@ -59,10 +59,33 @@ export async function readSessionTranscriptAnchorsAsync(
       authority,
       { type: "session.history.anchors", input: { ...selection, ...target } },
       signal,
-      onRead,
+      onRead ? consume : undefined,
     );
     authority.assertCurrent();
     return facts;
+  }
+  const selected =
+    selection.afterSeq === undefined &&
+    selection.includeMessagesForRunId === undefined &&
+    getOwnedSessionTranscriptReader(scope);
+  if (selected) {
+    return selected.withRead(
+      {
+        sessionKeys: [selected.sessionKey],
+        snapshotFields: [],
+        transcript: { ...selection, sessionKey: selected.sessionKey },
+      },
+      () => signal?.throwIfAborted(),
+      (read, assertCurrent) => {
+        assertCurrent();
+        const entry = read.entries.find((row) => row.sessionKey === selected.sessionKey)?.entry;
+        if (entry?.sessionId !== scope.sessionId || !read.transcript) {
+          throw new Error("Transcript anchors changed their admitted session");
+        }
+        consume(read.transcript);
+        return read.transcript;
+      },
+    );
   }
   const captured = {
     agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -74,8 +97,11 @@ export async function readSessionTranscriptAnchorsAsync(
   const request = {
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
+    includeMessagesForRunId: selection.includeMessagesForRunId,
     includeSession: selection.includeSession,
     includeHeader: selection.includeHeader,
+    includeWatermark: selection.includeWatermark,
+    includeMessagePresence: selection.includeMessagePresence,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
     replayValidation: selection.replayValidation && { ...selection.replayValidation },
@@ -85,68 +111,52 @@ export async function readSessionTranscriptAnchorsAsync(
     ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
-  if (
-    isIncognitoSessionKey(captured.sessionKey) ||
-    (captured.storePath && isIncognitoOpenClawAgentSqlitePath(captured.storePath, captured))
-  ) {
-    const resolved = resolveSqliteTranscriptScope(captured);
-    const database = getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolved));
-    // Process-held transcripts must never be reopened by a durable reader.
-    const facts = database
-      ? readOpenClawAgentDatabase(database, (reader) =>
-          readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request),
-        ).value
-      : empty;
-    onRead?.(facts);
-    return facts;
-  }
-  const storePath = captured.storePath ?? resolveOpenClawAgentSqlitePath(captured);
-  const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = captureSessionStoreCandidateIdentities(candidates);
-  const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
-  return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
-    const options = toDatabaseOptions(resolved);
-    const databasePath = resolveOpenClawAgentSqlitePath(options);
-    const identity = identities.get(assertSessionStoreReadCandidate(databasePath, candidates));
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      context.maintenanceScope?.assertAdmission();
-      context.admission.assertCurrent();
-      discovery.assertCurrent();
-      assertSessionStoreReadCandidate(databasePath, candidates);
-      const current = readDatabasePathIdentitySync(databasePath);
-      if (identity && (current.key !== identity.key || current.birthtime !== identity.birthtime)) {
-        throw new Error("Transcript anchors changed their captured database owner");
-      }
-    };
-    assertCurrent();
-    if (!identity) {
-      if (!readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
-        onRead?.(empty);
+  return withSessionTranscriptReadSource(
+    captured,
+    () => {
+      const resolved = resolveSqliteTranscriptScope(captured);
+      const options = toDatabaseOptions(resolved);
+      const database = getOpenClawAgentDatabaseIfOpen(options);
+      const read = (
+        readMessage?: Parameters<typeof readSessionTranscriptAnchorFactsInDatabase>[3],
+      ) => {
+        signal?.throwIfAborted();
+        if (getOpenClawAgentDatabaseIfOpen(options) !== database) {
+          throw new Error("Transcript anchors changed their captured native database owner");
+        }
+        // Process-held transcripts must never be reopened by a durable reader.
+        const facts = database
+          ? readOpenClawAgentDatabase(database, (reader) =>
+              readSessionTranscriptAnchorFactsInDatabase(reader, resolved, request, readMessage),
+            ).value
+          : empty;
+        consume(facts);
+        return facts;
+      };
+      return !database || request.includeMessagesForRunId === undefined
+        ? read()
+        : prepareSessionTranscriptAnchorMessageReader(request).then(read);
+    },
+    async (source) => {
+      if (!source.expectedIdentity) {
+        consume(empty);
         return empty;
       }
-      throw new Error("Transcript anchors changed their captured database owner");
-    }
-    if (!identity.key.startsWith("file:")) {
-      onRead?.(empty);
-      return empty;
-    }
-    return withSessionHistoryWorkerDatabase({ ...options, requestedPaths: [storePath] }, (owner) =>
-      readSessionTranscriptAnchorsFromSource(
+      return readSessionTranscriptAnchorsFromSource(
         {
-          scope: { ...captured, storePath: databasePath },
-          resolved,
-          owner,
-          expectedIdentity: identity,
-          assertCurrent,
+          ...source,
+          preparedReads: request.afterSeq === undefined ? source.preparedReads : undefined,
+          scope: { ...source.scope, sessionKey: captured.sessionKey },
         },
         request,
         signal,
-        onRead,
-      ),
-    );
-  });
+        onRead ? consume : undefined,
+      );
+    },
+    signal,
+    // Callback acceptance retains writer admission through reader failure and cleanup.
+    onRead ? targetDiscoveryLane : undefined,
+  );
 }
 
 /** Reuse a retained physical reader; final consumption keeps its writer FIFO and native witness. */

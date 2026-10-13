@@ -17,6 +17,10 @@ the Xcode requirements below.
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+  SwiftPM and Xcode generate the Gateway protocol models with the first
+  supported Node on `PATH`, then `/opt/homebrew/bin/node` or
+  `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
+  resolve to the Node binary they launch.
 
 macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
 required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a

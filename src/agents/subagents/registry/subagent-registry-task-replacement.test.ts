@@ -28,6 +28,7 @@ import {
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -179,19 +180,14 @@ it.each(["transaction", "commit"] as const)(
       retainAttachmentsOnKeep: true,
     });
     const source = subagentRuns.get("lifecycle-predecessor")!;
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let rotated = false;
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage && !rotated) {
-            rotated = true;
-            rotateAgentEventLifecycleGeneration();
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (request.stage === stage && !rotated) {
+        rotated = true;
+        rotateAgentEventLifecycleGeneration();
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         replaceSubagentRunAfterSteerCore({
@@ -770,35 +766,29 @@ it.each([
       return result;
     };
     vi.spyOn(persistence, "mutateSubagentRuns").mockImplementation(observeMutation);
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-      (context, operation, options) =>
-        runWorker(
-          context,
-          (scope) =>
-            operation({
-              async execute(command, executeOptions) {
-                if (command.type === "subagents.persistChanges") {
-                  if (holdFirst) {
-                    holdFirst = false;
-                    firstEntered.resolve();
-                    await releaseFirst.promise;
-                  } else if (holdStamp) {
-                    holdStamp = false;
-                    if (lateCleanup) {
-                      const receipt = await scope.execute(command, executeOptions);
-                      entered.resolve();
-                      await release.promise;
-                      return receipt;
-                    }
-                    entered.resolve();
-                    await release.promise;
-                  }
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
+    probe.command(
+      stateWorker,
+      async (command, executeOptions, scope) => {
+        if (command.type === "subagents.persistChanges") {
+          if (holdFirst) {
+            holdFirst = false;
+            firstEntered.resolve();
+            await releaseFirst.promise;
+          } else if (holdStamp) {
+            holdStamp = false;
+            if (lateCleanup) {
+              const receipt = await scope.execute(command, executeOptions);
+              entered.resolve();
+              await release.promise;
+              return receipt;
+            }
+            entered.resolve();
+            await release.promise;
+          }
+        }
+        return scope.execute(command, executeOptions);
+      },
+      { original: runWorker },
     );
     await import("./subagent-registry.js");
     let firstWrite: Promise<void> | undefined;

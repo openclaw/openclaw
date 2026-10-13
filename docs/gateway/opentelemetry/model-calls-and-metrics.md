@@ -29,6 +29,11 @@ request latency separate from full-turn latency. OpenClaw's OTEL model-call
 metrics also include `openclaw.model_call.observation_unit`; the Prometheus
 model-call metrics expose the equivalent `observation_unit` label.
 
+Request-level telemetry also covers native background completions, including
+session titles, Activity recaps, and plugin `runtime.llm.complete` calls.
+Each request records a start and one completion or error with its duration;
+token and cost accounting remains separate in `model.usage`.
+
 ## Claude Code CLI model-call fidelity
 
 Claude Code CLI turns emit one synthetic, turn-level `openclaw.model.call`

@@ -1,14 +1,15 @@
 import { html, nothing, type ReactiveController } from "lit";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import {
-  cancelRoutePreload,
-  scheduleRoutePreload,
+  navigationIconForRoute,
+  titleForRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -17,12 +18,13 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
-import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
+import { isSidebarRouteActive, renderSidebarNavLink } from "./app-sidebar-nav-menus.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
   SidebarSessionMenuState,
 } from "./app-sidebar-session-types.ts";
+import { icons } from "./icons.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
@@ -157,6 +159,19 @@ export class SidebarMenusController implements ReactiveController {
     if (options.restoreFocus) {
       trigger?.focus();
     }
+  }
+
+  positionedMenuHandlers(menu: PositionedMenu) {
+    const position = this[`${menu}MenuPosition`];
+    const trigger = this[`${menu}MenuTrigger`];
+    return {
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus?: boolean) => {
+        if (this[`${menu}MenuPosition`] === position) {
+          this.closePositionedMenu(menu, { restoreFocus });
+        }
+      },
+    };
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -602,8 +617,9 @@ export class SidebarMenusController implements ReactiveController {
       isSessionRouteId(routeId) && routeSessionKey && context
         ? sessionNavigationTarget({ context, face: routeId, sessionKey: routeSessionKey })
         : null;
-    return renderSidebarNavRoute({
-      routeId,
+    return renderSidebarNavLink({
+      icon: icons[navigationIconForRoute(routeId)],
+      label: titleForRoute(routeId),
       href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
       active: isSidebarRouteActive(this.host.activeRouteId, routeId),
       onNavigate: () => {

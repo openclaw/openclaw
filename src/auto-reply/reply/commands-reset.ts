@@ -156,15 +156,12 @@ export async function maybeHandleResetCommand(
         return { shouldContinue: false };
       }
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: resetResult.ok
-          ? "✅ ACP session reset in place."
-          : "⚠️ ACP session reset failed. Check /acp status and try again.",
-        isStatusNotice: true,
-      },
-    };
+    return commandReply({
+      text: resetResult.ok
+        ? "✅ ACP session reset in place."
+        : "⚠️ ACP session reset failed. Check /acp status and try again.",
+      isStatusNotice: true,
+    });
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -176,17 +173,12 @@ export async function maybeHandleResetCommand(
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
   });
   if (!resetTail) {
-    return {
-      shouldContinue: false,
-      ...(hookResult.routedReply
-        ? {}
-        : {
-            reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-              isStatusNotice: true,
-            },
-          }),
-    };
+    return hookResult.routedReply
+      ? { shouldContinue: false }
+      : commandReply({
+          text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+          isStatusNotice: true,
+        });
   }
   return null;
 }

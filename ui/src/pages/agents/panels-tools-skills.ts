@@ -271,10 +271,7 @@ export function renderAgentTools(
   }
   const uniqueEffectiveTools = [...availableTools.values()];
   const visibleEffectiveTools = uniqueEffectiveTools.slice(0, MAX_RUNTIME_TOOL_CHIPS);
-  const hiddenEffectiveToolCount = Math.max(
-    0,
-    uniqueEffectiveTools.length - visibleEffectiveTools.length,
-  );
+  const hiddenEffectiveToolCount = uniqueEffectiveTools.length - visibleEffectiveTools.length;
   const sortSectionTools = (tools: AgentToolEntry[]) =>
     tools.toSorted(
       (left, right) =>
@@ -445,7 +442,7 @@ export function renderAgentTools(
               availableTools.has(normalizeToolPolicyName(tool.id)),
             ).length;
             const previewTools = sortedTools.slice(0, 4);
-            const remainingPreviewCount = Math.max(0, sortedTools.length - previewTools.length);
+            const remainingPreviewCount = sortedTools.length - previewTools.length;
             return html`
               <details class="agent-tools-group" @toggle=${handleToolGroupToggle}>
                 <summary class="agent-tools-group__summary">

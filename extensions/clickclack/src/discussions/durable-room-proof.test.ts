@@ -173,7 +173,10 @@ describe("ClickClack durable room real-behavior proof", () => {
         }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
       },
       agent: {
-        session: { getSessionEntry: vi.fn(() => sessionEntry) },
+        session: {
+          getSessionEntry: vi.fn(() => sessionEntry),
+          getSessionEntryAsync: vi.fn(async () => sessionEntry),
+        },
       },
       channel: {
         routing: {

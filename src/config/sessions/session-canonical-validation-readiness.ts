@@ -85,17 +85,13 @@ export async function certifySessionCanonicalValidationPending(
   let oversizedRows = 0;
   try {
     const readiness = database
-      ? runSqliteReadOperationSync(
-          database.db,
-          () => {
-            const initialize = !hasOpenClawAgentCanonicalValidation(database);
-            return {
-              initialize,
-              hasWork: initialize || hasPendingCanonicalSessionValidation(database),
-            };
-          },
-          "fresh",
-        )
+      ? runSqliteReadOperationSync(database.db, () => {
+          const initialize = !hasOpenClawAgentCanonicalValidation(database);
+          return {
+            initialize,
+            hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+          };
+        })
       : { initialize: pending!.initializeCanonicalValidation, hasWork: true };
     if (!readiness.hasWork) {
       return;

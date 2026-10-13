@@ -425,7 +425,7 @@ it("preserves a keyed replacement while an older worker reply is pending", async
 });
 
 it.each([false, true])(
-  "keeps an unrelated exact read while a lost category reply reconciles its changed row (structural pending: %s)",
+  "keeps an unrelated exact read while publishing a committed category after reply loss (structural pending: %s)",
   async (structuralPending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
@@ -455,8 +455,7 @@ it.each([false, true])(
       const capturedA = createDeferredCore();
       const repeatedA = createDeferredCore();
       const releaseA = createDeferredCore();
-      const capturedB = createDeferredCore();
-      const releaseB = createDeferredCore();
+      const releaseStructural = createDeferredCore();
       const pending: Promise<unknown>[] = [];
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
       let authority:
@@ -479,8 +478,7 @@ it.each([false, true])(
         const generation = projection.capture(b)?.generation;
         expect(generation).toBeDefined();
         if (structuralPending) {
-          // This unknown structural publication predates category.prepare, so the
-          // producer's later publication fence cannot know it invalidated lineage.
+          // A committed category delta cannot resolve another row's unknown lineage.
           sessionChanges.emit({ sessionKey: c.key, factsInvalidated: true });
           expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
@@ -497,11 +495,7 @@ it.each([false, true])(
             }
           }
           if (structuralPending && input.sessionKeys.includes(c.key)) {
-            await releaseB.promise;
-          }
-          if (input.sessionKeys.includes(b.key)) {
-            capturedB.resolve();
-            await releaseB.promise;
+            await releaseStructural.promise;
           }
           return reply;
         });
@@ -553,7 +547,7 @@ it.each([false, true])(
                         const result = await operation.execute(command, options);
                         if (command.type === "category.apply") {
                           applies++;
-                          // The real write has settled; expose the existing uncertainty path.
+                          // The native receipt survives losing the ordinary result message.
                           sql = observeHostDataSql();
                           throw failure;
                         }
@@ -571,18 +565,20 @@ it.each([false, true])(
           from: "Work",
         });
         pending.push(changing);
-        await expect(changing).rejects.toBe(failure);
+        await expect(changing).resolves.toBe(1);
+        if (structuralPending) {
+          expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
+        }
         const readingB = describe(b);
         pending.push(readingB);
-        await Promise.race([
-          capturedB.promise,
-          readingB.then(() => {
-            throw new Error("Changed row bypassed its held reconciliation");
-          }),
-        ]);
-        if (!structuralPending) {
-          expect.soft(projection.sharingTargetState(b)).toEqual({ status: "pending" });
-          expect.soft(() => resource!.assertCurrent()).toThrow("refreshing");
+        const changed = await readingB;
+        expect(changed).toMatchObject({ sessionId: b.key, label: "Changed row" });
+        expect(changed?.category).toBeUndefined();
+        expect(reads.filter((keys) => keys.includes(b.key))).toEqual([]);
+        expect(projection.sharingTargetState(b).status).toBe("ready");
+        expect(() => resource!.assertCurrent()).not.toThrow();
+        if (structuralPending) {
+          expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
         expect(resource.signal.aborted).toBe(false);
 
@@ -591,26 +587,21 @@ it.each([false, true])(
           readingA.then(() => "response"),
           repeatedA.promise.then(() => "unrelated row read again"),
         ]);
-        expect.soft(boundary).toBe(structuralPending ? "unrelated row read again" : "response");
-        releaseB.resolve();
+        expect.soft(boundary).toBe("response");
+        releaseStructural.resolve();
         expect(await readingA).toMatchObject({ sessionId: a.key, label: "Unrelated row" });
-        const changed = await readingB;
-        expect(changed).toMatchObject({ sessionId: b.key, label: "Changed row" });
-        expect(changed?.category).toBeUndefined();
         await projection.prepareMembership();
         expect(projection.sharingTargetState(b)).toMatchObject({ status: "ready" });
         expect(projection.capture(b)?.generation).toBe(generation);
         expect(() => resource!.assertCurrent()).not.toThrow();
         expect(resource.signal.aborted).toBe(false);
         expect(applies).toBe(1);
-        expect
-          .soft(reads.filter((keys) => keys.includes(a.key)))
-          .toEqual(structuralPending ? [[a.key], [a.key]] : [[a.key]]);
+        expect.soft(reads.filter((keys) => keys.includes(a.key))).toEqual([[a.key]]);
         expect(sql).toBeDefined();
         expect(sql!.queries).toEqual([]);
       } finally {
         releaseA.resolve();
-        releaseB.resolve();
+        releaseStructural.resolve();
         await Promise.allSettled(pending);
         resource?.release();
         authority?.release();
@@ -631,14 +622,13 @@ it.each([
   "membership revocation",
   "runtime stored facts",
   "invalidated presentation facts",
-  "unrelated stored row",
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
-    const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
+    const changesSibling = change === "captured sibling row";
     const requiresFreshRead = change === "membership revocation" || changesOwner;
     const scope = { agentId: "main", sessionKey: "agent:main:worker-fact-freshness" };
     const owner = ensureProfileForEmail("projection-owner@example.test");

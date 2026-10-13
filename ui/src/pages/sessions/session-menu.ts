@@ -2,17 +2,27 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
+import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
+import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   isPinnableUiSessionRow,
+  isSubagentSessionKey,
+  buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { canCopySessionMarkdown } from "../../lib/sessions/session-menu-navigation.ts";
+import {
+  canCopySessionMarkdown,
+  runSessionNavigationAction,
+} from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 
 type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
@@ -47,12 +57,27 @@ export function renderSessionManagementMenu(params: {
     <openclaw-session-menu
       .session=${{
         label: normalizeOptionalString(row.label) ?? row.key,
+        target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
+        isChild:
+          !isSubagentSessionKey(row.key) &&
+          Boolean(
+            resolveSidebarSessionParentKey(
+              row,
+              new Set([buildAgentMainSessionKey({ agentId: row.agentId ?? "main", mainKey })]),
+            ),
+          ),
+        hasChildren: hasSessionArchiveDescendants(
+          row,
+          context.sessions.state.result?.sessions ?? [],
+        ),
         pinned: row.pinned === true,
         pinnable,
         snoozedUntil: row.snoozedUntil ?? null,
         unread: row.unread === true,
         hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+        communication: row.communication,
+        effectiveCommunication: row.effectiveCommunication,
         archived: row.archived === true,
         archiving: context.sessions.archiveVisibility(row.key) === "pending",
         category: normalizeOptionalString(row.category) ?? null,
@@ -60,6 +85,7 @@ export function renderSessionManagementMenu(params: {
         color: normalizeOptionalString(row.color) ?? null,
         categoryClearReturnsToGroups: false,
       }}
+      .compact=${isMobileNavLayout()}
       .anchor=${params.menu}
       .trigger=${params.trigger}
       .disabled=${params.disabled}
@@ -89,4 +115,37 @@ export function renderSessionManagementMenu(params: {
       }}
     ></openclaw-session-menu>
   `;
+}
+
+/** Consume navigation here; the caller owns the remaining management actions. */
+export function handleSessionManagementNavigationAction(
+  action: SessionsPageMenuAction,
+  params: { context: ApplicationContext; row: GatewaySessionRow; isCurrent: () => boolean },
+) {
+  const { context, row, isCurrent } = params;
+  switch (action.kind) {
+    case "open-pr":
+      openExternalUrlSafe(action.url);
+      return undefined;
+    case "open-in":
+      openEditor(action.editor, action.path);
+      return undefined;
+    case "copy-session-id":
+    case "copy-session-link":
+    case "copy-session-preview-link":
+    case "copy-markdown":
+    case "open-new-tab":
+    case "open-new-window":
+    case "split-right":
+    case "split-below":
+      void runSessionNavigationAction(action.kind, {
+        context,
+        session: row,
+        agentId: row.agentId,
+        isCurrent,
+      });
+      return undefined;
+    default:
+      return action;
+  }
 }

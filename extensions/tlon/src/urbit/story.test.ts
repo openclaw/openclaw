@@ -85,6 +85,18 @@ describe("markdownToStory inline formatting", () => {
       inline: [{ ship: "~zod" }, " ", { link: { href: "https://example.com", content: "site" } }],
     },
     {
+      markdown: "See [math](https://en.wikipedia.org/wiki/Function_(mathematics))!",
+      inline: [
+        "See ",
+        { link: { href: "https://en.wikipedia.org/wiki/Function_(mathematics)", content: "math" } },
+        "!",
+      ],
+    },
+    {
+      markdown: "[nested](https://example.com/a(b(c(d)e)f))",
+      inline: [{ link: { href: "https://example.com/a(b(c(d)e)f)", content: "nested" } }],
+    },
+    {
       markdown: "https://example.com",
       inline: [{ link: { href: "https://example.com", content: "https://example.com" } }],
     },
@@ -93,11 +105,15 @@ describe("markdownToStory inline formatting", () => {
     expect(markdownToStory(markdown)).toEqual([{ inline }]);
   });
 
-  it("hoists an image at the start of an inline run", () => {
-    expect(markdownToStory("![diagram](https://example.com/diagram.png)")).toEqual([
+  it.each([
+    "https://example.com/diagram.png",
+    "https://example.com/diagram_(final).png",
+    "https://example.com/a(b(c(d)e)f).png",
+  ])("hoists an image with its complete destination %s", (url) => {
+    expect(markdownToStory(`![diagram](${url})`)).toEqual([
       {
         block: {
-          image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+          image: { src: url, alt: "diagram", height: 0, width: 0 },
         },
       },
     ]);

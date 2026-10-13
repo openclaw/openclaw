@@ -447,6 +447,8 @@ export function finalizeCronFailureNotifications(
     };
     completionStatus: CronCompletionStatus;
     autoDisableNotificationOwnsFailure: boolean;
+    /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
+    pendingTransientRetry?: boolean;
     replay?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
@@ -460,7 +462,11 @@ export function finalizeCronFailureNotifications(
   if (params.replay) {
     return;
   }
-  if (params.result.status === "error" && !params.autoDisableNotificationOwnsFailure) {
+  if (
+    params.result.status === "error" &&
+    !params.autoDisableNotificationOwnsFailure &&
+    !params.pendingTransientRetry
+  ) {
     maybeEmitFailureAlert(state, {
       job: params.job,
       alertConfig: params.alertConfig,

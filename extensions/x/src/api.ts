@@ -527,6 +527,45 @@ export function createXApiClient(options: {
         Math.max(10, Math.min(Math.floor(params.maxPosts), 100)),
         params.signal,
       ),
+    async getUsersByUsernames(
+      usernames: string[],
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser[]> {
+      const handles = usernames.map((username) => username.replace(/^@/, ""));
+      if (
+        !handles.length ||
+        handles.length > 100 ||
+        handles.some((handle) => !/^[A-Za-z0-9_]{1,15}$/.test(handle))
+      ) {
+        throw new Error("X user lookup requires 1–100 valid usernames");
+      }
+      const query = new URLSearchParams({
+        usernames: handles.join(","),
+        "user.fields": "id,username,name",
+      });
+      return request(`/2/users/by?${query}`, {
+        signal,
+        assertActive,
+        billing: {
+          maximum: handles.length * X_USER_READ_MICRO_USD,
+          actual: (value) => xReadCost(value, "users"),
+          parse: (value) => {
+            const row = record(value);
+            if (!row || (row.data !== undefined && !Array.isArray(row.data))) {
+              throw new Error("X API returned an invalid users response");
+            }
+            return (row.data ?? []).map((entry: unknown) => {
+              const user = parseUser(entry);
+              if (!user || !/^[A-Za-z0-9_]{1,15}$/.test(user.username)) {
+                throw new Error("X API returned an invalid user");
+              }
+              return user;
+            });
+          },
+        },
+      });
+    },
     async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
       const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import {
   isOpenClawDeliveryMirrorAssistantMessage,
@@ -25,24 +26,38 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
+import {
+  readActiveTranscriptEntryAnchorInTransaction,
+  readTranscriptMessageAppendMetadataInTransaction,
+} from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
 } from "./session-accessor.sqlite-transcript-parent.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import {
+  readTranscriptAppendPostimage,
+  retainTranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
 
 export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
+
+type TranscriptMessageCommit<TMessage> = {
+  result: TranscriptMessageAppendResult<TMessage>;
+  visibleTailEntryId?: string;
+};
 
 class TranscriptTurnAdmissionConflictError extends Error {
   constructor(idempotencyKey: string) {
@@ -149,7 +164,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
-): TranscriptMessageAppendResult<TMessage> | undefined {
+): TranscriptMessageCommit<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   // Accepted input already owns its hook and redaction decision. A host-prepared
   // candidate must never replace those bytes during promotion or terminal replay.
@@ -195,15 +210,17 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
     return {
-      appended: false as const,
-      ...(anchor ? { anchor } : {}),
-      effectiveParentId:
-        !pending && anchor
-          ? anchor.effectiveParentId
-          : (readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)
-              ?.parentId ?? null),
-      message: found.message as TMessage,
-      messageId: found.messageId,
+      result: {
+        appended: false as const,
+        ...(anchor ? { anchor } : {}),
+        effectiveParentId:
+          !pending && anchor
+            ? anchor.effectiveParentId
+            : (readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)
+                ?.parentId ?? null),
+        message: found.message as TMessage,
+        messageId: found.messageId,
+      },
     };
   };
   const idempotencyKey = readMessageIdempotencyKey(options.message);
@@ -243,6 +260,18 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       : options.message;
   if (prepared === undefined) {
     return undefined;
+  }
+
+  if (!pending && options.expectedTranscript) {
+    const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+    const expected = options.expectedTranscript;
+    if (
+      current.generation !== expected.generation ||
+      current.rawSeq !== expected.rawSeq ||
+      current.updatedAt !== expected.updatedAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
+    }
   }
 
   const messageId =
@@ -306,7 +335,14 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     storagePreparation?.persistedMessage ??
     // SAFETY: Receipt custody comes from this event's exact committed JSON after storage normalization.
     (JSON.parse(appended) as typeof event).message;
-  const anchor = readAnchor({ message: persistedMessage, messageId });
+  const metadata = readTranscriptMessageAppendMetadataInTransaction({
+    database,
+    resolved,
+    entryId: messageId,
+    message: persistedMessage,
+  });
+  const { anchor } = metadata;
+  const revision = readSqliteNativeMutationRevision(database.db);
   if (pending) {
     if (pending.stageRelocation) {
       pending.stageRelocation(messageId);
@@ -314,11 +350,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       consumeSessionPendingInput(database, pending);
     }
   }
-  return {
-    appended: true,
-    ...(anchor ? { anchor } : {}),
-    effectiveParentId: parentId ?? null,
-    message: persistedMessage,
-    messageId,
-  };
+  return retainTranscriptAppendPostimage(
+    {
+      result: {
+        appended: true,
+        ...(anchor ? { anchor } : {}),
+        effectiveParentId: parentId ?? null,
+        message: persistedMessage,
+        messageId,
+      },
+      ...(metadata.visibleTailEntryId !== undefined &&
+      revision !== undefined &&
+      readSqliteNativeMutationRevision(database.db) === revision
+        ? { visibleTailEntryId: metadata.visibleTailEntryId }
+        : {}),
+    },
+    readTranscriptAppendPostimage(metadata),
+  );
 }

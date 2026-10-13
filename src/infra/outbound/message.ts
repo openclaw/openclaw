@@ -30,6 +30,8 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  loadMessageGatewayRuntime,
+  resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
@@ -47,12 +49,6 @@ const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
 const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
-);
-
-// Keep config/runtime loading lazy so importing message helpers does not
-// bootstrap plugin registries or gateway clients.
-const loadMessageGatewayRuntime = createLazyRuntimeModule(
-  () => import("./message.gateway.runtime.js"),
 );
 
 type MessageSendParams = Pick<
@@ -232,14 +228,6 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   }
   const { getRuntimeConfig } = await loadMessageConfigRuntime();
   return getRuntimeConfig();
-}
-
-async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
-  if (idempotencyKey) {
-    return idempotencyKey;
-  }
-  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
-  return randomIdempotencyKey();
 }
 
 function resolveDirectMessageTarget(

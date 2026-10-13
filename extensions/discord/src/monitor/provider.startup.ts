@@ -199,12 +199,15 @@ export function registerDiscordMonitorListeners(params: {
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
 }) {
-  for (const listener of [
+  const register = (...listeners: object[]) => {
+    for (const listener of listeners) {
+      registerDiscordListener(params.client.listeners, listener);
+    }
+  };
+  register(
     new DiscordInteractionListener(params.logger, params.trackInboundEvent),
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
-  ]) {
-    registerDiscordListener(params.client.listeners, listener);
-  }
+  );
   const listenerOptions = {
     readPolicy: params.readPolicy,
     cfg: params.cfg,
@@ -217,7 +220,7 @@ export function registerDiscordMonitorListeners(params: {
     ...listenerOptions,
     groupPolicy: params.groupPolicy,
   });
-  registerDiscordListener(params.client.listeners, guildJoinListener);
+  register(guildJoinListener);
 
   const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
     ...listenerOptions,
@@ -231,32 +234,26 @@ export function registerDiscordMonitorListeners(params: {
     allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
     onEvent: params.trackInboundEvent,
   };
-  for (const listener of [
+  register(
     new DiscordReactionListener(reactionListenerOptions),
     new DiscordReactionRemoveListener(reactionListenerOptions),
-  ]) {
-    registerDiscordListener(params.client.listeners, listener);
-  }
+  );
   const threadUpdateListener = new DiscordThreadUpdateListener(params.cfg, params.logger);
-  for (const listener of [
+  register(
     threadUpdateListener,
     new DiscordThreadReadyListener(threadUpdateListener),
     new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
-  ]) {
-    registerDiscordListener(params.client.listeners, listener);
-  }
+  );
 
   let presenceListener: DiscordPresenceListener | undefined;
   if (params.discordConfig.intents?.presence) {
     presenceListener = new DiscordPresenceListener(listenerOptions);
-    for (const listener of [
+    register(
       presenceListener,
       new DiscordPresenceGuildCreateListener(presenceListener),
       new DiscordPresenceGuildDeleteListener(presenceListener),
       new DiscordPresenceReadyListener(presenceListener),
-    ]) {
-      registerDiscordListener(params.client.listeners, listener);
-    }
+    );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
   return async () => {

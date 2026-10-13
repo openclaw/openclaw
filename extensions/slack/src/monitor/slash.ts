@@ -534,7 +534,7 @@ export function createSlackCommandHandler(params: {
         if (p.threadTs) {
           if (p.sessionTarget) {
             resolvedSlashRoute = p.sessionTarget;
-            isCurrentSession = captureSlackSessionTargetGuard(
+            isCurrentSession = await captureSlackSessionTargetGuard(
               ctx,
               p.sessionTarget,
               p.isSessionTargetCurrent,

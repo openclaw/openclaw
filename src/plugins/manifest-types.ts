@@ -23,6 +23,7 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  icons?: Record<string, string>;
   hats?: Record<string, string>;
   critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };

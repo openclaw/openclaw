@@ -469,6 +469,58 @@ describe("terminal resolution", () => {
     });
   });
 
+  it("keeps a prepared answer when a later assistant message is reasoning-only", async () => {
+    const answerText = "The operation completed successfully.";
+    const answer = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: answerText }],
+    });
+    const reasoningOnly = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "The earlier answer is complete.",
+          thinkingSignature: JSON.stringify({ id: "rs_retained", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = {
+      ...makeEmbeddedRunnerAttempt({
+        assistantTexts: [answerText],
+        messagesSnapshot: [
+          { role: "user", content: "Run the operation.", timestamp: 0 },
+          answer,
+          reasoningOnly,
+        ],
+        lastAssistant: reasoningOnly,
+        currentAttemptAssistant: reasoningOnly,
+        toolMetas: [
+          { toolName: "write", replaySafe: false },
+          { toolName: "exec", replaySafe: false },
+        ],
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      }),
+      keptAnswer: { assistant: answer, messageIndex: 1 },
+    };
+
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: reasoningOnly,
+        payloadsWithToolMedia: [{ text: answerText }],
+        finalAssistantVisibleText: answerText,
+        finalAssistantRawText: answerText,
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: answerText }]);
+    expect(resolved.result.meta.error).toBeUndefined();
+  });
+
   it("suppresses duplicate user persistence when retrying a missing assistant", async () => {
     const activePromptPersisted = true;
     const expectedSuppression = true;

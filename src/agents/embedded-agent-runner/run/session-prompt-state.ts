@@ -7,6 +7,7 @@ import type { ContextEngineSessionTarget } from "../../../context-engine/types.j
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CustomMessage } from "../../sessions/messages.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
@@ -122,7 +123,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
-  if (params.pluginRuntimeRefreshContinuation) {
+  // An outer model fallback starts a fresh invocation, but its retry instructions
+  // cannot recapture the original user projection after that turn has dispatched.
+  const dispatchedFallback =
+    params.modelRoutingProvenance?.stage === "fallback" &&
+    params.userTurnTranscriptRecorder !== undefined &&
+    getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder)?.sentToProvider() ===
+      true;
+  if (params.pluginRuntimeRefreshContinuation || dispatchedFallback) {
     activateInternalPrompt(params.prompt);
   }
   const activateCompactionContinuation = (instruction: string) => {

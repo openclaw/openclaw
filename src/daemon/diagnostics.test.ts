@@ -30,6 +30,24 @@ function makeTempStateDir(): string {
 }
 
 describe("readLastGatewayErrorLine", () => {
+  it.each(["darwin", "linux"] as const)(
+    "preserves startup failure evidence after routine shutdown messages on %s",
+    async (platform) => {
+      const env = { HOME: makeTempStateDir(), OPENCLAW_STATE_DIR: makeTempStateDir() };
+      const logs =
+        platform === "darwin" ? resolveGatewaySupervisorLogPaths(env) : resolveGatewayLogPaths(env);
+      fs.mkdirSync(logs.logDir, { recursive: true });
+      const failure = "2026-01-01T12:00:00Z Gateway failed to start: Tailscale is stopped.";
+      fs.writeFileSync(
+        logs.stdoutPath,
+        `${failure}\n[state/agent-db] agent database clean-close receipt: active-leases\n`,
+        "utf8",
+      );
+
+      await expect(readLastGatewayErrorLine(env, { platform })).resolves.toBe(failure);
+    },
+  );
+
   it("reads the launchd supervisor log instead of a state-dir stderr file on darwin", async () => {
     const stateDir = makeTempStateDir();
     const homeDir = makeTempStateDir();
@@ -39,10 +57,10 @@ describe("readLastGatewayErrorLine", () => {
     fs.mkdirSync(stateLogs.logDir, { recursive: true });
     fs.mkdirSync(launchdLogs.logDir, { recursive: true });
     fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");
-    fs.writeFileSync(launchdLogs.stdoutPath, "gateway stdout current\n", "utf8");
+    fs.writeFileSync(launchdLogs.stdoutPath, "Gateway failed to start: current failure\n", "utf8");
 
     await expect(readLastGatewayErrorLine(env, { platform: "darwin" })).resolves.toBe(
-      "gateway stdout current",
+      "Gateway failed to start: current failure",
     );
   });
 
@@ -80,9 +98,7 @@ describe("readLastGatewayErrorLine", () => {
       "utf8",
     );
 
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "gateway stdout current",
-    );
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
   });
 
   it("ignores a matching partial line at the bounded tail boundary", async () => {
@@ -98,9 +114,7 @@ describe("readLastGatewayErrorLine", () => {
       "utf8",
     );
 
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "gateway stdout current",
-    );
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
   });
 
   it("fills short positional reads before decoding the tail", async () => {
@@ -143,7 +157,7 @@ describe("readLastGatewayErrorLine", () => {
     );
   });
 
-  it("does not return a generic log tail when a pattern match is required", async () => {
+  it("does not label routine log output as an error", async () => {
     const stateDir = makeTempStateDir();
     const homeDir = makeTempStateDir();
     const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
@@ -152,8 +166,6 @@ describe("readLastGatewayErrorLine", () => {
     fs.writeFileSync(stateLogs.stdoutPath, "gateway stdout current\n", "utf8");
     fs.writeFileSync(stateLogs.stderrPath, "routine gateway stderr\n", "utf8");
 
-    await expect(
-      readLastGatewayErrorLine(env, { platform: "linux", requirePatternMatch: true }),
-    ).resolves.toBeNull();
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
   });
 });

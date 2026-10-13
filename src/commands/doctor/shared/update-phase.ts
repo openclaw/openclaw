@@ -12,6 +12,13 @@ export const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 export const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
   "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
+/**
+ * Set by an updater that runs optional Doctor inspections with `doctor --lint`
+ * after the restarted Gateway is ready. Shipped updaters never run them, so
+ * Doctor defers them out of the stopped window only when this marker is set.
+ */
+export const UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV =
+  "OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS";
 
 /** Share the post-swap discovery context through planning and final publication. */
 export function resolvePostCoreConvergenceEnv(

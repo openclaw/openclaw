@@ -159,7 +159,11 @@ describe("chat metadata store", () => {
   );
 
   it("revalidates compact commands by revision without repeating session or account reads", async () => {
-    const commands = { ...metadata("status"), revision: "commands-1" };
+    const commands = {
+      ...metadata("status"),
+      revision: "commands-1",
+      requiredWorkerInferenceProfileId: "worker-profile",
+    };
     const scope = { agentId: "main", sessionKey: "agent:main:saved" };
     const legacy = {
       ...commands,

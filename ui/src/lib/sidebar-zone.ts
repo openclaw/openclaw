@@ -35,16 +35,10 @@ export function reconcileSidebarZone(
       continue;
     }
     const canonicalKey = serializeSidebarEntry(entry);
-    if (seen.has(canonicalKey)) {
-      continue;
-    }
-    if (entry.type === "route" && !validRouteSet.has(entry.route)) {
-      continue;
-    }
     if (
-      entry.type === "session" &&
-      !pinnedKeys.has(entry.key) &&
-      knownUnpinnedKeys.has(entry.key)
+      seen.has(canonicalKey) ||
+      (entry.type === "route" && !validRouteSet.has(entry.route)) ||
+      (entry.type === "session" && !pinnedKeys.has(entry.key) && knownUnpinnedKeys.has(entry.key))
     ) {
       continue;
     }

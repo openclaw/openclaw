@@ -1,4 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
 import {
@@ -6,6 +5,7 @@ import {
   getWorkboardState,
   hasCurrentWorkboardCards,
   type WorkboardHost,
+  type WorkboardClientContext,
 } from "./runtime.ts";
 
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
@@ -100,13 +100,12 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
   }
 }
 
-export function configureWorkboardLiveRefresh(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-  refresh?: () => Promise<boolean>;
-  shouldDefer?: () => boolean;
-}): boolean {
+export function configureWorkboardLiveRefresh(
+  params: WorkboardClientContext & {
+    refresh?: () => Promise<boolean>;
+    shouldDefer?: () => boolean;
+  },
+): boolean {
   const runtime = getWorkboardRuntime(params.host);
   const requiresCanonicalReload = Boolean(
     params.client && runtime.liveRefreshEntry?.client !== params.client,

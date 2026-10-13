@@ -51,8 +51,9 @@ export class DetachedDiscussionBindingRetention {
     return retained;
   }
 
-  ensureCapacity(sessionKey: string): void {
-    while (!this.#store.hasCapacity(sessionKey)) {
+  async ensureCapacity(sessionKey: string): Promise<void> {
+    await this.#store.prepare();
+    while (!(await this.#store.hasCapacity(sessionKey))) {
       if (!this.#pruneOldest()) {
         throw new Error("ClickClack discussion binding capacity is exhausted");
       }
@@ -65,10 +66,7 @@ export class DetachedDiscussionBindingRetention {
       if (!oldest) {
         return false;
       }
-      const current = this.#store.get(oldest.sessionKey);
-      if (!current || current.detachedAt === undefined) {
-        continue;
-      }
+      const current = oldest.binding;
       const entry = this.#runtime.agent.session.getSessionEntry({
         sessionKey: oldest.sessionKey,
         readConsistency: "latest",

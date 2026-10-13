@@ -7,6 +7,7 @@ import {
   getPreparedModelRuntimeBorrowedSnapshot,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import { normalizeVerboseLevel } from "../../auto-reply/thinking.js";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -21,6 +22,8 @@ import {
   loadPublishedReplyDispatchRuntimeMock,
   loadModelCatalogOwnerMock,
   resolveAgentConfigMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
   makeCronSession,
   resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
@@ -86,6 +89,51 @@ async function setupPublishedGeneration(withAuth = false) {
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it("carries the admitted config into execution while preserving agent overrides", async () => {
+    const runtime = await import("./run-execution.runtime.js");
+    vi.mocked(runtime.normalizeVerboseLevel).mockImplementation(normalizeVerboseLevel);
+    const agent = {
+      model: "google/gemini-2.0-flash",
+      identity: { name: "Scheduled worker" },
+      verboseDefault: "on" as const,
+    };
+    const config = {
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+        entries: { main: agent },
+      },
+    };
+    const admittedConfig = structuredClone(config);
+    const selected = { provider: "google", model: "gemini-2.0-flash" };
+    resolveAgentConfigMock.mockReturnValue(agent);
+    resolveConfiguredModelRefMock.mockReturnValue(selected);
+    resolveAllowedModelRefMock.mockReturnValue({ ref: selected });
+    const acquire = acquirePreparedModelRuntimeMock.getMockImplementation()!;
+    acquirePreparedModelRuntimeMock.mockImplementationOnce(async (...args) => {
+      const lease = await acquire(...args);
+      return { ...lease, snapshot: { ...lease.snapshot, config: admittedConfig } };
+    });
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const generation = getPreparedModelRuntimePluginGeneration();
+      expect(generation).toBeDefined();
+      const borrowed = getPreparedModelRuntimeBorrowedSnapshot(generation!);
+      expect(params.config).toBe(borrowed?.config);
+      expect(params.config).toBe(admittedConfig);
+      return { payloads: [{ text: "summary done" }], meta: { agentMeta: {} } };
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ cfg: config, agentId: "main" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config).toBe(config);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ...selected, verboseLevel: "on" }),
+    );
+  });
+
   it("admits the published generation and keeps it active through embedded execution", async () => {
     const { config, metadataSnapshot, pluginGeneration, owner, dispatchRuntime, release } =
       await setupPublishedGeneration();
@@ -95,23 +143,43 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       routeVariants: [],
     };
     const readFullModelCatalog = vi.fn(() => fullCatalog);
-    loadPublishedReplyDispatchRuntimeMock.mockResolvedValue({
-      ...dispatchRuntime,
-      readFullModelCatalog,
+    const releaseDispatch = vi.fn(async () => {});
+    const dispatchLease = {
+      snapshot: { ...owner, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
+      pluginGeneration,
+      [Symbol.asyncDispose]: releaseDispatch,
+    };
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.(dispatchLease);
+      return { ...dispatchRuntime, readFullModelCatalog };
     });
     const selectedGeneration = {
       ...pluginGeneration,
       pluginRegistry: createEmptyPluginRegistry(),
     };
-    acquirePreparedModelRuntimeMock.mockResolvedValue({
-      snapshot: { config, metadataSnapshot, pluginRegistry: selectedGeneration.pluginRegistry },
-      pluginGeneration: selectedGeneration,
-      [Symbol.asyncDispose]: release,
+    const afterPreparation = createDeferred();
+    let borrowedAfterPreparation: Promise<unknown> | undefined;
+    acquirePreparedModelRuntimeMock.mockImplementation(async () => {
+      expect(getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration)).toBe(
+        dispatchLease.snapshot,
+      );
+      expect(releaseDispatch).not.toHaveBeenCalled();
+      borrowedAfterPreparation = afterPreparation.promise.then(() =>
+        getPreparedModelRuntimeBorrowedSnapshot(pluginGeneration),
+      );
+      return {
+        snapshot: { config, metadataSnapshot, pluginRegistry: selectedGeneration.pluginRegistry },
+        pluginGeneration: selectedGeneration,
+        [Symbol.asyncDispose]: release,
+      };
     });
     const afterRun = createDeferred();
     let borrowedAfterClose: Promise<unknown> | undefined;
     let embeddedRunGeneration: unknown = "not-captured";
     runEmbeddedAgentMock.mockImplementation(async (params) => {
+      expect(releaseDispatch).toHaveBeenCalledOnce();
+      afterPreparation.resolve();
+      await expect(borrowedAfterPreparation).resolves.toBeUndefined();
       expect(params.config).toEqual(acquirePreparedModelRuntimeMock.mock.calls[0]?.[0].config);
       embeddedRunGeneration = getPreparedModelRuntimePluginGeneration();
       borrowedAfterClose = afterRun.promise.then(() =>
@@ -257,6 +325,16 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("releases the prepared lease when continuation initialization fails", async () => {
+    const fixture = await setupPublishedGeneration();
+    const releaseDispatch = vi.fn(async () => {});
+    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+      onRuntimeLease?.({
+        snapshot: fixture.owner,
+        pluginGeneration: fixture.pluginGeneration,
+        [Symbol.asyncDispose]: releaseDispatch,
+      });
+      return fixture.dispatchRuntime;
+    });
     const state = await import("./run-session-state.js");
     const initialize = vi.spyOn(state, "createCronRunContinuationSession").mockReturnValue({
       initialize: async () => {
@@ -268,7 +346,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     });
     const release = vi.fn(async () => {});
     acquirePreparedModelRuntimeMock.mockResolvedValue({
-      snapshot: { pluginRegistry: createEmptyPluginRegistry() },
+      snapshot: { config: fixture.config, pluginRegistry: createEmptyPluginRegistry() },
       [Symbol.asyncDispose]: release,
     });
     try {
@@ -276,6 +354,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         "continuation fixture failed",
       );
       expect(release).toHaveBeenCalledOnce();
+      expect(releaseDispatch).toHaveBeenCalledOnce();
     } finally {
       initialize.mockRestore();
     }

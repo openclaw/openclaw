@@ -127,9 +127,16 @@ function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
 
 export function sessionIngestionSourceFromCorpus(
   entry: SessionTranscriptCorpusEntry,
+  purpose: "dreaming" | "backfill",
 ): SessionIngestionSource | null {
   const sessionPath = sessionPathFromCorpus(entry);
-  if (entry.sessionKind !== "interactive") {
+  if (
+    entry.sessionKind !== "interactive" ||
+    (purpose === "dreaming"
+      ? entry.artifactKind !== "active-session" ||
+        /\.checkpoint\..+\.jsonl$/i.test(path.basename(entry.sessionFile))
+      : entry.generatedByDreamingNarrative || entry.generatedByCronRun)
+  ) {
     return null;
   }
   const scope =

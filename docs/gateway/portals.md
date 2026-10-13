@@ -291,6 +291,8 @@ Portals proxy only the selected development server on the Gateway host or a node
 
 The proxy is ready, but the application is not listening on the selected port or its worker node is temporarily disconnected. The page retries automatically. Check the background process, confirm that the server honors `PORT`, and verify that the worker node is connected.
 
+WebSocket upgrades to an unavailable worker return the same 502 waiting response and close the connection. Reconnect after the application or worker is available again.
+
 ### The portal is not reachable from this browser
 
 Check the exact returned portal URL rather than substituting the Gateway host:

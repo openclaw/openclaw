@@ -2,6 +2,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -81,11 +83,11 @@ export function classifyApprovalRequestChannelRoute(params: {
   return "unbound";
 }
 
-/** Loads the persisted session entry referenced by an approval request, if still present. */
-export function resolvePersistedApprovalRequestSessionEntry(params: {
+/** Reads only the current session facts consumed by synchronous approval routing. */
+export function resolveApprovalRequestSessionDelivery(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-}) {
+}): Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery"> | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
@@ -93,6 +95,12 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  const binding = captureIncognitoSessionBinding({ storePath, sessionKey });
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    return binding.actor.sessions.readDelivery(sessionKey) ?? null;
+  }
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
@@ -101,18 +109,17 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   if (!entry) {
     return null;
   }
-  return { sessionKey, entry };
+  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
 }
 
 function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }) {
-  const persisted = resolvePersistedApprovalRequestSessionEntry(params);
-  if (!persisted) {
+  const entry = resolveApprovalRequestSessionDelivery(params);
+  if (!entry) {
     return null;
   }
-  const { entry } = persisted;
   const origin = sessionDeliveryOrigin(entry);
   const context = deliveryContextFromSession(entry);
   const channel = normalizeMessageChannel(context?.channel ?? origin?.provider);

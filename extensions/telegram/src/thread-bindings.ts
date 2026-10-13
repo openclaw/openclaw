@@ -89,12 +89,8 @@ async function initializeThreadBindingManager(
     DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   );
 
-  const loaded = await loadBindingsFromStore(accountId);
-  for (const entry of loaded) {
-    const key = resolveBindingKey({
-      accountId,
-      conversationId: entry.conversationId,
-    });
+  for (const entry of await loadBindingsFromStore(accountId)) {
+    const key = resolveBindingKey(entry);
     getThreadBindingsState().bindingsByAccountConversation.set(key, {
       ...entry,
       accountId,
@@ -528,38 +524,30 @@ export const setTelegramThreadBindingIdleTimeoutBySessionKeyAsync =
 export const setTelegramThreadBindingMaxAgeBySessionKeyAsync =
   createAsyncLifecycleSetter("maxAgeMs");
 
-function updateTelegramBindingsSynchronously(params: {
-  accountId?: string;
-  targetSessionKey: string;
-  update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
-}): TelegramThreadBindingRecord[] {
-  const manager = getTelegramThreadBindingManager(params.accountId);
-  if (!manager) {
-    return [];
-  }
-  const targetSessionKey = params.targetSessionKey.trim();
-  const now = Date.now();
-  const updated: TelegramThreadBindingRecord[] = [];
-  for (const entry of manager.listBySessionKey(targetSessionKey)) {
-    const next = manager.updateConversationSync(entry.conversationId, (current) =>
-      current.targetSessionKey === targetSessionKey ? params.update(current, now) : undefined,
-    );
-    if (next?.targetSessionKey === targetSessionKey) {
-      updated.push(next);
-    }
-  }
-  return updated;
-}
-
 function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleField>(
   field: Field,
 ) {
   return (params: TelegramThreadBindingLifecycleParams<Field>): TelegramThreadBindingRecord[] => {
     const value = resolveNonNegativeIntegerOption(params[field], 0);
-    return updateTelegramBindingsSynchronously({
-      ...params,
-      update: (entry, now) => ({ ...entry, [field]: value, lastActivityAt: now }),
-    });
+    const prepared = { ...params };
+    const manager = getTelegramThreadBindingManager(prepared.accountId);
+    if (!manager) {
+      return [];
+    }
+    const targetSessionKey = prepared.targetSessionKey.trim();
+    const now = Date.now();
+    const updated: TelegramThreadBindingRecord[] = [];
+    for (const entry of manager.listBySessionKey(targetSessionKey)) {
+      const next = manager.updateConversationSync(entry.conversationId, (current) =>
+        current.targetSessionKey === targetSessionKey
+          ? { ...current, [field]: value, lastActivityAt: now }
+          : undefined,
+      );
+      if (next?.targetSessionKey === targetSessionKey) {
+        updated.push(next);
+      }
+    }
+    return updated;
   };
 }
 

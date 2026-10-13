@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { runExtensionRelayDaemon } from "./relay-daemon.js";
 
@@ -12,6 +12,7 @@ const tempStateDirs: string[] = [];
 const savedStateDirEnv = process.env.OPENCLAW_STATE_DIR;
 
 afterEach(async () => {
+  vi.useRealTimers();
   if (savedStateDirEnv === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -23,25 +24,29 @@ afterEach(async () => {
 });
 
 /** Point readExtensionRelayToken() at an isolated credentials dir holding TOKEN. */
-async function stageRelaySecret(): Promise<void> {
+async function stageRelaySecret(token: string | null = TOKEN): Promise<void> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-daemon-"));
   tempStateDirs.push(stateDir);
   const credentialsDir = path.join(stateDir, "credentials");
   await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(path.join(credentialsDir, "browser-extension-relay.secret"), `${TOKEN}\n`, {
-    mode: 0o600,
-  });
+  if (token !== null) {
+    await fs.writeFile(path.join(credentialsDir, "browser-extension-relay.secret"), `${token}\n`, {
+      mode: 0o600,
+    });
+  }
   process.env.OPENCLAW_STATE_DIR = stateDir;
 }
 
 describe("runExtensionRelayDaemon", () => {
   it("refuses to start without a relay credential", async () => {
-    const run = await runExtensionRelayDaemon({ port: 0, readToken: () => null });
+    await stageRelaySecret(null);
+    const run = await runExtensionRelayDaemon({ port: 0 });
     expect(run.port).toBeNull();
     await expect(run.done).resolves.toBe("no-credential");
   });
 
   it("exits quietly when the relay port is already served", async () => {
+    await stageRelaySecret();
     const server = net.createServer();
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", () => resolve());
@@ -49,7 +54,7 @@ describe("runExtensionRelayDaemon", () => {
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     try {
-      const run = await runExtensionRelayDaemon({ port, readToken: () => TOKEN });
+      const run = await runExtensionRelayDaemon({ port });
       expect(run.port).toBeNull();
       await expect(run.done).resolves.toBe("port-in-use");
     } finally {
@@ -60,12 +65,9 @@ describe("runExtensionRelayDaemon", () => {
   });
 
   it("serves the relay until the idle grace elapses with no peers", async () => {
-    const run = await runExtensionRelayDaemon({
-      port: 0,
-      readToken: () => TOKEN,
-      idleExitMs: 60,
-      pollMs: 15,
-    });
+    await stageRelaySecret();
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const run = await runExtensionRelayDaemon({ port: 0 });
     expect(run.port).toBeGreaterThan(0);
     // The bound socket answers while the daemon is alive.
     const served = await new Promise<boolean>((resolve) => {
@@ -77,16 +79,13 @@ describe("runExtensionRelayDaemon", () => {
       socket.once("error", () => resolve(false));
     });
     expect(served).toBe(true);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     await expect(run.done).resolves.toBe("idle");
   });
 
   it("is v2-only by default: rejects a VALID legacy Bearer credential so a squatter cannot harvest the secret", async () => {
     await stageRelaySecret();
-    const run = await runExtensionRelayDaemon({
-      port: 0,
-      idleExitMs: 60_000,
-      pollMs: 60_000,
-    });
+    const run = await runExtensionRelayDaemon({ port: 0 });
     try {
       // Even the correct secret over legacy one-directional auth is refused
       // when allowLegacyAuth is not explicitly enabled.
@@ -105,8 +104,6 @@ describe("runExtensionRelayDaemon", () => {
     const run = await runExtensionRelayDaemon({
       port: 0,
       allowLegacyAuth: true,
-      idleExitMs: 60_000,
-      pollMs: 60_000,
     });
     try {
       // With legacy auth enabled the credential is accepted; the request then
@@ -122,12 +119,8 @@ describe("runExtensionRelayDaemon", () => {
   });
 
   it("stops on demand", async () => {
-    const run = await runExtensionRelayDaemon({
-      port: 0,
-      readToken: () => TOKEN,
-      idleExitMs: 60_000,
-      pollMs: 60_000,
-    });
+    await stageRelaySecret();
+    const run = await runExtensionRelayDaemon({ port: 0 });
     expect(run.port).toBeGreaterThan(0);
     run.stop();
     await expect(run.done).resolves.toBe("stopped");

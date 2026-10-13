@@ -7,6 +7,7 @@ import type {
   PluginStateNativeBindingDeletion,
   PluginStateNativeBindingPlan,
 } from "./plugin-state-native-binding.types.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   bindPluginStateEntry,
   createPluginStateError,
@@ -81,13 +82,15 @@ export function clearPluginStateNamespace(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string },
 ): void {
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .deleteFrom("plugin_state_entries")
       .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace),
+      .where("namespace", "=", params.namespace)
+      .returning(["plugin_id", "namespace", "entry_key"]),
   );
+  pluginStatePublication.stageDeletions(db, result.rows);
 }
 
 /** The caller owns the transaction containing admission, expiry cleanup, and insertion. */

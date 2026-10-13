@@ -7,7 +7,8 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { changedServerUiPrefs, selectThemeSettings } from "./server-prefs-intent.ts";
+import { resetServerUiPref, selectThemeSettings } from "./server-prefs-controls.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { extractServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
@@ -19,7 +20,6 @@ import {
   flushServerUiPrefs,
   pushServerUiPrefs,
   refreshProfileAppearancePrefs,
-  resetServerUiPref,
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
@@ -106,7 +106,7 @@ describe("profile-bound appearance preferences", () => {
     await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent", "ui.fontUi", "ui.fontChat", "ui.tabIcon"],
+      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
     });
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",

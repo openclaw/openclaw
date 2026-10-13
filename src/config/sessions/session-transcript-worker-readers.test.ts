@@ -89,3 +89,19 @@ it.each(["archives", "corpus", "targets"] as const)(
     }
   },
 );
+
+it("passes the cold metadata caller's signal to its reader task", async () => {
+  const input = { sessionId: "synthetic-cold-session", env: {} };
+  const signal = new AbortController().signal;
+  const readers = createSessionHistoryWorkerReaders(
+    async (prepare, _inputBytes, receive, receivedSignal) => {
+      expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
+      expect(receivedSignal).toBe(signal);
+      return receive({ kind: "cold-metadata", archive: undefined });
+    },
+  );
+  await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
+    kind: "cold-metadata",
+    archive: undefined,
+  });
+});

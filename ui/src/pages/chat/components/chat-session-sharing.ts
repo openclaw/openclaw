@@ -61,27 +61,6 @@ function sharingIcon(visibility: SessionVisibility): TemplateResult {
   return visibility === "shared" ? icons.users : icons.lock;
 }
 
-function renderMemberSkeletons() {
-  return html`
-    <div
-      class="chat-pane__sharing-members-loading"
-      role="status"
-      aria-busy="true"
-      aria-label=${t("common.loading")}
-    >
-      ${Array.from(
-        { length: 3 },
-        () => html`
-          <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
-            <span class="skeleton chat-pane__sharing-member-skeleton-icon"></span>
-            <span class="skeleton chat-pane__sharing-member-skeleton-label"></span>
-          </div>
-        `,
-      )}
-    </div>
-  `;
-}
-
 export function selectChatSessionSharingItem(
   props: ChatSessionSharingProps,
   value: string | undefined,
@@ -303,7 +282,24 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
             </div>
             ${
               props.state?.loading
-                ? renderMemberSkeletons()
+                ? html`
+                    <div
+                      class="chat-pane__sharing-members-loading"
+                      role="status"
+                      aria-busy="true"
+                      aria-label=${t("common.loading")}
+                    >
+                      ${Array.from(
+                        { length: 3 },
+                        () => html`
+                          <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
+                            <span class="skeleton chat-pane__sharing-member-skeleton-icon"></span>
+                            <span class="skeleton chat-pane__sharing-member-skeleton-label"></span>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  `
                 : identities.length > 0
                   ? searchablePeopleMenu(
                       identities.map((identity) => ({

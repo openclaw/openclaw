@@ -26,6 +26,7 @@ import {
   recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -101,7 +102,43 @@ it.each(["canonical", "shared"])(
         expect(detached.isPersisted()).toBe(false);
         expect(detached.buildSessionContext()).toEqual(expectedBounded);
         detached.appendMessage(makeUserMessage("detached only", 20));
-        await cold.reloadPersistedTranscriptAsync();
+        expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
+        // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
+        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        expect(warm.db.isOpen).toBe(true);
+        probes.forEach((probe) => probe.mockClear());
+        const retirementEntered = createDeferredCore();
+        const releaseRetirement = createDeferredCore();
+        let following: Promise<void> | undefined;
+        const waitForWriter = () => {
+          following ??= runOpenClawAgentWriteAdmission(
+            { agentId: database.agentId, path: database.path },
+            () => {},
+          );
+          retirementEntered.resolve();
+          return Promise.race([following, releaseRetirement.promise]);
+        };
+        const close = vi
+          .spyOn(historyLane.pool, "closeResources")
+          .mockImplementation(waitForWriter);
+        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+        const reloading = runOpenClawAgentWriteAdmission(
+          { agentId: database.agentId, path: database.path },
+          () => cold.reloadPersistedTranscriptAsync(),
+        );
+        try {
+          await Promise.race([
+            reloading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Manager reload cleanup waits on its own queued writer");
+            }),
+          ]);
+        } finally {
+          releaseRetirement.resolve();
+          await Promise.allSettled([reloading, following]);
+          close.mockRestore();
+          rotate.mockRestore();
+        }
         expect(cold.getCwd()).toBe("/runtime");
         expect(cold.getPersistedEntries()).toEqual(expected);
         const reader = prepareSessionTranscriptHydration(

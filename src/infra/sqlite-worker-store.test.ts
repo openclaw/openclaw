@@ -157,7 +157,9 @@ describe("SQLite worker store", () => {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "value"]));
+        expect(inlineReplies).toEqual(
+          values.map(() => ["databaseAdmissions", "id", "ok", "value"]),
+        );
         requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
@@ -754,7 +756,6 @@ describe("SQLite worker store", () => {
         }
         const [result] = await cleanup;
         expect(events.mock.calls.filter(([event]) => event === "error")).toEqual([]);
-        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
         if (reject) {
           expect(result).toEqual({
             status: "rejected",
@@ -767,6 +768,7 @@ describe("SQLite worker store", () => {
         } else {
           expect(result).toEqual({ status: "fulfilled", value: undefined });
         }
+        expect(await readFile(markerPath, "utf8")).toBe("native database closed");
       } finally {
         events.mockRestore();
         resumeReply?.();

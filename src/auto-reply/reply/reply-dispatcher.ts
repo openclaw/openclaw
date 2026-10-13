@@ -417,25 +417,24 @@ export function createReplyDispatcher(
         deliveryInput = deliverPayload
           ? replaceDispatchPayload(input, copyReplyPayloadMetadata(payload, deliverPayload))
           : null;
-        if (!deliveryInput) {
+        if (!deliveryInput && settleCustody) {
           // Record the intentional non-delivery before observers run so a
           // restart during observer work cannot replay a suppressed final.
-          if (settleCustody) {
-            await settleCustody("suppressed", ["prepared"]);
-          }
-          await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+          await settleCustody("suppressed", ["prepared"]);
         }
       }
-      if (settleCustody) {
+      if (deliveryInput && settleCustody) {
         // Claim direct-send custody before provider I/O; a non-prepared marker
         // means another owner already delivered, suppressed, or superseded this
         // final, so repeating the send would duplicate it.
         const claim = await settleCustody("queued", ["prepared"]);
         if (claim.state !== "queued") {
-          await notifyBeforeDeliverCancelled(payload, info);
-          return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
+          deliveryInput = null;
         }
+      }
+      if (!deliveryInput) {
+        await notifyBeforeDeliverCancelled(payload, info);
+        return { settlement: Promise.resolve<ReplyDispatchDeliveryOutcome>("cancelled") };
       }
       deliveryStarted = true;
       const deliveredPayload =

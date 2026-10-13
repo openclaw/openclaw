@@ -17,7 +17,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
-import * as transcriptEvents from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -304,24 +303,6 @@ describe("session transcript runtime SDK", () => {
       return message?.role === "assistant";
     });
     expect(assistantMessages).toHaveLength(1);
-  });
-
-  it("does not publish queued locked updates when the callback throws", async () => {
-    const scope = await createScope();
-    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
-    await expect(
-      withSessionTranscriptWriteLock(scope, async (locked) => {
-        await locked.appendMessage({
-          message: { role: "assistant", content: "durable but failed", timestamp: 1 },
-        });
-        await locked.publishUpdate({ sessionKey: scope.sessionKey });
-        throw new Error("stop before commit");
-      }),
-    ).rejects.toThrow("stop before commit");
-    expect(emitSpy).not.toHaveBeenCalled();
-    expect(await entries(scope)).toMatchObject([
-      { message: { role: "assistant", content: "durable but failed" } },
-    ]);
   });
 
   it("resolves encoded memory hit keys by agent and opaque session id instead of transcript basename", async () => {

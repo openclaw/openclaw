@@ -28,6 +28,7 @@ import {
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -93,7 +94,7 @@ type I18nRecoveryWiring = {
 
 type ShellServerPreferencesState = {
   runtime: { context: ApplicationContext };
-  reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+  shellGateway: ShellGatewayOwner;
 };
 
 type ShellLifecycle = Pick<ShellChromeEventState, "connectedCallback" | "disconnectedCallback">;
@@ -198,12 +199,12 @@ type ShellRouteCommitState = {
   runtime: { context: ApplicationContext };
   activeSessionKey: string;
   didConsiderNativeRouteRestore: boolean;
-  updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
+  shellNavigation: ShellNavigationOwner;
 };
 
 type ShellCustodianRouteState = {
   custodianMinimizeRequestId: number;
-  updateRouteState: (state: { routeId?: RouteId }) => void;
+  shellNavigation: ShellNavigationOwner;
 };
 
 type ShellSessionNavigationState = {
@@ -465,8 +466,10 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "agent:main:session-a";
     shell.didConsiderNativeRouteRestore = true;
 
-    shell.updateRouteState(selectShellRouteState(committedRouterState("cron", "/cron")));
-    shell.updateRouteState(
+    shell.shellNavigation.updateRouteState(
+      selectShellRouteState(committedRouterState("cron", "/cron")),
+    );
+    shell.shellNavigation.updateRouteState(
       selectShellRouteState(
         committedRouterState("chat", "/chat/main/session-b-12345678", {
           kind: "session",
@@ -485,11 +488,11 @@ describe("OpenClaw shell route session commits", () => {
       "openclaw-app-shell",
     ) as unknown as ShellCustodianRouteState;
 
-    shell.updateRouteState({ routeId: "custodian" });
-    shell.updateRouteState({});
+    shell.shellNavigation.updateRouteState({ routeId: "custodian" });
+    shell.shellNavigation.updateRouteState({});
     expect(shell.custodianMinimizeRequestId).toBe(0);
 
-    shell.updateRouteState({ routeId: "appearance" });
+    shell.shellNavigation.updateRouteState({ routeId: "appearance" });
     expect(shell.custodianMinimizeRequestId).toBe(1);
   });
 });
@@ -533,7 +536,7 @@ describe("OpenClaw shell server preferences", () => {
     ) as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
-    shell.reconcileServerUiPrefs(runtimeConfig);
+    shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
 
     expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
     expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));

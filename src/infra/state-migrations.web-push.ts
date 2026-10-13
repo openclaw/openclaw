@@ -158,15 +158,25 @@ function migrateIntoDatabase(params: {
     ({ db }) => {
       ensureWebPushSubscriptionBindingColumns(db);
       const webPushDb = getNodeSqliteKysely<WebPushDatabase>(db);
-      const expectedSubscriptions = new Map<string, WebPushSubscription>();
-      for (const [endpointHash, legacySubscription] of params.legacy.subscriptions) {
-        const existingRow = executeSqliteQueryTakeFirstSync(
+      const readSubscription = (endpointHash: string) =>
+        executeSqliteQueryTakeFirstSync(
           db,
           webPushDb
             .selectFrom("web_push_subscriptions")
             .selectAll()
             .where("endpoint_hash", "=", endpointHash),
         );
+      const readVapidKeys = () =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          webPushDb
+            .selectFrom("config_machine_state")
+            .select("value_json")
+            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
+        );
+      const expectedSubscriptions = new Map<string, WebPushSubscription>();
+      for (const [endpointHash, legacySubscription] of params.legacy.subscriptions) {
+        const existingRow = readSubscription(endpointHash);
         if (existingRow && existingRow.endpoint !== legacySubscription.endpoint) {
           throw new Error("Web Push endpoint hash collision during legacy import");
         }
@@ -209,13 +219,7 @@ function migrateIntoDatabase(params: {
 
       let expectedVapidKeys: VapidKeyPair | null = null;
       if (params.legacy.vapidKeys) {
-        const existingVapidRow = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("config_machine_state")
-            .select("value_json")
-            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
-        );
+        const existingVapidRow = readVapidKeys();
         if (existingVapidRow) {
           // SAFETY: The Web Push owner stores only VapidKeyPair objects under this key.
           const existingVapidKeys = JSON.parse(existingVapidRow.value_json) as VapidKeyPair;
@@ -241,25 +245,13 @@ function migrateIntoDatabase(params: {
       }
 
       for (const [endpointHash, expected] of expectedSubscriptions) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("web_push_subscriptions")
-            .selectAll()
-            .where("endpoint_hash", "=", endpointHash),
-        );
+        const row = readSubscription(endpointHash);
         if (!row || !webPushSubscriptionsEqual(webPushSubscriptionFromRow(row), expected)) {
           throw new Error("SQLite verification failed for a Web Push subscription");
         }
       }
       if (expectedVapidKeys) {
-        const row = executeSqliteQueryTakeFirstSync(
-          db,
-          webPushDb
-            .selectFrom("config_machine_state")
-            .select("value_json")
-            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
-        );
+        const row = readVapidKeys();
         // SAFETY: This transaction writes or validates this key as a VapidKeyPair above.
         const persisted = row ? (JSON.parse(row.value_json) as VapidKeyPair) : undefined;
         if (

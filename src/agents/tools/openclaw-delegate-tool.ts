@@ -30,9 +30,7 @@ const OpenClawDelegateOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema> & {
-  sessionId: string;
-};
+type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema>;
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()

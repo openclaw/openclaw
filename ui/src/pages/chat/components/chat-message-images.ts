@@ -238,28 +238,18 @@ class MessageImageResourceDirective extends AsyncDirective {
           : decodeFailed
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
-      if (reason === undefined) {
-        return this.present(this.renderImagePlaceholder(image));
-      }
       return this.present(
-        this.renderImageFrame(
-          image,
-          renderAssistantAttachmentStatusCard({
-            label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
-            badge: t("chat.attachments.unavailable"),
-            reason,
-            path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-            onAllow:
-              !decodeFailed && availability.status === "unavailable" && availability.canAllow
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
-                : undefined,
-            onRetry:
-              !decodeFailed && availability.status === "unavailable" && availability.recoverable
-                ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
-                : undefined,
-          }),
-          "unavailable",
-        ),
+        this.renderImagePlaceholder(image, reason, {
+          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+          onAllow:
+            !decodeFailed && availability.status === "unavailable" && availability.canAllow
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions, true)
+              : undefined,
+          onRetry:
+            !decodeFailed && availability.status === "unavailable" && availability.recoverable
+              ? () => retryAssistantAttachmentAvailability(source, subscriptionOptions)
+              : undefined,
+        }),
       );
     }
     if (!this.managed) {
@@ -408,7 +398,14 @@ class MessageImageResourceDirective extends AsyncDirective {
     >`;
   }
 
-  private renderImagePlaceholder(image: ImageBlock, reason?: string) {
+  private renderImagePlaceholder(
+    image: ImageBlock,
+    reason?: string,
+    actions?: Pick<
+      Parameters<typeof renderAssistantAttachmentStatusCard>[0],
+      "path" | "onAllow" | "onRetry"
+    >,
+  ) {
     if (reason === undefined) {
       return this.renderImageElement(image, undefined, this.options);
     }
@@ -432,6 +429,7 @@ class MessageImageResourceDirective extends AsyncDirective {
               this.refreshImage();
             }
           : undefined,
+        ...actions,
       }),
       "unavailable",
     );

@@ -516,6 +516,11 @@ export default definePluginEntry({
           return { text: `Error: ${urlResult.error ?? "Gateway URL unavailable."}` };
         }
         const authLabel = authLabelResult.label ?? "auth";
+        const setupRequest = {
+          url: urlResult.url,
+          allowFullAccess: authState.canIssueFullAccessSetup,
+          assertCurrent: assertOwnerCurrent,
+        };
 
         if (action === "qr") {
           const channel = ctx.channel;
@@ -536,11 +541,7 @@ export default definePluginEntry({
             }
           }
 
-          let payload = await issueSetupPayload({
-            url: urlResult.url,
-            allowFullAccess: authState.canIssueFullAccessSetup,
-            assertCurrent: assertOwnerCurrent,
-          });
+          let payload = await issueSetupPayload(setupRequest);
           let setupCode = encodeSetupCode(payload);
 
           const infoLines = buildQrInfoLines({
@@ -584,11 +585,7 @@ export default definePluginEntry({
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
+              payload = await issueSetupPayload(setupRequest);
               setupCode = encodeSetupCode(payload);
             } finally {
               if (qrFilePath) {
@@ -610,11 +607,7 @@ export default definePluginEntry({
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload({
-                url: urlResult.url,
-                allowFullAccess: authState.canIssueFullAccessSetup,
-                assertCurrent: assertOwnerCurrent,
-              });
+              payload = await issueSetupPayload(setupRequest);
               return {
                 text:
                   "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
@@ -651,11 +644,7 @@ export default definePluginEntry({
           normalizeOptionalString(ctx.from) ||
           normalizeOptionalString(ctx.to) ||
           "";
-        const payload = await issueSetupPayload({
-          url: urlResult.url,
-          allowFullAccess: authState.canIssueFullAccessSetup,
-          assertCurrent: assertOwnerCurrent,
-        });
+        const payload = await issueSetupPayload(setupRequest);
 
         if (channel === "telegram" && target) {
           try {

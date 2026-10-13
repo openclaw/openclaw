@@ -687,7 +687,7 @@ export async function swapStagedPackageInstall(
       // Retirement may remove the previous generation before its final acknowledgement.
       // From here, preserve the resumable receipt instead of starting compensation.
       activationRetirementStarted = true;
-      await activation.retire();
+      results.activationWarning(await activation.retireVerified());
     }
     const cleanup = activation
       ? []
@@ -709,10 +709,8 @@ export async function swapStagedPackageInstall(
       error instanceof FreeBsdPkgOwnershipError
     ) {
       if (activation && !retained && !liveMutationStarted) {
-        await retireRefusedPackageSwap(
-          activation,
-          error instanceof PackageUpdateActivationError ? error.cause : error,
-        );
+        const refusal = error instanceof PackageUpdateActivationError ? error.cause : error;
+        await retireRefusedPackageSwap(activation, refusal, results.activationWarning);
       } else if (!activation && !preparationCustody) {
         await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       }

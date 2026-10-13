@@ -1,11 +1,19 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   loadExactSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   addSubagentRunForTests,
@@ -16,6 +24,54 @@ import {
   makeRestartRecoveryRun as makeRunRecord,
   type useSubagentRestartRecoveryFixture,
 } from "./subagent-restart-recovery.test-support.js";
+
+export function registerAbsentChildRestoreOwnershipTest() {
+  it("settles a restarted actor-selected absent child without reading or recreating native storage", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      // Recovery runs after config admission; keep cold config bootstrap outside the SQL boundary.
+      setRuntimeConfigSnapshot({});
+      const childSessionKey = "agent:main:subagent:incognito-absent-restart";
+      const entry = makeRunRecord({
+        runId: "absent-actor-restart",
+        childSessionKey,
+        execution: { status: "interrupted", startedAt: 1 },
+      });
+      const warn = vi.fn();
+      await withIncognitoSessionBinding(
+        { kind: "absent", agentId: "main", env: state.env, authority: { assertCurrent() {} } },
+        async () => {
+          const sql = observeMainThreadSql();
+          try {
+            const result = await recoverInterruptedSubagentRow({
+              entry,
+              runId: entry.runId,
+              gatewayRuntime: undefined,
+              isCurrent: () => true,
+              warn,
+            });
+            expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
+            if (result.status !== "terminal") {
+              throw new Error("Expected absent actor recovery to settle the interrupted run");
+            }
+            expect(await result.recoveryCurrent?.prepare()).toBe(true);
+            expect(await result.sessionEffects?.isCurrent()).toBe(true);
+            sql.expectIdle();
+            expect(warn).not.toHaveBeenCalled();
+            expect(captureOpenClawAgentDatabaseExecution.listIncognito(state.env)).toEqual([]);
+            expect(
+              getOpenIncognitoAgentDatabase(
+                "main",
+                resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+              ),
+            ).toBeUndefined();
+          } finally {
+            sql.restore();
+          }
+        },
+      );
+    });
+  });
+}
 
 export function registerRawChildRestoreOwnershipTest(
   fixture: ReturnType<typeof useSubagentRestartRecoveryFixture>,

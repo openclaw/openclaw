@@ -330,7 +330,7 @@ export function listControlUiPluginActivations(
   });
 }
 
-/** Serves only snapshot bytes after scoped plugin-cookie or explicit read authentication. */
+/** Authorized content-addressed snapshots stay in the private browser cache across grant renewal. */
 export async function handleControlUiPluginAssetRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -341,6 +341,7 @@ export async function handleControlUiPluginAssetRequest(
   if (!pathname.startsWith(assetRoot)) {
     return false;
   }
+  res.setHeader("Cache-Control", "no-store");
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
@@ -411,7 +412,7 @@ export async function handleControlUiPluginAssetRequest(
   res.statusCode = 200;
   res.setHeader("Content-Type", asset.contentType);
   res.setHeader("Content-Length", asset.body.length);
-  res.setHeader("Cache-Control", "private, no-cache");
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.end(req.method === "HEAD" ? undefined : asset.body);
   return true;

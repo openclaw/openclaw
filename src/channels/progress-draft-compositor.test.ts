@@ -8,6 +8,7 @@ import {
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
+import { buildChannelProgressDraftLine } from "./streaming.js";
 
 function createProgress(
   config: ChannelStreamingProgressConfig = { label: "Shelling", toolProgress: true },
@@ -209,6 +210,41 @@ describe("channel progress draft compositor", () => {
       "Shelling\n\n💬 _Checking the workspace_\n• Exec\n💬 _Writing the patch next_",
     );
   });
+
+  it.each([
+    { toolIcons: true, exec: "🛠️ Exec: running" },
+    { toolIcons: undefined, exec: "• Exec: running" },
+  ])(
+    "prefixes generated tool rows with text glyphs when toolIcons is $toolIcons",
+    async ({ toolIcons, exec }) => {
+      const { progress, update } = createProgress(
+        { toolProgress: true, label: false, commentary: true },
+        {
+          toolIcons,
+          commentaryLinePrefix: "💬 ",
+          buildProgressEventLine: (input, options) => {
+            const line = buildChannelProgressDraftLine(input, options);
+            return line?.toolName === "read" ? { ...line, icon: "🧪" } : line;
+          },
+        },
+      );
+      await progress.pushCommentaryProgress("Checking");
+      await progress.pushItemEvent({
+        itemId: "exec-1",
+        kind: "tool",
+        name: "exec",
+        status: "running",
+      });
+      await progress.pushItemEvent({
+        itemId: "read-1",
+        kind: "tool",
+        name: "read",
+        status: "running",
+      });
+      await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+      expect(update.mock.lastCall?.[0]).toBe(`💬 _Checking_\n${exec}\n🧪 Read: running`);
+    },
+  );
 
   it("replaces and retracts only the addressed commentary item", async () => {
     const { progress, update } = createProgress({

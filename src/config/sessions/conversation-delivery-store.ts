@@ -18,6 +18,7 @@ import {
   pinConversationDatabaseScope,
   type ConversationRegistryScope,
 } from "./conversation-registry.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export { ConversationDeliveryInputError, ConversationDeliveryMissingError };
@@ -49,8 +50,11 @@ function readConversationDelivery(
   // Reads share writer admission so they cannot overtake an accepted transition.
   return deliveryResult(() =>
     runOpenClawAgentWriteAdmission(options, () =>
-      withSessionHistoryWorkerDatabase(options, (reader) =>
-        reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+      withSessionHistoryWorkerDatabase(
+        options,
+        (reader) => reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+        // Conflict cleanup retains this FIFO turn and must not drain independent readers.
+        targetDiscoveryLane,
       ),
     ),
   );

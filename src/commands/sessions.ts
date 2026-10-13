@@ -126,19 +126,15 @@ const formatTokensCell = (
 };
 
 const formatKindCell = (kind: SessionKind, rich: boolean) => {
-  if (!rich) {
-    return kind;
-  }
-  if (kind === "group") {
-    return theme.accentBright(kind);
-  }
-  if (kind === "global") {
-    return theme.warn(kind);
-  }
-  if (kind === "direct") {
-    return theme.accent(kind);
-  }
-  return theme.muted(kind);
+  const colors = {
+    group: theme.accentBright,
+    global: theme.warn,
+    direct: theme.accent,
+    cron: theme.muted,
+    "spawn-child": theme.muted,
+    unknown: theme.muted,
+  };
+  return colorize(rich, colors[kind], kind);
 };
 
 function resolveSessionRuntimeLabel(params: {

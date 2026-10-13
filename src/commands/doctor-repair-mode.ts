@@ -33,14 +33,9 @@ export function shouldAutoApproveDoctorFix(
     blockDuringUpdate?: boolean;
   } = {},
 ): boolean {
-  if (!mode.shouldRepair) {
-    return false;
-  }
-  if (params.requiresForce && !mode.shouldForce) {
-    return false;
-  }
-  if (params.blockDuringUpdate && isDoctorUpdateRepairMode(mode)) {
-    return false;
-  }
-  return true;
+  return (
+    mode.shouldRepair &&
+    !(params.requiresForce && !mode.shouldForce) &&
+    !(params.blockDuringUpdate && isDoctorUpdateRepairMode(mode))
+  );
 }

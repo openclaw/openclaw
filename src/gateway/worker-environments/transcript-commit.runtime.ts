@@ -5,6 +5,7 @@ import {
   publishTranscriptUpdate,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptWriteScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishSessionEntryWorkerMetadataInvalidation } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   resolveSqliteTranscriptScope,
@@ -12,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -49,10 +51,12 @@ import {
   applyPreparedTranscriptCommit,
   isCommittedAgentMessage,
   prepareTranscriptCommit,
-  type ApplyTranscriptCommitResult,
-  type CommittedAgentMessage,
-  type TranscriptCommitInput,
 } from "./transcript-commit.kernel.js";
+import type {
+  ApplyTranscriptCommitResult,
+  CommittedAgentMessage,
+  TranscriptCommitInput,
+} from "./transcript-commit.types.js";
 import type { WorkerTranscriptOperations } from "./transcript-commit.worker.js";
 
 const log = createSubsystemLogger("gateway/worker-transcript");
@@ -69,12 +73,15 @@ async function applyWorkerTranscriptCommit(params: {
   runId: string | null;
   target: BoundAgentRunSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const target = withOwnedSessionTranscriptWriterFence({
+  const target = withOwnedSessionTranscriptWriterFence<
+    BoundAgentRunSessionTarget & SessionTranscriptWriteScope
+  >({
     ...captureSessionTranscriptTargetBinding(params.target),
     expectedLifecycleRevision: params.target.expectedLifecycleRevision,
     expectedWriterRunId: params.target.expectedWriterRunId,
   });
   const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
+  const incognito = captureIncognitoSessionOperation(target);
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assertCurrent = () => {
     params.assertCurrent();
@@ -107,7 +114,46 @@ async function applyWorkerTranscriptCommit(params: {
     });
   };
   let applied: ApplyTranscriptCommitResult;
-  if (isIncognitoSessionKey(target.sessionKey)) {
+  if (incognito) {
+    const preparedMessages = prepareFresh(0);
+    if (!preparedMessages) {
+      return { ok: false, reason: "invalid-batch" };
+    }
+    const { scope: _scope, ...batch } = input;
+    const committed = await incognito.actor.sessions.transcript(
+      {
+        assertCurrent: () => {
+          incognito.authority.assertCurrent();
+          assertCurrent();
+        },
+      },
+      {
+        type: "session.workerTranscript.commit",
+        input: {
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          fence: {
+            expectedLifecycleRevision: target.expectedLifecycleRevision,
+            expectedWriterRunId: target.expectedWriterRunId,
+            expectedOwner: target.expectedOwner,
+          },
+          batch,
+          preparedMessages,
+        },
+      },
+      incognito.admissionSignal,
+      undefined,
+      ({ projectionNeedsReconcile }) => {
+        if (projectionNeedsReconcile) {
+          startSessionTranscriptIndexReconcile({
+            ...options,
+            preferredSessionId: target.sessionId,
+          });
+        }
+      },
+    );
+    applied = committed.result;
+  } else if (isIncognitoSessionKey(target.sessionKey)) {
     // Incognito retains its process-held database until the worker-owned cutover.
     let projectionNeedsReconcile = false;
     applied = await withTranscriptWriteTransaction(target, (): ApplyTranscriptCommitResult => {

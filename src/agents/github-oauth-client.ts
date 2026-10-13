@@ -189,12 +189,7 @@ function parseGitHubOAuthTokenPair(
     throw githubOAuthProtocolError(surface);
   }
   const scopes = normalizeGitHubScopes(record.scope, surface);
-  if (
-    !scopes.includes("repo") ||
-    !scopes.includes("workflow") ||
-    !scopes.includes("read:org") ||
-    !scopes.includes("gist")
-  ) {
+  if (!["repo", "workflow", "read:org", "gist"].every((scope) => scopes.includes(scope))) {
     throw githubOAuthProtocolError(surface);
   }
   const accessToken = readBoundedString(record.access_token, surface);
@@ -371,6 +366,29 @@ function throwGitHubOAuthHttpError(response: Response, surface: string): never {
   throw new Error(`GitHub OAuth ${surface} request failed (HTTP ${response.status})`);
 }
 
+async function exchangeGitHubOAuthToken(
+  form: Record<string, string>,
+  surface: string,
+  options: GitHubOAuthRequestOptions,
+) {
+  const { response, body } = await postGitHubOAuthForm(
+    GITHUB_OAUTH_ACCESS_TOKEN_URL,
+    new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, ...form }),
+    surface,
+    options,
+  );
+  if (body.error !== undefined && body.access_token !== undefined) {
+    throw githubOAuthProtocolError(surface);
+  }
+  if (body.error !== undefined) {
+    return { error: parseGitHubOAuthError(body, surface) };
+  }
+  if (!response.ok) {
+    throwGitHubOAuthHttpError(response, surface);
+  }
+  return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+}
+
 export async function requestGitHubOAuthDeviceCode(
   options: GitHubOAuthRequestOptions = {},
 ): Promise<GitHubOAuthDeviceAuthorization> {
@@ -420,21 +438,16 @@ export async function pollGitHubOAuthDeviceToken(
   if (!/^[A-Za-z0-9_-]{40}$/u.test(deviceCode)) {
     throw githubOAuthProtocolError("device token");
   }
-  const { response, body } = await postGitHubOAuthForm(
-    GITHUB_OAUTH_ACCESS_TOKEN_URL,
-    new URLSearchParams({
-      client_id: GITHUB_OAUTH_CLIENT_ID,
+  const result = await exchangeGitHubOAuthToken(
+    {
       device_code: deviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    }),
+    },
     "device token",
     params,
   );
-  if (body.error !== undefined && body.access_token !== undefined) {
-    throw githubOAuthProtocolError("device token");
-  }
-  if (body.error !== undefined) {
-    const { code, intervalSeconds, ...details } = parseGitHubOAuthError(body, "device token");
+  if (result.error) {
+    const { code, intervalSeconds, ...details } = result.error;
     switch (code) {
       case "authorization_pending":
       case "expired_token":
@@ -450,13 +463,7 @@ export async function pollGitHubOAuthDeviceToken(
         return { status: "error", code, ...details };
     }
   }
-  if (!response.ok) {
-    throwGitHubOAuthHttpError(response, "device token");
-  }
-  return {
-    status: "authorized",
-    tokens: parseGitHubOAuthTokenPair(body, "device token"),
-  };
+  return { status: "authorized", tokens: result.tokens };
 }
 
 export async function refreshGitHubOAuthToken(
@@ -465,33 +472,17 @@ export async function refreshGitHubOAuthToken(
   const refreshToken = readBoundedString(params.refreshToken, "token refresh");
   // Device-flow refresh is a public-client exchange. Sending a bundled client
   // secret would not make it confidential and is not required by GitHub.
-  const { response, body } = await postGitHubOAuthForm(
-    GITHUB_OAUTH_ACCESS_TOKEN_URL,
-    new URLSearchParams({
-      client_id: GITHUB_OAUTH_CLIENT_ID,
+  const result = await exchangeGitHubOAuthToken(
+    {
       grant_type: "refresh_token",
       refresh_token: refreshToken,
-    }),
+    },
     "token refresh",
     params,
   );
-  if (body.error !== undefined && body.access_token !== undefined) {
-    throw githubOAuthProtocolError("token refresh");
+  if (result.error) {
+    const { intervalSeconds: _intervalSeconds, ...details } = result.error;
+    return { status: "error", ...details };
   }
-  if (body.error !== undefined) {
-    const { code, errorDescription, errorUri } = parseGitHubOAuthError(body, "token refresh");
-    return {
-      status: "error",
-      code,
-      ...(errorDescription !== undefined ? { errorDescription } : {}),
-      ...(errorUri !== undefined ? { errorUri } : {}),
-    };
-  }
-  if (!response.ok) {
-    throwGitHubOAuthHttpError(response, "token refresh");
-  }
-  return {
-    status: "refreshed",
-    tokens: parseGitHubOAuthTokenPair(body, "token refresh"),
-  };
+  return { status: "refreshed", tokens: result.tokens };
 }

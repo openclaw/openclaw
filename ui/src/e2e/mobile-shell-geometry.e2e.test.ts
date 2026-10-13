@@ -9,6 +9,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -134,18 +135,13 @@ async function expectEditableDraft(
   artifacts: string,
   mobile: boolean,
 ) {
-  const context = page.locator(".chat-footer__context");
-  const contextBox = (await context.boundingBox())!;
-  expect(contextBox.height).toBeGreaterThanOrEqual(20);
-  // The progress summary owns wheel-to-expand; scroll the context gutter instead.
-  await page.mouse.move(contextBox.x + contextBox.width - 2, contextBox.y + contextBox.height / 2);
-  await page.mouse.wheel(0, 1000);
-  await expect
-    .poll(() => context.evaluate((element) => element.scrollTop + element.clientHeight))
-    .toBe(await context.evaluate((element) => element.scrollHeight));
-
-  await page.mouse.wheel(0, -1000);
-  await expect.poll(() => context.evaluate((element) => element.scrollTop)).toBe(0);
+  // PRs/progress no longer create a scrollable footer context. Close the
+  // independent overlay before exercising the short editor itself; dense
+  // queue/context reachability is covered by chat-footer.e2e.test.ts.
+  await expect(page.locator(".chat-details:popover-open")).toHaveCount(0);
+  await expect(
+    page.locator(".chat-footer__context .session-progress-card, .chat-footer__context .chat-prs"),
+  ).toHaveCount(0);
   const textarea = page.locator(".agent-chat__composer-combobox textarea");
   const measure = () =>
     textarea.evaluate((editor: HTMLTextAreaElement) => {
@@ -219,7 +215,7 @@ async function expectEditableDraft(
   await expect(textarea).toHaveValue("Edited First line\nSecond line\nThird line\nLast line typed");
   await writeFile(
     path.join(artifacts, "short-editor.json"),
-    JSON.stringify({ contextBox, before, last, first }, null, 2),
+    JSON.stringify({ before, last, first }, null, 2),
   );
   await textarea.fill("");
 }
@@ -242,7 +238,9 @@ async function geometry(page: Page) {
       thread: rect(".chat-thread-inner"),
       footer: rect(".chat-footer"),
       context: rect(".chat-footer__context"),
-      progress: rect(".session-progress-card--composer"),
+      progress: rect('[data-progress-card-placement="details"]'),
+      details: rect(".chat-details:popover-open"),
+      conversation: rect(".chat-main__conversation-frame"),
       header: rect(".chat-pane__header"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
@@ -399,6 +397,7 @@ suite.define(() => {
             },
           },
         });
+        await openDetailsPullRequests(page);
         await expect(page.locator('.chat-pr[data-state="merged"]').first()).toBeVisible();
         await gateway.setMethodResponse("progressCard.get", {
           card: {
@@ -417,7 +416,7 @@ suite.define(() => {
           sessionKey: "agent:main:main",
           revision: 1,
         });
-        await expect(page.locator(".session-progress-card--composer")).toBeVisible();
+        await expect(page.locator('[data-progress-card-placement="details"]')).toBeVisible();
         const chat = await geometry(page);
         await page.screenshot({ path: path.join(artifacts, "chat.png"), animations: "disabled" });
         await textarea.fill("Please continue the layout check.");
@@ -457,13 +456,17 @@ suite.define(() => {
           sessionKey: "agent:main:main",
           revision: 2,
         });
-        const progress = page.locator(".session-progress-card").first();
+        const progress = page.locator('[data-progress-card-placement="details"]');
+        // Sending is an outside click; updates must not reopen Details.
+        await expect(progress).toBeHidden();
+        await openChatDetails(page);
         await expect(progress).toBeVisible();
         const withProgress = await geometry(page);
         await page.screenshot({
           path: path.join(artifacts, "progress.png"),
           animations: "disabled",
         });
+        await page.getByRole("button", { name: "Close details", exact: true }).click();
         const keyboard = [];
         if (mobile) {
           await textarea.focus();
@@ -587,10 +590,12 @@ suite.define(() => {
           expect(chat.composer.right).toBeLessThanOrEqual(width - right - 20);
           expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
           expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
-          if (withProgress.progress) {
-            expect(withProgress.progress.left).toBeCloseTo(chat.composer.left, 0);
-            expect(withProgress.progress.right).toBeCloseTo(chat.composer.right, 0);
-          }
+          expect(withProgress.details).not.toBeNull();
+          expect(withProgress.details!.left).toBeGreaterThanOrEqual(
+            withProgress.conversation!.left,
+          );
+          expect(withProgress.details!.right).toBeLessThanOrEqual(withProgress.conversation!.right);
+          expect(withProgress.details!.bottom).toBeLessThanOrEqual(withProgress.footer!.top);
           for (const surface of surfaces) {
             expect(surface.left, surface.name).toBeGreaterThanOrEqual(left);
             expect(surface.right, surface.name).toBeLessThanOrEqual(width - right);

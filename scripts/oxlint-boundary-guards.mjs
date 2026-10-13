@@ -29,7 +29,7 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
     create(context) {
       const repoPath = repositoryPath(context);
       if (
-        !repoPath.endsWith(".ts") ||
+        !/\.tsx?$/u.test(repoPath) ||
         !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
         TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)

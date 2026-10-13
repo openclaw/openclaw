@@ -17,6 +17,7 @@ import {
   readCurrentConversationBindingSelectionInDatabase,
   updateCurrentConversationBindingRecordInDatabase,
 } from "./current-conversation-bindings.kernel.js";
+import { withCurrentConversationBindingWorkerReceipt } from "./current-conversation-bindings.publication.js";
 import type {
   CurrentConversationBindingBind,
   CurrentConversationBindingRemove,
@@ -32,7 +33,7 @@ function runBindingTransaction<T>(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = update(db);
+      const result = withCurrentConversationBindingWorkerReceipt(db, () => update(db));
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return result;
     },
@@ -85,8 +86,10 @@ function touchCurrentConversationBindingInDatabase(
 export const conversationBindingOperations = {
   "conversationBindings.bind": (input: CurrentConversationBindingBind, { write }) => {
     return write(({ db }) => {
-      const record = bindCurrentConversationInDatabase(db, input, (requiresAgentId) =>
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: requiresAgentId }),
+      const record = withCurrentConversationBindingWorkerReceipt(db, () =>
+        bindCurrentConversationInDatabase(db, input, (requiresAgentId) =>
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: requiresAgentId }),
+        ),
       );
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return record;
@@ -95,7 +98,9 @@ export const conversationBindingOperations = {
   "conversationBindings.remove": (input: CurrentConversationBindingRemove, { write }) => {
     return write(({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const records = removeCurrentConversationBindingsInDatabase(db, input);
+      const records = withCurrentConversationBindingWorkerReceipt(db, () =>
+        removeCurrentConversationBindingsInDatabase(db, input),
+      );
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return records;
     });

@@ -253,28 +253,20 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (
     !Number.isFinite(days) ||
     days < 0 ||
-    parts.some((part) => !Number.isFinite(part) || part < 0)
+    parts.some((part) => !Number.isFinite(part) || part < 0) ||
+    (parts.length !== 2 && parts.length !== 3)
   ) {
     return null;
   }
   if (parts.length === 2) {
-    const [minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
+    parts.unshift(0);
   }
-  if (parts.length === 3) {
-    const [hours, minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(hours, "process CPU hours") * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
-  }
-  return null;
+  const [hours, minutes, seconds] = parts;
+  return Math.round(
+    (days * 24 * 60 * 60 +
+      expectDefined(hours, "process CPU hours") * 60 * 60 +
+      expectDefined(minutes, "process CPU minutes") * 60 +
+      expectDefined(seconds, "process CPU seconds")) *
+      1000,
+  );
 }

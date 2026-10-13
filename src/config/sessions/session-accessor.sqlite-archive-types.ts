@@ -28,14 +28,24 @@ type MaterializedSessionTranscriptArchive = {
   sha256: string;
 };
 
-export type TranscriptArchiveWorkerPlan = Pick<
-  SessionStateDeletePlan,
-  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
->;
+export type SessionHistoryEvictionArchivePlan = Omit<SessionStateDeletePlan, "snapshot"> & {
+  historyEviction: {
+    expectedIdentity: DatabasePathIdentity;
+    preserveRecentMs?: number | null;
+  };
+};
+
+export type TranscriptArchiveWorkerPlan =
+  | Pick<
+      SessionStateDeletePlan,
+      "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
+    >
+  | SessionHistoryEvictionArchivePlan;
 
 export type TranscriptArchiveWorkerResult = {
   archive: MaterializedSessionTranscriptArchive | null;
   sessionId: string;
+  preparedPlan?: SessionStateDeletePlan | null;
 };
 
 export type TranscriptArchiveWorkerMessage = {

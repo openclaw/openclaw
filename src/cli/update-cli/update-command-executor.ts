@@ -416,14 +416,12 @@ export async function withUpdateCommandExecutor<T>(
                 }
                 retireFence();
                 children.close();
-                if (serviceLease) {
-                  if (!store.release(serviceLease)) {
-                    throw new UpdateCommandRecoveryPendingError(
-                      "Preflight service owner release failed.",
-                    );
-                  }
-                  serviceLease = undefined;
+                if (serviceLease && !store.release(serviceLease)) {
+                  throw new UpdateCommandRecoveryPendingError(
+                    "Preflight service owner release failed.",
+                  );
                 }
+                serviceLease = undefined;
                 if (lease.version === 1 || !store.release(lease)) {
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }

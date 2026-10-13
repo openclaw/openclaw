@@ -4,6 +4,7 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { icons } from "../../components/icons.ts";
+import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs } from "../../lib/format.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
@@ -266,17 +267,14 @@ export function renderPluginDeclaredCapabilities(
     [
       ...overviewContractFamilies
         .filter((family) => contracts?.[family]?.length)
-        .map((family) => ({
-          name: t(`pluginsPage.capabilityFamilies.${family}.name`),
-          description: t(`pluginsPage.capabilityFamilies.${family}.description`),
-        })),
+        .map((family) => `capabilityFamilies.${family}`),
       ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
-        (capability) => ({
-          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
-          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
-        }),
+        (capability) => `uiCapabilities.${capability}`,
       ),
-    ],
+    ].map((key) => ({
+      name: t(`pluginsPage.${key}.name`),
+      description: t(`pluginsPage.${key}.description`),
+    })),
     icons.layers,
   );
 }
@@ -288,7 +286,7 @@ export function renderPluginAskAction(onAsk?: () => void, primary = true) {
         class="btn oc-action ${primary ? "primary oc-action-primary" : "oc-action-secondary"}"
         @click=${onAsk}
       >
-        ${t("nav.askOpenClaw")}
+        ${askBrandLabel()}
       </button>`
     : nothing;
 }

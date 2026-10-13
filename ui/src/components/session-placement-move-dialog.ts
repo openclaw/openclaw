@@ -204,52 +204,40 @@ export function showSessionPlacementTargetDialog(
                                         onSelect: (profileId) =>
                                           select({ kind: "profile", profileId }),
                                       })}
-                                      ${
-                                        profileSelected && operatingSystems.length >= 2
+                                      ${[
+                                        {
+                                          kind: "os" as const,
+                                          label: t("newSession.operatingSystem"),
+                                          choices: operatingSystems,
+                                          visible: profileSelected && operatingSystems.length >= 2,
+                                          selectedId: cloudMachines.selectedOs(profile),
+                                        },
+                                        {
+                                          kind: "machine" as const,
+                                          label: t("newSession.machine"),
+                                          choices: machines,
+                                          visible: profileSelected && machines.length > 0,
+                                          selectedId: selectedMachineId,
+                                        },
+                                      ].map(({ kind, label, choices, visible, selectedId }) =>
+                                        visible
                                           ? html`
                                               <div class="new-session-page__menu-title">
-                                                ${t("newSession.operatingSystem")}
+                                                ${label}
                                               </div>
                                               ${renderCloudChoiceMenuItems({
-                                                kind: "os",
-                                                choices: operatingSystems,
-                                                selectedId: cloudMachines.selectedOs(profile),
+                                                kind,
+                                                choices,
+                                                selectedId,
                                                 submitting: false,
-                                                onSelect: (osId) =>
-                                                  cloudMachines.selectOs(
-                                                    profile.id,
-                                                    osId,
-                                                    catalog.profiles,
-                                                    false,
-                                                    paint,
-                                                  ),
+                                                onSelect: (id) =>
+                                                  cloudMachines[
+                                                    kind === "os" ? "selectOs" : "select"
+                                                  ](profile.id, id, catalog.profiles, false, paint),
                                               })}
                                             `
-                                          : nothing
-                                      }
-                                      ${
-                                        profileSelected && machines.length > 0
-                                          ? html`
-                                              <div class="new-session-page__menu-title">
-                                                ${t("newSession.machine")}
-                                              </div>
-                                              ${renderCloudChoiceMenuItems({
-                                                kind: "machine",
-                                                choices: machines,
-                                                selectedId: selectedMachineId,
-                                                submitting: false,
-                                                onSelect: (machineId) =>
-                                                  cloudMachines.select(
-                                                    profile.id,
-                                                    machineId,
-                                                    catalog.profiles,
-                                                    false,
-                                                    paint,
-                                                  ),
-                                              })}
-                                            `
-                                          : nothing
-                                      }
+                                          : nothing,
+                                      )}
                                     `;
                                   })}
                                 `

@@ -23,6 +23,18 @@ External-plugin compatibility work follows this order:
 
 ### Retained helper contracts
 
+Transcript append and lock preparation now uses
+[`preparation.prepareMessage`, `preparation.source`, and `withSessionTranscriptWrite`](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+The `transcript-lock-sync-message-preparation` and
+`transcript-strict-sync-message-preparation` records retain the old lock functions,
+`prepareMessageAfterIdempotencyCheck`, and `beforeFreshMessageCommit` for durable
+targets with their original transaction ordering. One deprecation warning is
+emitted per plugin for this family. Incognito and actor-bound targets reject the
+old form with an actionable replacement error. The old exports and fields remain
+available to compile existing plugins and will be removed at the **next Plugin SDK
+major**. This target-specific deprecation does not activate actor routing for
+ordinary incognito sessions or change stored data, schema, retention, or updates.
+
 Discord and llama.cpp retain their declared OpenClaw 2026.9.2 host support.
 They use the newer prepared-expiry, DM-policy refinement, and live-catalog outcome
 helpers when those exports are available, with plugin-local fallbacks for the
@@ -352,7 +364,11 @@ The execution object accepted by
 `openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore` retains the
 `prepare(source, signal?) => Promise<void>` contract published in
 `v2026.10.1-beta.1`. Existing callers and two-argument implementations remain
-supported. Ordinary preparation reuses a completed native generation; host
+supported. The publication source also accepts the execution object shape shipped
+in `v2026.9.9`. The `v2026.10.1-beta.1` shape retains its callable
+`capturePreparedGenerationClaim` method in parameter-derived types; internal
+native-adoption capabilities are not required from plugins. Ordinary preparation
+reuses a completed native generation; host
 admission can request current schema proof through an optional third argument.
 
 The `agent-execution-preparation-released-signature` compatibility record is
@@ -482,6 +498,24 @@ Bundled memory search and memory-forget use the awaited readers. The synchronous
 exports retain their signatures and behavior for existing consumers until removal
 at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
 compatibility registry; these readers emit no runtime warnings.
+
+The prepared incognito actor adapters remain inactive for ordinary unbound
+calls. Under an explicit actor binding, Memory entry, reset-cutoff, corpus, and
+selector reads retain that actor; a selected missing actor returns the normal
+missing result, while a retained ended actor rejects. Archive discovery returns
+no durable artifacts for that actor. Private transcripts are not added to the
+durable Memory ingestion corpus.
+
+The synchronous `loadMemorySessionMetadata` and
+`loadMemorySessionMetadataBatch` helpers remain durable ingestion admission
+guards. `statSessionEntrySync`, batch transcript stats, and synchronous archive
+and selector readers retain their existing native/offline contracts. Explicitly
+bound actor calls refuse synchronous database access with
+`IncognitoSessionSyncAccessError`: await `resolveMemorySessionTargetsAsync`,
+`loadArchivedSessionsAsync`, or `buildSessionEntry` as named by the error.
+Worker snapshot kernels and supplied transcript statistics remain synchronous;
+this preparation does not change production incognito selection or the
+released synchronous full-row session getter.
 
 ### Memory read missing results
 

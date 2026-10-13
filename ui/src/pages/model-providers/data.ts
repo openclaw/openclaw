@@ -46,9 +46,7 @@ export type ModelProviderPendingLogout = {
   target: ModelProviderLogoutTarget;
 };
 
-export type ModelProviderProfileOrderLock = NonNullable<
-  ModelAuthStatusProvider["profileOrderLocked"]
->;
+type ModelProviderProfileOrderLock = NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>;
 
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */

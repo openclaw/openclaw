@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -247,23 +247,24 @@ export async function completeReplyAgentRun(input: {
       });
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
-      const persistedPendingFinalDelivery = await patchSessionEntryCore(
+      const persistedPendingFinalDelivery = await applySessionEntryOperation(
         { agentId: followupRun.run.agentId, storePath, sessionKey },
-        (entry) =>
-          entry.sessionId === expectedSessionId
-            ? {
-                pendingFinalDelivery: {
-                  ...(pendingText && commandOwnerReference === undefined
-                    ? { kind: "replayable" as const, text: pendingText }
-                    : { kind: "transport-only" as const }),
-                  intentId: pendingFinalDeliveryIntentId,
-                  deliveries: pendingFinalDeliveries,
-                  context: pendingFinalDeliveryContext,
-                  createdAt: Date.now(),
-                },
-                updatedAt: Date.now(),
-              }
-            : null,
+        {
+          kind: "fields",
+          expected: { sessionId: expectedSessionId },
+          patch: {
+            pendingFinalDelivery: {
+              ...(pendingText && commandOwnerReference === undefined
+                ? { kind: "replayable" as const, text: pendingText }
+                : { kind: "transport-only" as const }),
+              intentId: pendingFinalDeliveryIntentId,
+              deliveries: pendingFinalDeliveries,
+              context: pendingFinalDeliveryContext,
+              createdAt: Date.now(),
+            },
+            updatedAt: Date.now(),
+          },
+        },
         {
           skipMaintenance: true,
           takeCacheOwnership: true,

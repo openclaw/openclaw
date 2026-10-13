@@ -413,17 +413,21 @@ async function customRestore() {
     source,
     identity: recoveryFileIdentity(source),
   }));
+  const importLegacy = (name) =>
+    command(
+      name,
+      ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
+      { env, measured: true },
+    );
+  const restoreLegacy = (name, failure = false) =>
+    command(
+      name,
+      ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
+      { env, failure },
+    );
   // Public Doctor owns both migrations. Restore never touches the primary Gateway histories.
-  await command(
-    "restore-import",
-    ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
-    { env, measured: true },
-  );
-  const restored = await command(
-    "restore-before",
-    ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
-    { env },
-  );
+  await importLegacy("restore-import");
+  const restored = await restoreLegacy("restore-before");
   const restoredFiles = restored.targets.flatMap((target) => target.restore?.restoredFiles ?? []);
   for (const original of originals) {
     assert(restoredFiles.includes(original.source), `restore omitted ${original.source}`);
@@ -440,11 +444,7 @@ async function customRestore() {
     ),
     "restored originals lost their consumed receipt",
   );
-  await command(
-    "restore-reimport",
-    ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
-    { env, measured: true },
-  );
+  await importLegacy("restore-reimport");
   const customPreview = await command(
     "restore-preview",
     ["update", "cleanup", "--dry-run", "--json"],
@@ -478,11 +478,7 @@ async function customRestore() {
     true,
   );
   const beforeDisposedRestore = recoveryTreeSnapshot([customState]);
-  const disposed = await command(
-    "restore-disposed",
-    ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
-    { env, failure: true },
-  );
+  const disposed = await restoreLegacy("restore-disposed", true);
   const conflicts = disposed.targets.flatMap((target) => target.restore?.conflicts ?? []);
   for (const original of originals) {
     assert(

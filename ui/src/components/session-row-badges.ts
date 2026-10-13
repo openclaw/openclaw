@@ -22,18 +22,30 @@ function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSumma
 }
 
 function renderSessionRowBadge(
-  label: string,
+  label: string | false | undefined,
   icon: TemplateResult,
-  modifier = "",
-  count = 0,
-  pullRequestState?: SessionCatalogPullRequestSummary["state"],
-  placementState?: SessionPlacementState,
-  diskSpaceStatus?: SessionPlacementDiskSpace["status"],
-  workspaceConflictCount = 0,
+  modifier: string,
+  options: {
+    count?: number;
+    pullRequestState?: SessionCatalogPullRequestSummary["state"];
+    placementState?: SessionPlacementState;
+    diskSpaceStatus?: SessionPlacementDiskSpace["status"];
+    workspaceConflictCount?: number;
+  } = {},
 ) {
+  if (label === false || label === undefined) {
+    return nothing;
+  }
+  const {
+    count = 0,
+    pullRequestState,
+    placementState,
+    diskSpaceStatus,
+    workspaceConflictCount = 0,
+  } = options;
   return html`<openclaw-tooltip .content=${label}>
     <span
-      class=${`session-row-badge${modifier ? ` ${modifier}` : ""}`}
+      class=${`session-row-badge session-row-badge--${modifier}`}
       data-pull-request-state=${pullRequestState ?? nothing}
       data-placement-state=${placementState ?? nothing}
       data-disk-space-status=${diskSpaceStatus ?? nothing}
@@ -134,67 +146,21 @@ export function renderSessionRowBadges(params: {
     : placementLabel;
   const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
-    ${
-      params.incognito
-        ? renderSessionRowBadge(
-            t("sessionsView.incognito"),
-            icons.lock,
-            "session-row-badge--incognito",
-          )
-        : nothing
-    }
-    ${
-      pullRequestLabel
-        ? renderSessionRowBadge(
-            pullRequestLabel,
-            pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
-            "session-row-badge--pull-request",
-            0,
-            pullRequestState,
-          )
-        : nothing
-    }
-    ${
-      params.hasApproval
-        ? renderSessionRowBadge(
-            t("sessionsView.approvalNeeded"),
-            icons.alertTriangle,
-            "session-row-badge--approval",
-          )
-        : nothing
-    }
-    ${
-      attentionCount > 0
-        ? renderSessionRowBadge(
-            attentionLabel,
-            icons.alertTriangle,
-            "session-row-badge--attention",
-            attentionCount,
-          )
-        : nothing
-    }
-    ${
-      params.hasComposerDraft
-        ? renderSessionRowBadge(
-            t("sessionsView.unsentDraft"),
-            icons.pencil,
-            "session-row-badge--draft",
-          )
-        : nothing
-    }
-    ${
-      displayedPlacementState || hasWorkspaceConflict
-        ? renderSessionRowBadge(
-            cloudLabel,
-            icons.globe,
-            "session-row-badge--cloud",
-            0,
-            undefined,
-            displayedPlacementState,
-            diskSpaceStatus,
-            hasWorkspaceConflict ? workspaceConflictCount : 0,
-          )
-        : nothing
-    }
+    ${renderSessionRowBadge(params.incognito && t("sessionsView.incognito"), icons.lock, "incognito")}
+    ${renderSessionRowBadge(
+      pullRequestLabel || undefined,
+      pullRequestState === "merged" ? icons.gitMerge : icons.gitPullRequest,
+      "pull-request",
+      { pullRequestState },
+    )}
+    ${renderSessionRowBadge(params.hasApproval && t("sessionsView.approvalNeeded"), icons.alertTriangle, "approval")}
+    ${renderSessionRowBadge(attentionCount > 0 && attentionLabel, icons.alertTriangle, "attention", { count: attentionCount })}
+    ${renderSessionRowBadge(params.hasComposerDraft && t("sessionsView.unsentDraft"), icons.pencil, "draft")}
+    ${renderSessionRowBadge(
+      Boolean(displayedPlacementState || hasWorkspaceConflict) && cloudLabel,
+      icons.globe,
+      "cloud",
+      { placementState: displayedPlacementState, diskSpaceStatus, workspaceConflictCount },
+    )}
   </span>`;
 }

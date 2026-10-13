@@ -121,11 +121,7 @@ export function sessionPullRequestsForGateway(
     requestController = null;
   };
 
-  const notify = () => {
-    for (const listener of Array.from(listeners)) {
-      listener();
-    }
-  };
+  const notify = () => Array.from(listeners).forEach((listener) => listener());
 
   const settle = (sessionKey: string, snapshot?: ControlUiSessionPullRequestSnapshot) => {
     const pending = waiters.get(sessionKey);

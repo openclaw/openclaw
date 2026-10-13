@@ -1,4 +1,9 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -74,6 +79,7 @@ export async function prepareManagedSessionAccess(
 ) {
   const { client, context, respond } = params;
   const cfg = context.getRuntimeConfig();
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
   const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
@@ -111,11 +117,11 @@ export async function prepareManagedSessionAccess(
         runAuthority,
         isMember: (_target, identityId) => membership.has(identityId),
       });
-      const { target, membership } = facts!.readCurrent(currentCfg);
+      const { target, membership, sourcePath, sourceAgentId } = facts!.readCurrent(currentCfg);
       if (selected && !isSameSessionSharingTarget(target, selected)) {
         throw new Error(`session changed before sharing ${operation}`);
       }
-      return { target, sharing };
+      return { target, sharing, sourcePath, sourceAgentId };
     };
     const initial = readCurrent();
     const selected = initial.target;
@@ -135,11 +141,30 @@ export async function prepareManagedSessionAccess(
       facts?.release();
       return null;
     }
-    const current = (entry?: SessionSharingTarget["entry"]) => {
-      // Refuse dirty membership before invoking any additional request authority guard.
-      readCurrent(selected);
-      params.sessionMutationAuthorization?.assertCurrent();
-      const { target, sharing } = readCurrent(selected);
+    const readSource = {
+      agentId: selected.readSource?.agentId ?? initial.sourceAgentId ?? selected.agentId,
+      path: selected.readSource?.path ?? initial.sourcePath ?? selected.storePath,
+    };
+    const expectedSource =
+      selected.readSource ??
+      (() => {
+        if (isIncognitoOpenClawAgentSqlitePath(readSource.path, { ...readSource, env })) {
+          return undefined;
+        }
+        const identity = readDatabasePathIdentitySync(readSource.path);
+        if (!identity.key.startsWith("file:")) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        return {
+          ...readSource,
+          databaseIdentity: identity.key.slice("file:".length),
+          databaseBirthtime: identity.birthtime,
+        };
+      })();
+    const requireManageable = (
+      { target, sharing }: ReturnType<typeof readCurrent>,
+      entry?: SessionSharingTarget["entry"],
+    ) => {
       if (
         entry &&
         (entry.sessionId !== selected.entry.sessionId ||
@@ -153,14 +178,44 @@ export async function prepareManagedSessionAccess(
       }
       return { target, role };
     };
+    const prepareCurrent = (
+      assertRequest = () => params.sessionMutationAuthorization?.assertCurrent(),
+    ) => {
+      // Refuse dirty membership before invoking any additional request authority guard.
+      readCurrent(selected);
+      assertRequest();
+      return readCurrent(selected);
+    };
+    const current = (entry?: SessionSharingTarget["entry"], assertRequest?: () => void) =>
+      requireManageable(prepareCurrent(assertRequest), entry);
     return {
       target: selected,
       // Lifecycle peers still fence the logical locator; worker I/O retains the physical source.
       lifecycleStorePath: facts.storageTarget.storePath,
       current,
-      assertCurrent: () => {
-        current();
+      currentStored: () => {
+        // Request/profile callbacks may reenter writers; finish them before the final row read.
+        const prepared = prepareCurrent();
+        const stored = loadExactSessionEntryCandidates({
+          env,
+          readSource,
+          expectedSource,
+          readOnly: true,
+          sessionKeys: [selected.storeKey],
+          projection: "list",
+        })[0];
+        if (!stored || !prepared.target) {
+          throw new Error(`session changed before sharing ${operation}`);
+        }
+        const target = { ...prepared.target, entry: stored.entry };
+        return requireManageable({ ...prepared, target }, stored.entry);
       },
+      assertCurrent: composeSessionSourceAssertion(
+        [params.sessionMutationAuthorization?.assertCurrent],
+        (assertSources) => {
+          current(undefined, assertSources);
+        },
+      ),
       assertEntryManageable: (entry: SessionSharingTarget["entry"]) => {
         current(entry);
       },

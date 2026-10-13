@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
@@ -33,6 +34,29 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+
+/** Keep automatic selection provenance distinct from an explicit model pin. */
+export function projectSessionCreateSpawnModelSelection(params: {
+  entry: SessionEntry;
+  creation: CreateGatewaySessionParams["creation"];
+  requestedModel?: string;
+  createdNewEntry: boolean;
+}): Partial<SessionEntry> {
+  // Match the requested model before using the patch owner's canonical selection.
+  const selection = params.creation?.spawnModelAutoSelection;
+  if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
+    return {};
+  }
+  return {
+    modelOverrideSource: "auto",
+    ...(selection.hasFallbackOrigin
+      ? {
+          modelOverrideFallbackOriginProvider: params.entry.providerOverride,
+          modelOverrideFallbackOriginModel: params.entry.modelOverride,
+        }
+      : {}),
+  };
+}
 
 export function resolveSessionCreateModelInputError(
   params: Pick<
@@ -139,12 +163,18 @@ export function resolveSessionCreationCommitGuard(
     validateSelection: () => ErrorShape | undefined;
   },
 ): (() => void) | undefined {
-  const assertCallerCurrent = params.childSessionPublication
-    ? () => {
-        params.commitGuard?.();
-        params.childSessionPublication?.assertCurrent();
-      }
-    : params.commitGuard;
+  const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
+    params.cfg,
+    params.spawnToolPolicy?.delegatedToolPolicy,
+  );
+  const assertCallerCurrent =
+    params.childSessionPublication || assertDelegationCurrent
+      ? () => {
+          params.commitGuard?.();
+          params.childSessionPublication?.assertCurrent();
+          assertDelegationCurrent?.();
+        }
+      : params.commitGuard;
   if (
     !(
       params.personalModelSelection ||

@@ -162,6 +162,7 @@ describe("gateway session row change publications", () => {
           {
             sessionKey: target.sessionKey,
             agentId: target.agentId,
+            scope: "runtime",
           },
         ]),
       );

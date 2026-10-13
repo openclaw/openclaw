@@ -2016,7 +2016,7 @@ describe("gateway session utils", () => {
     },
   ])("listAgentsForGateway never overstates $name", async ({ cfg, approvals, expected }) => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsSync({ update: () => approvals });
+      execApprovalsStore.updateExecApprovalsForMaintenance({ update: () => approvals });
       const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
       expect(agent).toBeDefined();
       if (expected === undefined) {

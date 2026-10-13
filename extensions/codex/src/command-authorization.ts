@@ -1,5 +1,9 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 
+export type CodexCommandContext = PluginCommandContext & {
+  assertNativePolicyCurrent?: () => void;
+};
+
 type CodexHostMutationAuthContext = Pick<
   PluginCommandContext,
   "gatewayClientScopes" | "senderIsOwner"
@@ -20,7 +24,8 @@ export function canMutateCodexHost(ctx: CodexHostMutationAuthContext): boolean {
   return ctx.senderIsOwner === true || hasCodexAdminScope(ctx);
 }
 
-export function assertCodexHostOwnerCurrent(ctx: PluginCommandContext): void {
+export function assertCodexHostOwnerCurrent(ctx: CodexCommandContext): void {
+  ctx.assertNativePolicyCurrent?.();
   if (!hasCodexAdminScope(ctx)) {
     ctx.assertOwnerCurrent?.();
   }

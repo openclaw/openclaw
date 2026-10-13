@@ -13,6 +13,7 @@ const targets = [
   "extensions",
   "examples",
   "scripts",
+  "tools",
   "packages",
   "ui",
   "apps",

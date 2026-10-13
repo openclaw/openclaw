@@ -1,6 +1,7 @@
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import {
   repairCanonicalSqliteIndexes,
@@ -18,6 +19,7 @@ import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantineFailure,
 } from "./openclaw-quarantine-store.js";
+import { publishStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
@@ -87,6 +89,9 @@ export function repairStateSchema(
   let indexChanges: string[] = [];
   let ownershipRefused = false;
   try {
+    if (scope !== "automatic") {
+      revokeSqliteDatabaseAdmissions(db);
+    }
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     const closeReadAdmission =
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
@@ -123,7 +128,7 @@ export function repairStateSchema(
         canInspectIndexes &&
         (indexChanges.length > 0 ||
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
-          readOpenClawDatabaseQuarantineFailure("state", pathname, { env }))
+          readOpenClawDatabaseQuarantineFailure("state", pathname, { env, fresh: true }))
       ) {
         runSqliteImmediateTransactionSync(
           db,
@@ -300,6 +305,9 @@ export function repairStateSchema(
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
+    if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      publishStateRuntimeSchemaAdmission(db, true);
+    }
     return {
       changes,
       warnings: quarantineCleared

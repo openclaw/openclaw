@@ -289,7 +289,11 @@ export class WorkerConnection {
             attempt += 1;
             continue;
           }
-          this.handleAdmissionFailure(error);
+          this.finishTerminal(
+            isFencedCloseReason(error.reason)
+              ? { kind: "fenced", reason: error.reason }
+              : { kind: "failed", error },
+          );
           throw error;
         }
         if (error instanceof WorkerConnectionEndpointError) {
@@ -320,7 +324,8 @@ export class WorkerConnection {
         // Arm before notifying owners so a synchronous stop cancels the heartbeat.
         this.startHeartbeat(hello.policy.heartbeatIntervalMs);
         this.transition({ kind: "ready", hello });
-        this.notifyReady(hello);
+        this.settleReadyWaiters((waiter) => waiter.resolve(hello));
+        notifyListeners(this.readyListeners, hello);
       },
       onReadyFrame: (frame, socket) => {
         this.frames.dispatchReadyFrame(frame, socket);
@@ -362,14 +367,6 @@ export class WorkerConnection {
     } finally {
       this.reconnectPromise = undefined;
     }
-  }
-
-  private handleAdmissionFailure(error: WorkerAdmissionError): void {
-    if (isFencedCloseReason(error.reason)) {
-      this.finishTerminal({ kind: "fenced", reason: error.reason });
-      return;
-    }
-    this.finishTerminal({ kind: "failed", error });
   }
 
   private startHeartbeat(intervalMs: number): void {
@@ -431,15 +428,6 @@ export class WorkerConnection {
     socket.terminate();
   }
 
-  private notifyReady(hello: WorkerHelloOk): void {
-    const waiters = [...this.readyWaiters];
-    this.readyWaiters.clear();
-    for (const waiter of waiters) {
-      waiter.resolve(hello);
-    }
-    notifyListeners(this.readyListeners, hello);
-  }
-
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
     notifyListeners(this.stateListeners, state);
@@ -468,7 +456,7 @@ export class WorkerConnection {
     this.reconnectAbort.abort(error);
     this.stopHeartbeat();
     this.frames.rejectPending(error);
-    this.rejectReadyWaiters(error);
+    this.settleReadyWaiters((waiter) => waiter.reject(error));
     const code = state.kind === "stopped" ? 1000 : 1008;
     const reason =
       state.kind === "fenced"
@@ -479,11 +467,11 @@ export class WorkerConnection {
     socket?.close(code, reason);
   }
 
-  private rejectReadyWaiters(error: Error): void {
+  private settleReadyWaiters(settle: (waiter: ReadyWaiter) => void): void {
     const waiters = [...this.readyWaiters];
     this.readyWaiters.clear();
     for (const waiter of waiters) {
-      waiter.reject(error);
+      settle(waiter);
     }
   }
 

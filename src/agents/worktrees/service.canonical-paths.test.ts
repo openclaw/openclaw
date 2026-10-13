@@ -593,7 +593,11 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
     let now = Date.now();
     service = new ManagedWorktreeService({ env, now: () => now });
-    const expired = await service.create({ repoRoot: repo, name: "expired-snapshot" });
+    const expired = await service.create({
+      repoRoot: repo,
+      name: "expired-snapshot",
+      baseRef: "HEAD",
+    });
     await service.remove({ id: expired.id, reason: "retention" });
     now += SNAPSHOT_RETENTION_MS + 1;
 

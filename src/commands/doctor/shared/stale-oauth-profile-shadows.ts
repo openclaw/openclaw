@@ -238,18 +238,17 @@ export async function repairStaleOAuthProfileShadows(params: {
   const hits = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
   const warnings: string[] = [];
-  const byAgentDir = new Map<string, StaleOAuthProfileShadow[]>();
+  const byAgentDir = new Map<string, Set<string>>();
   for (const hit of hits) {
-    const existing = byAgentDir.get(hit.agentDir) ?? [];
-    existing.push(hit);
-    byAgentDir.set(hit.agentDir, existing);
+    const profileIds = byAgentDir.get(hit.agentDir) ?? new Set<string>();
+    profileIds.add(hit.profileId);
+    byAgentDir.set(hit.agentDir, profileIds);
   }
-  for (const [agentDir, agentHits] of byAgentDir) {
+  for (const [agentDir, profileIds] of byAgentDir) {
     const mainStore = loadPersistedSharedAuthProfileStore(env);
     if (!mainStore) {
       continue;
     }
-    const profileIds = new Set(agentHits.map((hit) => hit.profileId));
     try {
       const removedProfileIds = await repairStaleOAuthProfilesForAgent({
         agentDir,

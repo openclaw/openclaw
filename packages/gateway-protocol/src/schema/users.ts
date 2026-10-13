@@ -17,6 +17,8 @@ import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
+export * from "./users-background.js";
+
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,

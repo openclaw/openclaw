@@ -95,6 +95,12 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Manual runs use the same scheduled execution context as timer-fired runs after
+the request passes admission. Ending the chat turn or tool call that started a
+run does not expire the job's tool access. The job still uses its stored authority
+and current tool restrictions; starting it manually does not grant the caller's
+extra permissions to the job.
+
 Current global, agent, profile, and provider tool policy is checked when each new
 scheduled message invocation starts. Configuration changes apply to later invocations;
 an invocation already admitted retains its configuration. Disabling or removing a job,
@@ -289,6 +295,8 @@ only when it needs Codex app access. See
 | Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
+
+An explicitly isolated agent-turn job created from a conversation keeps that conversation's identity for delivery. With default `announce` delivery and no explicit or remembered external route, its final result is committed into the creating conversation, including WebChat/Control UI. The run remains isolated and does not read the conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks, duplicate prevention, and external-route behavior.
 
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">

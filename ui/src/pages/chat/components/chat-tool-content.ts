@@ -1,6 +1,7 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -371,85 +372,49 @@ export function renderExpandedToolCardContent(
     view.diff && view.diff.length > 0
       ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
+  const variant =
+    view.kind === "command" && (view.command || view.code) && !card.preview
+      ? "command"
+      : (view.kind === "edit" || view.kind === "write") && view.diff?.length
+        ? "diff"
+        : "generic";
+  let body: ReturnType<typeof html> | ReturnType<typeof renderDiffBlock>;
 
   // Code-mode hooks pair code/command aliases; code selects plain source.
   // Source stays visible before serialized inputText arrives, and only the
   // rendered field leaves the remaining execution-context arguments.
-  if (view.kind === "command" && (view.command || view.code) && !card.preview) {
+  if (variant === "command") {
     const argsRecord = asNullableRecord(card.args);
     const sourceKey = view.code ? (argsRecord?.code === view.code ? "code" : "input") : "command";
     const extraArgs = Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey);
-    return html`
-      <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
-        <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${
-          view.code
-            ? sourceKey === "input"
-              ? html`${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}
-                  <details class="chat-tool-card__input">
-                    <summary>${t("chat.toolCards.toolInput")}</summary>
-                    ${renderToolDataBlock({ text: view.code })}
-                  </details>`
-              : html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
-                ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
-            : renderTerminalBlock(view.command!, card.outputText)
-        }
-        ${extraArgs.length > 0 ? renderArgsKeyValueList(extraArgs) : nothing} ${outputFooter}
-        ${renderToolOutcome(outcome, card.exitCode)}
-      </div>
-    `;
-  }
-
-  // Edits and writes with a resolvable diff render it inline. When raw output
-  // also exists, the shared tab primitive owns both views and their semantics.
-  if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
-    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
-    return html`
-      <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-        <div class="chat-tool-card__header">
-          ${renderToolWorkspaceFilePath(
-            workspaceFilePath ?? view.target ?? "",
-            workspaceFilePath,
-            onOpenWorkspaceFile,
-          )}
-          <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
-        </div>
-        ${
-          hasOutput
-            ? renderToolCardModes(card, messageKey, view.diff, outcome, isError, file)
-            : renderDiffBlock(view.diff, outcome, undefined, file)
-        }
-        ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
-      </div>
-    `;
-  }
-
-  // File reads and searches summarize their primary target in the row, so the
-  // full args JSON is noise — but any remaining args (filters, limits, request
-  // options…) stay visible as key-value rows for auditability.
-  const inputArgs = isRecord(card.args)
-    ? Object.entries(card.args).filter(([key]) => !ROW_SUMMARIZED_ARG_KEYS[view.kind]?.has(key))
-    : null;
-  const showInputBlock = hasInput && (!summarizedKind || Boolean(inputArgs?.length));
-
-  return html`
-    <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
+    body = html`
       ${
-        detail || canOpenSidebar
-          ? html`
-              <div class="chat-tool-card__header">
-                ${
-                  detail
-                    ? view.kind === "read"
-                      ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
-                      : html`<div class="chat-tool-card__detail">${detail}</div>`
-                    : nothing
-                }
-                <div class="chat-tool-card__actions">${sidebarAction}</div>
-              </div>
-            `
-          : nothing
+        view.code
+          ? sourceKey === "input"
+            ? html`${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}
+                <details class="chat-tool-card__input">
+                  <summary>${t("chat.toolCards.toolInput")}</summary>
+                  ${renderToolDataBlock({ text: view.code })}
+                </details>`
+            : html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
+              ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
+          : renderTerminalBlock(view.command!, card.outputText)
       }
+      ${extraArgs.length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+    `;
+  } else if (variant === "diff" && view.diff) {
+    // Raw output and the diff retain the shared tab primitive's view semantics.
+    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
+    body = hasOutput
+      ? renderToolCardModes(card, messageKey, view.diff, outcome, isError, file)
+      : renderDiffBlock(view.diff, outcome, undefined, file);
+  } else {
+    // Summarized targets stay in the row; remaining arguments stay inspectable.
+    const inputArgs = isRecord(card.args)
+      ? Object.entries(card.args).filter(([key]) => !ROW_SUMMARIZED_ARG_KEYS[view.kind]?.has(key))
+      : null;
+    const showInputBlock = hasInput && (!summarizedKind || Boolean(inputArgs?.length));
+    body = html`
       ${
         showInputBlock
           ? inputArgs && inputArgs.length > 0 && inputArgs.length <= KV_MAX_KEYS
@@ -461,21 +426,46 @@ export function renderExpandedToolCardContent(
           : nothing
       }
       ${
-        hasOutput
-          ? card.preview?.kind === "canvas"
-            ? renderRawOutputToggle(card.outputText!)
-            : renderToolDataBlock({
-                ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-                text: card.outputText!,
-              })
-          : isError
+        hasOutput && card.preview?.kind === "canvas"
+          ? renderRawOutputToggle(card.outputText!)
+          : hasOutput || isError
             ? renderToolDataBlock({
-                label: t("chat.toolCards.toolError"),
-                text: t("chat.toolCards.noOutputFailed"),
+                ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+                text: hasOutput ? card.outputText! : t("chat.toolCards.noOutputFailed"),
               })
             : nothing
       }
-      ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
-    </div>
-  `;
+    `;
+  }
+  // A tool changing presentation still replaces its prior card and native controls.
+  return keyed(
+    variant,
+    html` <div
+      class="chat-tool-card ${variant === "command" ? "chat-tool-card--flush " : ""}${isError ? "chat-tool-card--error" : ""}"
+    >
+      ${
+        variant === "command"
+          ? html`<div class="chat-tool-card__actions">${sidebarAction}</div>`
+          : variant === "diff" || detail || canOpenSidebar
+            ? html`<div class="chat-tool-card__header">
+                ${
+                  variant === "diff" || (detail && view.kind === "read")
+                    ? renderToolWorkspaceFilePath(
+                        variant === "diff" ? (workspaceFilePath ?? view.target ?? "") : detail!,
+                        workspaceFilePath,
+                        onOpenWorkspaceFile,
+                      )
+                    : detail
+                      ? html`<div class="chat-tool-card__detail">${detail}</div>`
+                      : nothing
+                }
+                <div class="chat-tool-card__actions">
+                  ${variant === "diff" ? diffCopyAction : nothing}${sidebarAction}
+                </div>
+              </div>`
+            : nothing
+      }
+      ${body} ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
+    </div>`,
+  );
 }

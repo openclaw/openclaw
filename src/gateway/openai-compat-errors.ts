@@ -1,6 +1,7 @@
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
@@ -104,6 +105,13 @@ export function validateOpenAiSamplingParams(params: {
     return "`seed` must be an integer.";
   }
   return undefined;
+}
+
+export function resolveOpenAiStreamParams(
+  params: AgentStreamParams,
+): AgentStreamParams | undefined {
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined);
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 export function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {

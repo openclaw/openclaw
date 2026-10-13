@@ -31,6 +31,9 @@ export function createMentionInputRecorder(params: {
     guards: Array<() => void>,
     bounds: Pick<ReturnType<typeof createMentionMutationProjection>, "sourceIndex" | "itemLimit">,
   ): StoredMention[] {
+    if (isIncognitoSessionKey(input.sessionKey)) {
+      return [];
+    }
     const { processed, head, dirtySources, items } = draft;
     const cfg = params.getRuntimeConfig();
     const resolved = resolveSessionSharingTarget({
