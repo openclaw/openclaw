@@ -229,7 +229,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
   // An empty page is not an empty conversation. Keep the transcript mounted
-  // while older history exists so its viewport can bootstrap the next page.
+  // while older history exists so the reader can request the next page.
   const isEmpty =
     transcriptItems.length === 0 &&
     !props.loading &&

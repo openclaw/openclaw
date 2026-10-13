@@ -82,6 +82,37 @@ it("coalesces passive edits until the minute boundary and shares one worker", as
   expect(await descriptions(request(other))).toEqual(["Other"]);
 });
 
+it("applies config refresh on the healthy worker and drops departed sources", async () => {
+  const nextWorkspace = temporary.make("skills-config-successor-");
+  const config = (workspaceDir: string) => ({
+    agents: { entries: { main: { workspace: workspaceDir } } },
+    plugins: { enabled: false },
+  });
+  const discoveryPool = () =>
+    getTrackedWorkerPoolSnapshot().workerPools.find(
+      (entry) => entry.script === "discovery.worker.js",
+    );
+  await write("Original");
+  await refreshSkillsDiscovery({ config: config(workspace), reason: "config-change" });
+  expect(await descriptions()).toEqual(["Original"]);
+  const originalPool = discoveryPool();
+  expect(originalPool).toMatchObject({ workerCount: 1 });
+
+  await write("Successor", nextWorkspace);
+  await refreshSkillsDiscovery({ config: config(nextWorkspace), reason: "config-change" });
+  expect(await descriptions(request(nextWorkspace))).toEqual(["Successor"]);
+  expect(discoveryPool()).toEqual(originalPool);
+
+  const retiredVersion = getSkillsSnapshotVersion(workspace);
+  await write("Departed change");
+  await write("Current change", nextWorkspace);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(getSkillsSnapshotVersion(workspace)).toBe(retiredVersion);
+  expect(await descriptions(request(nextWorkspace))).toEqual(["Current change"]);
+  await closeSkillsWatchers();
+  expect(discoveryPool()).toBeUndefined();
+});
+
 it("keeps each source environment while refreshing a reused worker's plans and prompt paths", async () => {
   const firstHome = temporary.make("skills-first-home-");
   const secondHome = temporary.make("skills-second-home-");

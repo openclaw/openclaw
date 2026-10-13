@@ -10,16 +10,12 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { resolveLoadedCommitHash } from "../src/infra/git-commit.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../src/state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
-import {
-  readBuildIdFromBuildInfoForModuleUrl,
-  resolveVersionFromModuleUrl,
-} from "../src/version.js";
+import { resolveVersionFromModuleUrl } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { startGatewayRestartProvider } from "./helpers/gateway-restart-provider.js";
 import {
@@ -333,15 +329,9 @@ it.skipIf(process.platform !== "linux")(
         if (!version) {
           throw new Error("Restart proof cannot identify its Gateway artifact version");
         }
-        // The child runs built artifacts; this source test has a different build identity.
-        // Bind the expected seal to the actual artifact and its canonical schema inputs.
+        // Seal policy revision 1 binds version and schema, independently of commit identity.
         const artifactSchema = createHash("sha256")
-          .update(version)
-          .update(
-            resolveLoadedCommitHash({ moduleUrl }) ??
-              readBuildIdFromBuildInfoForModuleUrl(moduleUrl) ??
-              "source",
-          )
+          .update(JSON.stringify([1, version]))
           .update(OPENCLAW_AGENT_SCHEMA_SQL)
           .update(OPENCLAW_STATE_SCHEMA_SQL)
           .digest("hex");

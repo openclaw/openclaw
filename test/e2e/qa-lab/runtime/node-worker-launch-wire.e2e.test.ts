@@ -654,6 +654,25 @@ describe("node worker launch wire", () => {
         expect(Math.max(...freshConnectionSamples)).toBeLessThan(CONTROL_PROBE_MAX_MS);
         expect(freshConnectionSamples).toHaveLength(FINALIZATION_LOAD_WAVES);
 
+        phase = "workspace settlement before node shutdown";
+        const settlementGateway = gateway;
+        // Replies are durable before reconciliation; keep their runners until it settles.
+        await Promise.all(
+          [SESSION_KEY, legacySessionKey, ...loadSessions].map((key) =>
+            waitFor(`workspace settlement for ${key}`, async () => {
+              const settlement = (await settlementGateway.call("sessions.describe", { key })) as {
+                session?: {
+                  placement?: { state?: string; workspaceResultReconciling?: boolean };
+                };
+              };
+              const settledPlacement = settlement.session?.placement;
+              return settledPlacement?.state === "active" &&
+                !settledPlacement.workspaceResultReconciling
+                ? settlement
+                : undefined;
+            }),
+          ),
+        );
         phase = "node shutdown";
         await workerNode.stop();
         workerNode = undefined;

@@ -453,6 +453,7 @@ export async function runSessionEntryWorkerMutation<T>(
   lifecycle: {
     identityAgentId: string;
     onResult?: (value: T | undefined) => void;
+    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
@@ -586,9 +587,10 @@ export async function runSessionEntryWorkerMutation<T>(
             "Session entry mutation commit omitted its publication keys",
         );
       }
-      admitted = { admission, retained };
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
+      lifecycle.beforeCommit?.(committed);
+      admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
         committed.membershipInvalidatedKeys,

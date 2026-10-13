@@ -447,6 +447,32 @@ describe("prepared config recovery", () => {
     },
   );
 
+  it("defers prepared recovery when the forensic snapshot cannot be written", async () => {
+    const warn = vi.fn();
+    const { root, configPath, original, backup, io } = fixture({
+      logger: { warn, error: vi.fn() },
+      fs: {
+        ...fs,
+        promises: {
+          ...fs.promises,
+          writeFile: async (target, data, options) => {
+            if (typeof target === "string" && target.includes(".clobbered.")) {
+              throw Object.assign(new Error("snapshot disk full"), { code: "ENOSPC" });
+            }
+            return fs.promises.writeFile(target, data, options);
+          },
+        },
+      },
+    });
+    const plan = await recovery(io);
+
+    await expect(plan.apply()).rejects.toThrow("Config backup recovery deferred");
+
+    expectUnchanged(root, configPath, original);
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
+  });
+
   it("rejects failed replacement while retaining the original and its clobbered snapshot", async () => {
     const { root, configPath, original, env } = fixture();
     const io = createConfigIO({

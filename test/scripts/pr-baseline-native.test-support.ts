@@ -177,12 +177,11 @@ if (args[0] === 'api' && args[1] === 'user') {
     git(repo, "commit", "-qam", `test: ${label}`);
     return git(repo, "rev-parse", "HEAD");
   };
-  const publish = () => {
-    const hosted = git(repo, "rev-parse", "topic");
+  const preparePublication = () => {
     git(repo, "config", `url.${repo}.insteadOf`, "https://github.com/fixture/repo.git");
     const head = git(worktree, "rev-parse", "HEAD");
     const stamp = spawnSync(
-      "bash",
+      process.platform === "darwin" ? "/bin/bash" : "bash",
       [
         "-c",
         'source "$1"; write_gates_env_stamp 42 true false github_pending "" "" "$2" "" "" "" ""',
@@ -193,6 +192,11 @@ if (args[0] === 'api' && args[1] === 'user') {
       { cwd: worktree, env, encoding: "utf8" },
     );
     expect(stamp.status, stamp.stderr).toBe(0);
+    return head;
+  };
+  const publish = () => {
+    const hosted = git(repo, "rev-parse", "topic");
+    const head = preparePublication();
     pass("prepare-push");
     expect(git(repo, "rev-parse", "topic")).toBe(head);
     expect(readFileSync(local("prepare-push-result.env"), "utf8")).toContain(
@@ -265,6 +269,7 @@ if (args[0] === 'api' && args[1] === 'user') {
     run,
     approve,
     advanceMain,
+    preparePublication,
     publish,
     manifest,
     successor,

@@ -10,6 +10,7 @@ import {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
@@ -404,7 +405,7 @@ function* openOpenClawAgentDatabaseSteps(
     let reusedSchema = false;
     let walMaintenance: SqliteWalMaintenance;
     try {
-      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       reusedSchema = adoptOpenClawAgentDatabaseSchema(
         validationDatabase,
         reuseAdmittedIntegrity,

@@ -77,6 +77,7 @@ export async function generateWorkboardPostgresSchema() {
       version: SCHEMA_VERSION,
       minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
       schema: "",
+      sqlite: WORKBOARD_SCHEMA_SQL,
       tables: portTables(data),
       objects: data.objects
         .filter((item) => item.kind === "check")
