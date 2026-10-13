@@ -574,11 +574,14 @@ describe("normalizeAssistantReplayContent", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
     const messages = [
       userMessage("hi"),
-      bedrockAssistant([
-        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
-        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
-        toolCall,
-      ]),
+      bedrockAssistant(
+        [
+          { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+          toolCall,
+        ],
+        "toolUse",
+      ),
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };
@@ -601,26 +604,28 @@ describe("normalizeAssistantReplayContent", () => {
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
   });
 
-  it.each(["channel-final", "channel-final-suppressed", "message-tool-source-reply"] as const)(
-    "filters a stripped delivery mirror identified by %s",
-    (kind) => {
-      const strippedMirror = {
-        ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
-        provider: undefined,
-        model: undefined,
-        openclawDeliveryMirror: { kind },
-      } as unknown as AgentMessage;
-      const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
-        input: 1,
-        output: 1,
-        totalTokens: 2,
-      });
+  it.each([
+    "channel-final",
+    "channel-final-suppressed",
+    "message-tool-source-reply",
+    "model-fallback",
+  ] as const)("filters a stripped delivery mirror identified by %s", (kind) => {
+    const strippedMirror = {
+      ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
+      provider: undefined,
+      model: undefined,
+      openclawDeliveryMirror: { kind },
+    } as unknown as AgentMessage;
+    const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+      input: 1,
+      output: 1,
+      totalTokens: 2,
+    });
 
-      expect(
-        normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
-      ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
-    },
-  );
+    expect(
+      normalizeAssistantReplayContent([userMessage("hello"), strippedMirror, realReply]),
+    ).toEqual([expect.objectContaining({ role: "user" }), realReply]);
+  });
 
   it("preserves an assistant carrying an invalid delivery-mirror marker", () => {
     const assistant = {

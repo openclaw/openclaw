@@ -73,6 +73,10 @@ export function createPlacementRecoveryActions(
       return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
     }),
   );
+  const isInterruptedTurn = (placement: WorkerDispatchPlacement) => {
+    const claim = projectWorkerSessionTurnClaim(placement);
+    return Boolean(claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim)));
+  };
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
   let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
@@ -87,7 +91,7 @@ export function createPlacementRecoveryActions(
     // Retire the old turn, not its machine. The node stop acknowledgement fences the
     // physical worker; the replacement turn receives a fresh claim on the same workspace.
     const claim = projectWorkerSessionTurnClaim(placement);
-    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    const interrupted = isInterruptedTurn(placement);
     if ((mode === "restart" || interrupted) && placement.turnClaim) {
       if (
         claim &&
@@ -426,5 +430,5 @@ export function createPlacementRecoveryActions(
     }
   };
 
-  return { reconcile, reconcileActive };
+  return { reconcile, reconcileActive, isInterruptedTurn };
 }

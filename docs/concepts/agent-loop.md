@@ -53,6 +53,7 @@ Before streaming, an admitted run records its durable `activeWriterRunId` claim.
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
+- Embedded global, plugin, and project settings are prepared once per session and reused across turns. Config or plugin changes, workspace or agent-directory changes, and session reset refresh that snapshot. Direct edits to `settings.json` take effect in a new or reset session. Authentication and model runtimes remain outside this settings cache; model-specific compaction limits and attempt-local settings remain fresh for each turn.
 - Bootstrap/context files are resolved and injected into the system prompt.
 - The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 
@@ -143,6 +144,8 @@ When a required turn exhausts its retries with only reasoning or empty output, O
 If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. A progress message fully delivered to the current conversation counts as the answer only when it is the last tool batch of the settled turn and the turn then produces no output: the model wrote it after every other tool result, so a finalization pass could only repeat it. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
 
 An optional turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded; a rejected Skill Workshop review still fails without making extra model requests to compose a reply.
+
+Node worker turns use the same settled-tool recovery when the model returns an empty final. The worker makes one tool-free follow-up request. If that request also returns no answer, the turn reports a failure. A worker turn that starts background commands which are still running ends with an explicit status and their process session IDs; it does not claim their results are complete.
 
 A confirmed delivery prevents duplicate generation. Pending delivery or continuation work retains completion ownership without being marked delivered; rejected sends, unflushed deferred text, and missing delivery callbacks are not delivery proof. `NO_REPLY` does not retract text already delivered. Pending tools, accepted child runs, and yielded work keep their existing owners, and assistant errors and aborts are not intentional silence.
 

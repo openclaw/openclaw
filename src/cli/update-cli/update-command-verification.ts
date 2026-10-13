@@ -222,9 +222,11 @@ export async function verifyUpdatedGateway(
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
-  if (launchAgentRecovery?.attempted) {
+  if (launchAgentRecovery && launchAgentRecovery.status !== "not-needed") {
     defaultRuntime.error(
-      launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
+      launchAgentRecovery.status === "recovered"
+        ? launchAgentRecovery.message
+        : launchAgentRecovery.detail,
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
@@ -363,9 +365,9 @@ export async function verifyUpdatedGateway(
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
     ...renderRestartDiagnostics(health),
-    ...(launchAgentRecovery?.attempted
+    ...(launchAgentRecovery && launchAgentRecovery.status !== "not-needed"
       ? [
-          launchAgentRecovery.recovered
+          launchAgentRecovery.status === "recovered"
             ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
             : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
         ]

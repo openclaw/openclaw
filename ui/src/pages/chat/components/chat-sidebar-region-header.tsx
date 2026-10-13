@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -79,6 +79,7 @@ const HOSTED_TAB_REQUESTS = [
 ] as const;
 
 function TypeMenu(props: SidebarRegionHeaderProps) {
+  const [opened, setOpened] = createSignal(false);
   const panelTypes = () => props.panelDefinitions.filter((definition) => definition.available);
   const openSlots = () =>
     new Set((props.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
@@ -86,6 +87,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
     <wa-dropdown
       class="side-panel-type-menu"
       placement="bottom-start"
+      onWa-show={() => setOpened(true)}
       onWa-select={(event) => {
         const slot = panelTypes().find((type) => type.slot === event.detail.item.value)?.slot;
         if (!slot) {
@@ -111,22 +113,25 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
       >
         <Icon name="plus" />
       </button>
-      <For
-        each={panelTypes().filter(
-          (type) =>
-            HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot),
-        )}
-        keyed={(type) => type.slot}
-      >
-        {(type) => (
-          <wa-dropdown-item
-            class="side-panel-type-menu__item session-menu__item"
-            prop:value={type().slot}
-          >
-            <PanelTypeOption type={type()} slotted />
-          </wa-dropdown-item>
-        )}
-      </For>
+      <Show when={opened()}>
+        <For
+          each={panelTypes().filter(
+            (type) =>
+              HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) ||
+              !openSlots().has(type.slot),
+          )}
+          keyed={(type) => type.slot}
+        >
+          {(type) => (
+            <wa-dropdown-item
+              class="side-panel-type-menu__item session-menu__item"
+              prop:value={type().slot}
+            >
+              <PanelTypeOption type={type()} slotted />
+            </wa-dropdown-item>
+          )}
+        </For>
+      </Show>
     </wa-dropdown>
   );
 }

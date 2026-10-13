@@ -209,9 +209,7 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("original session identity"), {
-      runId: entry.runId,
-    });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("records completion announcement timestamps from transcript delivery", async () => {

@@ -58,6 +58,8 @@ function createGatewayCallModuleMock() {
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+    getSubagentDepthFromSessionStoreInWorker: async (sessionKey?: string) =>
+      requesterDepthResolver(sessionKey),
   };
 }
 
@@ -77,6 +79,7 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
+// mock-isolation: Timeout fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", createSubagentDepthModuleMock);
 vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),

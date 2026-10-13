@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import type { StatementSync } from "node:sqlite";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 
@@ -74,6 +79,7 @@ describe("assertSkillReviewRunSucceeded", () => {
 });
 
 describe("postWorkshopChangeNotice", () => {
+  const dirs = useSessionStoreTempDirs(afterAll, "workshop-notice-");
   const change = (overrides: Partial<WorkshopChange>): WorkshopChange => ({
     id: "c1",
     agentId: "main",
@@ -346,5 +352,75 @@ describe("postWorkshopChangeNotice", () => {
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(mocks.withSessionEntriesFromStoresInWorker).toHaveBeenCalledOnce();
+  });
+
+  it("reads notice eligibility off-thread and observes a committed reset", async () => {
+    const currentGeneration = {
+      ...generation("agent:main:workshop-worker"),
+      storePath: path.join(dirs.make(), "sessions.sqlite"),
+    };
+    const entry = {
+      sessionId: currentGeneration.sessionId,
+      lifecycleRevision: currentGeneration.lifecycleRevision,
+      updatedAt: 1,
+    };
+    await replaceSessionEntry(currentGeneration, entry);
+    const { withSessionEntriesFromStoresInWorker } = await vi.importActual<
+      typeof import("../../config/sessions/session-entry-read-runtime.js")
+    >("../../config/sessions/session-entry-read-runtime.js");
+    mocks.withSessionEntriesFromStoresInWorker.mockImplementation(
+      withSessionEntriesFromStoresInWorker,
+    );
+    mocks.extractDeliveryInfo.mockResolvedValue({
+      deliveryContext: undefined,
+      threadId: undefined,
+    });
+    const { db } = openOpenClawAgentDatabase({
+      agentId: currentGeneration.agentId,
+      path: currentGeneration.storePath,
+    });
+    const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+    const reads: string[] = [];
+    const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(read, receiver: StatementSync, args) {
+            if (/\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)) {
+              reads.push(receiver.sourceSQL);
+            }
+            return Reflect.apply(read, receiver, args);
+          },
+        }),
+      );
+    });
+    const publish = () =>
+      postWorkshopChangeNotice({
+        config: {},
+        generation: currentGeneration,
+        runId,
+        changes: [change({})],
+      });
+    try {
+      await publish();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+      expect(reads).toEqual([]);
+      await replaceSessionEntry(currentGeneration, {
+        ...entry,
+        lifecycleRevision: "committed-reset",
+        updatedAt: 2,
+      });
+      reads.length = 0;
+      mocks.appendAssistantMessageToSessionTranscript.mockClear();
+      mocks.enqueueSystemEvent.mockClear();
+      await publish();
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(reads).toEqual([]);
+    } finally {
+      for (const observer of observers) {
+        observer.mockRestore();
+      }
+    }
   });
 });

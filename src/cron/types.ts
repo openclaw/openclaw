@@ -319,7 +319,7 @@ export type CronJobState = Omit<
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; alerted?: true };
+    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;

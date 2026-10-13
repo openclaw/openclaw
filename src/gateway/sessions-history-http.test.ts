@@ -764,7 +764,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("returns 404 after initializing a missing configured session store", async () => {
+  test("returns 404 without initializing a missing configured session store", async () => {
     await closeHistoryHarness();
     const storePath = await createSessionStoreFile();
     const agentId = "new-history";
@@ -795,7 +795,7 @@ describe("session history HTTP endpoints", () => {
           type: "not_found",
           message: `Session not found: ${sessionKey}`,
         });
-        expect((await fs.stat(missingDatabasePath)).isFile()).toBe(true);
+        await expect(fs.stat(missingDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
       },
       { fresh: true },
     );

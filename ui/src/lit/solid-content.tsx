@@ -205,8 +205,8 @@ class SolidContent extends AsyncDirective {
     if (!component || !element) {
       return;
     }
-    // The directive controls connection; its creator owns resources mounted by later effects.
-    this.dispose = runWithOwner(this.owner, () =>
+    // An initially unowned Lit render can later commit under its renderer's restored owner.
+    this.dispose = runWithOwner(this.owner ?? getOwner(), () =>
       renderSolid(() => {
         // A legacy host can publish props during its parent's Solid commit.
         const [props, setProps] = createSignal(this.props, { ownedWrite: true });

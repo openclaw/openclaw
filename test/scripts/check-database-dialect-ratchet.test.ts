@@ -163,6 +163,25 @@ it("counts only SQLite-specific transaction modes across owners", () => {
   expect(inventory(root).map((row) => row.matches.length)).toEqual([3]);
 });
 
+it("retains SQLite JSONB debt without counting PostgreSQL catalog constructors", () => {
+  const { root, write } = fixture();
+  write(
+    "src/postgres.ts",
+    'const sql = "SELECT jsonb_build_object(), jsonb_build_array(), jsonb_agg(value), pg_catalog.jsonb_object_agg(key, value) FROM facts";',
+  );
+  write(
+    "src/sqlite.ts",
+    'const sql = "SELECT jsonb_object(), jsonb_array(), jsonb_extract(value), jsonb_group_array(value) FROM facts";',
+  );
+  expect(inventory(root)).toMatchObject([
+    {
+      file: "src/sqlite.ts",
+      matches: Array.from({ length: 4 }, () => ({ construct: "json-projection" })),
+    },
+  ]);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([4]);
+});
+
 it("distinguishes table column lists from custom function calls", () => {
   const { root, write } = fixture();
   write(

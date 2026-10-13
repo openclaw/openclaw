@@ -146,7 +146,12 @@ export function buildReplyPromptEnvelopeBase(
     : undefined;
   const currentInboundContextText = isRoomEvent
     ? buildRoomEventContext(inboundUserContext, deliveryDirective)
-    : [inboundUserContext, deliveryDirective].filter(Boolean).join("\n\n");
+    : (params.inboundUserContextPromptJoiner === " "
+        ? [deliveryDirective, inboundUserContext]
+        : [inboundUserContext, deliveryDirective]
+      )
+        .filter(Boolean)
+        .join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,

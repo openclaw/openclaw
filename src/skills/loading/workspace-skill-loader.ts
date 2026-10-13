@@ -12,14 +12,14 @@ import {
   loadSkillLibrarySelection,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
-import { getSkillsSourceVersion, observeSkillsSnapshotSource } from "../runtime/refresh-state.js";
+import { getSkillsSourceVersion } from "../runtime/refresh-state.js";
+import { prepareLocalSkillSources, prepareSkillSourcePlan } from "../runtime/refresh.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { hasBinary, prepareSkillBinaryProbe, resolveSkillRequiredBins } from "./config.js";
-import { resolveSkillKey } from "./frontmatter.js";
 import { loadSingleSkillDirectory } from "./local-loader.js";
 import type { Skill } from "./skill-contract.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
@@ -62,6 +62,7 @@ const pluginMetadataIds = new WeakMap<PluginMetadataSnapshot, number>();
 let nextPluginMetadataId = 0;
 
 type WorkspaceSkillLoadOptions = {
+  watch?: boolean;
   matchesSnapshotSkill?: (skill: Skill) => boolean;
   bundledSkillName?: string;
   executionWorkspaceDir?: string;
@@ -214,39 +215,6 @@ function loadLocalSkillTiers(
   };
   skillEntryCache.set(cacheKey, entries);
   pruneMapToMaxSize(skillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
-  const winners = mergeSkillTiers(entries);
-  // Retain only discovery inputs, never the turn's assertions, eligibility, or session state.
-  const sourceOptions: LocalWorkspaceSkillLoadOptions = {
-    executionWorkspaceDir,
-    executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
-    workspaceOnly,
-    gatewayOnly: opts?.gatewayOnly,
-    agentId: opts?.agentId,
-    config: opts?.config,
-    managedSkillsDir: opts?.managedSkillsDir,
-    bundledSkillsDir: opts?.bundledSkillsDir,
-    pluginSkillsDir: opts?.pluginSkillsDir,
-    pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
-  };
-  observeSkillsSnapshotSource({
-    workspaceDir,
-    sourceKey,
-    sourceScope: sourceOptions,
-    entries: winners
-      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-      .map((entry) => ({ skill: entry.skill, skillKey: resolveSkillKey(entry) })),
-    reconcile: (inputs) => {
-      if (inputs) {
-        sourceOptions.config = inputs.config;
-        sourceOptions.pluginMetadataSnapshot = inputs.pluginMetadataSnapshot;
-      }
-      return loadLocalSkillTiers(workspaceDir, sourceOptions).sourceKey;
-    },
-    suspend: () => {
-      sourceOptions.config = undefined;
-      sourceOptions.pluginMetadataSnapshot = undefined;
-    },
-  });
   return entries;
 }
 
@@ -320,10 +288,8 @@ async function prepareCapturedWorkspaceSkillEntries(
   const { assertCurrent, libraryContext, librarySelections } = preparation;
   assertCurrent();
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
-  if (!access?.loadSkills && opts?.bundledSkillName !== undefined) {
-    return { entries: readBundledSkillEntries(opts.bundledSkillName, opts) };
-  }
-  if (!access?.loadSkills && opts?.entries !== undefined) {
+  const bundledOnly = opts?.bundledSkillName !== undefined;
+  if (!access?.loadSkills && !bundledOnly && opts?.entries !== undefined) {
     return { entries: opts.entries };
   }
   const libraryEntries = libraryContext
@@ -335,37 +301,82 @@ async function prepareCapturedWorkspaceSkillEntries(
     : [];
   assertCurrent();
   if (!access?.loadSkills) {
+    const preparedPlan = await prepareSkillSourcePlan(workspaceDir, opts);
+    const sourcePlan = preparedPlan.plan;
+    const sources = await prepareLocalSkillSources(
+      {
+        sourcePlan: opts?.gatewayOnly ? splitSkillSourcePlan(sourcePlan).gatewayPlan : sourcePlan,
+        bundledSkillName: opts?.bundledSkillName,
+        executionWorkspaceDir:
+          opts?.workspaceOnly || opts?.gatewayOnly || bundledOnly
+            ? undefined
+            : opts?.executionWorkspaceDir,
+        limits: resolveSkillDiscoveryLimits(opts?.config),
+        additionalBins: libraryEntries.flatMap(resolveSkillRequiredBins),
+        status: opts?.status,
+      },
+      {
+        watch: opts?.watch !== false && opts?.config?.skills?.load?.watch !== false,
+        plan: {
+          input: preparedPlan.input,
+          ...(opts?.gatewayOnly ? { scope: "gateway" as const } : {}),
+        },
+      },
+    );
+    assertCurrent();
     return {
-      entries: mergeSkillTiers(loadLocalSkillTiers(workspaceDir, opts), opts, libraryEntries),
+      entries: bundledOnly
+        ? sources.entries
+        : mergeSkillTiers(
+            {
+              sourceKey: JSON.stringify(sourcePlan),
+              agent: sources.entries,
+              execution: sources.executionEntries,
+            },
+            opts,
+            libraryEntries,
+          ),
+      runtime: sources.runtime,
+      status: sources.status,
     };
   }
-  const bundledOnly = opts?.bundledSkillName !== undefined;
   const { agentWorkspaceDir, executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: workspaceDir,
     executionWorkspaceDir: opts?.executionWorkspaceDir,
     executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
   });
+  const preparedPlan = await prepareSkillSourcePlan(agentWorkspaceDir, opts);
   const {
     gatewayPlan,
     workspacePlan,
     gatewayExecutionWorkspaceDir,
     workspaceExecutionWorkspaceDir,
-  } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(agentWorkspaceDir, opts), {
+  } = splitSkillSourcePlan(preparedPlan.plan, {
     executionWorkspaceDir,
     executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
   });
-  const gatewaySourceEntries = bundledOnly
-    ? readBundledSkillEntries(opts.bundledSkillName!, opts)
-    : loadWorkspaceSkillSourceEntries(gatewayPlan, opts?.config);
+  const gatewaySources = await prepareLocalSkillSources(
+    {
+      sourcePlan: gatewayPlan,
+      bundledSkillName: opts?.bundledSkillName,
+      executionWorkspaceDir:
+        opts?.workspaceOnly || bundledOnly ? undefined : gatewayExecutionWorkspaceDir,
+      limits: resolveSkillDiscoveryLimits(opts?.config),
+      additionalBins: libraryEntries.flatMap(resolveSkillRequiredBins),
+      status: opts?.status,
+    },
+    {
+      watch: opts?.watch !== false && opts?.config?.skills?.load?.watch !== false,
+      plan: { input: preparedPlan.input, scope: "gateway" },
+    },
+  );
+  assertCurrent();
   const onGateway = (entry: SkillEntry): SkillEntry => ({
     ...entry,
     skill: recordSkillFileHost({ ...entry.skill }, "gateway"),
   });
-  const gatewayEntries = gatewaySourceEntries.map(onGateway);
-  const gatewayExecutionEntries =
-    gatewayExecutionWorkspaceDir && !opts?.workspaceOnly && !bundledOnly
-      ? loadExecutionSkillEntries(gatewayExecutionWorkspaceDir, opts?.config).map(onGateway)
-      : [];
+  const gatewayEntries = gatewaySources.entries.map(onGateway);
+  const gatewayExecutionEntries = gatewaySources.executionEntries.map(onGateway);
   const sources = await access.loadSkills({
     sourcePlan: bundledOnly ? { ...workspacePlan, roots: [] } : workspacePlan,
     executionWorkspaceDir:
@@ -416,14 +427,19 @@ async function prepareCapturedWorkspaceSkillEntries(
           libraryEntries,
         )),
     runtime: sources.runtime,
-    status: sources.status,
+    status: sources.status
+      ? {
+          ...sources.status,
+          files: [...(gatewaySources.status?.files ?? []), ...sources.status.files],
+        }
+      : undefined,
   };
 }
 
 /** Acquire host source tiers before the native node/execution/Library merge. */
 export async function prepareWorkspaceSkillEntries(
   workspaceDir: string,
-  opts?: WorkspaceSkillLoadOptions & {
+  opts?: LocalWorkspaceSkillLoadOptions & {
     entries?: SkillEntry[];
     status?: { skillCardKey?: string };
   },
@@ -483,7 +499,8 @@ async function prepareWorkspaceSkillSelection(
       entries,
       { ...opts, skillFilter },
       preparation.assertCurrent,
-      sources.runtime,
+      // Local binaries can change between discovery scans; remote hosts supply their own facts.
+      getAgentWorkspaceAccess(workspaceDir, "loadSkills")?.loadSkills ? sources.runtime : undefined,
     );
     preparation.assertCurrent();
     if (
@@ -534,7 +551,7 @@ function resolveWorkspaceSkillLoad(
 /** Runtime preparation shares discovery and filtering with synchronous SDK inventory reads. */
 export async function prepareWorkspaceSkills(
   workspaceDir: string,
-  opts?: WorkspaceSkillLoadOptions,
+  opts?: LocalWorkspaceSkillLoadOptions,
   assertCurrent?: () => void,
 ): Promise<SkillEntry[]> {
   return (await prepareWorkspaceSkillSelection(workspaceDir, opts, "runtime", assertCurrent))

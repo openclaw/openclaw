@@ -2,9 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { classifyGatewayCommand } from "./inspect-markers.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { execSystemctl, execSystemctlUser } from "./systemd-exec.js";
+import { readSystemdServiceCommandLocation } from "./systemd-service-files.js";
 
 const INSPECTION_TIMEOUT_MS = 15_000;
 
@@ -13,6 +15,24 @@ export type LoadedSystemdUnit = {
   fragmentPath: string;
   execStart: string;
 };
+
+export async function isLoadedSystemdMaintenanceCommand(
+  unit: LoadedSystemdUnit,
+  scope: "user" | "system",
+  env: GatewayServiceEnv,
+): Promise<boolean> {
+  // Display text loses argv boundaries. Confirm maintenance commands from the
+  // loaded definition without reading credentials; unknown commands stay guarded.
+  const location = await readSystemdServiceCommandLocation(env, {
+    scope,
+    unitName: unit.name,
+    unitPath: unit.fragmentPath,
+  });
+  return (
+    location.kind === "command" &&
+    classifyGatewayCommand(location.command.programArguments) === "maintenance"
+  );
+}
 
 async function exists(file: string): Promise<boolean> {
   try {

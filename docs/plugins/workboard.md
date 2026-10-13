@@ -69,6 +69,14 @@ plugin entry:
 openclaw plugins disable workboard
 ```
 
+## Storage recovery
+
+If a SQLite worker fails, Workboard reopens its store through the database worker
+owner on the next call, after native cleanup finishes. An operation already in
+flight can still report a failure or an unknown write outcome; Workboard does not
+replay that operation. A Gateway restart is not needed once the underlying storage
+problem is resolved. Updates require no configuration or data migration.
+
 ## Board appearance
 
 While Workboard is open, its sidebar entry expands to show both Cards and

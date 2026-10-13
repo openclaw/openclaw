@@ -166,6 +166,8 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
+  /** Snapshot these related rows and the current entry's stored parent for the builder. */
+  relatedSessionKeys?: readonly string[];
   /** Apply this upsert only when the named removal was projected in the same mutation. */
   requiresRemovalSessionKey?: string;
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
@@ -179,6 +181,7 @@ export type SessionEntryLifecycleUpsert = {
   | {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
+        readEntry: (sessionKey: string) => SessionEntry | undefined;
         sessionKey: string;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;

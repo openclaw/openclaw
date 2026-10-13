@@ -19,8 +19,6 @@ import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
-import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
-import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
@@ -181,6 +179,16 @@ async function resolveConfiguredProviderApiKey(params: {
   options: EmbeddingProviderCreateOptions;
   configuredProvider: ConfiguredEmbeddingProvider | undefined;
 }): Promise<string | undefined> {
+  if (params.configuredProvider?.localService) {
+    const { resolveManagedLocalProviderAuth } = await import("../agents/model-auth-runtime.js");
+    const auth = resolveManagedLocalProviderAuth({
+      cfg: params.options.config,
+      provider: params.providerId,
+    });
+    if (auth) {
+      return auth.apiKey;
+    }
+  }
   const apiKey = normalizeResolvedSecretInputString({
     value: params.configuredProvider?.apiKey,
     path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,
@@ -402,8 +410,11 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
   // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
-  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
-    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+  const {
+    embeddingProviderOwnsDestination,
+    resolveEmbeddingEndpointUrl,
+    resolveEmbeddingProviderSsrFPolicy,
+  } = await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
@@ -429,23 +440,16 @@ async function createOpenAICompatibleEmbeddingClient(
     }
   }
   const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
-  const policy = resolveProviderRequestPolicyConfig({
-    provider: providerId,
-    api: configuredProvider?.api ?? "openai-completions",
-    baseUrl,
-    capability: "other",
-    request: { allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork },
-  });
   return {
     providerId,
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: providerId,
+      api: configuredProvider?.api ?? "openai-completions",
       baseUrl,
-      url: baseUrl,
-      allowPrivateNetwork: policy.allowPrivateNetwork,
-      trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+      allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
     }),
     model,
     ...(configuredProvider?.localService && !remoteBaseUrl

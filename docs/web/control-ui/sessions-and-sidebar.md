@@ -258,6 +258,9 @@ together. The personal order survives reloads. A temporarily unavailable plugin
 keeps its saved position for when it returns. Home, Inbox, and the account controls
 stay fixed at the bottom; unpinning a destination does not remove it from Pages.
 
+When you reload a conversation, saved pin labels remain visible while the selected
+chat loads. Pins outside the loaded session list refresh in the background afterward.
+
 To reorder a rail shortcut without dragging, right-click it, touch and hold it for
 half a second, or focus it and
 press Shift+F10 or the Context Menu key. Choose **Move up**, **Move down**, or
@@ -390,6 +393,8 @@ while its confirmation dialog is open.
 If you select a replacement while the earlier deletion is still finishing, its
 late confirmation keeps your new selection and the replacement's details open.
 It does not switch the current conversation away from the replacement.
+Likewise, a delayed rename, archive, or restore confirmation clears only the
+original session's checkbox, preserving a replacement you selected meanwhile.
 
 **Rename** in the sidebar, chat header, and Sessions page starts with your custom name or the generated dashboard title. Edit the text, then save or press Enter. Saving an unchanged generated title leaves automatic naming intact; clearing a custom name restores the generated title. Channel and account decorations stay outside the editable name. Rename targets the session you started editing. If that session is deleted and recreated at the same key before you save, the edit is rejected instead of renaming the replacement. Reopen Rename on the current session to try again. Resetting the conversation keeps the same session identity and does not invalidate the edit.
 
@@ -466,7 +471,7 @@ With **Person** grouping, open the owner-filter title to show one owner, includi
 
 ## Session colors
 
-Choose **Advanced → Icon & color** from a session menu and select a color swatch to add a narrow color stripe to its sidebar row and a matching dot beside the chat title. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
+Choose **Advanced → Icon & color** from a session menu and select a color swatch to add a soft full-row tint, a narrow color stripe, and a matching dot beside the chat title. Sidebar titles and metadata stay neutral and readable in light and dark mode. Pinned rows use the same tint; the open conversation keeps a distinct neutral fill and stronger title, while multi-selected rows use the selection fill instead of the session tint. Pick one of eight colors, or choose **Default** to clear only the color. **Reset to default** clears both the icon and color. The colors match Claude Code’s `/color` names, so imported Claude Code sessions keep the same color. Imported catalog rows show their color without offering color editing.
 
 ## Direct session shortcuts
 

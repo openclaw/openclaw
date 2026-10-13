@@ -1,41 +1,13 @@
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, expect, it } from "vitest";
-import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
-import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
-const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
+const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
+  createMergeOutcomeFixtureHarness();
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const uncertainGatewayResponse = '{\n  "message": "Server Error"\n}\ngh: Server Error (HTTP 502)\n';
-
-const setupSnapshots = useAutoCleanupTempDirTracker(afterAll);
-const restoredRoots = new Set<string>();
-afterEach(() => cleanupTempDirs(restoredRoots));
-
-function reuseCompletedSetup<Args extends unknown[], Setup extends { f: { root: string } }>(
-  create: (...args: Args) => Setup,
-): (...args: Args) => Setup {
-  const completed = new Map<string, { setup: Setup; snapshot: string }>();
-  return (...args) => {
-    const key = JSON.stringify(args);
-    const cached = completed.get(key);
-    if (cached) {
-      // Keep absolute Git worktree links and retained evidence paths intact.
-      rmSync(cached.setup.f.root, { recursive: true, force: true });
-      copyTreeCloseOnExec(cached.snapshot, cached.setup.f.root);
-      restoredRoots.add(cached.setup.f.root);
-      return cached.setup;
-    }
-    const setup = create(...args);
-    const snapshot = setupSnapshots.make("pr-recovery-setup-");
-    // Builders settle every command and recover failed dispatch locks before returning.
-    copyTreeCloseOnExec(setup.f.root, snapshot);
-    completed.set(key, { setup, snapshot });
-    return setup;
-  };
-}
 
 const cancelledAutoReplacement = reuseCompletedSetup(function (
   options: { cancellation?: "confirmed" | "missing" | "uncertain"; replace?: boolean } = {},
@@ -63,7 +35,7 @@ const cancelledAutoReplacement = reuseCompletedSetup(function (
     const cancelled = initial.cancel(originalOid);
     expect(cancelled.status, cancelled.output).toBe(cancellation === "confirmed" ? 0 : 1);
     if (cancellation === "uncertain") {
-      expect(initial.recover()).toBe(true);
+      expect(initial.recover()).toBe(false);
     }
   }
   const retiredOid = initial.git(["rev-parse", outcomeRef]);
@@ -120,7 +92,7 @@ const staleAdminReplacement = reuseCompletedSetup(function () {
   expect(readFileSync(join(f.worktree, ".local", adminCapture), "utf8")).toBe(
     uncertainGatewayResponse,
   );
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
 
   const replacement = f.replacePreparedHead();
   writeFileSync(
@@ -181,7 +153,7 @@ function rewriteRecord(
 }
 
 describePosix("prior-CI admin recovery after auto cancellation", () => {
-  it("retires an uncertain stale-head admin dispatch and preserves the complete capture chain", () => {
+  it("retires a recovered auto request at an observed head and preserves the complete capture chain", () => {
     const { f, originalOid, retiredOid, adminOid, adminRecord, adminCapture, replacement } =
       staleAdminReplacement();
     const captures = f.captures();
@@ -225,15 +197,17 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       );
     }
 
-    f.save({ ...f.state(), cancellation: "success" });
-    const cancelled = f.cancel(recoveredOid);
+    const observed = f.commit(f.tree("collaborator replacement\n"), [f.base]);
+    f.save({ ...f.state(), pr: { ...f.state().pr, headRefOid: observed, autoMergeRequest: null } });
+    const cancelled = f.cancel(recoveredOid, observed);
     expect(cancelled.status, cancelled.output).toBe(0);
-    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 2, posts: 0 });
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
     expect(f.record()).toMatchObject({
       phase: "intent",
       route: "auto",
       accepted: true,
-      cancellation: { state: "confirmed", outcome: recoveredOid },
+      cancellation: { state: "confirmed", outcome: recoveredOid, observedHead: observed },
+      recovery: recoveredRecord.recovery,
     });
     const cancelledOid = f.git(["rev-parse", outcomeRef]);
     for (const oid of [originalOid, retiredOid, adminOid, recoveredOid]) {
@@ -254,7 +228,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     });
     const resumed = f.run(false, f.repo, "squash", cancelledOid, nextReplacement);
     expect(resumed.status, resumed.output).toBe(0);
-    expect(f.state()).toMatchObject({ mutations: 4, cancellations: 2, posts: 1 });
+    expect(f.state()).toMatchObject({ mutations: 4, cancellations: 1, posts: 1 });
     expect(f.record()).toMatchObject({
       phase: "complete",
       head: nextReplacement,
@@ -294,7 +268,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const attemptCapture = `merge-output.${recoveredRecord.attempt}.log`;
     const attemptBytes = readFileSync(join(f.worktree, ".local", attemptCapture), "utf8");
     expect(() => f.git(["cat-file", "-e", `${recoveredOid}:${attemptCapture}`])).toThrow();
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     f.save({ ...f.state(), cancellation: "success" });
     const cancelled = f.cancel(recoveredOid);
@@ -349,31 +323,42 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     );
   });
 
-  it.each(["a changed successor capture", "an extra capture"])(
-    "refuses cancellation with %s",
-    (fault) => {
-      const { f, recoveredOid, recoveredRecord } = recoveredStaleAdminAuto();
-      if (fault === "a changed successor capture") {
-        writeFileSync(
-          join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`),
-          "changed successor capture\n",
-        );
-      } else {
-        writeFileSync(join(f.worktree, ".local/merge-output.extra.log"), "extra\n");
-      }
-      f.save({ ...f.state(), cancellation: "success" });
-
-      const cancelled = f.cancel(recoveredOid);
-      expect(cancelled.status, cancelled.output).toBe(1);
-      expect(cancelled.output).toContain(
-        fault === "a changed successor capture"
-          ? "merge capture changed before retention"
-          : "merge capture set changed before retention",
+  it.each([
+    "a changed successor capture",
+    "an extra capture",
+    "a missing capture",
+    "a symlink capture",
+  ])("refuses cancellation with %s", (fault) => {
+    const { f, recoveredOid, recoveredRecord } = recoveredStaleAdminAuto();
+    if (fault === "a changed successor capture") {
+      writeFileSync(
+        join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`),
+        "changed successor capture\n",
       );
-      expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
-      expect(f.git(["rev-parse", outcomeRef])).toBe(recoveredOid);
-    },
-  );
+    } else if (fault === "a missing capture" || fault === "a symlink capture") {
+      const capture = join(f.worktree, ".local", `merge-output.${recoveredRecord.attempt}.log`);
+      rmSync(capture);
+      if (fault === "a symlink capture") {
+        symlinkSync(join(f.root, "absent-capture"), capture);
+      }
+    } else {
+      writeFileSync(join(f.worktree, ".local/merge-output.extra.log"), "extra\n");
+    }
+    const observed = f.commit(f.tree("collaborator replacement\n"), [f.base]);
+    f.save({ ...f.state(), pr: { ...f.state().pr, headRefOid: observed, autoMergeRequest: null } });
+
+    const cancelled = f.cancel(recoveredOid, observed);
+    expect(cancelled.status, cancelled.output).toBe(1);
+    expect(cancelled.output).toContain(
+      fault === "a changed successor capture"
+        ? "merge capture changed before retention"
+        : fault === "a symlink capture"
+          ? "cannot retain non-regular capture"
+          : "merge capture set changed before retention",
+    );
+    expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
+    expect(f.git(["rev-parse", outcomeRef])).toBe(recoveredOid);
+  });
 
   it.each(["a changed successor capture", "an extra capture"])(
     "refuses subsequent recovery with %s",

@@ -34,12 +34,12 @@ import {
   openOpenClawStateReadConnection,
   type OpenClawStateReadConnection,
 } from "./openclaw-state-db-read-connection.js";
-import { admitStateReadSchemaFacts } from "./openclaw-state-db-read-schema.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import {
   executeExistingOpenClawStateRead,
   withCurrentOpenClawStateReadScope,
 } from "./openclaw-state-db-readonly.js";
+import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -372,7 +372,7 @@ function runOpenClawStateCurrentReadConnection<T>(
     closeAdmission = openStateSchemaReadAdmission?.(db);
     runSqliteReadOperationSync(db, () => {
       // The schema owner already retains validation for this physical database.
-      admitStateReadSchemaFacts(db, pathname);
+      admitStateSchemaFacts(db, pathname);
       assertStateReadSchema(db, pathname, integrityPolicy);
     });
     result = runSqliteReadSnapshotSync(db, () => {

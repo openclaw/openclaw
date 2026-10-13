@@ -17,7 +17,6 @@ import {
   chatHistoryRequests,
   getChatHistoryLoadState,
   setChatHistoryLoad,
-  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
@@ -36,7 +35,7 @@ export async function loadChatHistory(
   state: ChatHistoryHost,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ObservedChatHistoryResult | undefined> {
-  let sessionKey = state.sessionKey;
+  const sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
@@ -60,40 +59,6 @@ export async function loadChatHistory(
   const agentIsCurrent = () =>
     !isUiSelectedGlobalSessionKey(state, sessionKey) ||
     resolveUiSelectedSessionAgentId(state) === requestAgentId;
-  const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
-  if (hydration) {
-    const version = requests.historyVersion;
-    state.chatLoading = true;
-    state.requestUpdate?.();
-    const current = await hydration;
-    if (
-      !current ||
-      !connectionIsCurrent() ||
-      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-      !agentIsCurrent()
-    ) {
-      return undefined;
-    }
-    sessionKey = state.sessionKey;
-    if (requests.historyVersion !== version) {
-      const active = requests.historyLoad;
-      if (active.phase === "idle") {
-        return undefined;
-      }
-      if (
-        active.phase === "in-flight" &&
-        opts.supersedeInFlight !== true &&
-        active.startup &&
-        active.client === client &&
-        active.sessions === sessions &&
-        active.connectionEpoch === connectionEpoch &&
-        active.sessionKey === sessionKey &&
-        active.requestAgentId === requestAgentId
-      ) {
-        return active.promise;
-      }
-    }
-  }
   const deltaCursor = readChatHistoryCursor(state);
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);

@@ -1419,10 +1419,9 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps recovered Telegram notice authority current after a transport failure", async () => {
+  it("releases recovered Telegram notice authority after a transport failure", async () => {
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:telegram:group:-100123:topic:99";
-    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       sessionKey,
@@ -1434,8 +1433,13 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeCompletedToolTranscript(sessionsDir);
-    sendRecoveryNotice.mockRejectedValueOnce(new Error("temporary transport failure"));
+    let currentAtSend: boolean | undefined;
+    sendRecoveryNotice.mockImplementationOnce(async (notice) => {
+      currentAtSend = notice.isCurrent?.({});
+      throw new Error("temporary transport failure");
+    });
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(currentAtSend).toBe(true);
     expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     const notice = sendRecoveryNotice.mock.calls[0]?.[0];
     expect(notice).toMatchObject({
@@ -1446,23 +1450,8 @@ describe("main-session-restart-recovery", () => {
       text: "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!",
       idempotencyKey: `main-session-restart-recovery:${String(gatewayParams().idempotencyKey)}:resumed-notice`,
     });
-    expect(notice?.isCurrent?.({})).toBe(true);
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected recovered session");
-    }
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, abortedLastRun: true },
-    });
     expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, sessionId: "replacement-session" },
-    });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(true);
     dispatchSettlement.resolve();
-    await waitForFast(() => expect(notice?.isCurrent?.({})).toBe(false));
   });
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {

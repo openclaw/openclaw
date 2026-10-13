@@ -273,10 +273,13 @@ async function prepareRuntimeConfigSnapshot(
   inputConfig: OpenClawConfig,
   context: RuntimeConfigSnapshotPreparationContext = {},
   assertCurrent?: () => void,
+  sourceConfig?: OpenClawConfig,
 ): Promise<() => boolean> {
   const config = getRuntimeConfigCapture(inputConfig)
     ? cloneConfigWithResolutionFacts(inputConfig)
     : inputConfig;
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
   const generation = runtimeConfigSnapshotGeneration;
   const preparerGeneration = runtimeConfigPreparerGeneration;
   const fingerprint = preparationFingerprint(config);
@@ -315,16 +318,19 @@ async function prepareRuntimeConfigSnapshot(
         return false;
       }
     }
-    publishRuntimeConfigSnapshot(config);
+    publishRuntimeConfigSnapshot(config, sourceConfig);
     return true;
   };
 }
 
-export function setAppliedRuntimeConfigSnapshot(
+export async function setAppliedRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig: OpenClawConfig,
-): void {
-  setRuntimeConfigSnapshot(config, sourceConfig);
+): Promise<void> {
+  const publish = await prepareRuntimeConfigSnapshot(config, {}, undefined, sourceConfig);
+  if (!publish()) {
+    throw new Error("Applied runtime config preparation was superseded before publication");
+  }
   runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 

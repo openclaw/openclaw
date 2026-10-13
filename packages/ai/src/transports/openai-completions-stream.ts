@@ -139,9 +139,10 @@ export async function processCompletionsStream(
   const openAIModel = model as OpenAIModeModel;
   const compat = getCompat(openAIModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
-  const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
+  const shouldFilterDeepSeekDsmlText = compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const deepSeekToolCallRecoverer =
+    !directMode && shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
   const gemmaToolCallRecoverer =
     !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();

@@ -18,7 +18,10 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { hasSupportedGitHubPublicationTarget } from "./github-publication-availability.js";
+import {
+  hasSupportedGitHubPublicationTarget,
+  prepareGitHubPublicationWorkspaceOwner,
+} from "./github-publication-availability.js";
 import {
   readGitHubPublicationFact,
   startGitHubPublicationDiscovery,
@@ -39,6 +42,7 @@ const identity = {
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
   sessionRead: vi.fn(),
+  admittedSessionRead: vi.fn(),
   config: vi.fn(),
   identity: vi.fn(),
 }));
@@ -46,7 +50,56 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
 // mock-isolation: Keep session-worker state outside the worktree-read measurement.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: mocks.sessionRead,
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => {
+    const loaded = await mocks.sessionRead(params);
+    params.onSelected?.({
+      ...loaded,
+      storePath: "/synthetic/admitted.sqlite",
+      storeKeys: [loaded.canonicalKey],
+      store: { [loaded.canonicalKey]: loaded.entry },
+      capturedReadSource: {
+        agentId: loaded.agentId,
+        path: "/synthetic/admitted.sqlite",
+        databaseIdentity: "publication-worker-fixture",
+      },
+    });
+    return loaded;
+  },
+}));
+// mock-isolation: Supply fresh row facts from the admitted physical session reader.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  withSessionEntryReadOnlyInWorker: async <T>(
+    scope: Parameters<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+    >[0],
+    assertCurrent: () => void,
+    consume: Parameters<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker<T>
+    >[2],
+  ) => {
+    const loaded = await mocks.admittedSessionRead(scope, assertCurrent);
+    return await consume(
+      {
+        ok: true,
+        value: loaded.entries.find(
+          (row: { sessionKey: string }) => row.sessionKey === scope.sessionKey,
+        )?.entry,
+      },
+      {
+        kind: "file",
+        assertCurrent,
+        source: {
+          agentId: scope.agentId ?? "main",
+          path: scope.storePath ?? "/synthetic/admitted.sqlite",
+          databaseIdentity: "publication-worker-fixture",
+        },
+      },
+    );
+  },
 }));
 // mock-isolation: Use the synthetic registry without starting managed-worktree services.
 vi.mock("../agents/worktrees/service.js", () => ({
@@ -108,6 +161,9 @@ beforeEach(async () => {
     },
   });
   mocks.sessionRead.mockReset().mockImplementation(async () => mocks.session());
+  mocks.admittedSessionRead.mockReset().mockImplementation(async () => ({
+    entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }],
+  }));
   mocks.identity.mockReset().mockResolvedValue(identity);
   await insertRegistryWorktree(process.env, worktree);
 });
@@ -143,12 +199,92 @@ it("rejects an unbound session without dispatching a worktree read", async () =>
   expect(execute).not.toHaveBeenCalled();
 });
 
+it.each(["unbound", "replaced-session", "replaced-lifecycle", "replaced-writer"])(
+  "uses the admitted store's current %s row instead of rediscovering another store",
+  async (kind) => {
+    const entry = { ...mocks.session().entry, activeWriterRunId: "writer" };
+    if (kind === "unbound") {
+      delete entry.worktree;
+    } else if (kind === "replaced-session") {
+      entry.sessionId = "replacement";
+    } else if (kind === "replaced-lifecycle") {
+      entry.lifecycleRevision = "replacement";
+    } else {
+      entry.activeWriterRunId = "replacement";
+    }
+    mocks.admittedSessionRead.mockResolvedValue({
+      entries: [{ sessionKey: session.sessionKey, entry }],
+    });
+    await expect(
+      prepareGitHubPublicationWorkspaceOwner(session, {
+        sessionTarget: {
+          ...session,
+          storePath: "/synthetic/admitted.sqlite",
+          expectedLifecycleRevision: "lifecycle",
+          expectedWriterRunId: "writer",
+        },
+      }),
+    ).rejects.toThrow();
+    expect(mocks.sessionRead).not.toHaveBeenCalled();
+    expect(mocks.admittedSessionRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: session.agentId,
+        sessionKey: session.sessionKey,
+        storePath: "/synthetic/admitted.sqlite",
+        projection: [],
+      }),
+      expect.any(Function),
+    );
+  },
+);
+
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {
     await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
     return identity;
   });
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);
+});
+
+it("keeps an admitted stored main alias under its canonical publication owner", async () => {
+  mocks.config.mockReturnValue({ session: { scope: "global" } });
+  const aliasWorktree = {
+    ...worktree,
+    id: "publication-global-worktree",
+    path: "/synthetic/global-publication",
+    branch: "openclaw/global-publication",
+    ownerId: "global",
+  };
+  await insertRegistryWorktree(process.env, aliasWorktree);
+  mocks.session.mockReturnValue({
+    ...mocks.session(),
+    canonicalKey: "global",
+    entry: {
+      ...mocks.session().entry,
+      worktree: {
+        id: aliasWorktree.id,
+        branch: aliasWorktree.branch,
+        repoRoot: aliasWorktree.repoRoot,
+      },
+    },
+  });
+  const storedKey = "agent:main:main";
+  mocks.admittedSessionRead.mockResolvedValue({
+    entries: [{ sessionKey: storedKey, entry: mocks.session().entry }],
+  });
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(
+    { ...session, sessionKey: "global" },
+    {
+      sessionTarget: {
+        ...session,
+        sessionKey: storedKey,
+        storePath: "/synthetic/admitted.sqlite",
+      },
+    },
+  );
+  using _ = { [Symbol.dispose]: () => prepared.release() };
+  expect(prepared.initial.loaded.canonicalKey).toBe("global");
+  expect(mocks.sessionRead).not.toHaveBeenCalled();
 });
 
 it.each(["session", "identity"] as const)(

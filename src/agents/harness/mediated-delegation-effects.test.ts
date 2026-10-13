@@ -157,7 +157,7 @@ async function createCaller(
       timeoutMs: 10_000,
       admittedRunContext,
     };
-    const policy = resolveCliRuntimeToolPolicy({
+    const policy = await resolveCliRuntimeToolPolicy({
       params: run,
       policySessionKey: sessionKey,
       policyAgentId: "coder",

@@ -400,7 +400,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const run = async () => {
       let outcome: MemorySyncOutcome;
       await this.publishedDatabase.withPublicationGeneration(async () => {
-        await this.publishedDatabase.refreshFacts();
+        try {
+          await this.publishedDatabase.refreshFacts();
+        } catch (error) {
+          if (params?.force && !hasTargetedSessionSyncParams(params)) {
+            this.markFailedFullReindexRetry({
+              memory: this.sources.has("memory"),
+              sessions: this.sources.has("sessions"),
+            });
+            this.recordFullReindexFailure(this.provider !== null);
+          }
+          throw error;
+        }
         const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
         let forceFtsOnly =
           this.embeddingBootstrapFailure !== undefined &&

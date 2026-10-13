@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
@@ -116,6 +117,34 @@ describe("restricted CLI tool preparation", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
   });
+
+  it.each(["agent", "side-question", "preparation-error"] as const)(
+    "releases direct CLI tool authority after %s",
+    async (outcome) => {
+      if (outcome === "preparation-error") {
+        setCliRunnerPrepareTestDeps({
+          resolveBootstrapContextForRun: async () => {
+            throw new Error("bootstrap preparation failed");
+          },
+        });
+      }
+      const pending = fixture.prepare({
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sessionKey: fixture.session.sessionTarget.sessionKey,
+        config: { session: { store: fixture.session.sessionTarget.storePath } },
+        ...(outcome === "side-question" ? { executionMode: "side-question" } : {}),
+      });
+      if (outcome === "preparation-error") {
+        await expect(pending).rejects.toThrow("bootstrap preparation failed");
+      } else {
+        const context = await pending;
+        await context.preparedBackend.cleanup?.();
+      }
+      assertNoRetainedSessionSharingReads();
+    },
+  );
 
   it.each([
     "conversation",

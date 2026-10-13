@@ -18,11 +18,25 @@ type TranscriptStatsRow = Omit<
   position: number;
   lastMutationAtMs: number | null;
   lastObservedMutationAtMs: number | null;
+  generation: string | null;
+  coldSessionId: string | null;
 };
+
+function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTranscriptStats {
+  return {
+    eventCount: row?.eventCount ?? 0,
+    maxSeq: row?.maxSeq ?? 0,
+    sizeBytes: row?.sizeBytes ?? 0,
+    ...(row?.lastMutationAtMs != null ? { lastMutationAtMs: row.lastMutationAtMs } : {}),
+    ...(row?.lastObservedMutationAtMs != null
+      ? { lastObservedMutationAtMs: row.lastObservedMutationAtMs }
+      : {}),
+  };
+}
 
 const transcriptStatsQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
-  const prepare = (point: boolean) =>
+  const prepare = (point: boolean, includeGeneration = false) =>
     prepareSqliteQuerySync<readonly string[], TranscriptStatsRow>(database, (parameter) => {
       const id = parameter((ids) => ids[0]!);
       const requested = (): AliasableExpression<{ key: number; value: string | null }> =>
@@ -75,9 +89,17 @@ const transcriptStatsQuery = createSqliteQueryCache((database) => {
           eb.fn.coalesce("cold.raw_bytes", "events.size_bytes", eb.val(0)).as("sizeBytes"),
           "session.transcript_observed_at as lastObservedMutationAtMs",
           "session.transcript_updated_at as lastMutationAtMs",
+          "cold.session_id as coldSessionId",
+          (includeGeneration
+            ? eb
+                .selectFrom("transcript_rewrite_watermarks as rewrite")
+                .select("rewrite.generation")
+                .whereRef("rewrite.session_id", "=", "target.value")
+            : eb.val(null)
+          ).as("generation"),
         ]);
     });
-  return { point: prepare(true), batch: prepare(false) };
+  return { point: prepare(true), batch: prepare(false), export: prepare(true, true) };
 });
 
 /** Read ordered stats in bounded statements, preserving duplicate and missing session IDs. */
@@ -91,21 +113,7 @@ export function readTranscriptStatsBatchFromDatabase(
   const read = point ? queries.point : queries.batch;
   return chunkItems(sessionIds, point ? 1 : 400).flatMap((chunk) => {
     const rows = new Map(read(chunk).rows.map((row) => [row.position, row]));
-    return chunk.map((_, position) => {
-      const row = rows.get(position);
-      const stats: SessionTranscriptStats = {
-        eventCount: row?.eventCount ?? 0,
-        maxSeq: row?.maxSeq ?? 0,
-        sizeBytes: row?.sizeBytes ?? 0,
-      };
-      if (row?.lastMutationAtMs != null) {
-        stats.lastMutationAtMs = row.lastMutationAtMs;
-      }
-      if (row?.lastObservedMutationAtMs != null) {
-        stats.lastObservedMutationAtMs = row.lastObservedMutationAtMs;
-      }
-      return stats;
-    });
+    return chunk.map((_, position) => transcriptStatsFromRow(rows.get(position)));
   });
 }
 
@@ -115,4 +123,17 @@ export function readTranscriptStatsFromDatabase(
   sessionId: string,
 ): SessionTranscriptStats {
   return readTranscriptStatsBatchFromDatabase(database, [sessionId])[0]!;
+}
+
+/** Export readers carry the rewrite identity in their existing statistics statement. */
+export function readTranscriptExportStatsFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+): { stats: SessionTranscriptStats; generation: string | null; cold: boolean } {
+  const row = transcriptStatsQuery(database.db).export([sessionId]).rows[0];
+  return {
+    generation: row?.generation ?? null,
+    cold: row?.coldSessionId != null,
+    stats: transcriptStatsFromRow(row),
+  };
 }
