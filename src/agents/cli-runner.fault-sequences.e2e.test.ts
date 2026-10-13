@@ -115,7 +115,6 @@ beforeAll(async () => {
 beforeEach(async () => {
   const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-fault-sequences-"));
   scenarioRoot = await fs.realpath(rawRoot);
-  setRuntimeConfigSnapshot(fallbackConfig());
   supervisorSpawnMock.mockReset();
   testMocks.nativeRunBudgetAttempt.mockReset();
   testMocks.runCliAgent.mockReset();
@@ -286,6 +285,7 @@ function expectCounts(expected: ScenarioCounts): void {
 
 describe("CLI runner fault sequences", () => {
   it("dispatches bridge mode through one fresh CLI child and bypasses the native run budget", async () => {
+    setRuntimeConfigSnapshot(fallbackConfig());
     supervisorSpawnMock.mockResolvedValueOnce(managedRun(successExit("bridge ok")));
 
     const outcome = await runOuter({

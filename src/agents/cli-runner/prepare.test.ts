@@ -689,8 +689,8 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     await fixture.cleanup();
-    // One retained case keeps workers warm without exhausting their store capacity.
-    for (const dir of retainedStateDirs.splice(0, retainedStateDirs.length - 1)) {
+    // A few retained cases keep both broker workers warm below their store capacity.
+    for (const dir of retainedStateDirs.splice(0, retainedStateDirs.length - 4)) {
       await closeOpenClawStateDatabaseByPathAsync(
         resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
       );
