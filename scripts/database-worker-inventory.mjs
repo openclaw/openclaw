@@ -240,14 +240,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-archive-transaction.ts",
-    {
-      priority: 99,
-      evidence:
-        "reclaimSqliteSessionInTransaction dispatches archive metadata writes in mutation workers; archive-store.ts also calls it only in its !supportsOpenClawAgentDatabaseExecution native branch. Durable publication uses publishSessionStateArchivesInWorker; native compatibility publication remains; incognito never enters these kernels.",
-    },
-  ],
-  [
     "src/cron/store/quarantine.kernel.ts",
     {
       tier: "T3",
@@ -776,19 +768,133 @@ const reviewedOperations = new Map([
           "Entry/lifecycle reader workers and replacement-state.ts query pending publication. Replacement-state also serves opaque SDK replacement transactions; keep this shared read mixed.",
       },
       {
-        tier: "T1",
+        tier: "T3",
         operations: [
           "prepareSessionTranscriptArchivePublishPlans",
           "recordSessionTranscriptArchivePublishResults",
         ],
         evidence:
-          "Durable archive publication uses openclaw-agent-execution-operations.ts workers. archive-transaction.ts retains the !supportsOpenClawAgentDatabaseExecution native publication path from archive-store.ts; no worker-only classification while that compatibility owner remains.",
+          "Only archive-transaction.ts:24,30 and openclaw-agent-execution-operations.ts:433,445 call prepare/record. Runtime publication dispatches through session-archive-publication.ts to the agent execution worker. The alternate archive-store.ts route passes reclamation-run.ts:68,140: native reclamation requires a worker or explicit schema/agent maintenance custody; !supportsOpenClawAgentDatabaseExecution alone never admits native reclamation.",
       },
       {
         tier: "T1",
         operations: ["persistSessionTranscriptArchive"],
         evidence:
           "Only lifecycle-state.ts deleteMaterializedSessionStatePlans inserts the canonical recovery copy. That lifecycle kernel serves mutation workers plus opaque SDK deletion transactions; retain the shared user-data integrity check and mixed tier.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive-transaction.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["reclaimSessionArchivePublicationInTransaction"],
+        evidence:
+          "Only session-accessor.sqlite-reclamation.ts:204 calls this archive-publish-prepare/record transaction. Incoming reclamation passes reclamation-run.ts:68,140: !isMainThread or exclusive schema/agent maintenance permits native work; ordinary runtime dispatches to session-accessor.sqlite-archive.worker.ts:500-512. Agent execution publication uses its own worker transaction.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-compaction.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["persistCompactionBoundary"],
+        evidence:
+          "agent-runner-memory.ts:489 uses the async compaction facade, which dispatches session.transcript.compactionBoundary via withSessionMetadataWorker to session-manager-metadata.worker.ts:141. The native Sync wrapper has no production value caller: accessor barrels only re-export it and session-accessor.sqlite-compaction-runtime.ts:17,37-38 uses its type. No SDK value export. Worker initialization uses ensureSessionEntryInTransaction; the unused native branch is not a new entry exemption.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-anchor.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["assertSessionTranscriptContextAnchorInDatabase"],
+        guard: "expectedAuthority",
+        evidence:
+          "Only the expectedAuthority SELECT is covered. model-context.ts:202 forwards it from anchor-read.kernel.ts:215; callers are entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts:185 registered in execution.worker.ts:454. Runtime anchor readers use owned cohorts or transcript-worker readAnchors. Released detached validators accept only version/admission, and withTranscriptContextSnapshot omits expectedAuthority; shared anchor helpers remain mixed.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-message-rewrite.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "rewriteNativeAssistantTranscriptMessageForRun",
+          "rewriteNativeTranscriptMessageAtAnchor",
+        ],
+        evidence:
+          "The sole production value callers are session-message-rewrite.ts:160,193, each dominated by !isMainThread at :159,191. Main-thread callers take rewritePreparedTranscriptMessage at :176,208. Neither native helper has a plugin-SDK value export; the surrounding mixed module is not exempted.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["appendTranscriptEvent", "rewriteTranscriptEventRowsExact"],
+        evidence:
+          "Raw append's only production caller is session-transcript-event.ts:94 under !isMainThread; memory returns earlier and main-thread append dispatches to its worker. sqlite-runtime-testing.ts is a private first-party test helper excluded from the published package. Exact-row rewrite is called only by session-transcript-correction.ts:164 inside runNative, invoked solely under !isMainThread at :190. Internal re-exports are not runtime roots; snapshot/SDK siblings stay mixed.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-index.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "deleteOrphanedTranscriptIndexRowsInTransaction",
+          "listSessionsNeedingTranscriptIndexReconcile",
+        ],
+        evidence:
+          "Only reconcile.ts:205,206,280 and projection-writer.ts:299,301 call these full scans, in no-execution/publication branches. Ordinary durable reconcile/search captures agent execution and uses projection-publication.worker.ts maintained status. Memory returns before SQL; execution-scope.ts:93-112 confines unsupported execution to explicit maintenance or worker-native deletion cleanup. Synchronous per-session rebuild uses separate helpers.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-projection-rebuild.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "claimPreparedSessionTranscriptProjectionInTransaction",
+          "deletePreparedSessionTranscriptProjectionChunkInTransaction",
+          "finalizePreparedSessionTranscriptProjectionInTransaction",
+          "insertPreparedSessionTranscriptProjectionRows",
+          "prepareProjectionTailCatchUp",
+          "projectionTailFitsCatchUpBounds",
+          "readProjectionSourceSnapshot",
+        ],
+        evidence:
+          "Prepared claim/delete/append/finalize are called only by projection-writer.ts:124,143,184,212 and projection-publication.worker.ts:118-128; snapshot/tail/insertion helpers are private descendants. reconcile.ts:175-192 supplies publication for ordinary durable execution. Memory returns first; execution-scope.ts:93-112 confines native branches to explicit maintenance or worker-native cleanup. The synchronous index.ts:497-531 rebuild uses visitSessionTranscriptProjection/readProjectionSource, not these operations.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-projection-writer.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["finalizePreparedProjection", "runProjectionWrite.write"],
+        evidence:
+          "runProjectionWrite is called only by this module's native claim/delete/append/finalize/status branches and reconcile.ts:201,277 without publication. Durable reconcile/search uses the publication worker; finalize's worker branch returns before its SELECT. Memory returns before SQL; execution-scope.ts:93-112 limits unsupported execution to maintenance or worker-native cleanup, whose sole host factory supplies workerAuthority in agent-lifecycle-registry.ts:436-439.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-reconcile-readiness.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readSessionTranscriptProjectionStatus"],
+        evidence:
+          "Only reconcile.ts:557 calls this after waitForSessionTranscriptProjection's memory return and running-reconcile check. Supported durable execution dispatches via withSessionHistoryWorkerDatabase to session-transcript.worker.ts:460-470. Native reads require the maintenance/worker-native cleanup scopes in execution-scope.ts:93-112; failed execution capture or worker admission never falls back to native SQL.",
       },
     ],
   ],
