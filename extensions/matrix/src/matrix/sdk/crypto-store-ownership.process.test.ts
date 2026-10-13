@@ -77,7 +77,9 @@ describe("Matrix crypto-store ownership across processes", () => {
       const successor = acquireMatrixCryptoStoreOwnership(snapshotPath);
       await contention.promise;
       expect(child.exitCode).toBeNull();
-      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      const exited = new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+      });
       child.stdin?.end();
       await exited;
       const next = await successor;

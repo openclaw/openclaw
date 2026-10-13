@@ -417,10 +417,11 @@ export class LegacyReefTrustStore {
         (peer) => this.#peerForScan(peer, peers),
         true,
       ),
-    ).map((entry) => ({
-      ...entry,
-      recovery: this.#recovery(entry.peer, entry.id, entry.recipient),
-    }));
+    ).map((entry) =>
+      Object.assign(entry, {
+        recovery: this.#recovery(entry.peer, entry.id, entry.recipient),
+      }),
+    );
   }
 
   #recovery(peer: string, id: string, recipient: ReefPeerIdentity): ReefRejectionRecovery {
