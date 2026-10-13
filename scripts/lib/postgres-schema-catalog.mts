@@ -2,7 +2,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 
 export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-export const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const identifier = (token: string) =>
   /^["`[]/.test(token) ? token.slice(1, -1).replaceAll(token[0]!.repeat(2), token[0]!) : token;
 const keyword = (token: string | undefined, word: string) => token?.toUpperCase() === word;

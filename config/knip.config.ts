@@ -447,6 +447,9 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Offline port foundations precede orchestration; remove with their first production callers.
+  "src/infra/database-engine/port.worker.ts!",
+  "src/snapshot/export-envelope.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",

@@ -20,8 +20,8 @@ import {
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
 
-export type PortRow = Record<string, SQLInputValue>;
-export type PortTable = {
+type PortRow = Record<string, SQLInputValue>;
+type PortTable = {
   name: string;
   columns: readonly { name: string; type: string }[];
   pk: readonly string[];
