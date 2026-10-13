@@ -11,6 +11,7 @@ import { stageSessionPendingInput } from "../../config/sessions/session-accessor
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -319,6 +320,46 @@ describe("CLI durable session context", () => {
     expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
     expect(context.openClawHistoryPrompt).toContain("hook context");
     expect(context.openClawHistoryPrompt).toContain("current ask");
+  });
+
+  it("binds the recorder-owned admitted request to the CLI prompt-build event", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
+    });
+    const { sessionTarget } = fixture.session;
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "latest ask", idempotencyKey: "cli-admitted-request" },
+      target: {
+        ...sessionTarget,
+        sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+      },
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+    vi.spyOn(globalHooks, "getGlobalHookRunner").mockReturnValue(hookRunner as never);
+
+    const context = await fixture.prepare({
+      skillsSnapshot: { prompt: "", skills: [] },
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      trigger: "user",
+      runId: "run-test-cli-current-input",
+      userTurnTranscriptRecorder: recorder,
+    });
+    cleanups.push(() => context.preparedBackend.cleanup?.());
+
+    // Only the recorder-owned admitted request carries current-input identity; a
+    // run without one keeps the legacy identity-free event.
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        currentUserMessage: "latest ask",
+        currentUserMessageId: "cli-admitted-request",
+      }),
+      expect.anything(),
+    );
   });
 
   it("joins deferred maintenance before reading durable context", async () => {

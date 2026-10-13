@@ -2,9 +2,9 @@
 // request on both the embedded runtime and the CLI backend process, so a plugin can
 // identify the current input and its stable admission identity.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
@@ -146,6 +146,7 @@ async function readProbeCaptures(gateway: {
 
 describe("prompt-build current input on real runtimes", () => {
   const cleanups: Array<() => Promise<void>> = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(async () => {
     for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -230,12 +231,7 @@ describe("prompt-build current input on real runtimes", () => {
     "binds the admitted request onto the CLI backend prompt boundary event",
     { timeout: 300_000 },
     async () => {
-      const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "qa-fake-claude-"));
-      // Registered before the Gateway so it runs after Gateway shutdown, when the
-      // CLI child has released the executable.
-      cleanups.push(async () => {
-        fs.rmSync(fakeDir, { recursive: true, force: true });
-      });
+      const fakeDir = tempDirs.make("qa-fake-claude-");
       const fakeBin = path.join(fakeDir, "claude");
       fs.writeFileSync(fakeBin, FAKE_CLAUDE, { mode: 0o755 });
       const { gateway, state, transport } = await startGateway(withCliBackendConfig, () => {
