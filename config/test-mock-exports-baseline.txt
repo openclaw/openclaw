@@ -1247,7 +1247,6 @@
 ["extensions/qa-lab/src/gateway-child-lifecycle.test.ts","./gateway-rpc-client.js","3715d8560d0974ba2f957adf42b42d7eaa2bceeb2b414dd39a6f203b9fc0a327",1]
 ["extensions/qa-lab/src/gateway-child.test.ts","openclaw/plugin-sdk/ssrf-runtime","c4158bd78d2436e364e9cae0b8bf7b683375c110d09f099c5f1bb97ac4933ab7",1]
 ["extensions/qa-lab/src/gateway-rpc-client.test.ts","openclaw/plugin-sdk/gateway-runtime","bde506fd3cda0e8c9b6056e3ceb513fe5ddcea57b8f169d3de14c16936651411",1]
-["extensions/qa-lab/src/lab-server-capture.test.ts","openclaw/plugin-sdk/proxy-capture","ddc4968518294310d26e526c448abb3aacd008c6bdd865369b2a0770546fb7f1",1]
 ["extensions/qa-lab/src/lab-server.test.ts","./live-transports/cli.js","04f6ba8bba5e3a7cfe00951c20277673a8265f4cfc1bf22bdcd6f0c11f713396",1]
 ["extensions/qa-lab/src/lab-server.test.ts","./suite-launch.runtime.js","723033aee16a1c0743a74a4b16c2c0ad5daa2b533cb7749d19f87056efb9af73",1]
 ["extensions/qa-lab/src/lab-server.test.ts","openclaw/plugin-sdk/proxy-capture","370d9ab3ff2b407f04d33ffe5f578a274320631d6e6c8405b0d7dd718c95bf1d",1]

@@ -59,6 +59,8 @@ describe("repository project admission", () => {
   let recipeMode: string;
   let truncated: boolean;
   let unavailable: boolean;
+  let rootEntries: Record<string, unknown>[];
+  let blobs: Record<string, string>;
   let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
   const repositoryNode = () => ({
     __typename: "Repository",
@@ -80,6 +82,8 @@ describe("repository project admission", () => {
     recipeMode = "100755";
     truncated = false;
     unavailable = false;
+    rootEntries = [{ path: ".openclaw", type: "tree", mode: "040000", sha: setupTree }];
+    blobs = {};
     mocks.captureAgentLifecycleBinding.mockReset().mockResolvedValue(agent);
     mocks.prepareGitPack.mockReset().mockResolvedValue("/synthetic/source.pack");
     mocks.matchesAgentLifecycleBinding.mockReset().mockReturnValue(true);
@@ -132,13 +136,25 @@ describe("repository project admission", () => {
         value = {
           sha: rootTree,
           truncated,
-          tree: [{ path: ".openclaw", type: "tree", mode: "040000", sha: setupTree }],
+          tree: rootEntries,
         };
       } else if (url.pathname === `/repos/acme/project/git/trees/${setupTree}`) {
         value = {
           sha: setupTree,
           truncated,
           tree: [{ path: "worktree-setup.sh", type: "blob", mode: recipeMode, sha: recipe }],
+        };
+      } else if (url.pathname.startsWith("/repos/acme/project/git/blobs/")) {
+        const sha = url.pathname.split("/").at(-1) ?? "";
+        const content = blobs[sha];
+        if (content === undefined) {
+          throw new Error("Unexpected fixture blob request");
+        }
+        value = {
+          sha,
+          size: Buffer.byteLength(content),
+          encoding: "base64",
+          content: Buffer.from(content).toString("base64"),
         };
       } else {
         throw new Error("Unexpected fixture metadata request");
@@ -151,6 +167,86 @@ describe("repository project admission", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("admits the declarative recipe before an executable fallback from immutable blobs", async () => {
+    const blob = "e".repeat(40);
+    rootEntries.push({ path: ".devcontainer.json", type: "blob", mode: "100644", sha: blob });
+    blobs[blob] = '{ // cloud preparation\n "onCreateCommand": ["npm", "ci"], "image": "ignored" }';
+    const result = await prepareRepositoryWorkerProjectSource(initial);
+    expect(result.setupRecipe).toBe(blob);
+    expect(result.recipe).toMatchObject({
+      source: "devcontainer",
+      identity: blob,
+      inputs: { ".devcontainer.json": blob },
+      onCreate: ["npm", "ci"],
+      ignoredPropertiesNote: "devcontainer image ignored on cloud machines",
+    });
+    expect(requestPaths().filter((path) => path.includes("/git/trees/"))).toEqual([
+      `/repos/acme/project/git/trees/${rootTree}`,
+    ]);
+    expect(requestPaths().filter((path) => path.includes("/git/blobs/"))).toEqual([
+      `/repos/acme/project/git/blobs/${blob}`,
+    ]);
+  });
+
+  it("records detected install identity using immutable lockfile blobs without fetching their contents", async () => {
+    const lock = "e".repeat(40);
+    const packageBlob = "f".repeat(40);
+    rootEntries = [
+      { path: "yarn.lock", type: "blob", mode: "100644", sha: lock },
+      { path: "package.json", type: "blob", mode: "100644", sha: packageBlob },
+    ];
+    blobs[packageBlob] = '{ "packageManager": "yarn@4.0.0" }';
+    const result = await prepareRepositoryWorkerProjectSource(initial);
+    const identity = "d66a6ba34bd261aca84e16d556a81df1d3c3105fa71ad1a175af1be237a8412a";
+    expect(result.setupRecipe).toBe(identity);
+    expect(result.recipe).toEqual({
+      source: "detected",
+      identity,
+      inputs: { "yarn.lock": lock, "package.json": packageBlob },
+      env: { COREPACK_ENABLE_AUTO_PIN: "0" },
+      detectedInstall:
+        'mkdir -p "$HOME/.local/bin" && corepack enable --install-directory "$HOME/.local/bin" && PATH="$HOME/.local/bin:$PATH" yarn install --immutable',
+    });
+    expect(requestPaths().filter((path) => path.includes("/git/blobs/"))).toEqual([
+      `/repos/acme/project/git/blobs/${packageBlob}`,
+    ]);
+    fetchImpl.mockClear();
+    const cached = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      knownRecipe: () => ({
+        project: result.project,
+        setupRecipe: result.setupRecipe,
+        recipe: result.recipe,
+      }),
+    });
+    expect(cached.recipe).toEqual(result.recipe);
+    expect(
+      requestPaths().every(
+        (path) => !path.includes("/git/trees/") && !path.includes("/git/blobs/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects cached command facts whose recipe identity disagrees with admission", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    await expect(
+      prepareRepositoryWorkerProjectSource({
+        ...initial,
+        knownRecipe: () => ({
+          project: admitted.project,
+          setupRecipe: admitted.setupRecipe,
+          recipe: {
+            source: "script",
+            identity: "e".repeat(40),
+            inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+            env: {},
+            onCreate: ["./.openclaw/worktree-setup.sh"],
+          },
+        }),
+      }),
+    ).rejects.toThrow("identity changed");
   });
 
   it("prepares an authenticated pack for an internal enterprise repository", async () => {

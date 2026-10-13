@@ -104,31 +104,23 @@ function summarizeResponsesCompactionItems(input: unknown): string[] {
   ];
 }
 
-function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
-  try {
-    return record[field];
-  } catch {
-    return undefined;
-  }
-}
-
 function readResponsesToolDisplayName(tool: unknown): string {
   if (!tool || typeof tool !== "object") {
     return "";
   }
   const record = tool as Record<string, unknown>;
-  const name = readToolPayloadField(record, "name");
+  const name = record.name;
   if (typeof name === "string") {
     return name;
   }
-  const fn = readToolPayloadField(record, "function");
+  const fn = record.function;
   if (fn && typeof fn === "object") {
-    const fnName = readToolPayloadField(fn as Record<string, unknown>, "name");
+    const fnName = (fn as Record<string, unknown>).name;
     if (typeof fnName === "string") {
       return fnName;
     }
   }
-  const type = readToolPayloadField(record, "type");
+  const type = record.type;
   return typeof type === "string" && type !== "function" ? type : "";
 }
 

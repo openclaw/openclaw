@@ -113,6 +113,12 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
+The synthetic transport commit can change between wrapper calls even when the
+source tree is unchanged. Build and consume artifacts whose freshness is bound
+to Git `HEAD` in one payload, as CI does within one checkout. Separate calls can
+trigger an unintended rebuild. Do not rewrite freshness stamps to bypass this
+check.
+
 See [local commands](/reference/test/local) for focused development proof.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set

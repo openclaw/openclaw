@@ -12651,7 +12651,74 @@ describe("ci workflow guards", () => {
         }),
       ).toBe(expected);
     }
-    expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    const smokeRunnerContext = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      runnerBackend: "hybrid" as const,
+      runAttempt: 1,
+      matrix: { part_count: 4 },
+      preflightOutputs: { compatibility_target: "false" },
+    };
+    for (const eventName of ["push", "schedule"] as const) {
+      expect(
+        evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
+          ...smokeRunnerContext,
+          eventName,
+        }),
+      ).toBe("blacksmith-8vcpu-ubuntu-2404");
+    }
+    const smokeRunnerFallbacks: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>[] = [
+      { ref: "refs/heads/extended-stable/2026.9.33" },
+      { eventName: "pull_request" },
+      { matrix: { part_count: 6 } },
+      { matrix: {} },
+      { runnerBackend: "blacksmith" },
+      { runnerBackend: "runson" },
+      { runnerBackend: "" },
+      { runnerProfile: "blacksmith" },
+      { frozenTarget: true },
+      { preflightOutputs: { compatibility_target: "true" } },
+      { preflightOutputs: { compatibility_target: "" } },
+      { preflightOutputs: {} },
+      { preflightOutputs: { compatibility_target: "false", frozen_target: "" } },
+    ];
+    for (const override of smokeRunnerFallbacks) {
+      expect(
+        evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
+          ...smokeRunnerContext,
+          ...override,
+        }),
+        JSON.stringify(override),
+      ).toBe("blacksmith-16vcpu-ubuntu-2404");
+    }
+    for (const override of [
+      { runnerBackend: "github" },
+      { runAttempt: 2 },
+      { eventName: "workflow_dispatch" },
+      { repository: "contributor/openclaw" },
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
+          ...smokeRunnerContext,
+          ...override,
+        }),
+        JSON.stringify(override),
+      ).toBe("ubuntu-24.04");
+    }
+    expect(
+      evaluateWorkflowExpression(smokeProfileJob["runs-on"], {
+        ...smokeRunnerContext,
+        eventName: "workflow_dispatch",
+        dispatchId: "full-release-validation-test",
+        releaseRunnerGroup: "test-group",
+        preflightOutputs: {
+          ci_qualification: "true",
+          qualification_runner_backend: "hybrid",
+          compatibility_target: "false",
+        },
+      }),
+    ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
     expect(smokeDockerCacheStep).toBeUndefined();
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart(partId, partCount)");

@@ -264,3 +264,9 @@ timeout. Those events do not automatically cancel them.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+
+Subagent lifecycle warnings retain the error name, message, code, and full stack
+in file logs; console output includes the first six stack lines. Direct announce
+and requester-settle retry warnings
+also include the requester and delivery idempotency key so retries can be traced
+without logging message content.

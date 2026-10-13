@@ -84,6 +84,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
     assertCurrent(context);
     const captureId = randomUUID();
     const owner = await lookupLease(context.id);
+    if (owner?.captureSkipped) {
+      return false;
+    }
     const key = owner?.key;
     let claimed = false;
     let creating = false;
