@@ -15,20 +15,11 @@ type LoadWorkboardParams = WorkboardClientContext & {
   force?: boolean;
   refreshDiagnostics?: boolean;
   preserveError?: boolean;
+  catalogOnly?: boolean;
 };
 
 export async function loadWorkboard(params: LoadWorkboardParams): Promise<boolean> {
-  return await loadWorkboardInternal(params);
-}
-
-export async function loadWorkboardCatalog(params: WorkboardClientContext): Promise<boolean> {
-  return await loadWorkboardInternal({ ...params, force: true }, true);
-}
-
-async function loadWorkboardInternal(
-  params: LoadWorkboardParams,
-  catalogOnly = false,
-): Promise<boolean> {
+  const catalogOnly = params.catalogOnly === true;
   const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
   if (
@@ -50,7 +41,7 @@ async function loadWorkboardInternal(
       runtime.loadClient === client &&
       !state.dispatching &&
       !workboardHasActiveWrites(state)
-      ? await loadWorkboardInternal(params, catalogOnly)
+      ? await loadWorkboard(params)
       : result;
   }
   runtime.loadCatalogOnly = catalogOnly;

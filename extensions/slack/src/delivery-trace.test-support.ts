@@ -1,4 +1,4 @@
-import type { WebClient } from "@slack/web-api";
+import { WebClient } from "@slack/web-api";
 import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
@@ -200,4 +200,148 @@ export async function assertSlackSteeringTransportTrace(params: {
       `${JSON.stringify({ proof: "slack-top-level-steering", headSha: process.env.OPENCLAW_DELIVERY_PROOF_SHA, stoppedBySlack: params.stoppedBySlack, transport: "real dispatch and SDK ChatStreamer; recording WebClient", wireMethods: methods.filter((method) => method.startsWith("chat.")), wireTexts: collectSlackWireTexts(events) })}\n`,
     );
   }
+}
+
+/** Records the real SDK's serialized request, replacing only external HTTP. */
+export function createSlackHttpRecorder(
+  beforeResponse?: (method: string, body: URLSearchParams) => Promise<void>,
+) {
+  const requests: Array<{ method: string; body: URLSearchParams; ts: string }> = [];
+  let nextMessage = 0;
+  const client = new WebClient("xoxb-synthetic-progress", {
+    slackApiUrl: "https://slack-progress.invalid/api/",
+    retryConfig: { retries: 0 },
+    fetch: async (input, init) => {
+      const method = new URL(String(input)).pathname.split("/").at(-1) ?? "";
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected URL-encoded Slack request");
+      }
+      const body = new URLSearchParams(init.body);
+      const ts = body.get("ts") ?? `1767225601.${String(++nextMessage).padStart(6, "0")}`;
+      requests.push({ method, body, ts });
+      await beforeResponse?.(method, body);
+      switch (method) {
+        case "chat.postMessage":
+        case "chat.update":
+          return Response.json({
+            ok: true,
+            channel: body.get("channel"),
+            ts,
+            message: { ts, text: body.get("text") },
+          });
+        case "users.info":
+          return Response.json({ ok: true, user: { team_id: "T0TRACE" } });
+        case "chat.delete":
+        case "reactions.add":
+        case "reactions.remove":
+        case "assistant.threads.setStatus":
+        case "assistant.threads.setTitle":
+        case "assistant.threads.setSuggestedPrompts":
+          return Response.json({ ok: true });
+        default:
+          throw new Error(`Unexpected Slack HTTP method: ${method}`);
+      }
+    },
+  });
+  return { client, requests };
+}
+
+export async function assertSlackProgressMentionHttpTrace(params: {
+  mode: "compact" | "inferred-compact" | "partial" | "card";
+  setup: (
+    recorder: { recordWireCall: (call: { method: string; result?: unknown }) => void },
+    client: WebClient,
+  ) => Promise<(step: DeliveryTraceInStep) => Promise<void>>;
+}) {
+  const http = createSlackHttpRecorder();
+  const native = "<@U0456EFGH> <#C0456EFGH> <!here>";
+  const escaped = "&lt;@U0456EFGH&gt; &lt;#C0456EFGH&gt; &lt;!here&gt;";
+  const source = `${native} with **bold** _context_ \`src/one.ts\` [Docs](https://example.invalid/docs)`;
+  await runDeliveryTraceScenario({
+    scenario: {
+      name: `native-mentions-${params.mode}`,
+      steps: [
+        { kind: "reply-start" },
+        { kind: "partial", text: `FIRST ${source}` },
+        { kind: "advance", ms: 2000 },
+        { kind: "tool-progress", name: "read", phase: "start" },
+        { kind: "partial", text: `SECOND ${source}` },
+        { kind: "advance", ms: 2000 },
+        { kind: "final", text: `FINAL ${native}` },
+        { kind: "idle" },
+      ],
+    },
+    setup: (recorder) => params.setup(recorder, http.client),
+  });
+  emitSlackProgressHttpEvidence(`dispatch-${params.mode}`, http.requests);
+  const writes = http.requests.filter(({ method }) =>
+    ["chat.postMessage", "chat.update"].includes(method),
+  );
+  const readText = (body: URLSearchParams): string => {
+    const blocks = body.get("blocks");
+    if (params.mode !== "card" || !blocks) {
+      return body.get("text") ?? "";
+    }
+    const parsed = JSON.parse(blocks) as Array<{ text?: { text?: string } }>;
+    return parsed.map((block) => block.text?.text ?? "").join("\n");
+  };
+  const first = writes.find(
+    ({ method, body }) => method === "chat.postMessage" && readText(body).includes("FIRST"),
+  );
+  const second = writes.find(
+    ({ method, body }) => method === "chat.update" && readText(body).includes("SECOND"),
+  );
+  expect(first).toBeDefined();
+  expect(second).toBeDefined();
+  expect(second?.body.get("ts")).toBe(first?.ts);
+  for (const request of [first, second]) {
+    const text = readText(request!.body);
+    expect(text).toContain(params.mode === "partial" ? native : escaped);
+    expect(text).not.toContain("&amp;lt;");
+    if (params.mode !== "partial") {
+      for (const token of native.split(" ")) {
+        expect(text).not.toContain(token);
+      }
+      for (const token of escaped.split(" ")) {
+        expect(text.split(token)).toHaveLength(2);
+      }
+    }
+    expect(text).toContain("<https://example.invalid/docs|Docs>");
+    expect(text).toContain("`src/one.ts`");
+    expect(text).not.toContain("**bold**");
+    if (params.mode === "partial") {
+      expect(text).toContain("*bold* _context_");
+    } else {
+      expect(text).toContain("_" + (request === first ? "FIRST" : "SECOND"));
+    }
+  }
+  const final = writes.find(({ body }) => readText(body).includes("FINAL"));
+  expect(final).toBeDefined();
+  expect(readText(final!.body)).toContain(`FINAL ${native}`);
+}
+
+function emitSlackProgressHttpEvidence(
+  scenario: string,
+  requests: ReturnType<typeof createSlackHttpRecorder>["requests"],
+) {
+  if (process.env.OPENCLAW_DELIVERY_PROOF !== "1") {
+    return;
+  }
+  process.stdout.write(
+    `${JSON.stringify({
+      proofRecord: true,
+      boundary: "real Slack SDK serialized HTTP request; external fetch fixture",
+      scenario,
+      sha: process.env.OPENCLAW_DELIVERY_PROOF_SHA,
+      writes: requests
+        .filter(({ method }) => method === "chat.postMessage" || method === "chat.update")
+        .map(({ method, body, ts }) => ({
+          method,
+          ts,
+          channel: body.get("channel"),
+          text: body.get("text"),
+          blocks: body.has("blocks") ? JSON.parse(body.get("blocks")!) : undefined,
+        })),
+    })}\n`,
+  );
 }

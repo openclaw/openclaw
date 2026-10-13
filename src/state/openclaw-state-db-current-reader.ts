@@ -34,13 +34,14 @@ import {
   openOpenClawStateReadConnection,
   type OpenClawStateReadConnection,
 } from "./openclaw-state-db-read-connection.js";
-import { admitStateReadSchemaFacts } from "./openclaw-state-db-read-schema.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import {
   executeExistingOpenClawStateRead,
   withCurrentOpenClawStateReadScope,
 } from "./openclaw-state-db-readonly.js";
+import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
+import { allowsMaintenanceLiveAuthorityReads } from "./openclaw-state-maintenance-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -93,7 +94,7 @@ export async function prepareOpenClawStateCurrentReader(context: OpenClawStateWo
     );
     assertSource();
     assertExistingDatabaseIdentity(pathname, key, birthtime);
-    if (!admitted?.ok || admitted.type !== "admit") {
+    if (!admitted) {
       throw new Error("Current shared-state reader admission did not settle");
     }
   }
@@ -260,20 +261,28 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const native = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname, {
           readOnly: true,
         });
-        if (!native?.db.isOpen) {
+        const liveSource = allowsMaintenanceLiveAuthorityReads(scope, pathname);
+        if (!native?.db.isOpen && !liveSource) {
           return { available: false };
         }
-        const sourceScope = getOpenClawDatabaseMaintenanceResourceScope(native.db);
+        const sourceScope = native && getOpenClawDatabaseMaintenanceResourceScope(native.db);
         if (sourceScope && sourceScope !== scope) {
           return { available: false };
         }
-        const identity = requireOpenClawStateDatabaseIdentity(native);
-        if (!canReadWarmNativeSourceIndependently(native, pathname, identity.key)) {
+        const admission = captureOpenClawStateDatabaseReadAdmission(pathname);
+        const identity = native ? requireOpenClawStateDatabaseIdentity(native) : admission.identity;
+        if (
+          !identity.key.startsWith("file:") ||
+          (native && !canReadWarmNativeSourceIndependently(native, pathname, identity.key))
+        ) {
           return { available: false };
         }
-        const admission = captureOpenClawStateDatabaseReadAdmission(pathname);
-        const retained = retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read");
-        if (!retained) {
+        // Doctor's post-backup live source belongs to this scope even without a
+        // cached writer; private pre-backup inspection still needs source retention.
+        const retained = native
+          ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+          : undefined;
+        if (native && !retained) {
           return { available: false };
         }
         let connection: ReturnType<typeof openOpenClawStateReadConnection>;
@@ -281,7 +290,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
           connection = openOpenClawStateReadConnection(pathname, pathname, identity.key);
         } catch (error) {
           try {
-            retained.release();
+            retained?.release();
           } catch (cleanupError) {
             throwSqliteLifecycleErrors(
               [error, cleanupError],
@@ -298,7 +307,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
           }
           scope?.assertReadAdmission();
           admission.assertCurrent();
-          retained.assertCurrent();
+          retained?.assertCurrent();
           assertExistingDatabaseIdentity(pathname, identity.key);
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             pathname,
@@ -315,7 +324,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
               operation,
               openStateSchemaReadAdmission,
             );
-            retained.observe();
+            retained?.observe();
             return result;
           },
         };
@@ -330,7 +339,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
               return;
             }
             connection.close();
-            retained.release();
+            retained?.release();
             active = false;
             if (bound === reader) {
               bound = undefined;
@@ -363,7 +372,7 @@ function runOpenClawStateCurrentReadConnection<T>(
     closeAdmission = openStateSchemaReadAdmission?.(db);
     runSqliteReadOperationSync(db, () => {
       // The schema owner already retains validation for this physical database.
-      admitStateReadSchemaFacts(db, pathname);
+      admitStateSchemaFacts(db, pathname);
       assertStateReadSchema(db, pathname, integrityPolicy);
     });
     result = runSqliteReadSnapshotSync(db, () => {

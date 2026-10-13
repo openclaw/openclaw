@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -90,7 +91,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           await installMockGateway(page);
@@ -128,7 +129,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
         const held = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
         );
         try {
           await installMockGateway(page);
@@ -293,11 +294,8 @@ suite.define(() => {
       expect(await sideInput.isDisabled()).toBe(false);
       await mainInput.focus();
       // The shared selection owner also publishes background roster reconciliation.
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: { context: { agentSelection: { set: (agent: string) => void } } };
-        };
-        app.runtime.context.agentSelection.set("work");
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.set("work");
       });
       await expect.poll(() => sideInput.isDisabled()).toBe(false);
       expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
@@ -334,7 +332,7 @@ suite.define(() => {
         intent === "sidebar menu before mount"
           ? await holdModuleResponse(
               page,
-              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.ts"),
+              controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-session-rail.tsx"),
             )
           : null;
       try {

@@ -4,7 +4,7 @@ import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inven
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 
-const command = "node --import ./scripts/tsx.mjs scripts/test-projects.mts";
+const command = "node scripts/test-projects.mts";
 
 function packageScripts(files: string[]) {
   const middle = Math.ceil(files.length / 2);
@@ -88,6 +88,15 @@ describe("Windows CI whole-file placement", () => {
 
   it.each([
     { "test:windows:ci:1": `${command} src/first.test.ts` },
+    {
+      ...packageScripts(["src/first.test.ts", "src/second.test.ts"]),
+      "test:windows:ci:1":
+        "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/first.test.ts",
+    },
+    {
+      ...packageScripts(["src/first.test.ts", "src/second.test.ts"]),
+      "test:windows:ci:1": `echo ignored && ${command} src/first.test.ts`,
+    },
     packageScripts(["src/repeated.test.ts", "src/repeated.test.ts"]),
     packageScripts(["src/first.test.ts", "src/*.test.ts"]),
     packageScripts(["src/first.test.ts", "src/second.test.ts --testNamePattern=partial"]),

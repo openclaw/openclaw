@@ -47,8 +47,8 @@ export type PendingSessionsYield = {
 
 type WorkingStatusItem = Extract<ChatItem, { kind: "reading-indicator" }>;
 
-function isWorkingStatus(item: ChatItem): item is WorkingStatusItem {
-  return item.kind === "reading-indicator" && !item.waitingOn;
+function isTurnStatus(item: ChatItem): item is WorkingStatusItem {
+  return item.kind === "reading-indicator";
 }
 
 function scanSessionsYieldItems(
@@ -83,7 +83,10 @@ function scanSessionsYieldItems(
         [...laterRuns].some(
           (runId) => lastYield.runId !== undefined && runId !== lastYield.runId,
         ) ||
-        (insideWorkingTurn && working !== undefined && !working.item.runId);
+        (insideWorkingTurn &&
+          working !== undefined &&
+          !working.item.waitingOn &&
+          !working.item.runId);
       // Nothing is drawn here. The boundary keeps the handed-off turn's rows in
       // place, also between the wait ending and the resume, and keeps a resumed
       // run's rows from pooling or rolling up with the run that handed off.
@@ -94,17 +97,16 @@ function scanSessionsYieldItems(
         text: "",
         timestamp: timestamp ?? 0,
       });
-      if (resumed) {
-        const handoffRunId = lastYield.runId ?? transcriptRunId(message);
-        if (
-          insideWorkingTurn &&
-          handoffRunId &&
-          handoffRunId !== working?.item.runId &&
-          !handoffRunIds.includes(handoffRunId)
-        ) {
-          handoffRunIds.unshift(handoffRunId);
-        }
-      } else {
+      const handoffRunId = lastYield.runId ?? transcriptRunId(message);
+      if (
+        insideWorkingTurn &&
+        handoffRunId &&
+        (handoffRunId !== working?.item.runId || working?.item.waitingOn === "subagents") &&
+        !handoffRunIds.includes(handoffRunId)
+      ) {
+        handoffRunIds.unshift(handoffRunId);
+      }
+      if (!resumed) {
         pending = {
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
           ...(lastYield.runId ? { runId: lastYield.runId } : {}),
@@ -158,7 +160,7 @@ function scanSessionsYieldItems(
     }
     const slot = [...remaining, ...boundary];
     projected.push(slot);
-    if (isWorkingStatus(item)) {
+    if (isTurnStatus(item)) {
       working = { slot, item };
       insideWorkingTurn = true;
     } else if (insideWorkingTurn && chatItemStartsUserTurn(item)) {
@@ -186,7 +188,7 @@ function scanSessionsYieldItems(
         normalizeRoleForGrouping(resolveMessageRole(message)) === "assistant" &&
         hasRenderableNormalizedMessage(message));
   }
-  // A run that resumes a handoff continues the same answer: its status counts
+  // Waiting on or resuming a handoff continues the same answer: its status counts
   // from the request and names the runs before it. That needs the loaded turn
   // to be exactly that chain, from the message that asked. A turn that also
   // holds another run, or starts outside the window, keeps the run's own status
@@ -200,7 +202,11 @@ function scanSessionsYieldItems(
     status.slot[status.slot.indexOf(status.item)] = {
       ...status.item,
       startedAt: Math.min(status.item.startedAt, status.askedAt),
-      request: { askedAt: status.askedAt, runIds: handoffRunIds },
+      request: {
+        askedAt: status.askedAt,
+        // Usage consumers add the status run itself, including while it waits.
+        runIds: handoffRunIds.filter((runId) => runId !== status.item.runId),
+      },
     };
   }
   return { items: projected.toReversed().flat(), pending };
@@ -220,9 +226,9 @@ export function projectSessionsYieldItems(
   complete?: readonly ChatItem[],
 ): ChatItem[] {
   const projected = scanSessionsYieldItems(items, showToolCalls).items;
-  const status = complete?.find(isWorkingStatus);
+  const status = complete?.find(isTurnStatus);
   return status
-    ? projected.map((item) => (isWorkingStatus(item) && item.key === status.key ? status : item))
+    ? projected.map((item) => (isTurnStatus(item) && item.key === status.key ? status : item))
     : projected;
 }
 

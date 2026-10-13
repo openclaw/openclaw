@@ -28,6 +28,7 @@ export const slackPluginBase = {
   },
   doctor: slackDoctor,
   agentPrompt: {
+    customInlineButtonHint: true,
     inboundFormattingHints: () => ({
       text_markup: "markdown",
       rules: [

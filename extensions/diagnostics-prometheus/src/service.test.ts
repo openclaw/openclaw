@@ -22,6 +22,33 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus service", () => {
+  it("counts egress outcomes and catalog preparation independently of log records", () => {
+    const metrics = createMetricsHarness();
+    try {
+      for (const outcome of ["forwarded", "refused"] as const) {
+        for (const substituted of [false, true]) {
+          metrics.record({ type: "secret.egress", outcome, substituted });
+          metrics.record({ type: "secret.egress", outcome, substituted }, untrusted);
+          expect(metrics.render()).toContain(
+            `openclaw_secret_egress_requests_total{outcome="${outcome}",substituted="${substituted}"} 1\n`,
+          );
+        }
+      }
+      const catalog = { type: "tool.catalog", source: "client", mode: "code-mode" } as const;
+      metrics.record({ ...catalog, toolCount: 10 });
+      metrics.record({ ...catalog, toolCount: 12 });
+      metrics.record({ ...catalog, toolCount: 99 }, untrusted);
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_total{mode="code-mode",source="client"} 2\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22\n',
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("distinguishes long runs through one hour without changing shorter-duration histograms", () => {
     const metrics = createMetricsHarness();
     try {

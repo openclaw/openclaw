@@ -5,7 +5,7 @@ import {
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
 /** Explicit reset retires child work without erasing its durable conversations. */
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
@@ -13,7 +13,7 @@ import { clearFollowupDrainCallback } from "../../../auto-reply/reply/queue/drai
 import { clearFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -36,9 +36,107 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;
+
+it.each([false, true])(
+  "reset preserves a replacement child and retires only suppressed terminal work (suppressed=%s)",
+  async (suppressed) => {
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: parentKey,
+      defaultSessionId: "reset-parent",
+      lifecycleRevision: "reset-parent-revision",
+    });
+    const key = childKey("replaced");
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: key,
+      defaultSessionId: "original-child",
+      lifecycleRevision: "original-revision",
+    });
+    await registerSubagentRun({
+      runId: "original-run",
+      childSessionKey: key,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: key }),
+      requesterSessionKey: parentKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: parentKey,
+      task: "old retained assignment",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+    await updateRun("original-run", (entry) => {
+      entry.execution = {
+        status: "terminal",
+        endedAt: 1_000,
+        outcome: { status: "error", error: "original session incarnation changed" },
+        suppressSessionEffects: suppressed ? true : undefined,
+      };
+      entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
+      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    });
+    await patchSessionEntryCore({ storePath, sessionKey: key }, (entry) => ({
+      ...entry,
+      sessionId: "replacement-child",
+      lifecycleRevision: "replacement-revision",
+    }));
+    const replacement = loadSessionEntry({ storePath, sessionKey: key });
+    const interruptReplacement = vi.fn();
+    const replacementAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [key, "replacement-child"],
+      assertAllowed: () => {},
+      onInterrupt: interruptReplacement,
+    });
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.reset"]!({
+        params: { key: parentKey },
+        context: createChatAbortContext({
+          getRuntimeConfig,
+          getSessionEventSubscriberConnIds: () => new Set(),
+        }) as never,
+        respond,
+        client: { connect: { scopes: ["operator.admin"] } } as never,
+        req: { type: "req", id: "reset-replaced-child", method: "sessions.reset" },
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        suppressed,
+        suppressed ? expect.objectContaining({ ok: true }) : undefined,
+        suppressed
+          ? undefined
+          : expect.objectContaining({ message: expect.stringContaining("Reset did not complete") }),
+      );
+      const parent = loadSessionEntry({ storePath, sessionKey: parentKey });
+      if (suppressed) {
+        expect(parent?.lifecycleRevision).not.toBe("reset-parent-revision");
+        expect(subagentRuns.get("original-run")).toMatchObject({
+          execution: {
+            outcome: { status: "error", error: "original session incarnation changed" },
+          },
+          suppressCompletionDelivery: true,
+        });
+        expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeUndefined();
+      } else {
+        expect(parent?.lifecycleRevision).toBe("reset-parent-revision");
+        expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeDefined();
+      }
+      expect(loadSessionEntry({ storePath, sessionKey: key })).toEqual(replacement);
+      expect(interruptReplacement).not.toHaveBeenCalled();
+    } finally {
+      replacementAdmission.release();
+    }
+  },
+);
 
 async function updateRun(runId: string, update: (draft: SubagentRunRecord) => void): Promise<void> {
   await mutateSubagentRuns([runId], (rows) => {
@@ -104,6 +202,8 @@ it.each(
       await registerSubagentRun({
         runId: id,
         childSessionKey: childKey(id),
+        childAgentId: "main",
+        sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey(id) }),
         requesterSessionKey,
         controllerSessionKey,
         requesterAgentId: "main",
@@ -243,6 +343,8 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     await registerSubagentRun({
       runId: "draining",
       childSessionKey: childKey("draining"),
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey("draining") }),
       requesterSessionKey: parentKey,
       controllerSessionKey: controllerKey,
       requesterAgentId: "main",
@@ -253,7 +355,10 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     });
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
-    const interruptChild = vi.fn(() => childInterrupted.resolve());
+    const interruptChild = vi.fn(() => {
+      childInterrupted.resolve();
+      return { runId: "draining" };
+    });
     const parentAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [parentKey, "parent"],
@@ -263,6 +368,12 @@ it.each(["chat", "rpc", "chat-rebind"] as const)(
     const childAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [childKey("draining"), "draining"],
+      run: {
+        runId: "draining",
+        sessionKey: childKey("draining"),
+        sessionId: "draining",
+        agentId: "main",
+      },
       assertAllowed: () => {},
       onInterrupt: interruptChild,
     });
@@ -371,6 +482,8 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
     await registerSubagentRun({
       runId: agentId,
       childSessionKey: "agent:" + agentId + ":subagent:global-child",
+      childAgentId: agentId,
+      sessionEntry: { sessionId: agentId },
       requesterSessionKey: "global",
       controllerSessionKey: "agent:" + agentId + ":other-controller",
       requesterAgentId: agentId,
@@ -453,6 +566,8 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       await registerSubagentRun({
         runId: "replacement-child",
         childSessionKey: childKey("replacement-child"),
+        childAgentId: "main",
+        sessionEntry: { sessionId: "replacement-child" },
         requesterSessionKey: "agent:main:other-requester",
         controllerSessionKey: parentKey,
         requesterAgentId: "main",

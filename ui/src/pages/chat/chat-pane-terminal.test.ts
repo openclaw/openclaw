@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -36,7 +37,11 @@ function createTerminalPane(client: GatewayBrowserClient) {
   const paint = (
     row: GatewaySessionRow | undefined,
     workspace = createPaneHeaderWorkspaceFixture(state),
-  ) => render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
+  ) => {
+    render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
+    container.querySelector(".chat-pane__layout-menu")?.dispatchEvent(new Event("wa-show"));
+    flush();
+  };
   return { pane, state, container, paint };
 }
 

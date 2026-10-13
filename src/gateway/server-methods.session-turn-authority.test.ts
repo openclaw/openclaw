@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -20,6 +21,7 @@ describe("session file turn authority", () => {
   it("reads host files for a session writer and hides them from view-only callers", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
       const sessionRoot = state.path("workspace");
       const filePath = state.path("outside.html");
       await fs.mkdir(sessionRoot, { recursive: true });
@@ -108,6 +110,7 @@ describe("session file turn authority", () => {
   it("keeps solo and admin incognito reads inside prepared authorization without synchronous SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       const sessionRoot = state.path("workspace");
       const filePath = state.path("outside.html");
       await fs.mkdir(sessionRoot, { recursive: true });
@@ -189,6 +192,7 @@ describe("session file turn authority", () => {
   it("rechecks scopes and the original session incarnation after file I/O", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
       const projection = await createSessionRowProjection({ cfg });
       const context = bindSessionRowProjection(
         createDirectChatContext({ getRuntimeConfig: () => cfg }),

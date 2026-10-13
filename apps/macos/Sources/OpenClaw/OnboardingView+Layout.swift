@@ -72,8 +72,8 @@ extension OnboardingView {
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
         onboardingVisible = true
-        currentPage = 0
-        updateMonitoring(for: 0)
+        currentPage = pageOrder.firstIndex(of: initialPage.rawValue) ?? 0
+        updateMonitoring(for: self.activePageIndex)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)

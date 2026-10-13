@@ -16,6 +16,7 @@ import {
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
+  resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
 import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
@@ -128,19 +129,11 @@ async function runWithRetainedUpdateRuntime<T>(
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must be a sibling of both boundaries.
           const boundaries = [sourceRoot, ...mutationBoundaries];
-          let parent = path.dirname(sourceRoot);
-          while (boundaries.some((entry) => isPathInside(entry, parent))) {
-            const ancestor = path.dirname(parent);
-            if (ancestor === parent) {
-              break;
-            }
-            parent = ancestor;
-          }
+          const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
+            -1,
+          )!;
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
-          // An unselected module install can copy its entire enclosing module
-          // owner. Keep its scratch outside that owner; standalone checkouts
-          // can retain current-main same-volume placement.
           if (
             (installTarget || !sourceRoot.split(path.sep).includes("node_modules")) &&
             outsideMutation(parent)

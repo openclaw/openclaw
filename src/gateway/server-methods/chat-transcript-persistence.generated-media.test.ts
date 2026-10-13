@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   readSessionTranscriptWatermark,
@@ -32,6 +33,7 @@ async function withTranscriptFixture(
   }) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState({ label: "generated-media-transcript" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionId: "media-session",

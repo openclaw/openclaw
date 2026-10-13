@@ -684,7 +684,7 @@ describe("gateway server chat", () => {
         key: "agent:main:dashboard:test-abort",
         runId: "idem-sessions-abort-1",
       });
-      expect(abortRes.ok).toBe(true);
+      expect(abortRes.ok, JSON.stringify(abortRes.error)).toBe(true);
       expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");

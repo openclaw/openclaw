@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -43,6 +47,7 @@ describe("memory forget", () => {
     cfg = {
       agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg);
   });
 
   afterEach(async () => {
@@ -52,6 +57,7 @@ describe("memory forget", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetPluginStateStoreForTests();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -85,6 +91,7 @@ describe("memory forget", () => {
           },
         },
       } as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntry({
         agentId: "gamma",
         sessionKey: "agent:gamma:private-session",

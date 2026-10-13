@@ -9,6 +9,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -72,7 +73,11 @@ export async function resolveSessionStableReplyMode(params: {
   }
   // Match dispatch's availability downgrade without letting sender-specific
   // permissions change the policy shared by all turns in this session.
-  return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
+  return (await withPreparedSessionCapabilityRead(() =>
+    resolveStableMessageToolAvailability(params),
+  ))
+    ? candidateMode
+    : "automatic";
 }
 
 /** Shared by dispatch and synthetic turns; sender denials apply only to the individual turn. */

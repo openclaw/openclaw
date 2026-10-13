@@ -237,14 +237,21 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   });
 
-  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  // Warm once; an unobserved Gateway needs no periodic snapshot. Health requests
+  // refresh stale snapshots, and connected clients still receive passive updates.
+  let initialHealthRefresh = true;
   schedulePeriodic(
     "health",
     HEALTH_REFRESH_INTERVAL_MS,
-    () =>
-      params
+    () => {
+      if (!initialHealthRefresh && params.clients.size === 0) {
+        return undefined;
+      }
+      initialHealthRefresh = false;
+      return params
         .refreshGatewayHealthSnapshot({ probe: false })
-        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+    },
     true,
   );
 

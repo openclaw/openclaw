@@ -9,7 +9,7 @@ import type { IncognitoSessionAuthority } from "../config/sessions/session-incog
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
 import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
-import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { hasSessionTranscriptMessage } from "../config/sessions/session-transcript-message-presence.js";

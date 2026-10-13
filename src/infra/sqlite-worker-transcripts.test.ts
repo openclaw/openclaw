@@ -158,10 +158,10 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
     expect(await store.readSession("missing")).toBeUndefined();
     expect(
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "plugins.metadata.read",
-        input: { selector: "installed-index", artifactPreservingReadOnly: true },
+        type: "claws.install-schema-versions",
+        input: { artifactPreservingReadOnly: true },
       }),
-    ).toBeUndefined();
+    ).toEqual([]);
   });
   expect(existsSync(databasePath)).toBe(true);
   expect(existsSync(exportRoot)).toBe(false);

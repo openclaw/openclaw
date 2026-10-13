@@ -17,6 +17,10 @@ function createSuspendedBacklog(count: number) {
     createSubagentRunRecord({
       runId: `suspended-${index}`,
       childSessionKey: `agent:main:subagent:suspended-${index}`,
+      childSessionIdentity: {
+        sessionId: `suspended-session-${index}`,
+        lifecycleRevision: "original-suspended-revision",
+      },
       endedAt: Date.now() - 60_000,
       outcome: { status: "ok" },
       retainAttachmentsOnKeep: true,

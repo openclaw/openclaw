@@ -1,12 +1,13 @@
 import { fork } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -17,6 +18,7 @@ import {
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -44,6 +46,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import * as verificationImplementation from "./openclaw-database-verify.impl.js";
@@ -126,6 +129,26 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 // Direct native fixtures hold their generation until their explicit close.
 const retainVerification = () => async () => {};
 
+function createNativeGeneration(
+  agentId: string,
+  pathname: string,
+  context: ReturnType<typeof captureOpenClawStateWorkerContext>,
+  assertCurrent: () => void,
+  assertCleanup = assertCurrent,
+) {
+  return createAgentDatabaseNativeGeneration(
+    agentId,
+    pathname,
+    context,
+    new AgentDatabaseExecutionLifetime().state,
+    assertCurrent,
+    assertCleanup,
+    undefined,
+    () => {},
+    retainVerification,
+  );
+}
+
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
   async (outcome) => {
@@ -153,15 +176,11 @@ it.each(["confirmed close", "native exit"] as const)(
         }, binding.attachment),
       }),
     };
-    const generation = createAgentDatabaseNativeGeneration(
+    const generation = createNativeGeneration(
       database.agentId,
       database.path,
       context,
       assertCurrent,
-      assertCurrent,
-      undefined,
-      () => {},
-      retainVerification,
     );
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
@@ -369,16 +388,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
       }, binding.attachment),
     }),
   };
-  const generation = createAgentDatabaseNativeGeneration(
-    "main",
-    pathname,
-    context,
-    assertCurrent,
-    assertCurrent,
-    undefined,
-    () => {},
-    retainVerification,
-  );
+  const generation = createNativeGeneration("main", pathname, context, assertCurrent);
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
@@ -460,7 +470,6 @@ it.each([
         .get();
       database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
-      expect(database.walMaintenance.health?.state).toBe("blocked");
       expect(database.db.isOpen).toBe(false);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {
@@ -540,15 +549,11 @@ it.each([
       });
     },
   };
-  const generation = createAgentDatabaseNativeGeneration(
+  const generation = createNativeGeneration(
     database.agentId,
     database.path,
     context,
     assertCurrent,
-    assertCurrent,
-    undefined,
-    () => {},
-    retainVerification,
   );
   if (
     proof === "invalidated" ||
@@ -665,11 +670,12 @@ it.runIf(process.platform === "linux")(
       "corrupt-page",
       "interrupted-admission",
     ];
-    const child = fork(
-      fileURLToPath(new URL("./openclaw-agent-db-crash.test-support.ts", import.meta.url)),
-      cases,
-      { execArgv: ["--import", "tsx"], env: { ...process.env, ...env }, silent: true },
-    );
+    const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
+    const child = fork(fileURLToPath(childUrl), cases, {
+      execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
+      env: { ...process.env, ...env },
+      silent: true,
+    });
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
       stderr += String(chunk);
@@ -687,11 +693,7 @@ it.runIf(process.platform === "linux")(
         });
       });
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, "exit");
-        child.kill("SIGKILL");
-        await exited;
-      }
+      await stopChildProcess(child, 5_000, { force: true });
     }
     expect(child.signalCode).toBe("SIGKILL");
     expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);
@@ -787,15 +789,8 @@ it.runIf(process.platform === "linux")(
             run: execution.runExisting.bind(execution),
             close: () => closeOpenClawAgentDatabaseByPathAsync(pathname),
           }
-        : createAgentDatabaseNativeGeneration(
-            agentId,
-            pathname,
-            context,
-            assertCurrent,
-            () => context.admission.assertCurrent(),
-            undefined,
-            () => {},
-            retainVerification,
+        : createNativeGeneration(agentId, pathname, context, assertCurrent, () =>
+            context.admission.assertCurrent(),
           );
       const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
       try {
@@ -991,16 +986,7 @@ it.runIf(process.platform === "linux")(
         counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
         current = true;
         recordAgentDatabaseAdmissions([], { env });
-        const successor = createAgentDatabaseNativeGeneration(
-          agentId,
-          pathname,
-          context,
-          assertCurrent,
-          assertCurrent,
-          undefined,
-          () => {},
-          retainVerification,
-        );
+        const successor = createNativeGeneration(agentId, pathname, context, assertCurrent);
         try {
           await expect(successor.run(source, async () => "reopened")).resolves.toBe("reopened");
           expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual(

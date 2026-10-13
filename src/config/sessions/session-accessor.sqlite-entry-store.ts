@@ -15,7 +15,7 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
-import { retainLegacyAcpMigrationSourcesForEntry } from "./session-accessor.sqlite-acp-provenance.js";
+import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
 import {
   linkSessionConversation,
   prepareConversationIdentities,
@@ -54,7 +54,10 @@ import {
   parseSessionEntryJson as parseSessionEntryRow,
 } from "./session-accessor.sqlite-status.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  readSessionActorTransactionState,
+  replaceSessionActorStoredEntry,
+} from "./session-actor-transaction.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
   assertCanonicalSessionKeyWrite,
@@ -509,12 +512,22 @@ export function writeSessionEntry(
   const persisted = splitSessionEntrySnapshots(canonicalEntry, {
     previousEntry: canonicalPreviousEntry,
   });
-  const sessionNode = bindSessionNode({
-    entry: canonicalEntry,
-    entryJson: persisted.entryJson,
+  const legacySources = prepareLegacyAcpMigrationSourcesForEntryWrite(
+    database,
     sessionKey,
-    updatedAt,
-  });
+    normalizedEntry,
+    canonicalPreviousEntry,
+    canonicalPreviousRow,
+  );
+  const sessionNode = {
+    ...bindSessionNode({
+      entry: canonicalEntry,
+      entryJson: persisted.entryJson,
+      sessionKey,
+      updatedAt,
+    }),
+    ...legacySources,
+  };
   const previousColumns = new Map(Object.entries(canonicalPreviousRow ?? {}));
   const nodeChanged =
     options.allowStoredAliases === true ||
@@ -590,10 +603,14 @@ export function writeSessionEntry(
         nodeChanged || persisted.snapshotsChanged
           ? trackSessionEntryCacheWrite(database, () => {
               if (nodeChanged) {
-                queries.node(sessionNode);
+                const writeNode =
+                  "legacy_acp_migration_json" in legacySources
+                    ? queries.nodeWithLegacySources
+                    : queries.node;
+                writeNode(sessionNode);
               }
               if (persisted.snapshotsChanged) {
-                writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots);
+                writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots, persisted);
               }
             })
           : undefined;
@@ -603,13 +620,6 @@ export function writeSessionEntry(
           entry: normalizedEntry,
           previousEntry: canonicalPreviousEntry,
         });
-      }
-      if (
-        canonicalPreviousEntry &&
-        (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
-          canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision)
-      ) {
-        retainLegacyAcpMigrationSourcesForEntry(database.db, sessionKey, normalizedEntry);
       }
       if (window.changed) {
         const writeWindow = retainWindowOwner ? queries.retainWindow : queries.claimWindow;
@@ -632,6 +642,15 @@ export function writeSessionEntry(
     persisted.snapshotsChanged ||
     written.window.changed ||
     written.conversationWritten;
+  const sideMetadata =
+    changed || actor || options.postimages
+      ? structuredClone({
+          owner: canonicalPreviousEntry?.owner,
+          participants: canonicalPreviousEntry?.participants,
+          participantCount: canonicalPreviousEntry?.participantCount,
+        })
+      : {};
+  const snapshots = persisted.snapshotsChanged ? persisted.snapshots : undefined;
   if (changed) {
     publishSessionEntryCacheInvalidation(
       database,
@@ -646,12 +665,8 @@ export function writeSessionEntry(
           }),
         entryJson: persisted.entryJson,
         snapshotEntry: canonicalEntry,
-        snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        sideMetadata: structuredClone({
-          owner: canonicalPreviousEntry?.owner,
-          participants: canonicalPreviousEntry?.participants,
-          participantCount: canonicalPreviousEntry?.participantCount,
-        }),
+        snapshots,
+        sideMetadata,
         previousEntry: canonicalPreviousEntry,
         ...(!options.allowStoredAliases
           ? {
@@ -676,20 +691,7 @@ export function writeSessionEntry(
   }
   const persistedEntry =
     actor || options.postimages
-      ? projectSessionEntryCacheUpdate(
-          persisted.entryJson,
-          structuredClone({
-            ...(canonicalPreviousEntry?.owner ? { owner: canonicalPreviousEntry.owner } : {}),
-            ...(canonicalPreviousEntry?.participants
-              ? { participants: canonicalPreviousEntry.participants }
-              : {}),
-            ...(canonicalPreviousEntry?.participantCount !== undefined
-              ? { participantCount: canonicalPreviousEntry.participantCount }
-              : {}),
-          }),
-          canonicalEntry,
-          persisted.snapshotsChanged ? persisted.snapshots : undefined,
-        )
+      ? projectSessionEntryCacheUpdate(persisted.entryJson, sideMetadata, canonicalEntry, snapshots)
       : undefined;
   const row = persistedEntry
     ? createSessionEntryWriteRow({
@@ -701,12 +703,11 @@ export function writeSessionEntry(
       })
     : undefined;
   if (actor && persistedEntry && row) {
-    actor.entryRows.set(sessionKey, {
-      entry: structuredClone(persistedEntry),
+    replaceSessionActorStoredEntry(actor, sessionKey, {
+      entry: persistedEntry,
       row,
+      window: written.window.postimage,
     });
-    actor.hot.entry = structuredClone(persistedEntry);
-    actor.window = written.window.postimage;
   }
   if (options.postimages && persistedEntry && row && canonicalPreviousSideTables) {
     const stagedTranscript = readStagedSessionTranscriptAuthority(database)

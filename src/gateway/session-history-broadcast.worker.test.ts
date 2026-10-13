@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
@@ -28,6 +29,7 @@ async function seedBroadcastHistory(storePath: string) {
   readSessionMessageByIdAsyncMock.mockImplementation(readers.readSessionMessageByIdAsync);
   readSessionMessageCountAsyncMock.mockImplementation(readers.readSessionMessageCountAsync);
   runtimeConfigState.value = {};
+  setRuntimeConfigSnapshot(runtimeConfigState.value);
   loadGatewaySessionRowMock.mockReturnValue(sessionRow);
   const target = {
     agentId: "main",

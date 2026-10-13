@@ -4,6 +4,7 @@ import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
@@ -43,7 +44,6 @@ import {
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
@@ -63,13 +63,11 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
   const state = getTranscriptState(props.paneId);
-  const asyncQuestions = props.asyncQuestions;
+  const { asyncQuestions, selectedSession: activeSession } = props;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const activeSession = props.selectedSession;
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const isGlobalAliasKey = isTranscriptGlobalAlias(props);
@@ -90,11 +88,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
-  const recoveryKey = (messageId: string) =>
-    messageRecoveryKey(props.fullMessageAgentId, messageId);
+  const recoveryKey = (id: string) => messageRecoveryKey(props.fullMessageAgentId, id);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
   const subagents = projectSubagentStatus(props, searchFiltering);
-  const subagentWait = subagents.wait;
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
@@ -145,7 +141,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const chatItems = buildCachedChatItems(chatItemsInput);
   const { workingIndicator, activityRunId, activityGroupKey, runOutputTokens } =
     projectTranscriptActivity(chatItems, props);
-  const latestBrowserTabs = props.latestBrowserTabs;
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -168,11 +163,11 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   }
   const { messageRowKeysById, transcriptMessageKeys, loadedReplySources, positionIndex, rows } =
     projectTranscriptIndex(transcriptChain, expandedToolCards, props);
-  const latestBrowserTabsKey = JSON.stringify([...(latestBrowserTabs ?? [])]);
+  const latestBrowserTabsKey = JSON.stringify([...(props.latestBrowserTabs ?? [])]);
   const workPreviews = projectTranscriptWorkPreviews(transcriptChain.workGroups, {
     sessionKey: props.sessionKey,
     expanded: expandedToolCards,
-    latestBrowserTabs,
+    latestBrowserTabs: props.latestBrowserTabs,
     latestBrowserTabsKey,
     bubbleMode: props.chatBubbleMode,
   });
@@ -230,7 +225,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(subagentWait || hasTypingActors || hasRealtimeTalkConversation);
+  const hasLiveContent = Boolean(subagents.wait || hasTypingActors || hasRealtimeTalkConversation);
   // Rows, not items: a handoff boundary is structure and draws nothing.
   const isEmpty = transcriptItems.length === 0 && !props.loading && !hasLiveContent;
   transcript.setContentReady(!props.loading);
@@ -300,6 +295,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     runActive: props.runActive,
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onPermissionRetry: props.onPermissionRetry,
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
@@ -326,11 +322,12 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
-    waitingSubagents: subagentWait ?? undefined,
+    waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
     subagentActivity: subagents.activity.length
       ? html`<openclaw-chat-subagent-activity
           .rows=${subagents.activity}
+          .turnStartedAt=${subagents.wait ? workingIndicator?.request?.askedAt : undefined}
           .onOpenSubagent=${props.onOpenSubagent}
           .onOpenSession=${props.onOpenSession}
         ></openclaw-chat-subagent-activity>`
@@ -351,7 +348,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       messageReactions: props.messageReactions,
       onReact: props.onReact,
       transcriptVisible: props.transcriptVisible,
-      latestBrowserTabs,
+      latestBrowserTabs: props.latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
       activityRunId,
@@ -381,6 +378,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       userName: props.userName ?? null,
       showOwnSenderName,
       userAvatar: props.userAvatar ?? null,
+      channelAvatar: props.channelAvatar,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
       onDiscardQueuedMessage: props.onDiscardQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
@@ -494,7 +492,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         return () => renderChatDivider(item);
       }
       if (item.kind === "notice") {
-        return () => renderChatNotice(item);
+        return () => renderChatNotice(item, props.onPermissionRetry);
       }
       if (item.kind === "agent-run-frame") {
         return () =>
@@ -528,31 +526,17 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       );
     }
   }
-  // Voice captions reconcile against unfiltered immutable history, not the
-  // current search or streaming projection.
-  const realtimeConversation = renderRealtimeTalkConversation({
-    ...props,
-    realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
-      if (!entry.transcriptId) {
-        return true;
-      }
-      return !persistedMessageIds(
-        props.messages,
-        [],
-        () => new Set(props.messages.map(persistedMessageEntryId)),
-      ).has(entry.transcriptId);
-    }),
-  });
+  const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     appendContent("realtime-talk", realtimeConversation);
   }
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", renderTurnRecapRow(turnRecap));
   }
-  if (subagentWait && !subagents.placedWait && !searchFiltering) {
+  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
     appendContent(
       "waiting-subagents",
-      renderUnplacedSubagentWait(props.sessionKey, subagentWait, streamGroupOptions),
+      renderUnplacedSubagentWait(props.sessionKey, subagents.wait, streamGroupOptions),
     );
   }
   const typingIndicator = renderChatTypingIndicator(
@@ -627,6 +611,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.userName,
     showOwnSenderName,
     props.userAvatar,
+    ...channelSenderAvatarMemoKey(props.channelAvatar),
     props.resourceBasePath,
     props.basePath,
     props.sessionPublicOrigin,

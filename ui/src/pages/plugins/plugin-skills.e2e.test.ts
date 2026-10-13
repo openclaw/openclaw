@@ -210,6 +210,8 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
             await captureScreenshot(page, `skill-bundle-${width}.png`, "viewport");
           }
         }
+        // Move off the file hint so Escape tests viewer dismissal.
+        await modal.locator(".heading").hover();
         await page.keyboard.press("Escape");
         await expect.poll(() => modal.count()).toBe(0);
         expect(new URL(page.url()).pathname).toBe(`/${route}`);

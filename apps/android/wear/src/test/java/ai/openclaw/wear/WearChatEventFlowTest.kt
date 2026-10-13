@@ -2641,13 +2641,15 @@ class WearChatEventFlowTest {
     }
     flow.settleApp()
     flow.captureApp(if (dictate) "dictate-error" else "type-reply")
-    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     if (failure) {
       flow.scrollAppTo(0)
       assertTrue(flow.hasAppText("Error"))
     } else {
       assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
     }
+    // Following the reply can scroll the page heading out of the round viewport.
+    flow.scrollAppTo(0)
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     assertTrue(
       flow.state.realtimeTalk.conversation
         .isEmpty(),

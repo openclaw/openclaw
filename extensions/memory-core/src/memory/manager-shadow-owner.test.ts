@@ -153,11 +153,7 @@ describe("private shadow admission", () => {
         () => undefined,
         async () => true,
       ),
-    ).resolves.toEqual({
-      beforeRevision: expect.any(Number),
-      databaseRevision: expect.any(Number),
-      retainedDrift: false,
-    });
+    ).resolves.toBe(true);
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },
     ]);

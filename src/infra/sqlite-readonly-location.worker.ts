@@ -11,6 +11,7 @@ import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
+import { readSqliteAuthSchema } from "./sqlite-readonly-auth-schema.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import {
   releaseSnapshotTempDirectory,
@@ -338,7 +339,7 @@ function runSession(): void {
           return;
         }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const rows = readAuthProfileRowsReadOnly(pathname);
+        const rows = readAuthProfileRowsReadOnly(pathname, readSqliteAuthSchema(read.schema));
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }

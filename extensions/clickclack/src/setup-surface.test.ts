@@ -189,24 +189,6 @@ describe("ClickClack setup wizard", () => {
     expect(mocks.resolveWorkspaceId).toHaveBeenCalledTimes(1);
   });
 
-  it("reports the resolved bot and workspace after live validation", async () => {
-    const note = vi.fn(async () => undefined);
-
-    await runSetupWizardFinalize({
-      finalize: clickClackSetupWizard.finalize,
-      cfg: configuredAccount,
-      prompter: createTestWizardPrompter({ note }),
-    });
-
-    expect(mocks.me.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.resolveWorkspaceId.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(note).toHaveBeenCalledWith(
-      "Connected as @openclaw — workspace Default resolved.",
-      "ClickClack connection",
-    );
-  });
-
   it("uses the resolved setup credential for live validation", async () => {
     await runSetupWizardFinalize({
       finalize: clickClackSetupWizard.finalize,

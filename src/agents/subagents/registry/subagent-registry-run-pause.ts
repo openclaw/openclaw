@@ -1,7 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -44,7 +47,8 @@ export async function preserveSubagentRunForRestart(params: {
       if (
         entry.execution.status === "terminal" ||
         typeof entry.execution.endedAt === "number" ||
-        shouldSuppressSubagentRecoverySessionEffects(entry)
+        (shouldSuppressSubagentRecoverySessionEffects(entry) &&
+          resolveSubagentChildAuthority(entry).status !== "legacy-unverified")
       ) {
         return { value: { preserved: true, observedEntry: entry } };
       }
@@ -198,7 +202,9 @@ export function markSubagentRunPausedAfterYield(params: {
   const { entry } = params;
   if (
     entry.terminalOwner === "interrupted-recovery" ||
-    shouldSuppressSubagentRecoverySessionEffects(entry) ||
+    (shouldSuppressSubagentRecoverySessionEffects(entry) &&
+      (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
+        (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
     entry.suppressAnnounceReason === "killed" ||
     (entry.cleanup === "delete" && Number.isFinite(entry.deleteCleanupDispatchedAt))

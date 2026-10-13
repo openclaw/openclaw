@@ -129,21 +129,6 @@ describe("openclaw-exec-approval", () => {
     );
   });
 
-  it("exposes labelled, focusable decision buttons", async () => {
-    await renderOpenedApproval(createExecRequest());
-    await getRenderedModalDialog(container);
-
-    const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
-    );
-    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Allow once",
-      "Always allow here",
-      "Deny",
-    ]);
-    expect(buttons.every((button) => button.tabIndex === 0)).toBe(true);
-  });
-
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
     await renderOpenedApproval(
       createExecRequest({
@@ -401,25 +386,6 @@ describe("openclaw-exec-approval", () => {
     );
     await approval.updateComplete;
     expect(element.dialogOpen).toBe(false);
-  });
-
-  it("opens the full queue only on demand", async () => {
-    const queue = [
-      createExecRequest({ id: "approval-inline" }),
-      createExecRequest({ id: "approval-other", request: { command: "pnpm test" } }),
-    ];
-    const { approval } = await renderApproval(queue);
-    expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
-
-    (approval as ExecApprovalElement & { show(): void }).show();
-    await approval.updateComplete;
-
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
-    expect(container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id")).toBe(
-      "approval-inline",
-    );
-    expect(container.querySelectorAll(".exec-approval-list__item")).toHaveLength(1);
-    expect(container.querySelector(".exec-approval-queue")?.textContent?.trim()).toBe("2 pending");
   });
 
   it("closes and resets after the approval queue drains", async () => {

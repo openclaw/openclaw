@@ -168,6 +168,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     basePath?: string;
     sessionPublicOrigin?: string;
     resourceBasePath?: string;
@@ -200,6 +201,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;
     onSend: () => void;
+    onPermissionRetry?: (message: string) => void;
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;

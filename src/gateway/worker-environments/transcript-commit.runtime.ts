@@ -1,17 +1,15 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
-import {
-  publishTranscriptUpdate,
-  withTranscriptWriteTransaction,
-} from "../../config/sessions/session-accessor.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import type { SessionTranscriptWriteScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishSessionEntryWorkerMetadataInvalidation } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { publishTranscriptUpdate } from "../../config/sessions/session-accessor.sqlite-events.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { redactTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { withTranscriptWriteTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-write-snapshot.js";
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
@@ -93,8 +91,8 @@ async function applyWorkerTranscriptCommit(params: {
     assertOwned();
   };
   assertCurrent();
-  const redactedMessages = params.messages.map((message) =>
-    attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
+  const normalizedMessages = params.messages.map((message) =>
+    attachSessionTranscriptRunId(sanitizeTranscriptMessage(message), params.runId),
   );
   const { env: _env, ...scope } = target;
   const input: TranscriptCommitInput = {
@@ -106,7 +104,7 @@ async function applyWorkerTranscriptCommit(params: {
     cwd: process.cwd(),
   };
   const prepareFresh = (recoveredCount: number) => {
-    const messages = redactedMessages.slice(recoveredCount);
+    const messages = normalizedMessages.slice(recoveredCount);
     if (!messages.every(isCommittedAgentMessage)) {
       return undefined;
     }
@@ -115,7 +113,7 @@ async function applyWorkerTranscriptCommit(params: {
         Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
         applyAssistantDeliveryDirectives(message);
       }
-      return redactTranscriptMessageForStorage(message, { config: params.config });
+      return sanitizeTranscriptMessageForStorage(message);
     });
   };
   let applied: ApplyTranscriptCommitResult;
@@ -247,6 +245,7 @@ async function applyWorkerTranscriptCommit(params: {
             storePath: execution.path,
             databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
+            entry: committed.entry,
           });
         }
         if (committed.projectionNeedsReconcile) {

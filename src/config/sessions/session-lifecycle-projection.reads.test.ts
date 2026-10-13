@@ -18,7 +18,7 @@ it("keeps upsert preparation current without a read transaction and retains remo
           { database: database.db, databasePath: database.path },
         ),
     );
-    const input = { removals: [], upsertSessionKeys: [sessionKey], archiveDirectory: state.root };
+    const input = { removals: [], upserts: [{ sessionKey }], archiveDirectory: state.root };
     backend.execute({ type: "prepare", input });
     writeSessionEntry(database, sessionKey, { sessionId: "current", updatedAt: 2 });
     const exec = vi.spyOn(database.db, "exec");

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -12,6 +13,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -49,6 +51,7 @@ import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
+import { projectAssistantTranscriptMirrorIdentity } from "./transcript-assistant-delivery-read.js";
 import {
   projectAssistantTranscriptText,
   recordAssistantManagedMediaUrls,
@@ -101,7 +104,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice;
+  | SkillWorkshopChangeNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -517,7 +521,6 @@ async function appendExactAssistantMessageWithSource(
               ? await findLatestEquivalentAssistantMessageId(
                   appendTarget,
                   preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                  params.config,
                 )
               : undefined;
           equivalentAssistant = messageId
@@ -621,32 +624,12 @@ async function readLatestVisibleTranscriptMessage(scope: {
   }
 }
 
-function extractAssistantMessageText(message: AgentMessage): string | null {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
-    return null;
-  }
-
-  const parts = message.content
-    .filter(
-      (
-        part,
-      ): part is {
-        type: "text";
-        text: string;
-      } => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
-    )
-    .map((part) => part.text.trim());
-
-  return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
 async function findLatestEquivalentAssistantMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
-  config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(redactTranscriptMessage(message, config));
-  if (!expectedText) {
+  const expected = projectAssistantTranscriptMirrorIdentity(sanitizeTranscriptMessage(message));
+  if (!expected) {
     return undefined;
   }
 
@@ -657,14 +640,12 @@ async function findLatestEquivalentAssistantMessageId(
       sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
-    const latestMessage = latest?.message as { role?: unknown } | undefined;
-    if (latestMessage?.role !== "assistant") {
-      return undefined;
-    }
-    const candidateText = latest
-      ? extractAssistantMessageText(redactTranscriptMessage(latest.message as AgentMessage, config))
+    const candidate = latest
+      ? projectAssistantTranscriptMirrorIdentity(
+          sanitizeTranscriptMessage(latest.message as AgentMessage),
+        )
       : undefined;
-    return candidateText === expectedText ? latest?.id : undefined;
+    return isDeepStrictEqual(candidate, expected) ? latest?.id : undefined;
   }
 
   return undefined;

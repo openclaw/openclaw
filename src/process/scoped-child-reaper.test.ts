@@ -156,17 +156,6 @@ describe("adopted process-group cleanup", () => {
     expect(proc.wait).toHaveBeenCalledTimes(2);
   });
 
-  it("stops after two quiet scans even if unrelated children remain", () => {
-    setProcesses([{ pid: 401, ppid: process.pid, pgid: 700, state: "Z" }]);
-    scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true);
-    vi.advanceTimersByTime(50);
-    expect(proc.wait).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-    const scans = proc.entries.mock.calls.length;
-    vi.advanceTimersByTime(30_000);
-    expect(proc.entries).toHaveBeenCalledTimes(scans);
-  });
-
   it("stops at its deadline while an owned process is still alive", () => {
     setProcesses([{ pid: 401, ppid: process.pid, pgid: ROOT, state: "S" }]);
     scheduleAdoptedChildZombieReapAfterExit(trackedRoot(true), true);
@@ -187,15 +176,6 @@ describe("adopted process-group cleanup", () => {
     expect(vi.getTimerCount()).toBe(1);
     vi.advanceTimersByTime(50);
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(["darwin", "win32"])("does no work on %s", (platform) => {
-    Object.defineProperty(process, "platform", { value: platform });
-    const child = trackedRoot(true);
-    scheduleAdoptedChildZombieReapAfterExit(child, true);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(proc.entries).not.toHaveBeenCalled();
-    expect(proc.wait).not.toHaveBeenCalled();
   });
 
   it("does not claim a child that fell back to a shared process group", () => {

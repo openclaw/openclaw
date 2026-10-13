@@ -274,7 +274,9 @@ describe("steering input custody", () => {
             commandAuthorized: true,
           }).senderIsOwner,
         };
-        operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+        const toolAuthority = prepareReplyToolAuthority(run);
+        await toolAuthority.fingerprintAsync(run.run);
+        operation.bindToolAuthoritySnapshot(toolAuthority);
         const fingerprint = operation.bindToolAuthorityRoute(run.run);
         if (sharedSecretOwner) {
           const incoming = await captureGatewayOperatorRunAuthority({
@@ -287,10 +289,10 @@ describe("steering input custody", () => {
           try {
             expect(incoming.authority.source).not.toBe(captured.authority.source);
             expect(
-              prepareReplyToolAuthority({
+              await prepareReplyToolAuthority({
                 ...run,
                 operatorAuthority: incoming.authority,
-              }).fingerprint(run.run),
+              }).fingerprintAsync(run.run),
             ).toBe(fingerprint);
           } finally {
             incoming.release();

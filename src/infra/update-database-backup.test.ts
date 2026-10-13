@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
@@ -12,6 +13,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import * as sqliteIntegrity from "./sqlite-integrity.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -122,6 +124,58 @@ it.each(["legacy", "current"] as const)(
     expect(await fs.readFile(f.shared)).toEqual(before);
   },
 );
+
+it.each(["auto", "off"] as const)(
+  "captures stopped databases without a payload audit (native copy %s)",
+  async (mode) => {
+    const f = await fixture(true);
+    const previous = getFsSafeNativeConfig();
+    const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
+    try {
+      configureFsSafeNative({ mode });
+      const backup = await createUpdateDatabaseBackupInProcess({
+        ...f.input,
+        inspectionPlan: f.inspectionPlan,
+        stopped: true,
+      });
+      expect(audit).not.toHaveBeenCalled();
+      expect(backup.databases).toHaveLength(3);
+      for (const entry of backup.databases) {
+        const bytes = await fs.readFile(entry.snapshotPath);
+        expect(entry).toMatchObject({
+          userVersion: 17,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        });
+        const source = new DatabaseSync(entry.path);
+        source.exec("DELETE FROM payload");
+        source.close();
+        using retained = new DatabaseSync(entry.snapshotPath, { readOnly: true });
+        expect(retained.prepare("SELECT rowid FROM payload").all()).toEqual([{ rowid: 42 }]);
+      }
+    } finally {
+      configureFsSafeNative(previous);
+    }
+  },
+);
+
+it("preserves stopped source WAL bookkeeping during the final inventory check", async () => {
+  const f = await fixture();
+  using database = new DatabaseSync(f.shared);
+  database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
+  const before = await fs.readFile(`${f.shared}-wal`);
+  const backup = await createUpdateDatabaseBackupInProcess({
+    ...f.input,
+    inspectionPlan: f.inspectionPlan,
+    stopped: true,
+  });
+  expect(await fs.readFile(`${f.shared}-wal`)).toEqual(before);
+  using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+  expect(retained.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
+    { value: "retained" },
+    { value: "checkpoint pending" },
+  ]);
+});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();

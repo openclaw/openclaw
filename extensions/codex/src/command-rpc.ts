@@ -7,8 +7,9 @@ import {
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  captureSessionEntryCurrentCheck,
+  captureSessionEntryCurrentCheckAsync,
   composeSessionEntryCommitGuards,
+  type PreparedSessionSourceAssertion,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
@@ -79,6 +80,7 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   /** Owner authority applies before dispatch; accepted responses still settle. */
   assertOwnerCurrent?: () => void;
   catalogPreview?: true;
@@ -94,7 +96,12 @@ export type CodexControlRequestOptions = {
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
-    auth: { authProfileId?: string; assertCurrent: () => void },
+    auth: {
+      authProfileId?: string;
+      assertCurrent: () => void;
+      assertCurrentAsync?: () => Promise<void>;
+      source?: PreparedSessionSourceAssertion;
+    },
   ) => Promise<void>;
 };
 
@@ -108,7 +115,9 @@ export async function prepareCodexControlSessionAuth(
       throw new Error("Codex control subscription requires admitted session authority.");
     }
     return {
+      release() {},
       authProfileId: options.authProfileId ?? undefined,
+      source: undefined,
       clientOptions: { authProfileId: options.authProfileId },
     };
   }
@@ -123,7 +132,7 @@ export async function prepareCodexControlSessionAuth(
   const storePath =
     options.storePath?.trim() ||
     resolveStorePath(config.session?.store, { agentId: sessionAgentId });
-  const current = await captureSessionEntryCurrentCheck({
+  const current = await captureSessionEntryCurrentCheckAsync({
     agentId: sessionAgentId,
     storePath,
     sessionKey: options.sessionKey,
@@ -136,102 +145,115 @@ export async function prepareCodexControlSessionAuth(
       "authProfileOverrideSource",
     ],
   });
-  const { entry } = current;
-  const assertCurrent = composeSessionEntryCommitGuards([
-    options.assertCurrent,
-    current.assertCurrent,
-  ]);
-  assertCurrent();
-  if (entry?.sessionId !== options.sessionId) {
-    throw createCodexSessionGenerationSupersededError(options.sessionId);
-  }
-  if (options.authProfileId === null || startOptions.homeScope === "user") {
+  try {
+    const { entry } = current;
+    const assertCurrent = composeSessionEntryCommitGuards([options.assertCurrent]);
+    const assertCurrentAsync = async () => {
+      await options.assertCurrentAsync?.();
+      await current.assertCurrent();
+      options.assertCurrent?.();
+    };
+    await assertCurrentAsync();
+    if (entry?.sessionId !== options.sessionId) {
+      throw createCodexSessionGenerationSupersededError(options.sessionId);
+    }
+    if (options.authProfileId === null || startOptions.homeScope === "user") {
+      return {
+        release: current.release,
+        authProfileId: options.authProfileId ?? undefined,
+        source: current.source,
+        clientOptions: {
+          authProfileId: options.authProfileId,
+          assertCurrent,
+          assertCurrentAsync,
+          storePath,
+          agentId: sessionAgentId,
+        },
+      };
+    }
+    const model = resolveSessionModelRef(config, entry, sessionAgentId);
+    const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
+    const store = await resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
+    const { plan, attempts } = prepareAgentRuntimeAuth({
+      provider: model.provider,
+      modelId: model.model,
+      config,
+      agentDir,
+      workspaceDir,
+      authProfileStore: store,
+      sessionAuthProfileId: authProfileId,
+      sessionAuthProfileSource: entry?.authProfileOverrideSource,
+      harnessId: "codex",
+      harnessAuthBootstrap: "harness",
+    });
+    const route = plan.modelRoute;
+    // A control subscription must use the same prepared auth partition as a turn.
+    // Unsubscribe leaves Codex's native writer loaded for 30 minutes; another
+    // process cannot resume that thread, even after its OpenClaw binding is gone.
+    const resolvedAuth = route
+      ? await resolveApiKeyForProvider({
+          provider: route.provider,
+          modelId: route.modelId,
+          modelApi: route.api,
+          cfg: config,
+          agentDir,
+          workspaceDir,
+          store,
+          profileId: attempts[0]?.profileId,
+          lockedProfile: plan.forwardedAuthProfileSource === "user",
+          allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
+          skipSetupProviderFallback: true,
+        })
+      : undefined;
+    const handoff = await resolveCodexAppServerPreparedAuthHandoff({
+      authRequirement: route?.authRequirement,
+      resolvedApiKey: resolvedAuth?.apiKey,
+      authProfileId: route
+        ? plan.forwardedAuthProfileId
+        : resolveCodexAppServerAuthProfileId({
+            authProfileId: plan.forwardedAuthProfileId,
+            store,
+            config,
+          }),
+      authProfileStore: store,
+      agentDir,
+      homeScope: startOptions.homeScope ?? "agent",
+      config,
+      subscriptionProfileRequiredError:
+        "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+      subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+    });
+    const binding = handoff.authProfileId
+      ? await prepareCodexAppServerAuthBinding({
+          authProfileId: handoff.authProfileId,
+          authProfileStore: store,
+          agentDir,
+          config,
+        })
+      : undefined;
+    await assertCurrentAsync();
     return {
-      authProfileId: options.authProfileId ?? undefined,
+      release: current.release,
+      authProfileId: handoff.authProfileId,
+      source: current.source,
       clientOptions: {
-        authProfileId: options.authProfileId,
+        ...(handoff.preparedAuth
+          ? { preparedAuth: handoff.preparedAuth }
+          : { authProfileId: handoff.authProfileId }),
+        authRequirement: route?.authRequirement,
+        authProfileStore: binding?.authProfileStore ?? store,
+        authBindingFingerprint: binding?.fingerprint,
+        agentDir,
         assertCurrent,
+        assertCurrentAsync,
         storePath,
         agentId: sessionAgentId,
       },
     };
+  } catch (error) {
+    current.release();
+    throw error;
   }
-  const model = resolveSessionModelRef(config, entry, sessionAgentId);
-  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
-  const store = await resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
-  const { plan, attempts } = prepareAgentRuntimeAuth({
-    provider: model.provider,
-    modelId: model.model,
-    config,
-    agentDir,
-    workspaceDir,
-    authProfileStore: store,
-    sessionAuthProfileId: authProfileId,
-    sessionAuthProfileSource: entry?.authProfileOverrideSource,
-    harnessId: "codex",
-    harnessAuthBootstrap: "harness",
-  });
-  const route = plan.modelRoute;
-  // A control subscription must use the same prepared auth partition as a turn.
-  // Unsubscribe leaves Codex's native writer loaded for 30 minutes; another
-  // process cannot resume that thread, even after its OpenClaw binding is gone.
-  const resolvedAuth = route
-    ? await resolveApiKeyForProvider({
-        provider: route.provider,
-        modelId: route.modelId,
-        modelApi: route.api,
-        cfg: config,
-        agentDir,
-        workspaceDir,
-        store,
-        profileId: attempts[0]?.profileId,
-        lockedProfile: plan.forwardedAuthProfileSource === "user",
-        allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
-        skipSetupProviderFallback: true,
-      })
-    : undefined;
-  const handoff = await resolveCodexAppServerPreparedAuthHandoff({
-    authRequirement: route?.authRequirement,
-    resolvedApiKey: resolvedAuth?.apiKey,
-    authProfileId: route
-      ? plan.forwardedAuthProfileId
-      : resolveCodexAppServerAuthProfileId({
-          authProfileId: plan.forwardedAuthProfileId,
-          store,
-          config,
-        }),
-    authProfileStore: store,
-    agentDir,
-    homeScope: startOptions.homeScope ?? "agent",
-    config,
-    subscriptionProfileRequiredError:
-      "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
-    subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
-  });
-  const binding = handoff.authProfileId
-    ? await prepareCodexAppServerAuthBinding({
-        authProfileId: handoff.authProfileId,
-        authProfileStore: store,
-        agentDir,
-        config,
-      })
-    : undefined;
-  assertCurrent();
-  return {
-    authProfileId: handoff.authProfileId,
-    clientOptions: {
-      ...(handoff.preparedAuth
-        ? { preparedAuth: handoff.preparedAuth }
-        : { authProfileId: handoff.authProfileId }),
-      authRequirement: route?.authRequirement,
-      authProfileStore: binding?.authProfileStore ?? store,
-      authBindingFingerprint: binding?.fingerprint,
-      agentDir,
-      assertCurrent,
-      storePath,
-      agentId: sessionAgentId,
-    },
-  };
 }
 
 export function requestOptions(
@@ -291,95 +313,105 @@ export async function codexControlRequest(
     options.onResponse && !nativeAuthFork
       ? await prepareCodexControlSessionAuth(options, startOptions)
       : {
+          release() {},
           authProfileId: options.authProfileId ?? undefined,
+          source: undefined,
           clientOptions: { authProfileId: options.authProfileId },
         };
-  const controlRequestOptions = {
-    timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
-    assertCurrent: options.assertCurrent,
-    startOptions,
-    config: options.config,
-    agentId: options.agentId,
-    sessionKey: options.sessionKey,
-    sessionId: options.sessionId,
-    storePath: options.storePath,
-    agentDir: options.agentDir,
-    isolated: options.isolated,
-    ...(options.catalogPreview
-      ? {
-          catalogPreview: true as const,
-          catalogPreviewCache: options.catalogPreviewCache,
-          catalogRows: options.catalogRows,
-        }
-      : {}),
-    ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
-    ...auth.clientOptions,
-  };
-  if (options.onResponse || options.beforeRequest) {
-    return await withCodexAppServerJsonClient(
-      controlRequestOptions,
-      async (request, client, scope) => {
-        await options.beforeRequest?.(request, client, scope);
-        scope.assertCurrent();
-        let response: unknown;
-        if (method === "thread/resume") {
-          if (!isJsonObject(requestParams) || typeof requestParams.threadId !== "string") {
-            throw new Error("Codex thread/resume requires a thread id.");
+  try {
+    const controlRequestOptions = {
+      timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
+      assertCurrent: options.assertCurrent,
+      assertCurrentAsync: options.assertCurrentAsync,
+      startOptions,
+      config: options.config,
+      agentId: options.agentId,
+      sessionKey: options.sessionKey,
+      sessionId: options.sessionId,
+      storePath: options.storePath,
+      agentDir: options.agentDir,
+      isolated: options.isolated,
+      ...(options.catalogPreview
+        ? {
+            catalogPreview: true as const,
+            catalogPreviewCache: options.catalogPreviewCache,
+            catalogRows: options.catalogRows,
           }
-          response = await resumeCodexAppServerThread({
-            client,
-            request: { ...requestParams, threadId: requestParams.threadId },
-            requestResume: () =>
-              request({ method, requestParams, assertCurrent: options.assertOwnerCurrent }),
-            abandonClient: () => closeCodexStartupClientBestEffort(client),
-          });
-        } else {
-          try {
-            response = await request({
-              method,
-              requestParams,
-              assertCurrent: options.assertOwnerCurrent,
-            });
-          } catch (error) {
-            if (
-              nativeAuthFork &&
-              (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-                isCodexAppServerIndeterminateTransportError(error) ||
-                (error instanceof CodexAppServerRpcError && !isCodexAppServerOverloadError(error)))
-            ) {
-              // Codex can subscribe before response assembly fails. Without the
-              // new thread id, only the exact client can settle that subscription.
-              await closeCodexStartupClientBestEffort(client);
-            }
-            throw error;
-          }
-        }
-        if (options.onResponse) {
-          // Settlement fences its commit; a later guard cannot turn that committed result into failure.
-          await options.onResponse(response, client, {
-            authProfileId: auth.authProfileId,
-            assertCurrent: scope.assertCurrent,
-          });
-        } else {
+        : {}),
+      ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
+      ...auth.clientOptions,
+    };
+    if (options.onResponse || options.beforeRequest) {
+      return await withCodexAppServerJsonClient(
+        controlRequestOptions,
+        async (request, client, scope) => {
+          await options.beforeRequest?.(request, client, scope);
           scope.assertCurrent();
-        }
-        return response;
-      },
-    );
+          let response: unknown;
+          if (method === "thread/resume") {
+            if (!isJsonObject(requestParams) || typeof requestParams.threadId !== "string") {
+              throw new Error("Codex thread/resume requires a thread id.");
+            }
+            response = await resumeCodexAppServerThread({
+              client,
+              request: { ...requestParams, threadId: requestParams.threadId },
+              requestResume: () =>
+                request({ method, requestParams, assertCurrent: options.assertOwnerCurrent }),
+              abandonClient: () => closeCodexStartupClientBestEffort(client),
+            });
+          } else {
+            try {
+              response = await request({
+                method,
+                requestParams,
+                assertCurrent: options.assertOwnerCurrent,
+              });
+            } catch (error) {
+              if (
+                nativeAuthFork &&
+                (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+                  isCodexAppServerIndeterminateTransportError(error) ||
+                  (error instanceof CodexAppServerRpcError &&
+                    !isCodexAppServerOverloadError(error)))
+              ) {
+                // Codex can subscribe before response assembly fails. Without the
+                // new thread id, only the exact client can settle that subscription.
+                await closeCodexStartupClientBestEffort(client);
+              }
+              throw error;
+            }
+          }
+          if (options.onResponse) {
+            // Settlement fences its commit; a later guard cannot turn that committed result into failure.
+            await options.onResponse(response, client, {
+              authProfileId: auth.authProfileId,
+              assertCurrent: scope.assertCurrent,
+              source: auth.source,
+              assertCurrentAsync: controlRequestOptions.assertCurrentAsync,
+            });
+          } else {
+            scope.assertCurrent();
+          }
+          return response;
+        },
+      );
+    }
+    return await requestCodexAppServerJson({
+      method,
+      requestParams,
+      ...controlRequestOptions,
+      ...(options.assertOwnerCurrent
+        ? {
+            assertCurrent: () => {
+              options.assertOwnerCurrent?.();
+              options.assertCurrent?.();
+            },
+          }
+        : {}),
+    });
+  } finally {
+    auth.release();
   }
-  return await requestCodexAppServerJson({
-    method,
-    requestParams,
-    ...controlRequestOptions,
-    ...(options.assertOwnerCurrent
-      ? {
-          assertCurrent: () => {
-            options.assertOwnerCurrent?.();
-            options.assertCurrent?.();
-          },
-        }
-      : {}),
-  });
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(
