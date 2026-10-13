@@ -1,5 +1,5 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
@@ -36,7 +36,11 @@ function attempt(tools: AnyAgentTool[], options: Options = {}) {
     ...options,
   });
   return {
-    tools: finalized,
+    tool(index = 0) {
+      const result = finalized[index];
+      assert.ok(result, `Expected finalized tool at index ${index}`);
+      return result;
+    },
     settle: async () => {
       for (const cleanup of cleanups) {
         await cleanup("finished");
@@ -56,7 +60,7 @@ describe("finalized tool descriptor snapshots", () => {
     const firstAbort = new AbortController();
     const first = tool(parameters, { outputSchema });
     const cold = attempt([first], { abortSignal: firstAbort.signal });
-    expect(getPublishedRuntimeToolInputSchema(cold.tools[0].parameters)).toBeUndefined();
+    expect(getPublishedRuntimeToolInputSchema(cold.tool().parameters)).toBeUndefined();
     await cold.settle();
     firstAbort.abort();
     const current = tool(parameters, {
@@ -64,21 +68,22 @@ describe("finalized tool descriptor snapshots", () => {
       prepareArguments: () => ({ query: "current" }),
     });
     const warm = attempt([current], { abortSignal: new AbortController().signal });
-    const descriptor = warm.tools[0];
+    const descriptor = warm.tool();
     expect(descriptor.parameters).toEqual(parameters);
     expect(descriptor.parameters).not.toBe(parameters);
+    assert.ok("properties" in descriptor.parameters);
     expect(Object.isFrozen(descriptor.parameters.properties)).toBe(true);
     expect(Object.isFrozen(descriptor.outputSchema)).toBe(true);
     expect(Object.isFrozen(parameters)).toBe(false);
     expect(descriptor.prepareArguments?.(null)).toEqual({ query: "current" });
-    await expect(cold.tools[0].execute("old", {})).rejects.toThrow("Aborted");
+    await expect(cold.tool().execute("old", {})).rejects.toThrow("Aborted");
     await descriptor.execute("current", {});
     expect(first.execute).not.toHaveBeenCalled();
     expect(current.execute).toHaveBeenCalledOnce();
     await warm.settle();
     const next = attempt([tool(parameters, { outputSchema })]);
-    expect(next.tools[0].parameters).toBe(descriptor.parameters);
-    expect(next.tools[0].outputSchema).toBe(descriptor.outputSchema);
+    expect(next.tool().parameters).toBe(descriptor.parameters);
+    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
   it.each([
@@ -90,11 +95,11 @@ describe("finalized tool descriptor snapshots", () => {
   ] satisfies Array<[string, Options]>)("refreshes when %s changes", async (_name, change) => {
     const parameters = schema();
     await attempt([tool(parameters)]).settle();
-    const previous = attempt([tool(parameters)]).tools[0].parameters;
+    const previous = attempt([tool(parameters)]).tool().parameters;
     const changed = attempt([tool(parameters)], change);
-    expect(changed.tools[0].parameters).not.toBe(previous);
+    expect(changed.tool().parameters).not.toBe(previous);
     await changed.settle();
-    const refreshed = attempt([tool(parameters)], change).tools[0].parameters;
+    const refreshed = attempt([tool(parameters)], change).tool().parameters;
     expect(getPublishedRuntimeToolInputSchema(refreshed)).toBeDefined();
     expect(refreshed).not.toBe(previous);
   });
@@ -107,14 +112,14 @@ describe("finalized tool descriptor snapshots", () => {
     for (const metadataSnapshot of [empty, loaded, empty]) {
       const options = { preparedModelRuntime: { metadataSnapshot } };
       const changed = attempt([tool(parameters)], options);
-      expect(changed.tools[0].parameters).not.toBe(previous);
+      expect(changed.tool().parameters).not.toBe(previous);
       await changed.settle();
-      previous = attempt([tool(parameters)], options).tools[0].parameters;
+      previous = attempt([tool(parameters)], options).tool().parameters;
       expect(getPublishedRuntimeToolInputSchema(previous)).toBeDefined();
     }
     clearPluginMetadataLifecycleCaches();
     expect(
-      attempt([tool(parameters)], { preparedModelRuntime: { metadataSnapshot: empty } }).tools[0]
+      attempt([tool(parameters)], { preparedModelRuntime: { metadataSnapshot: empty } }).tool()
         .parameters,
     ).not.toBe(previous);
   });
@@ -127,13 +132,13 @@ describe("finalized tool descriptor snapshots", () => {
         description: "Search visible past sessions for matching user and assistant text.",
       });
     await attempt([search()]).settle();
-    const previous = attempt([search()]).tools[0].parameters;
+    const previous = attempt([search()]).tool().parameters;
     const enabled = attempt([search(), tool(schema(), { name: "sessions_history" })]);
-    expect(enabled.tools[0].parameters).not.toBe(previous);
-    expect(enabled.tools[0].description).toContain("Follow up with sessions_history");
+    expect(enabled.tool().parameters).not.toBe(previous);
+    expect(enabled.tool().description).toContain("Follow up with sessions_history");
     await enabled.settle();
     const disabled = attempt([search()]);
-    expect(disabled.tools[0].description).not.toContain("Follow up");
+    expect(disabled.tool().description).not.toContain("Follow up");
     await disabled.settle();
     const replacement = { type: "object", properties: { count: { type: "integer" } } };
     const changed = attempt([
@@ -142,7 +147,7 @@ describe("finalized tool descriptor snapshots", () => {
     await changed.settle();
     const refreshed = attempt([
       tool(replacement, { description: "New description", outputSchema: replacement }),
-    ]).tools[0];
+    ]).tool();
     expect(refreshed.description).toBe("New description");
     expect(refreshed.parameters).toEqual(replacement);
     expect(refreshed.outputSchema).toEqual(replacement);
@@ -158,8 +163,10 @@ describe("finalized tool descriptor snapshots", () => {
     });
     await attempt([first]).settle();
     const context = { sessionId: "descriptor-session", runId: "fresh-run" };
-    const next = attempt([tool(parameters)], { hookContext: context, wrapBeforeToolCallHook: true })
-      .tools[0];
+    const next = attempt([tool(parameters)], {
+      hookContext: context,
+      wrapBeforeToolCallHook: true,
+    }).tool();
     expect(next.parameters).toEqual(parameters);
     expect(getBeforeToolCallHookContext(next)).toBe(context);
   });
@@ -177,15 +184,18 @@ describe("finalized tool descriptor snapshots", () => {
     const first = makeSkills();
     await attempt(first).settle();
     const current = makeSkills();
-    current[0].parameters = first[0].parameters;
-    current[1].parameters = first[1].parameters;
+    const [previousSearch, previousRead] = first;
+    const [currentSearch, currentRead] = current;
+    assert.ok(previousSearch && previousRead && currentSearch && currentRead);
+    currentSearch.parameters = previousSearch.parameters;
+    currentRead.parameters = previousRead.parameters;
     const allowed = attempt(current);
-    expect((await allowed.tools[0].execute("allowed", { query: "canary" })).details).toMatchObject({
+    expect((await allowed.tool().execute("allowed", { query: "canary" })).details).toMatchObject({
       skills: [{ name: "guide" }],
     });
     await allowed.settle();
-    const denied = attempt([current[0], tool(current[1].parameters, { name: "skills_read" })]);
-    expect((await denied.tools[0].execute("denied", { query: "canary" })).details).toMatchObject({
+    const denied = attempt([currentSearch, tool(currentRead.parameters, { name: "skills_read" })]);
+    expect((await denied.tool().execute("denied", { query: "canary" })).details).toMatchObject({
       skills: [],
     });
   });
