@@ -160,9 +160,9 @@ async function prepareSessionStatusDetails(
 
   // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
-  const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
+  const buildSessionRows = async (rows: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async (candidate) => {
+      rows.map(async (candidate) => {
         const cached = sessionRows.get(candidate);
         if (cached) {
           return { ...cached, flags: [...cached.flags] };
