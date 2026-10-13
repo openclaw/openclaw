@@ -1,5 +1,5 @@
 // Keep scan-note aggregation separate from the environment-scanning owner suites.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { collectDoctorPreviewNotes } from "./preview-warnings.js";
 import * as staleOAuthProfileShadows from "./stale-oauth-profile-shadows.js";
@@ -72,8 +72,44 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 describe("doctor preview scan notes", () => {
+  beforeEach(() => {
+    staleOAuthShadowState.warnings = [];
+    staleOAuthShadowState.scanWarnings = [];
+    staleAuthOrderState.warnings = [];
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    {
+      name: "stale OAuth profile shadow",
+      shadows: [
+        '- ~/.openclaw/agents/telegram/agent/auth-profiles.json has stale OAuth auth profile openai-codex:default. Run "openclaw doctor --fix".',
+      ],
+      authOrder: [],
+      expected: "stale OAuth auth profile openai-codex:default",
+    },
+    {
+      name: "stale configured auth-order",
+      shadows: [],
+      authOrder: [
+        "- auth.order.anthropic references only missing profiles while compatible stored credentials exist; run openclaw doctor --fix to remove the stale override and restore automatic selection.",
+      ],
+      expected: "auth.order.anthropic references only missing profiles",
+    },
+  ])("includes $name warnings", async ({ shadows, authOrder, expected }) => {
+    staleOAuthShadowState.warnings = shadows;
+    staleAuthOrderState.warnings = authOrder;
+
+    const { warningNotes } = await collectDoctorPreviewNotes({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warningNotes).toHaveLength(1);
+    expect(warningNotes[0]).toContain(expected);
   });
 
   it.each([

@@ -69,6 +69,9 @@ import {
   isExpectedYieldedAgentTimeout,
   isRetryableCodexHarnessLiveError,
   isStrictExpectedCodexModelsCommandText,
+  resolveBoundedPositiveIntEnv,
+  resolveCodexHarnessThinkingLevel,
+  resolveLiveTimeoutMs,
   shouldUseCodexHarnessSubagentOnlyFastPath,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
@@ -252,49 +255,6 @@ const observedCodexClientIds = new Map<string, string>();
 const observedCodexThreadActions = new Map<string, string>();
 
 type GuardianPluginApprovalDecision = "allow-once" | "allow-always" | "deny";
-type CodexHarnessThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-  | "ultra";
-
-function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
-  const parsed = raw ? Number(raw) : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function resolveBoundedPositiveIntEnv(
-  name: string,
-  raw: string | undefined,
-  fallback: number,
-  max: number,
-  min = 1,
-): number {
-  if (raw === undefined || raw.trim() === "") {
-    return fallback;
-  }
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${name} must be between ${min} and ${max}`);
-  }
-  return parsed;
-}
-
-function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarnessThinkingLevel {
-  const normalized = raw?.trim().toLowerCase() || "low";
-  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
-    throw new Error(`invalid OPENCLAW_LIVE_CODEX_HARNESS_THINKING: ${raw}`);
-  }
-  return normalized as CodexHarnessThinkingLevel;
-}
-
 function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {

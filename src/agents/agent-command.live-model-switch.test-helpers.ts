@@ -1,3 +1,5 @@
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, type vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -343,4 +345,28 @@ export function createTestModelSelection(params: {
     resolveDefaultModelForAgent: resolveTestDefaultModelForAgent,
     resolveThinkingDefault: (args: unknown) => params.resolveThinkingDefaultMock(args),
   };
+}
+
+export const requireRecord = createRequireRecord("object", "expected-label-object");
+
+export function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+export function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const actual = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
 }

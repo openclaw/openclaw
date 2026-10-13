@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined, toStringifiedError } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
@@ -39,7 +38,11 @@ import {
   createConfiguredModelCompatRuntimeConfig,
   createTestModelSelection,
   createTestModelVisibilityPolicy,
+  expectRecordFields,
   makeSuccessResult,
+  mockCallArg,
+  requireArray,
+  requireRecord,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import {
   registerAgentCommandRecoveryCases,
@@ -890,30 +893,6 @@ function setupAcpSession(): void {
     kind: "ready",
     meta: { agent: "claude", cwd: "/tmp/workspace" },
   });
-}
-
-const requireRecord = createRequireRecord("object", "expected-label-object");
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
-  const actual = requireRecord(value, "record");
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(expectedValue);
-  }
 }
 
 function agentLifecycleEvents() {

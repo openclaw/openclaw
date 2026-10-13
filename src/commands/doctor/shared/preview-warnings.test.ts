@@ -692,35 +692,6 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain('Run "openclaw doctor --fix"');
   });
 
-  it("includes stale OAuth profile shadow warnings", async () => {
-    staleOAuthShadowState.warnings = [
-      '- ~/.openclaw/agents/telegram/agent/auth-profiles.json has stale OAuth auth profile openai-codex:default. Run "openclaw doctor --fix".',
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
-  });
-
-  it("includes stale configured auth-order warnings", async () => {
-    staleAuthOrderState.warnings = [
-      "- auth.order.anthropic references only missing profiles while compatible stored credentials exist; run openclaw doctor --fix to remove the stale override and restore automatic selection.",
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expectSingleWarningContaining(
-      warnings,
-      "auth.order.anthropic references only missing profiles",
-    );
-  });
-
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
     manifestState.plugins = [];
     manifestState.diagnostics = [

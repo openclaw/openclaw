@@ -632,3 +632,48 @@ export function isExpectedYieldedAgentTimeout(payload: unknown): boolean {
     record.livenessState === "paused"
   );
 }
+
+type CodexHarnessThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
+
+export function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+export function resolveBoundedPositiveIntEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+  min = 1,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+export function resolveCodexHarnessThinkingLevel(
+  raw: string | undefined,
+): CodexHarnessThinkingLevel {
+  const normalized = raw?.trim().toLowerCase() || "low";
+  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(normalized)) {
+    throw new Error(`invalid OPENCLAW_LIVE_CODEX_HARNESS_THINKING: ${raw}`);
+  }
+  return normalized as CodexHarnessThinkingLevel;
+}
