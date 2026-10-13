@@ -267,11 +267,11 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
-    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
-    ["Use `", "[[tts:literal", " speech]]", "` here."],
-  ])("preserves code literals across chunks: %j", (...chunks) => {
+    [["```\n", "[[tts:literal", " speech]]\n", "```\n"], "```\n\n```\n"],
+    [["Use `", "[[tts:literal", " speech]]", "` here."], "Use `` here."],
+  ] as const)("does not recover code literals as prose: %j", (chunks, expected) => {
     const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(expected);
     expect(cleaner.push(" [[tts:Visible speech]]")).toBe(" Visible speech");
     expect(cleaner.flush()).toBe("");
   });

@@ -105,10 +105,8 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
   let inlineCode = createInlineCodeState();
   let fence: FenceScanState = {};
   // Speech-only Markdown must not change the code ownership of later visible text.
-  const trackVisibleText = (
-    text: string,
-    code = buildCodeSpanIndex(text, inlineCode, fence),
-  ): string => {
+  const trackVisibleText = (text: string): string => {
+    const code = buildCodeSpanIndex(text, inlineCode, fence);
     inlineCode = code.inlineState;
     fence = code.fenceState;
     return text;
@@ -144,14 +142,11 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           pending = input.slice(tagStart);
           break;
         }
+        let insideCode = false;
         if (!insideHiddenTextBlock) {
           const segment = input.slice(index, tagEnd + 2);
           const code = buildCodeSpanIndex(segment, inlineCode, fence);
-          if (code.isInside(tagStart - index)) {
-            output += trackVisibleText(segment, code);
-            index = tagEnd + 2;
-            continue;
-          }
+          insideCode = code.isInside(tagStart - index);
           output += trackVisibleText(input.slice(index, tagStart));
         }
 
@@ -163,7 +158,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           insideHiddenTextBlock = false;
         } else if (tag === "other" && !insideHiddenTextBlock) {
           output += trackVisibleText(rawTag);
-        } else if (tag === "tts" && !insideHiddenTextBlock) {
+        } else if (tag === "tts" && !insideHiddenTextBlock && !insideCode) {
           const body = /^\s*tts\s*:([\s\S]*)$/i.exec(input.slice(tagStart + 2, tagEnd))?.[1];
           if (body !== undefined) {
             output += trackVisibleText(resolveTtsDirectiveBody(body) ?? "");
