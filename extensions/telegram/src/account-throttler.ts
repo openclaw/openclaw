@@ -431,9 +431,14 @@ function createTelegramAccountThrottler(
 ): TelegramAccountThrottler {
   const created = createThrottler();
   const baseThrottler = typeof created === "function" ? created : created.transformer;
+  // Aborted when the token retires so pre-I/O chat-action backoffs settle
+  // before the shared limiter's shutdown starts waiting on executing jobs.
+  const retireController = new AbortController();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
     minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
+    retirementSignal: retireController.signal,
+    retiredError: telegramThrottlerReleasedError,
   });
   const schedulersByChat = new Map<string, GroupRequestScheduler>();
   let retired = false;
@@ -447,6 +452,9 @@ function createTelegramAccountThrottler(
     for (const scheduler of schedulersByChat.values()) {
       scheduler.settleForRetirement(telegramThrottlerReleasedError);
     }
+    // Terminate pre-I/O chat-action backoffs before stopping the shared
+    // limiters, whose shutdown waits for executing callbacks to finish.
+    retireController.abort();
     if (typeof created !== "function") {
       await created.dispose();
     }

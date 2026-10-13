@@ -30,6 +30,14 @@ type CreateTelegramSendChatActionHandlerParams = {
   maxConsecutive401?: number;
   minIntervalMs?: number;
   now?: () => number;
+  /**
+   * When the owning account is retired, an authorization backoff still
+   * sleeping before transport I/O aborts immediately instead of keeping the
+   * shared limiter's shutdown waiting out the remaining backoff.
+   */
+  retirementSignal?: AbortSignal;
+  /** The rejection surfaced to the caller when retirement ends its backoff. */
+  retiredError?: Error;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -72,6 +80,8 @@ export function createTelegramSendChatActionHandler({
   maxConsecutive401 = 10,
   minIntervalMs = 0,
   now = () => Date.now(),
+  retirementSignal,
+  retiredError,
 }: CreateTelegramSendChatActionHandlerParams) {
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
@@ -156,6 +166,11 @@ export function createTelegramSendChatActionHandler({
       clearTransientCooldown();
       return result;
     } catch (error) {
+      // A retirement-terminated pre-I/O backoff surfaces the released error to
+      // the caller; only the sleep aborts, never transport I/O that began.
+      if (retirementSignal?.aborted && error instanceof Error && error.name === "AbortError") {
+        throw retiredError instanceof Error ? retiredError : error;
+      }
       if (signal.aborted && error instanceof Error && error.name === "AbortError") {
         throw error;
       }
@@ -215,6 +230,12 @@ export function createTelegramSendChatActionHandler({
     } else {
       signal?.addEventListener("abort", abort, { once: true });
     }
+    const onRetired = () => controller.abort();
+    if (retirementSignal?.aborted) {
+      onRetired();
+    } else {
+      retirementSignal?.addEventListener("abort", onRetired, { once: true });
+    }
     try {
       return await sendWithBackoff(async () => {
         const result = await prev(method, payload, signal);
@@ -225,6 +246,7 @@ export function createTelegramSendChatActionHandler({
       }, controller.signal);
     } finally {
       signal?.removeEventListener("abort", abort);
+      retirementSignal?.removeEventListener("abort", onRetired);
       controller.abort();
     }
   };

@@ -774,41 +774,46 @@ describe("releaseAccountThrottler", () => {
     }
   });
 
-  it("never dispatches a DM action whose authorization backoff outlives retirement", async () => {
+  it("settles a backing-off DM action immediately when the account is retired", async () => {
     vi.useFakeTimers();
+    let sent = 0;
+    const api = new Api("123:dm-backoff-retire", {
+      fetch: asTelegramClientFetch(async () => {
+        sent++;
+        return new Response(
+          JSON.stringify({ ok: false, error_code: 401, description: "Unauthorized" }),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("dm-backoff-retire").transformer);
+    // Four consecutive 401 failures put the next DM action into an 8s
+    // authorization backoff before any transport I/O starts.
+    const failed = Array.from({ length: 4 }, () =>
+      expect(api.sendChatAction(42, "typing")).rejects.toThrow("Unauthorized"),
+    );
+    const second = api.sendChatAction(42, "typing");
+    const secondRejection = expect(second).rejects.toThrow(/released/i);
     try {
-      let sent = 0;
-      const api = new Api("123:dm-backoff-retire", {
-        fetch: asTelegramClientFetch(async () => {
-          sent++;
-          return new Response(
-            JSON.stringify(
-              sent === 1
-                ? { ok: false, error_code: 401, description: "Unauthorized" }
-                : { ok: true, result: true },
-            ),
-          );
-        }),
-      });
-      api.config.use(getOrCreateAccountThrottler("dm-backoff-retire").transformer);
-      const first = api.sendChatAction(42, "typing");
-      const failed = expect(first).rejects.toThrow("Unauthorized");
-      await vi.advanceTimersByTimeAsync(100);
-      await failed;
-      expect(sent).toBe(1);
-      const second = api.sendChatAction(42, "typing");
-      const secondRejection = expect(second).rejects.toThrow(/released/i);
-      // The DM successor parks in the 401 authorization backoff; retiring the
-      // token during that backoff must stop the final dispatch from ever
-      // reaching the Bot API with the retired token.
-      await vi.advanceTimersByTimeAsync(1_400);
-      expect(sent).toBe(1);
+      // All warm-up actions fail and the successor parks sleeping in backoff
+      // (its 8s sleep would end around the 16s mark).
+      await vi.advanceTimersByTimeAsync(9_500);
+      await Promise.all(failed);
+      expect(sent).toBe(4);
       const releasing = releaseAccountThrottler("dm-backoff-retire");
-      await vi.advanceTimersByTimeAsync(1_500);
+      // Retiring during that backoff settles the caller and the throttler
+      // right away, without waiting for the remaining backoff to elapse.
+      // A tick on the faked clock delivers the dropped waiting job's
+      // rejection; the settlement must not wait out the remaining sleep.
+      await vi.advanceTimersByTimeAsync(10);
       await secondRejection;
       await releasing;
-      expect(sent).toBe(1);
+      // Even after the remaining backoff elapses, the retired token never
+      // dispatches.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(sent).toBe(4);
     } finally {
+      await vi.advanceTimersByTimeAsync(600_000);
+      await Promise.allSettled([...failed, second]);
       vi.useRealTimers();
     }
   });
