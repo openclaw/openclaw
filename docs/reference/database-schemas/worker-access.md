@@ -4409,7 +4409,9 @@ Scope matching, FTS scan bounds, fire budgets, and hidden-context limits are unc
 The writer retains the next expiry or rearm deadline per native connection. Calls
 before that deadline skip lifecycle SQL; create, cancel, fire, and failed
 transactions invalidate it. The same lifecycle fact records when no active intents
-remain, so matching skips the FTS query until a mutation invalidates that fact.
+remain, so matching returns without opening a transaction or querying FTS until
+a mutation invalidates that fact. This absence result has no write or external
+effect to authorize; nonempty matches retain transaction and commit admission.
 A nonempty active set still uses the full matching query and eligibility filters.
 Reopening a connection reloads the deadline and active-intent fact. Expiry
 comparison and fired-row numeric validation retain their existing semantics.
