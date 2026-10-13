@@ -90,7 +90,7 @@ it("renders a persisted standalone tool result as a Grant card without expanding
   );
   expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
   const button = container.querySelector<HTMLButtonElement>(".chat-permission-card button");
-  expect(button?.textContent).toBe("Grant Screen Recording");
+  expect(button?.textContent).toBe("Open System Settings");
   button?.click();
   expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request: permissionMissing });
 });

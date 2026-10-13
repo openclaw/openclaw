@@ -52,6 +52,7 @@ it("preserves a proven schema failure while completing plugin metadata", async (
     fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
     const pathname = openOpenClawStateDatabase({ env: process.env }).path;
     await closeOpenClawStateDatabaseAsync();
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
     const database = new DatabaseSync(pathname);
     try {
       database.exec(
