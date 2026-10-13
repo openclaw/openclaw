@@ -26,7 +26,7 @@ import {
   SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { LitRouteHost } from "./lit-route-host.tsx";
-import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
+import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { floatingSidebarAttentionVisible, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
@@ -61,6 +61,10 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
     props.host.shellRevision();
     return props.host.routeState.routeId !== undefined || props.host.routeState.routeFailed;
   };
+  // Legacy Mac hosts stamp this immutable host class before mounting the shell.
+  // The web-chrome flag remains a reactive view read for the current host path.
+  const legacyMacChrome = () =>
+    !view().nativeWebChrome && document.documentElement.classList.contains("openclaw-native-macos");
   createEffect(view, (state) => {
     props.host.lazyCustomElements.requestWhileActive(
       props.host.onboardingMemoryImportElement,
@@ -123,16 +127,11 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
         <Show when={view().nativeWebChrome && !view().onboarding}>
           <openclaw-macos-titlebar-controls
             inert={view().navDrawerOpen}
-            prop:navCollapsed={(props.host.shellRevision(), props.host.nativeNavCollapsed())}
             prop:historyOnly={view().settingsTakeover}
             prop:canGoBack={(props.host.shellRevision(), props.host.nativeHistoryState.canGoBack)}
             prop:canGoForward={
               (props.host.shellRevision(), props.host.nativeHistoryState.canGoForward)
             }
-            prop:newSessionDisabledReason={view().newSessionDisabledReason}
-            prop:onToggleSidebar={props.host.viewCallbacks.toggleSidebar}
-            prop:onOpenPalette={props.host.openPalette}
-            prop:onOpenNewSession={props.host.handleNativeNewSession}
           />
         </Show>
         <Show when={!view().nativeEmbed}>
@@ -160,7 +159,7 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
           />
         </Show>
         <Show when={view().collapsedControls}>
-          <div class="shell-chrome-controls">
+          <div class="shell-chrome-controls" onMouseDown={beginNativeWindowDrag}>
             <openclaw-tooltip
               prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
             >
@@ -193,17 +192,19 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
                 }
               />
             </Show>
-            <openclaw-tooltip
-              prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-            >
-              <button
-                type="button"
-                class="shell-chrome-controls__button shell-chrome-controls__search"
-                aria-label={t("chat.openCommandPalette")}
-                onClick={() => props.host.openPalette()}
-                ref={createLitContentRef(() => icons.search)}
-              />
-            </openclaw-tooltip>
+            <Show when={!view().railAvailable || legacyMacChrome()}>
+              <openclaw-tooltip
+                prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+              >
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__search"
+                  aria-label={t("chat.openCommandPalette")}
+                  onClick={() => props.host.openPalette()}
+                  ref={createLitContentRef(() => icons.search)}
+                />
+              </openclaw-tooltip>
+            </Show>
             <Show when={view().homePanelAvailable && !view().railAvailable}>
               <LitRouteHost
                 renderValue={() => {

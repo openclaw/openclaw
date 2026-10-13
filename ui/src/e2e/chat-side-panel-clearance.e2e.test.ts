@@ -455,7 +455,7 @@ suite.define(() => {
       home: false,
       deviceLess: false,
       direction: "ltr",
-      expectedControl: ".shell-chrome-controls__search",
+      expectedControl: ".sidebar-brand__search",
       name: "collapsed navigation",
       navCollapsed: true,
       operatorScopes: undefined,

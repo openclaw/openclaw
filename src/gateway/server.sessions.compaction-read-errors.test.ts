@@ -46,8 +46,6 @@ beforeEach(async () => {
   >("../config/sessions/session-transcript-stats.js");
   realTranscriptStatsReader = actual.readTranscriptStatsAsync;
   transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
-  // Resolve the lazy handler before the RPC response deadline starts.
-  await import("./server-methods/sessions-compact.js");
 });
 
 async function seedCompactionSession(params: {

@@ -86,6 +86,13 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+Visible and private requester-settle completions retain their processing outcome
+across restart. A replay of the same frozen child batch acknowledges an already
+completed requester turn without executing or delivering it again. Unfinished
+main-session turns continue through normal restart recovery with the original
+operator restrictions. If the original authority is unavailable, the task stays
+owed instead of running with broader permissions.
+
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead

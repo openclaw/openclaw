@@ -370,9 +370,9 @@ eligible sessions age out without further traffic. Reply preparation does not wa
 for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer checks
-the prepared store revision before applying changes, so concurrent updates are
-reconsidered instead of overwritten.
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
 If writes invalidate an automatic maintenance plan, its replacement waits for
 a quiet window after the last write (one second, then two seconds). Three
 consecutive invalidations pause automatic retries and log the cause; a new
