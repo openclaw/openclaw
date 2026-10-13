@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import { sleepWithAbort } from "../infra/backoff.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
@@ -62,7 +62,7 @@ import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-conte
 
 export type AgentDatabaseExecutionState = {
   owners: Map<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>;
-  // LRU entries keep their slots during eviction and after failed cleanup.
+  // Eviction holds its slot until settlement; failed cleanup retains custody in owners.
   idle: Set<AgentDatabaseFileExecutionOwner>;
 };
 
@@ -92,7 +92,7 @@ export function createAgentDatabaseExecution(
   let generation: AgentDatabaseNativeGeneration | undefined;
   let fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   let nativeClosing: Promise<void> | undefined;
-  let cleanupFailure: { error: unknown } | undefined;
+  let cleanupFailure: { error: unknown; reason: string } | undefined;
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,10 +115,17 @@ export function createAgentDatabaseExecution(
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
-  const reportCleanupFailure = (error: unknown) => {
+  const describeCleanupFailure = (error: unknown): string => {
+    try {
+      return formatErrorMessageWithCode(error);
+    } catch {
+      return "Agent database cleanup failed";
+    }
+  };
+  const reportCleanupFailure = (reason: string) => {
     // Diagnostic failures cannot turn a committed command into a replayable failure.
     try {
-      log.warn(`Agent database idle cleanup failed: ${formatErrorMessage(error)}`);
+      log.warn(`Agent database idle cleanup failed (agent ${agentId}): ${reason}`);
     } catch {
       // The resource owner still retains the cleanup failure.
     }
@@ -170,7 +177,13 @@ export function createAgentDatabaseExecution(
           }
         },
         (error: unknown) => {
-          cleanupFailure = { error };
+          const firstFailure = !cleanupFailure;
+          const reason = describeCleanupFailure(error);
+          cleanupFailure = { error, reason };
+          executionState.idle.delete(owner);
+          if (firstFailure) {
+            reportCleanupFailure(reason);
+          }
           throw error;
         },
       )
@@ -254,7 +267,7 @@ export function createAgentDatabaseExecution(
       );
       // A peer's intentional native close can finish while this admitted operation settles.
       if (generation === current && !nativeClosing && current.failure()) {
-        await owner.close().catch(reportCleanupFailure);
+        await owner.close().catch(() => undefined);
       }
       return result;
     } catch (error) {
@@ -340,6 +353,9 @@ export function createAgentDatabaseExecution(
   const owner: AgentDatabaseFileExecutionOwner = {
     kind: "file",
     agentId,
+    stateDatabasePath: context.admission.databasePath,
+    getCleanupFailure: () =>
+      cleanupFailure ? { reason: cleanupFailure.reason, retryable: !revoked } : undefined,
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
@@ -534,7 +550,7 @@ export function createAgentDatabaseExecution(
             ) {
               if (generation) {
                 // Source refusal can leave an unaccepted generation allocated before native open.
-                await closeNative(generation).catch(reportCleanupFailure);
+                await closeNative(generation).catch(() => undefined);
               }
               if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
                 creationIdentity = undefined;
@@ -556,8 +572,8 @@ export function createAgentDatabaseExecution(
                 }
                 await idle.closeIdle();
               }
-            } catch (error) {
-              reportCleanupFailure(error);
+            } catch {
+              // The failed owner recorded its diagnostic and retained cleanup custody.
             }
             if (borrowers !== 0 || !lifetime.open || executionState.idle.has(owner)) {
               return;
@@ -569,7 +585,7 @@ export function createAgentDatabaseExecution(
                   if (idleTimer !== timer || !executionState.idle.has(owner)) {
                     return;
                   }
-                  void owner.closeIdle().catch(reportCleanupFailure);
+                  void owner.closeIdle().catch(() => undefined);
                 }, SQLITE_IDLE_HANDLE_TTL_MS),
               );
               idleTimer = timer;
@@ -577,13 +593,13 @@ export function createAgentDatabaseExecution(
               // Restart drain retires idle generations without interrupting accepted writers.
               idleDrainListener = addAbortListener(drainSignal, () => {
                 runInExecutionOwnerContext(() => {
-                  void owner.closeIdle().catch(reportCleanupFailure);
+                  void owner.closeIdle().catch(() => undefined);
                 });
               });
               return;
             }
             // The completed command stays acknowledged; the resource owner retains cleanup.
-            await owner.closeIdle().catch(reportCleanupFailure);
+            await owner.closeIdle().catch(() => undefined);
           })());
         },
       };
