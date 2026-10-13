@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-// Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { tryResolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -17,13 +15,13 @@ import { prepareSessionEventProjection } from "../session-event-projection.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
-  tryResolveSessionCompatibilityOwnerAgentId,
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,22 +33,6 @@ type SessionChangedPayload = {
   compacted?: boolean;
   catalogChanged?: true;
 };
-
-export function resolveSessionMessageSubscriptionKey(params: {
-  canonicalKey: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): string {
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : params.canonicalKey === "global" && params.defaultAgentId
-      ? normalizeAgentId(params.defaultAgentId)
-      : undefined;
-  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
-  return params.canonicalKey === "global" && agentId
-    ? `agent:${agentId}:global`
-    : params.canonicalKey;
-}
 
 type SessionChangeContext = Pick<
   GatewayRequestContext,
@@ -144,6 +126,28 @@ function snapshotTarget(payload: SessionChangedPayload, scope: SessionEventAgent
     : undefined;
 }
 
+function resolveSessionDrain(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+  eventReceivers: ReadonlySet<string>,
+): { connIds: ReadonlySet<string>; subscriptionKey: string } | undefined {
+  if (!payload.sessionKey || !scope?.[1] || !["reset", "delete", "new"].includes(payload.reason)) {
+    return undefined;
+  }
+  const key = resolveSessionStoreKey({
+    cfg: context.getRuntimeConfig(),
+    sessionKey: payload.sessionKey,
+    storeAgentId: scope[1],
+  });
+  const subscriptionKey = resolveSessionSubscriptionKey(key, scope[1]);
+  const messageReceivers = context.getSessionMessageSubscriberConnIds?.(subscriptionKey);
+  return {
+    connIds: new Set([...eventReceivers, ...(messageReceivers ?? [])]),
+    subscriptionKey,
+  };
+}
+
 function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
@@ -151,13 +155,10 @@ function broadcastSessionsChanged(
   includeSnapshot = true,
   read?: SessionRowReadView,
 ): void {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
-    return;
-  }
   if (scope === null) {
     return;
   }
+  const connIds = context.getSessionEventSubscriberConnIds();
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
   const routingOptions = {
     ...(routingAgentId ? { agentId: routingAgentId } : {}),
@@ -168,6 +169,21 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  const drain = resolveSessionDrain(context, payload, scope, connIds);
+  if (drain && drain.connIds.size > 0) {
+    // Keep teardown behind earlier admitted publications and use the same
+    // private/global routing as sessions.changed. The broadcaster still owns
+    // live recipient authorization and disconnects slow clients rather than
+    // silently dropping this notice. It is not a durable delivery receipt.
+    context.broadcastToConnIds("socket.drain", eventPayload, drain.connIds, {
+      ...routingOptions,
+      sessionKeys: [drain.subscriptionKey],
+      dropIfSlow: false,
+    });
+  }
+  if (!hasSessionChangeReceivers(connIds)) {
+    return;
+  }
   if (!includeSnapshot) {
     // Native plugins need the keyed notice, but a keyed WebSocket payload would
     // ask recipient projection to read the unavailable row again.
@@ -408,53 +424,21 @@ export function emitSessionsChanged(
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
-  const evSubs = context.getSessionEventSubscriberConnIds();
-  const isTeardown =
-    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
-
-  if (isTeardown) {
-    let msgSubs: ReadonlySet<string> = new Set<string>();
-    if (payload.sessionKey) {
-      const cfg = context.getRuntimeConfig();
-      const defaultAgentId =
-        payload.sessionKey === "global"
-          ? (tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey) ??
-            tryResolveDefaultAgentId(cfg))
-          : undefined;
-      const subscriptionKey = resolveSessionMessageSubscriptionKey({
-        canonicalKey: payload.sessionKey,
-        agentId: payload.agentId,
-        defaultAgentId,
-      });
-      msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
-    }
-    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
-
-    if (drainConnIds.size > 0 && payload.sessionKey) {
-      context.broadcastToConnIds(
-        "socket.drain",
-        {
-          sessionKey: payload.sessionKey,
-          reason: payload.reason,
-          ts: Date.now(),
-          ...(payload.sessionKey === "global" && payload.agentId
-            ? { agentId: payload.agentId }
-            : {}),
-        },
-        drainConnIds,
-      );
-    }
-  }
-
-  const connIds = evSubs;
-
-  if (!hasSessionChangeReceivers(connIds)) {
+  const connIds = context.getSessionEventSubscriberConnIds();
+  // Lightweight contexts without either kind of listener need no routing config.
+  if (!hasSessionChangeReceivers(connIds) && !context.getSessionMessageSubscriberConnIds) {
     return;
   }
   const cfg = context.getRuntimeConfig();
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
+  if (
+    !hasSessionChangeReceivers(connIds) &&
+    !resolveSessionDrain(context, payload, scope, connIds)?.connIds.size
+  ) {
+    return;
+  }
   if (options.preparedPublication && payload.sessionKey) {
     return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }

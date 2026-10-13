@@ -477,9 +477,35 @@ describe("sessions.changed coalescing", () => {
       vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
     ).toMatchObject([
       { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
+      { reason: "delete", sessionId: "removed" }, // socket.drain
+      { reason: "delete", sessionId: "removed" }, // sessions.changed
     ]);
   });
+
+  it.each([
+    { key: "main", agentId: "main", subscriptionKey: "agent:main:main" },
+    { key: "global", agentId: "work", subscriptionKey: "agent:work:global" },
+  ])(
+    "routes $key teardown to message-only subscribers for $agentId",
+    async ({ key, agentId, subscriptionKey }) => {
+      const context = createContext(new Set(), {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+      context.getSessionMessageSubscriberConnIds = vi.fn(
+        (requestedKey) => new Set(requestedKey === subscriptionKey ? ["message-reader"] : []),
+      );
+
+      await emitAndSettleLeading(context, { reason: "reset", sessionKey: key, agentId });
+      await flushPendingSessionsChangedEvents(context);
+
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "socket.drain",
+        expect.objectContaining({ sessionKey: key, agentId, reason: "reset" }),
+        new Set(["message-reader"]),
+        expect.objectContaining({ agentId, dropIfSlow: false }),
+      );
+    },
+  );
 
   it("joins a different session admitted while shutdown is draining", async () => {
     const context = createContext();

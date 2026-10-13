@@ -164,6 +164,14 @@ or protocol-version change.
 
 ## Common event families
 
+- `socket.drain`: session reset (`reset` or `new`) or deletion (`delete`) notice
+  for session-list and matching message subscribers. The payload includes
+  `sessionKey`, `reason`, `ts`, and, when available, `agentId` and `sessionId`.
+  It follows the same session access checks as other session events; clients
+  with `session-scoped-events` receive it only for their subscribed session.
+  This is a best-effort cache invalidation, not task completion, a WebSocket
+  transport drain, or a durable delivery receipt. Reconcile state after reconnects.
+
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
   events. A `state: "delta"` payload carries the append in `deltaText`.
   The first text frame delivered to a recipient for a run also includes the
