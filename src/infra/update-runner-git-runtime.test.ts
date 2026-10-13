@@ -111,8 +111,8 @@ describe("Git runtime promotion", () => {
       for (const staged of stagedModules) {
         const stagedLink = path.join(root, staged, "candidate", "openclaw");
         expect((await fs.lstat(stagedLink)).isSymbolicLink()).toBe(true);
-        expect(await fs.realpath(stagedLink)).toBe(root);
         if (process.platform === "win32") {
+          expect(await fs.realpath(stagedLink)).toBe(root);
           const probe = await runCommandWithTimeout(
             [
               "powershell.exe",
@@ -125,6 +125,10 @@ describe("Git runtime promotion", () => {
           );
           expect(probe.code, probe.stderr).toBe(0);
           expect(probe.stdout.trim()).toBe("Junction");
+        } else {
+          expect(
+            path.resolve(root, path.dirname(relativeLink), await fs.readlink(stagedLink)),
+          ).toBe(root);
         }
       }
       await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
