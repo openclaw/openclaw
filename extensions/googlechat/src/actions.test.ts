@@ -40,12 +40,21 @@ describe("googlechat message actions", () => {
     vi.resetModules();
   });
 
-  function buildAccount() {
+  function buildAccount(overrides: Record<string, unknown> = {}) {
+    const overrideConfig =
+      overrides.config && typeof overrides.config === "object"
+        ? (overrides.config as Record<string, unknown>)
+        : {};
     return {
       accountId: "default",
       enabled: true,
       credentialSource: "service-account",
-      config: { groupPolicy: "open", dmPolicy: "open" },
+      ...overrides,
+      config: {
+        groupPolicy: "open",
+        dmPolicy: "open",
+        ...overrideConfig,
+      },
     };
   }
 
