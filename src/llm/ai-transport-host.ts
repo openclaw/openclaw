@@ -14,6 +14,7 @@ import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { formatModelTransportContext } from "./model-transport-context.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -56,9 +57,11 @@ configureAiTransportHost({
     }
     const entry = build();
     if (entry) {
-      log.debug(entry.message, entry.data);
+      log.debug(entry.message + formatModelTransportContext(), entry.data);
     }
   },
-  logInfo: (subsystem, message, data) => transportLog(subsystem).info(message, data),
-  logWarn: (subsystem, message, data) => transportLog(subsystem).warn(message, data),
+  logInfo: (subsystem, message, data) =>
+    transportLog(subsystem).info(message + formatModelTransportContext(), data),
+  logWarn: (subsystem, message, data) =>
+    transportLog(subsystem).warn(message + formatModelTransportContext(), data),
 });

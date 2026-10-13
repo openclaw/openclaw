@@ -962,8 +962,8 @@ describe("createGatewayKernel", () => {
         "gateway.chat-metadata-lifecycle",
         "gateway.config-revision-key",
         "gateway.request-context",
-        "gateway.instance-runtime-import",
         "sessions.projection",
+        "gateway.instance-runtime-import",
         "sessions.materialize",
         "gateway.lifetime-sidecars",
       ]);

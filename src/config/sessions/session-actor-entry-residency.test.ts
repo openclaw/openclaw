@@ -12,6 +12,7 @@ import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-pa
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
+import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -205,7 +206,16 @@ it("keeps transcript residency across entry patches without losing either owner'
       ]),
     );
     const before = f.read();
-    const entryPatch = (fields: { label?: string; lifecycleRevision?: string }) =>
+    const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
+      kind: "transcript",
+      sessionId: f.scope.sessionId,
+      generation: before.transcript.watermark.generation,
+      leafEntryId: "before-patch",
+    };
+    const entryPatch = (
+      fields: { label?: string; lifecycleRevision?: string },
+      shouldCommitIf = predicate,
+    ) =>
       f.patchEntry({
         selection: { kind: "entry", sessionKey: f.target.sessionKey, exact: true },
         sessionKey: f.target.sessionKey,
@@ -213,12 +223,21 @@ it("keeps transcript residency across entry patches without losing either owner'
         operationLabel: "session-entry.patch",
         validateCanonicalKeys: false,
         preserveActivity: true,
+        shouldCommitIf,
       });
-    entryPatch({ label: "entry owner committed" });
-    const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
-      /^select\b/iu.test(sql) ? "select" : null,
+    const reads = trackSqliteStatementExecutions(f.database.db, ["select", "watermark"], (sql) =>
+      sql.startsWith("select coalesce(") &&
+      sql.includes('as "max_seq"') &&
+      sql.includes('"session_transcript_cold_archives"')
+        ? "watermark"
+        : /^select\b/iu.test(sql)
+          ? "select"
+          : null,
     );
     try {
+      entryPatch({ label: "entry owner committed" });
+      expect(reads.counts.watermark).toBe(0);
+      reads.counts.select = 0;
       const after = f.read();
       expect(after.entry?.label).toBe("entry owner committed");
       expect(after.transcript).toEqual(before.transcript);
@@ -260,6 +279,11 @@ it("keeps transcript residency across entry patches without losing either owner'
       await f.prepare(append);
       expect(f.mutate(append).kind).toBe("committed");
       expect(reads.counts.select).toBe(0);
+      entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
+      entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });
+      expect(f.read().entry?.label).toBe("entry owner committed");
+      entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
+      expect(reads.counts.watermark).toBe(0);
     } finally {
       reads.restore();
     }

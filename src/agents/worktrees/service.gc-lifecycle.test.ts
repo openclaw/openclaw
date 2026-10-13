@@ -51,7 +51,11 @@ vi.mock("../../gateway/session-worker-placement-context.js", () => ({
         assertCurrent: () => {},
         release: () => {},
       }),
-      prepareSessionPlacement: async () => ({ current: () => undefined, release: () => {} }),
+      prepareSessionPlacement: async () => ({
+        prepareRead: () => undefined,
+        current: () => undefined,
+        release: () => {},
+      }),
     },
   }),
 }));

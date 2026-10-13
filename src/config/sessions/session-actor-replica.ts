@@ -260,17 +260,18 @@ function retainSnapshot(
   state: SessionActorHotState,
   generation: string | undefined,
 ): void {
+  const next = isDeeplyFrozenPlainData(state) ? state : freezeJsonSnapshot(structuredClone(state));
+  if (cell.snapshot === next && cell.generation === generation) {
+    return touch(cell);
+  }
   const previousTranscript = cell.transcript;
-  const detached = isDeeplyFrozenPlainData(state)
-    ? state
-    : freezeJsonSnapshot(structuredClone(state));
   discard(cell);
-  cell.snapshot = detached;
-  cell.predicateColumns = detached.entry
-    ? deriveSessionPredicateColumns(JSON.stringify(detached.entry))
+  cell.snapshot = next;
+  cell.predicateColumns = next.entry
+    ? deriveSessionPredicateColumns(JSON.stringify(next.entry))
     : undefined;
   cell.generation = generation;
-  cell.bytes = JSON.stringify(detached).length * 2;
+  cell.bytes = JSON.stringify(next).length * 2;
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (

@@ -18,7 +18,11 @@ import { createVitestCacheSlots } from "./lib/vitest-cache-slots.mts";
 import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
-import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mts";
+import {
+  isCiLikeEnv,
+  resolveLocalFullSuiteProfile,
+  shouldContinueVitestFailures,
+} from "./lib/vitest-local-scheduling.mts";
 import {
   VITEST_INFRASTRUCTURE_EXIT_CODE,
   mergeVitestExitCodes,
@@ -294,7 +298,8 @@ async function runVitestSpecs(
         const continueOrdinaryFailure =
           continueOnFailure &&
           result.exitedNormally &&
-          result.groupJoined &&
+          // Windows retains each namespace and never recycles scheduler cache slots.
+          (result.groupJoined || process.platform === "win32") &&
           !result.noOutputTimedOut;
         if (
           result.code !== 1 ||
@@ -557,7 +562,7 @@ export async function runTestProjects(
       !runSpecs.some((spec) => spec.watchMode);
     const isParallelShardRun =
       isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
-    // Explicit selectors keep their ordering; focused CI shards still stop after failure.
+    // Explicit selectors keep their ordering; CI drains ordinary failures.
     // Automatic overlap requires joined groups and scheduler-owned cache leaves.
     const automatic =
       exactTargetRun &&
@@ -614,7 +619,7 @@ export async function runTestProjects(
       reports,
       termination,
       automatic,
-      baseEnv.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
+      shouldContinueVitestFailures(baseEnv),
       focusedCiShard,
     );
     if (concurrency === 1 && termination.signal) {

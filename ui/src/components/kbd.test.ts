@@ -2,7 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
-import { renderKbd, renderKeyboardShortcut, renderShortcutText } from "./kbd.ts";
+import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
 
 describe("shared keyboard hints", () => {
   it.each([
@@ -33,7 +33,7 @@ describe("shared keyboard hints", () => {
     },
   );
 
-  it("preserves caller slots, hidden state, literal labels and translated placement", () => {
+  it("preserves caller slots, hidden state, and literal labels", () => {
     const host = document.createElement("div");
     render(
       renderKbd("constructor", {
@@ -49,8 +49,5 @@ describe("shared keyboard hints", () => {
     expect(key.hidden).toBe(true);
     expect(key.slot).toBe("details");
     expect(key.getAttribute("aria-hidden")).toBe("true");
-    render(renderShortcutText("{shortcut} first; {shortcut} again", renderKbd("/")), host);
-    expect(host.textContent).toBe("/ first; / again");
-    expect(host.querySelectorAll("kbd")).toHaveLength(2);
   });
 });

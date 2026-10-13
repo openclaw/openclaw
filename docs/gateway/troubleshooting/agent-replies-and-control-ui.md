@@ -65,6 +65,8 @@ Common signatures:
 - `pairing request` → sender needs approval.
 - `blocked` / `allowlist` → sender/channel was filtered by policy.
 
+A `Session delivery: entry <id> was dead-lettered and moved to failed` warning means a queued session delivery finished terminal cleanup and will not be replayed. Use the queue entry ID to correlate earlier logs, then check the conversation before retrying: an interrupted delivery may already have produced side effects. Batch recovery includes the finalized entry in its failure count.
+
 Related:
 
 - [Channel troubleshooting](/channels/troubleshooting)

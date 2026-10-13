@@ -59,6 +59,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // Maintainers invoke this isolated transcript-rewrite benchmark by path.
+  "scripts/bench-session-manager-rewrite.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
@@ -238,6 +240,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // review.sh invokes the corrected-candidate review validator by path.
   "scripts/pr-lib/correction-review.mjs!",
+  // prepare-core.sh invokes correction continuation and recovery by path.
+  "scripts/pr-lib/correction-continuation.mjs!",
   "scripts/pr-lib/gh-api-preflight.mjs!",
   "scripts/pr-lib/materialize-dependencies.mjs!",
   "scripts/pr-lib/merge-body.mjs!",
@@ -1007,9 +1011,7 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.jsx!",

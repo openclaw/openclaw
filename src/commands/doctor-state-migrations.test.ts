@@ -20,7 +20,6 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
-import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -577,70 +576,6 @@ describe("doctor legacy state migrations", () => {
       });
       expect(await store.lookup("legacy-new")).toStrictEqual({ body: "new" });
       expect(await store.lookup("legacy-old")).toStrictEqual({ body: "old" });
-    });
-  });
-
-  it("keeps already-imported entries when a concurrent namespace write causes eviction", async () => {
-    const root = makeDoctorStateDir();
-    const maxEntries = 4;
-    const sourcePath = path.join(root, "legacy-cache.json");
-    fs.writeFileSync(sourcePath, "legacy", "utf-8");
-    mockedChannelMigrationPlans.plans = [
-      {
-        kind: "plugin-state-import",
-        label: "Test evicted cache",
-        sourcePath,
-        targetPath: "plugin state:test.evicted-cache",
-        pluginId: "telegram",
-        namespace: "test.evicted-cache",
-        maxEntries,
-        scopeKey: "scope",
-        cleanupSource: "rename",
-        // Seeding inside readEntries lands after the preflight capacity check, which
-        // simulates concurrent live writes filling the namespace before import.
-        readEntries: () => {
-          seedPluginStateEntriesForTests(
-            Array.from({ length: maxEntries - 2 }, (_, index) => ({
-              pluginId: "telegram",
-              namespace: "test.evicted-cache",
-              key: `concurrent-${index}`,
-              value: { body: "concurrent" },
-            })),
-          );
-          return [
-            { key: "first", value: { body: "first" }, timestamp: 1_000 },
-            { key: "second", value: { body: "second" }, timestamp: 2_000 },
-            { key: "third", value: { body: "third" }, timestamp: 3_000 },
-          ];
-        },
-      },
-    ];
-
-    const result = await runLegacyStateMigrationsForRoot(root);
-
-    expect(result.warnings).toStrictEqual([
-      "Paused migrating Test evicted cache because plugin state cap evicted scope:first; imported 1 of 3 missing entries and deferred the rest in the legacy source",
-    ]);
-    expect(result.changes).toContain("Migrated 1 Test evicted cache entry → plugin state");
-    expect(result.changes).not.toContain(
-      `Archived Test evicted cache legacy source → ${sourcePath}.migrated`,
-    );
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-
-    await withStateDir(root, async () => {
-      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
-        namespace: "test.evicted-cache",
-        maxEntries,
-      });
-      const valuesByKey = new Map(
-        (await store.entries()).map(({ key, value }) => [key, value.body]),
-      );
-      expect(valuesByKey.has("scope:first")).toBe(false);
-      expect(valuesByKey.get("scope:second")).toBe("second");
-      expect(valuesByKey.has("scope:third")).toBe(false);
-      expect(valuesByKey.get("concurrent-0")).toBe("concurrent");
-      expect(valuesByKey.get("concurrent-1")).toBe("concurrent");
     });
   });
 

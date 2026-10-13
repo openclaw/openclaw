@@ -363,6 +363,7 @@ describe("cron outcome receipt finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
 
+    expect(state.store).toBeNull();
     await finalizeCompletedCronRunOutcomes(state, [
       authorOutcome({
         jobId: completed.id,

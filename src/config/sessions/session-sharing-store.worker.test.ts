@@ -18,6 +18,7 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -30,6 +31,8 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -498,13 +501,14 @@ it("preserves entry changes and skips reassigned categories after preparation", 
 });
 
 it.each([
-  { mutation: "membership", receipt: "valid" },
-  { mutation: "category", receipt: "valid" },
-  { mutation: "membership", receipt: "conflicting" },
-  { mutation: "membership", receipt: "missing" },
+  { mutation: "membership", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "category", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "conflicting", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: false },
+  { mutation: "membership", receipt: "missing", closeBeforeFailure: true },
 ] as const)(
-  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost",
-  async ({ mutation, receipt }) => {
+  "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost (host closed: $closeBeforeFailure)",
+  async ({ mutation, receipt, closeBeforeFailure }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();
       const scope = {
@@ -549,6 +553,18 @@ it.each([
         cachesAtPublication.push(readCommittedSessionEntryCache(database.db));
         projection.invalidate(change);
       });
+      const cfg = { agents: { entries: { main: {} } }, session: { store: database.path } };
+      const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
+      const publishedMemberships: boolean[] = [];
+      const stopPublic = sessionChanges.subscribe((change) => {
+        if (
+          receipt === "valid" &&
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey
+        ) {
+          publishedMemberships.push(sharing.readCurrent(cfg).membership.has("guest"));
+        }
+      });
       const failure = new SqliteWorkerError(
         "membership reply lost after commit",
         "outcome-unknown",
@@ -579,7 +595,18 @@ it.each([
           async <Operations extends SqliteWorkerOperations>(
             ...args: Parameters<typeof original>
           ) => {
-            const worker = await original<Operations>(...args);
+            const [databaseOptions, native, configuration] = args;
+            const worker = await original<Operations>(databaseOptions, native, {
+              ...configuration,
+              onAdmitted(request) {
+                configuration.onAdmitted?.(request);
+                if (request.stage === "commit") {
+                  expect(() => sharing.readCurrent(cfg)).toThrow(
+                    "Session access facts are unavailable",
+                  );
+                }
+              },
+            });
             const intercept = async <T>(
               type: keyof Operations,
               run: () => Promise<T>,
@@ -590,6 +617,12 @@ it.each([
               }
               const result = await run();
               if (selected) {
+                if (closeBeforeFailure) {
+                  expect(closeOpenClawAgentDatabaseByPath(database.path, database.agentId)).toBe(
+                    true,
+                  );
+                  expect(database.db.isOpen).toBe(false);
+                }
                 throw failure;
               }
               return result;
@@ -652,7 +685,20 @@ it.each([
           expect(mutations).toBe(1);
           expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
           expect(projection.needsPreparation).toBe(true);
+          if (closeBeforeFailure) {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+          }
           expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+          expect(() => sharing.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
+          open.mockRestore();
+          corruptReceipt.mockRestore();
+          await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 3 });
+          await expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+            "Session access facts are unavailable",
+          );
           return;
         }
         await expect(run()).resolves.toEqual(
@@ -689,6 +735,8 @@ it.each([
           expect(loadSessionEntry(aliasedScope)?.category).toBeUndefined();
         }
         const members = mutation === "category" ? ["guest"] : [];
+        expect([...sharing.readCurrent(cfg).membership]).toEqual(members);
+        expect(publishedMemberships).toEqual([mutation === "category"]);
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
         expect(
@@ -699,6 +747,8 @@ it.each([
         ).toBe(mutation === "category" ? undefined : " Work ");
         expect(projection.groupTargets().has("Work")).toBe(mutation !== "category");
       } finally {
+        stopPublic();
+        sharing.release();
         open.mockRestore();
         corruptReceipt.mockRestore();
         stop();

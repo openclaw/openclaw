@@ -5,15 +5,34 @@ description: "Update the operator-configured Team server through its canonical o
 
 # Update Team server
 
-Update the operator-configured Team server through Night Watch under the existing per-deployment approval and coordinated execution window. Keep unattended deployment disabled. This repository operator skill bundles the interim [deployment controller](controller/README.md); it is not a runtime skill. The native `openclaw update` path will replace the controller after its migration, recovery, and acceptance contracts are proven and adopted.
+Update the operator-configured Team server through the canonical release deployer under explicit per-deployment approval. A Peter-instructed update authorizes execution through that owner; Night Watch coordinates restart timing and receives every deploy/restart notification, but is not an approval gate for that update. Keep unattended deployment disabled. This repository operator skill bundles the interim [deployment controller](controller/README.md); it is not a runtime skill. The native `openclaw update` path will replace the controller after its migration, recovery, and acceptance contracts are proven and adopted.
 
-## Night Watch alone executes live updates
+## Canonical deployer owns live updates
 
-For the operator-configured Team server, only the designated **Team Server · Night Watch** owner may execute live updates through the canonical deployment controller. Verify its exact coordinator session and host from the private operator record; a matching display name or possession of access is not authority. Night Watch coordinates every intentional restart and records the verified outcome in that same session. Other Codex tasks, sessions, agents, or operators must not execute or receive delegation for deployment, restart, cutover, rollback, or recovery. Coordination/admission may route the request to Night Watch, but must never designate an external executor. Existing approval applies to Night Watch, not to readers of this skill; do not request it again for continuation of the same approved deployment.
+Only the canonical release deployer owns deployment, restart, cutover, rollback,
+and recovery. Peter-instructed updates run through that owner. Night Watch on
+`stable.openclaw.ai` is notified of every deploy/restart, coordinates restart
+timing, and records the verified outcome in the same coordinator session; its
+acknowledgment is not an additional approval or execution gate for a
+Peter-instructed update. Resolve the exact coordinator session and deployment
+host from the private operator record; a matching display name or access alone
+is not authority. Keep unattended deployment disabled. Never edit Team live
+state outside the deployer/owner, invoke direct restarts, or create another
+deployer. Existing per-deployment approval persists through the same scoped
+update and recovery.
 
-Other workers may investigate, test, review, and land scoped fixes in isolated worktrees, then hand evidence and results to Night Watch for live execution. Repair or landing authority does not transfer live execution authority. Non-owner requesters retain coordination and follow-through until Night Watch verifies acceptance; they do not invoke the updater service themselves. Night Watch uses the existing controller and configured cadence, not a second deployer.
+Other workers may investigate, test, review, and land scoped fixes in isolated
+worktrees. Repair or landing authority does not authorize a fresh deployment.
+The requester retains coordination and follow-through through native acceptance;
+an acknowledgment or landed repair is not acceptance.
 
-If an external live operation is already running, arrange a safe handback of that exact transaction to Night Watch through the existing owner's supported coordination/recovery path. Preserve its invocation identity, phase, lock, journal, maintenance authority, and receipts; reconcile whether writers or child processes are still active before Night Watch resumes. Do not launch a duplicate controller, reassign authority by editing records, blindly kill the operation, or treat a handoff acknowledgement as acceptance. If safe handback is unavailable, report the precise blocker privately and keep the request open without further unauthorized live actions. This rule grants no permission or security bypass.
+If a live operation is already running, reconcile that exact transaction through
+the existing owner's supported coordination/recovery path. Preserve invocation
+identity, phase, lock, journal, maintenance authority, and receipts; check whether
+writers or children remain active before resuming. Never launch a duplicate
+controller, reassign authority by editing records, blindly kill an operation, or
+bypass a denial. If safe continuation is unavailable, report the concrete blocker
+privately and keep the request open without unauthorized live actions.
 
 ## Resolve the owner
 
@@ -27,14 +46,14 @@ Night Watch alone performs adoption in its coordinated window: settle every old 
 
 Use the operator-provided private deployment runbook to establish the designated owner, access, canonical command, sole configured cadence, and recovery contract. Reuse known unchanged access, runbook, and source context; do not reread historical registries or rediscover the deployment setup each turn. Reconcile only the current owner, active invocation, lock, and journal before proceeding. Never guess access or copy private connection details, credentials, state, or receipts into public output.
 
-For an approved request, complete that concise reconciliation and promptly invoke the canonical updater through Night Watch when idle. The updater owns validation, migrations, and acceptance; do not add agent-side preflight or postflight checks that repeat its work. Investigate only a concrete native failure, a missing or ambiguous receipt, contradictory current evidence, or an actual ownership conflict. Inspect the relevant source or runbook when resolving that specific gap, not as a routine prerequisite.
+For an approved request, complete that concise reconciliation and promptly invoke the canonical updater through its owner when idle, notifying Night Watch and coordinating restart timing without making its acknowledgment an extra gate. The updater owns validation, migrations, and acceptance; do not add agent-side preflight or postflight checks that repeat its work. Investigate only a concrete native failure, a missing or ambiguous receipt, contradictory current evidence, or an actual ownership conflict. Inspect the relevant source or runbook when resolving that specific gap, not as a routine prerequisite.
 
 This skill does not install a migration phase. Missing access or a safe capability is a concrete blocker: repair through the existing owner within authority, or report what remains unavailable. Never invent success or bypass a denial. Qualify suspected issues against the actual failing path before treating them as defects. Improve this updater guidance when confirmed issues expose a durable gap, and repair confirmed defects within the authorized update scope. Use isolated worktrees and subagents where useful; test and review repairs, then land them through normal CI, PR review, and `scripts/pr` landing without bypassing branch protection. Keep ownership through verified update acceptance; landed repairs alone do not complete the update. Do not delay an otherwise safe prepared update for unrelated repairs.
 
 ## Deploy through one owner
 
 1. Preserve the operator-configured sole cadence and its intended state. A retired host timer may intentionally remain disabled when an authorized Gateway job owns the schedule. Never enable a legacy timer, pause the active cadence for proof, or create another scheduler/deployer. Inspect the active invocation, lock, and journal; observe an active owner instead of duplicating it. Resolve retained journals through canonical recovery before requesting a new deployment. Do not clear failed status to manufacture idleness.
-2. When idle, Night Watch alone requests the configured updater service using its documented command. The canonical owner alone controls deployment, Gateway lifecycle, rollback, and recovery. Do not substitute direct restarts, partial build overlays, or an in-place source build.
+2. When idle, request the configured updater service through its canonical owner using its documented command. The canonical owner alone controls deployment, Gateway lifecycle, rollback, and recovery. Do not substitute direct restarts, partial build overlays, or an in-place source build.
 3. Keep the incumbent serving while the owner freezes official upstream `main`, builds the complete release off-path, validates it, and seals it. After a new instruction to update to latest main following an interruption or outage, let the native controller freeze official `main` once for that request after canonical recovery permits a new deployment. Follow that recorded target through acceptance; do not chase moving main with externally sampled `--sha` assertions or repeat safe target-mismatch refusals. Let the owner check runtime-user disk/quota headroom as part of its native preparation; do not repeat that check externally.
 4. Use the owner's genuine, unexpired maintenance authority bound to the incumbent generation. Use the configured graceful drain, then the owner's documented bounded-interruption mode when authorized; active agents and PTYs are not indefinite vetoes. Apply existing interruption authorization rather than repeatedly choosing a defer-only policy or asking again. Never bulk-cancel agents, abort sessions, clear queues, manually replay turns, or bypass persistence or locks to force idleness. Pending terminal persistence still blocks interruption. Never relabel DRAINING as READY. Bound shutdown, migration, startup, and verification separately; the drain budget is not total downtime.
 

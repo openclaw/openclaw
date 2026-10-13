@@ -92,7 +92,6 @@ async function waitForDispatch<T>(
 ): Promise<T> {
   let releaseDeadline: (() => void) | undefined;
   try {
-    throwIfGatewayDispatchAborted(method, signal);
     const remainingTimeoutMs =
       deadlineMs === undefined
         ? undefined
@@ -103,7 +102,7 @@ async function waitForDispatch<T>(
     releaseDeadline =
       deadlineMs === undefined ? undefined : registerDiagnosticToolExecutionDeadline(deadlineMs);
     const abortError = (aborted: AbortSignal) => resolveDispatchAbortError(method, aborted);
-    return await (remainingTimeoutMs === undefined
+    return await (remainingTimeoutMs === undefined || signal?.aborted
       ? racePromiseWithAbortSignal(promise, signal, abortError)
       : raceWithTimeout(
           promise,

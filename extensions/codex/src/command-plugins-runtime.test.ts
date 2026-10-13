@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createEmptyPluginRegistry,
@@ -12,6 +9,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -78,31 +76,24 @@ afterEach(async () => {
 async function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
   const workspaceDir = path.join(root, "second-workspace");
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      agentDir,
-      store: {
-        version: 1,
-        profiles: {
-          "openai:second": {
-            type: "oauth",
-            provider: "openai",
-            access: stableAccount
-              ? "test-access-token"
-              : `e30.${Buffer.from(
-                  JSON.stringify({
-                    "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
-                  }),
-                ).toString("base64url")}.test-signature`,
-            refresh: "test-refresh-token",
-            expires: Date.now() + 24 * 60 * 60_000,
-            ...(stableAccount ? { accountId: "test-second-account" } : {}),
-          },
-        },
-        order: { openai: ["openai:second"] },
-      },
+  await upsertAuthProfileAsync({
+    agentDir,
+    profileId: "openai:second",
+    credential: {
+      type: "oauth",
+      provider: "openai",
+      access: stableAccount
+        ? "test-access-token"
+        : `e30.${Buffer.from(
+            JSON.stringify({
+              "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
+            }),
+          ).toString("base64url")}.test-signature`,
+      refresh: "test-refresh-token",
+      expires: Date.now() + 24 * 60 * 60_000,
+      ...(stableAccount ? { accountId: "test-second-account" } : {}),
     },
-  ]);
+  });
   const current = {
     enabled: true,
     plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
@@ -184,7 +175,11 @@ describe("Codex plugin command context", () => {
           "https://api.openai.com/auth": { chatgpt_account_id: "test-replacement-account" },
         }),
       ).toString("base64url")}.test-signature`;
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: test.agentDir, store }]);
+      await upsertAuthProfileAsync({
+        agentDir: test.agentDir,
+        profileId: "openai:second",
+        credential: profile,
+      });
       return auth;
     });
     await expect(

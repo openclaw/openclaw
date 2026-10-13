@@ -18,7 +18,7 @@ import {
   type SqliteWorkerStore,
   runQueuedStoreWrite,
   readOpenClawAgentDatabaseIdentity,
-  readSqliteDatabaseWriteTokenForPath,
+  readSqliteDatabaseScopedWriteTokenForPath,
   supportsOpenClawAgentDatabaseExecution,
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -34,6 +34,7 @@ import type {
   MemoryPublicationResult,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
+import { MEMORY_INDEX_WRITE_SCOPE } from "./manager-publication-task.js";
 import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
 import {
   initializePublishedMemory,
@@ -114,7 +115,7 @@ export class MemoryIndexDatabase {
     try {
       database.fts.enabled = params.schema.ftsEnabled;
       if (params.maintenanceSource) {
-        database.installFacts(params.maintenanceSource.facts);
+        database.installFacts(params.maintenanceSource.facts, params.maintenanceSource.factsToken);
       }
       if (
         params.maintenanceSource &&
@@ -231,7 +232,9 @@ export class MemoryIndexDatabase {
 
   private writeToken(): string | undefined {
     const filename = this.shadow?.path ?? this.writeOptions?.path;
-    return filename ? readSqliteDatabaseWriteTokenForPath(filename) : undefined;
+    return filename
+      ? readSqliteDatabaseScopedWriteTokenForPath(filename, MEMORY_INDEX_WRITE_SCOPE)
+      : undefined;
   }
 
   private installFacts(facts: MemoryDatabaseFacts, token?: string): void {

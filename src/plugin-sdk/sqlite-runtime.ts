@@ -14,7 +14,10 @@ export {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-export { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+export {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../infra/sqlite-database-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,
   openOpenClawAgentSqliteWorkerStoreV2,

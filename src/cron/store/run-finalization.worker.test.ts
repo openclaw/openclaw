@@ -82,6 +82,25 @@ it("commits execution, delivery, and history once despite an owner edit and a du
             },
           }),
       );
+    database.db.exec(`
+      CREATE TEMP TRIGGER fail_cron_history BEFORE INSERT ON task_runs
+      BEGIN SELECT RAISE(ABORT, 'synthetic history failure'); END
+    `);
+    expect(() => finalize("ok")).toThrow("synthetic history failure");
+    expect(
+      database.db
+        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ).toEqual({ status: "running" });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM task_runs WHERE source_id = ?")
+        .get(job.id),
+    ).toEqual({ count: 0 });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId).toBe(
+      receipt.receiptId,
+    );
+    database.db.exec("DROP TRIGGER fail_cron_history");
     expect(finalize("ok").outcome.eventPlans).toHaveLength(1);
     expect(finalize("error").outcome.eventPlans).toHaveLength(0);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({

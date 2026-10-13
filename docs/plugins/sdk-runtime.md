@@ -96,19 +96,23 @@ inference routes, it replays the parent's last prepared instructions, tool schem
 and input prefix, including after parent completion, with tool choice set to `none`.
 Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
 and WebSocket continuation requests fall back to native thread reconstruction
-without guaranteed cache reuse. While declarations remain in the snapshot budget,
-tool schemas stay parent-identical even on that native reconstruction path.
+without guaranteed cache reuse. Native reconstructed history also takes precedence when
+its prefix no longer matches the recorded request. Completed parent responses and
+subsequent fork tool-denial outcomes remain before the side question or continuation.
+While the prepared request remains in the snapshot budget,
+instructions and tool schemas stay parent-identical even on that native reconstruction path.
 Denied forks always set tool choice to `none` on managed inference requests,
 while native hosted search remains disabled. The fork has its own thread,
 session, and current model authority.
 Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime replays the parent's recorded provider request
-with one appended user message, preserving its system prompt, tools, reasoning
+The built-in `openclaw` runtime replays the parent's recorded provider request,
+followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
 settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
 payload data without re-running the parent's one-shot continuation hooks.
-The replay uses the current prepared model's proxy and TLS policy. Session read
+Completed asynchronous tool calls, their outcomes, and the final answer remain in
+conversation order. The replay uses the current prepared model's proxy and TLS policy. Session read
 authority is checked immediately before every network send, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
@@ -419,6 +423,15 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
+For independent data owners in one database,
+`readSqliteDatabaseScopedWriteTokenForPath(path, scope)` retains facts across
+unrelated scoped writes. The worker exports `readSqliteDatabaseScopedWriteToken`
+and `readSqliteDatabasePendingScopedWriteToken` from `sqlite-worker-runtime`;
+use the latter to attach the committed scope receipt to a transaction result.
+Each participating writer names its affected scopes with
+`withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
+all scope receipts. These tokens describe committed data, never effect authority.
+
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read
@@ -566,6 +579,16 @@ preparation record. After the attempt closes, the callback rejects retained work
 Teardown keeps its existing cleanup authority and must still settle an owned
 lease when the requesting run has ended.
 
+Project preparation can return optional `recipePreparation` diagnostics with the
+recipe source, ignored-property note, phase durations, and a failure reason plus
+an output tail of at most 16 KiB. The optional transport callback
+`recordRecipePreparation` records diagnostics before a declared recipe rejects.
+These records contain neither command definitions nor environment values.
+An optional `captureSkipped` reason means detected setup failed best effort:
+continue enrollment, but suppress checkpoint capture for that allocation,
+including later teardown. Keep these recorded facts under the same live
+provisioning authority; they do not grant new allocation or execution authority.
+
 The legacy optional parameter shape remains source-compatible until the next
 declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
@@ -710,3 +733,11 @@ passes the previous successful value (or `undefined`) to its load callback,
 including explicit refreshes. Keep HTTP validators with that value so eviction,
 clear, and failed refreshes retire the representation and its validators together.
 The loader must treat the previous value as immutable.
+
+### Worker provisioning status
+
+Worker providers can call `options.reportStartStatus` during provisioning to publish
+attempt-scoped snapshot or cold-start facts. Environment status and session
+placement expose these facts as `startStatus`; the host closes the callback when
+the attempt finishes or loses authority. Report capture progress only when capture
+is claimed. These display facts do not change allocation or enrollment ownership.

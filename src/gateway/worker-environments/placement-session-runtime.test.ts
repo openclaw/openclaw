@@ -631,6 +631,7 @@ describe("worker placement runtime capability projection", () => {
       workerSessionPlacementService: {
         getMany: () => new Map([[sessionId, placement]]),
         prepareSessionPlacement: async () => ({
+          prepareRead: () => undefined,
           current: () => placement,
           release() {},
         }),
@@ -684,6 +685,7 @@ describe("worker placement runtime capability projection", () => {
       workerSessionPlacementService: {
         getMany: () => new Map([[sessionId, placement]]),
         prepareSessionPlacement: async () => ({
+          prepareRead: () => undefined,
           current: () => placement,
           release() {},
         }),

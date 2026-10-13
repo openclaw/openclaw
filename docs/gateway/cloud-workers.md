@@ -106,9 +106,29 @@ crabbox doctor --provider <backend> --json
 
 Read-only readiness does not prove allocation, setup, enrollment, or cleanup. Verify the complete session flow before relying on a new profile; see [Verify the profile](/gateway/cloud-workers/verify-the-profile).
 
+## Quick start
+
+With Crabbox logged in on the Gateway host, open **New Session** and pick **Cloud**
+in the where picker. OpenClaw discovers the configured backend, then saves a
+`cloud` profile when you select it. You can edit that profile later in
+**Settings → Connections → Cloud workers**. An explicitly configured direct
+provider can supply the same suggestion; discovery checks configuration, while
+allocation still performs the provider's normal preflight checks.
+
+The suggested profile uses Linux, the smallest advertised standard machine
+class, an 8-hour lifetime, a 45-minute idle timeout and idle suspend, and warm
+images. Viewing the suggestion does not save config or allocate a machine.
+Saving requires administrator access. Existing profiles take precedence, and
+adopting an existing `cloud` profile leaves it unchanged.
+If config reload is disabled, saving schedules a Gateway restart. Until the
+saved profile becomes active, selection reports that the profile is saved and
+asks you to wait for the restart and retry; retrying does not save it again.
+
 ## Configuration
 
-Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list`. Saved changes apply without restarting the Gateway. With `gateway.reload.mode: "off"`, a save from this page restarts the Gateway to apply it, while direct edits to `openclaw.json` wait for a manual `openclaw gateway restart`. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
+Open **Settings → Connections → Cloud environments** to see one row per repository with a snapshot, a repository default profile, or a prepared worker. Select a repository to inspect its snapshots and setup or change its default machine. The sheet appears beside the list on wide screens and below it on narrow screens. Before any environments exist, the page explains that the first cloud session prepares the repository and saves a snapshot.
+
+Expand **Advanced** at the bottom for **Machines**, **Pool**, **Snapshot retention**, and **Machine images**, in that order. Machines lets you add, edit, or delete profiles; Pool shows ready workers and the shared pool cap. Snapshot retention applies to all repositories. Machine images keeps snapshots without a repository, including uncertain captures, available for inspection and recovery. Profile changes write `cloudWorkers.profiles`, the same keys you can edit directly in `openclaw.json`. Saved changes apply without restarting the Gateway. With `gateway.reload.mode: "off"`, a save from this page restarts the Gateway to apply it, while direct edits to `openclaw.json` wait for a manual `openclaw gateway restart`.
 
 **Machine class** is required in the class-based editor. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving. To configure a classless profile, use **Settings → Advanced** and omit `settings.class`; **Edit** on an existing classless profile opens Advanced. OpenClaw then omits `--class` unless the placement supplies a class, leaving resource selection to Crabbox without claiming a default size. Explicit `null`, empty or whitespace strings, and nonstring class values are invalid.
 

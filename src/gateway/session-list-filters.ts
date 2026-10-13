@@ -30,10 +30,8 @@ import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
   projectSessionOwner,
-  projectSessionProfileInvolvement,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
-  projectSessionParticipants,
   projectSessionParticipant,
   projectSessionPeople,
   projectSessionPeopleFacet,
@@ -70,6 +68,7 @@ export type SessionListFilteredEntries = {
   ownerEntries: SessionEntryPair[];
   ownerFacet: SessionOwnerFacetIdentity[];
   ownerSessionCounts?: SessionOwnerSessionCount[];
+  ownerSessionProfiles?: ReadonlyMap<string, string>;
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
@@ -106,6 +105,7 @@ export type SessionListFilterParams = {
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
   shouldYield?: () => boolean;
+  involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
 
 function resolveSessionListSearchDisplayName(
@@ -191,6 +191,7 @@ export function* filterSessionEntries(
   const ownerSessionCounts = opts.includeOwnerSessionCounts
     ? new Map<string, SessionOwnerSessionCount>()
     : undefined;
+  const ownerSessionProfiles = ownerSessionCounts ? new Map<string, string>() : undefined;
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
@@ -201,8 +202,6 @@ export function* filterSessionEntries(
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
-  const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
-  const projectInvolvement = identityProjection?.involvement ?? projectSessionProfileInvolvement;
   const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
@@ -362,27 +361,11 @@ export function* filterSessionEntries(
         );
       }
     : undefined;
-  const participantKeys = new Map<string, string>();
-  const matchesInvolvement = (
-    entry: SessionEntry,
-    effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
-    profileId: string,
-    personal: boolean,
-  ) => {
-    const state = projectInvolvement(entry, profileId, identities);
-    let participantKey = participantKeys.get(profileId);
-    if (!participantKey) {
-      participantKey = JSON.stringify({ type: "profile", id: profileId });
-      participantKeys.set(profileId, participantKey);
-    }
-    return (
-      !(personal && state?.hidden) &&
-      (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
-        (effectiveOwner?.identity?.type === "profile" &&
-          effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(participantKey))
-    );
-  };
+  const personalKeys = involvingActorId && params.involvementKeys(involvingActorId, true);
+  const relationKeys =
+    profileRelation?.relationship === "involving"
+      ? params.involvementKeys(profileRelation.profileId, false)
+      : undefined;
 
   for (const pair of candidateEntries) {
     if (shouldYield?.()) {
@@ -492,10 +475,7 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    if (
-      profileRelation?.relationship === "involving" &&
-      !matchesInvolvement(entry, effectiveOwner, profileRelation.profileId, false)
-    ) {
+    if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
     if (effectiveOwner) {
@@ -508,7 +488,7 @@ export function* filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
+    if (personalKeys && !personalKeys.has(key)) {
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {
@@ -547,14 +527,8 @@ export function* filterSessionEntries(
     ) {
       const profileId = effectiveOwner.identity.id;
       const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
-      const agentId = target.agentId;
-      const active = params.projectActiveRun?.(key, entry, agentId);
       counts.open += 1;
-      counts.running += Number(
-        (active?.active === true && active.status !== "queued") ||
-          getRowContext().subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
-          getRowContext().projectedSubagentActivity?.has(storeKey) === true,
-      );
+      ownerSessionProfiles!.set(key, profileId);
       ownerSessionCounts.set(profileId, counts);
     }
     if (activityPulse) {
@@ -595,6 +569,7 @@ export function* filterSessionEntries(
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
     ...(ownerSessionCounts
       ? {
+          ownerSessionProfiles,
           ownerSessionCounts: [...ownerSessionCounts.values()].toSorted((a, b) =>
             a.profileId.localeCompare(b.profileId),
           ),
@@ -612,4 +587,39 @@ export function* filterSessionEntries(
         }
       : {}),
   };
+}
+
+/** Open membership is metadata; running state is read from the current runtime owners. */
+export function projectSessionOwnerRunningCounts(
+  params: SessionListFilterParams,
+  selection: SessionEntrySelection,
+  candidateKeys: () => Iterable<string>,
+): SessionEntrySelection {
+  if (!selection.ownerSessionCounts || !selection.ownerSessionProfiles) {
+    return selection;
+  }
+  const counts = new Map(
+    selection.ownerSessionCounts.map((count) => [count.profileId, { ...count, running: 0 }]),
+  );
+  const context = params.getRowContext();
+  for (const key of candidateKeys()) {
+    const profileId = selection.ownerSessionProfiles.get(key);
+    if (profileId === undefined) {
+      continue;
+    }
+    const target = params.getTarget(key);
+    if (!target) {
+      continue;
+    }
+    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
+    const storeKey = target.storeKey ?? key;
+    if (
+      (active?.active === true && active.status !== "queued") ||
+      context.subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
+      context.projectedSubagentActivity?.has(storeKey) === true
+    ) {
+      counts.get(profileId)!.running += 1;
+    }
+  }
+  return { ...selection, ownerSessionCounts: [...counts.values()] };
 }

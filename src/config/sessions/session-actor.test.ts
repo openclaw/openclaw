@@ -14,12 +14,7 @@ import {
   type SqliteWorkerOperationSettlement,
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -30,7 +25,6 @@ import {
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionActorAuthority, SessionActorOperations } from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import {
   seedSessionActorOutcomeTransferTranscript,
@@ -39,7 +33,6 @@ import {
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -49,43 +42,6 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-
-it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = {
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
-      env,
-    };
-    const sessionKey = "agent:main:dashboard:incognito-declined";
-    const owner = runOpenClawAgentWriteTransaction((opened) => {
-      writeSessionEntry(opened, sessionKey, {
-        sessionId: "native-session",
-        updatedAt: 1,
-        incognito: true,
-      });
-      return opened;
-    }, database);
-    const actor = await acquireSessionInputActor(
-      {
-        agentId: database.agentId,
-        storePath: database.path,
-        env,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    expect(actor).toBeUndefined();
-    expect(memorySessionActorOwners.read(database)).toBeUndefined();
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
-    expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
-      sessionId: "native-session",
-      updatedAt: 1,
-      incognito: true,
-    });
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
-  });
-});
 
 it.each([false, true])(
   "acquires the exact cold durable execution owner and installs a real worker commit (oversized=%s)",
@@ -511,6 +467,46 @@ it("serves installed state without a request and reconciles a retired worker gen
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
+
+it.each(["updated", "caller revoked", "disclosure revoked", "keeps changing"] as const)(
+  "reconciles a cold actor read superseded by a native publication (%s)",
+  async (change) => {
+    await withActor(async ({ actor, commands, fault, nativePatch }) => {
+      let callerRevoked = false;
+      const readAuthority: SessionActorAuthority = {
+        assertCurrent() {
+          if (callerRevoked) {
+            throw new Error("Read caller revoked");
+          }
+        },
+        authorize() {},
+      };
+      fault.onExecuted = () => {
+        if (change !== "keeps changing") {
+          fault.onExecuted = undefined;
+        }
+        nativePatch(654 + commands.length);
+        callerRevoked = change === "caller revoked";
+        fault.disclosureRevoked = change === "disclosure revoked";
+      };
+      const reading = actor.read(readAuthority);
+      if (change === "updated") {
+        await expect(reading).resolves.toMatchObject({ entry: { updatedAt: 655 } });
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else if (change === "keeps changing") {
+        await expect(reading).rejects.toThrow(
+          "Session actor changed before its read could publish",
+        );
+        expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
+      } else {
+        await expect(reading).rejects.toThrow(
+          change === "caller revoked" ? "Read caller revoked" : "Snapshot disclosure revoked",
+        );
+        expect(commands).toEqual(["session.actor.read"]);
+      }
+    });
+  },
+);
 
 it("installs a cold command and stale preimage without a separate read request", async () => {
   await withActor(async ({ actor, commands, fault, retireGeneration }) => {

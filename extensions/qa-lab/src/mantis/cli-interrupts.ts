@@ -40,30 +40,28 @@ function requestMantisShutdownGrace(): void {
 function isExpectedMantisInterrupt(
   error: unknown,
   interruptReason: MantisCliInterruptError,
-  seen = new Set<unknown>(),
 ): boolean {
   if (error === interruptReason) {
     return true;
   }
-  if (!error || (typeof error !== "object" && typeof error !== "function") || seen.has(error)) {
+  if (!error || (typeof error !== "object" && typeof error !== "function")) {
     return false;
   }
-  seen.add(error);
   if (error instanceof AggregateError) {
     if (error.errors.length === 0) {
       return false;
     }
     const errorsExpected = error.errors.every((entry) =>
-      isExpectedMantisInterrupt(entry, interruptReason, seen),
+      isExpectedMantisInterrupt(entry, interruptReason),
     );
     const causeExpected =
       error.cause === undefined ||
       error.errors.includes(error.cause) ||
-      isExpectedMantisInterrupt(error.cause, interruptReason, seen);
+      isExpectedMantisInterrupt(error.cause, interruptReason);
     return errorsExpected && causeExpected;
   }
   if ("cause" in error && error.cause !== undefined) {
-    return isExpectedMantisInterrupt(error.cause, interruptReason, seen);
+    return isExpectedMantisInterrupt(error.cause, interruptReason);
   }
   return false;
 }

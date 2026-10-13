@@ -169,33 +169,46 @@ export function writeSessionGoalOperationReceipt(
     db,
     kysely.deleteFrom(SESSION_GOAL_OPERATIONS_TABLE).where("expires_at", "<=", now),
   );
-  const count =
-    executeSqliteQueryTakeFirstSync(
-      db,
-      kysely
-        .selectFrom(SESSION_GOAL_OPERATIONS_TABLE)
-        .select(({ fn }) => fn.countAll<number>().as("count"))
-        .where("session_key", "=", sessionKey),
-    )?.count ?? 0;
-  if (count >= MAX_SESSION_RECEIPTS) {
+  const result = createSessionGoalOperationResult(sessionId, operation, goal, runId);
+  const inserted = executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto(SESSION_GOAL_OPERATIONS_TABLE)
+      .columns([
+        "session_key",
+        "operation_id",
+        "session_id",
+        "request_fingerprint",
+        "result_json",
+        "expires_at",
+      ])
+      .expression(
+        kysely
+          .selectNoFrom((eb) => [
+            eb.val(sessionKey).as("session_key"),
+            eb.val(operation.operationId).as("operation_id"),
+            eb.val(sessionId).as("session_id"),
+            eb.val(operationFingerprint(operation)).as("request_fingerprint"),
+            eb.val(JSON.stringify(result)).as("result_json"),
+            eb.val(operation.issuedAtMs + OPERATION_VALIDITY_MS).as("expires_at"),
+          ])
+          .where(
+            kysely
+              .selectFrom(SESSION_GOAL_OPERATIONS_TABLE)
+              .select(({ fn }) => fn.countAll<number>().as("count"))
+              .where("session_key", "=", sessionKey),
+            "<",
+            MAX_SESSION_RECEIPTS,
+          ),
+      ),
+  );
+  if (inserted.numAffectedRows === 0n) {
     // Evicting a still-valid receipt would turn a retry into a second operation.
     throw new SessionGoalOperationError(
       "capacity",
       "Too many recent Goal operations; wait for older requests to expire before trying again.",
     );
   }
-  const result = createSessionGoalOperationResult(sessionId, operation, goal, runId);
-  executeSqliteQuerySync(
-    db,
-    kysely.insertInto(SESSION_GOAL_OPERATIONS_TABLE).values({
-      session_key: sessionKey,
-      operation_id: operation.operationId,
-      session_id: sessionId,
-      request_fingerprint: operationFingerprint(operation),
-      result_json: JSON.stringify(result),
-      expires_at: operation.issuedAtMs + OPERATION_VALIDITY_MS,
-    }),
-  );
   return result;
 }
 

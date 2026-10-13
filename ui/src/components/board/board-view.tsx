@@ -11,8 +11,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
-import "../web-awesome-tabs.ts";
-import "../web-awesome.ts";
 import { BoardTabs, orderedBoardTabs } from "./board-tabs.tsx";
 import {
   BoardViewState,
@@ -217,8 +215,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           tabs={view().tabs}
           activeTabId={view().activeTabId}
           hoverTabId={view().state.hoverTabId}
-          onTabShow={state.handleTabShow}
-          onOverflowSelect={state.handleOverflowSelect}
+          onSelect={state.selectTab}
         />
         <Show when={Boolean(props.snapshot) || view().cells.length > 0}>
           <div

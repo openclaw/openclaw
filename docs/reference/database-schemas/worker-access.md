@@ -68,6 +68,18 @@ Replacement files also require new admission; migration and repair owners publis
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
+Retained task workers request admission facts through their existing relay when
+needed. Task messages must not copy the global admission snapshot. Committed
+session deletion retires its exact receipt scopes, including windows removed by
+cascade, while windows transferred to a surviving session retain their scopes.
+Shared retirement flags remove those scopes and exited workers' reference cells
+from later admission snapshots; stale transfers cannot restore them. Recreated
+scope keys receive a fresh receipt identity, so old cached reads remain invalid.
+Receipt metadata follows retained session scopes rather than all deleted sessions;
+reads of absent keys can still register a scope. Replacement files still require
+admission through the same owner. Schemas, stored data, and update behavior are
+unchanged.
+
 For row data, hydrate once and update or invalidate the owner's in-memory facts
 from committed write receipts. Every writer must participate. A receipt may
 supply a postimage or explicit absence; missing coverage is unknown, not absence.
@@ -81,6 +93,14 @@ declares no session-row or transcript changes and preserves unrelated session
 actor replicas. Transcript mutations still update or invalidate their session
 facts; unknown write coverage invalidates conservatively. The shared mechanism is
 [`sqlite-database-write-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-database-write-receipts.ts).
+
+Memory publication retains index facts under its own write scope, so session
+activity and embedding-cache writes do not trigger another facts query. The
+publication worker also retains the embedding-cache size, updates it only after
+committed inserts/deletes, and reloads after unscoped writes or schema changes.
+Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
+writes may overestimate this disposable cache and evict entries early; bounded
+writes still reserve space before insertion.
 
 ## Final authority without SQL
 
@@ -104,6 +124,10 @@ Confirmed rollback preserves the previous committed facts. A lost reply is not
 proof of rollback and must not trigger blind replay. Facts install before public
 observers, through
 [`sqlite-post-commit.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-post-commit.ts).
+Exec allowlist usage writes retain receipt and supersession tracking without
+publishing a pending denial: recording last-used metadata cannot revoke another
+command's authorization. Policy edits and durable allow-always grants still
+publish pending denials; unknown outcomes still invalidate the policy view.
 Personal credential and GitHub publication owners are concrete examples:
 [`user-model-account-authority.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/user-model-account-authority.ts)
 and [`github-publication-receipts.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/github-publication-receipts.ts).
@@ -232,8 +256,12 @@ watches retain the existing membership preparation and visibility filtering.
 Profile authority preparation reuses the resident catalog's role, display,
 GitHub login, and merge aliases. Committed profile writes update these facts
 before subsequent connections read them; existing authority revocation still
-applies at access boundaries. Standalone reads and requests for the full profile
-continue through the shared-state read worker.
+applies at access boundaries. The catalog also retains the canonical Gateway
+owner's exact local identity binding. A named owner can connect directly from
+those facts, without another ensure request or host-account lookup. Missing,
+unbound, or merged owners and blank-name adoption still use the profile writer.
+Standalone reads and requests for the full profile continue through the
+shared-state read worker.
 
 Runtime database access belongs in workers. The Gateway main thread owns live
 projections, caches, and caller authority; it awaits prepared facts and installs
@@ -395,7 +423,12 @@ visibility, membership, and conversation authority that the destination worker
 cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
-and parent lookups. Personal default selection reads profile links and its selected
+and parent lookups. The Gateway's `snapshot` timing includes scope preparation and
+its writer-queue reservation before the worker read; it does not clone the session
+store. That reservation preserves earlier queued writes when adopting an existing
+key and protects shared-store discovery from concurrent cold registration. Creation
+commits acquire their own writer admission and revalidate current authority.
+Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
 authority still applies at the creation effect. Default cron loads resolve their
 saved partition in the same worker operation that loads the jobs. A queued load
@@ -406,8 +439,14 @@ and retirement, while the retrieval worker owns read-only capability probing.
 These paths add no schema, retention, or update contract.
 
 Scheduled cron runs reuse the job and receipt loaded by their queue transaction
-when claiming and activating work. Activation commits ownership and start time
-together. Isolated preparation persists skills with the pre-run metadata, and
+when claiming and activating work. The scheduler claims and activates due runs
+in one worker command using its loaded job postimages. Fresh claims persist the
+running state directly; capacity-limited runs retain their queued state and FIFO
+order. Activation commits ownership and start time together. Job mutations return
+their committed postimage without rereading the store. Finalization uses the
+conditional receipt completion write for idempotency, committing history and job
+state in the same transaction; terminal retention runs on completion, not claim.
+Isolated preparation persists skills with the pre-run metadata, and
 continuation synchronization includes its selected CLI provider in the same
 write. The first unchanged embedded candidate reuses the successfully persisted
 pre-run model and harness plus its initialized continuation; failed preparation
@@ -638,11 +677,29 @@ and provenance in the synchronous transaction. Host grants retain live caller
 authority at transaction and commit; acknowledged publications and accepted-write
 settlement remain with the existing entry owner. Incognito routing is unchanged.
 Confirmed entry receipts publish exact membership and category facts instead of
-forcing a new membership read. Delivery rechecks synchronous listener writes;
-unknown outcomes, moved membership, and superseded metadata still invalidate.
+forcing a new membership read. Prepared membership guards use the entry owner's
+committed facts at the effect boundary. Authority-changing writes deny those
+guards before commit and install committed facts before releasing the denial or
+notifying observers. An unknown durable authority outcome remains denied until owner
+restart, including after a database handle closes and reopens; a fresh read or
+later successful write cannot settle it. Category and other metadata-only writes
+do not revoke membership authority. Delivery rechecks synchronous listener writes;
+moved membership and superseded metadata still invalidate.
+Process-held incognito membership retains its native transaction owner. Current
+creation stores rows in that owner's in-memory database; a worker cannot reopen
+it, and activating another actor would split the session's state. Native member
+writes stage and publish through the same sharing-facts owner before notifying
+observers. Their two forwarding entries are audited by the writer-custody guard
+and remain counted as native work until the incognito owner cutover.
 Committed entry metadata preserves an active trajectory-retention sweep through
 its existing owner. Unknown local writes still invalidate
 the sweep; rollback publishes no acknowledgment.
+Durable trajectory retention is triggered by appends, with one aggregate per
+hourly pass. Appends share a pending pass; an invalidated or failed pass waits
+until the next hourly opportunity instead of restarting on every append. The
+existing bounded deletion batches consume the pass's summary and committed
+trajectory receipts. Snapshot invalidation and run-content checks still protect
+history from deletion when concurrent writes change the retention decision.
 The v2026.9.8 `plugin-sdk/session-store-runtime` entry and last-route contracts
 retain their opaque `assertCommitAllowed` callbacks inside the native transaction.
 Released model-selection validators and synchronous Stop currentness callbacks keep
@@ -3851,6 +3908,8 @@ expiry pruning, and capacity check in the existing agent executor. Prepared shar
 and target predicates run in that transaction; host grants retain current caller
 authority without rereading the same database. The existing native receipt publishes
 entry facts before releasing FIFO custody, and close joins accepted persistence.
+Receipt insertion checks capacity in the same SQL statement; rejection rolls back
+the Goal and turn without evicting a still-valid retry receipt.
 Incognito, maintenance, and opaque or cross-store SDK guards retain native atomicity.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
@@ -6362,6 +6421,12 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Transcript rewrite preparation and publication copy mutable view containers while
+retaining already-owned string values, so old tool results and image payloads do
+not require another full byte copy on the main thread. Prepared views remain
+independently mutable. Opaque structured-cloneable SDK data retains native snapshot
+semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

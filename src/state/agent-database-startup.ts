@@ -2,8 +2,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmission,
+} from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -73,6 +78,7 @@ type PendingRecovery = {
 };
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
+const STARTUP_PUBLICATION_ATTEMPTS = 4;
 
 function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
   return {
@@ -92,6 +98,7 @@ type PreparedSchemaHeader = Pick<
 type PreparedSchemaHeaders = {
   statePath: string;
   headers: Map<string, PreparedSchemaHeader>;
+  state?: { identity: string; schemaAdmissionId: string };
 };
 
 function matchesInspectionPath(
@@ -111,6 +118,13 @@ function matchesInspectionPath(
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
+
+export class AgentDatabaseStartupSupersededError extends Error {
+  constructor(agentId: string, subject: "startup" | "secrets") {
+    super(`Agent ${agentId} ${subject} preparation was superseded`);
+    this.name = "AgentDatabaseStartupSupersededError";
+  }
+}
 
 /** Startup owns readers until the Gateway adopts them; only the Gateway activates agents. */
 class AgentDatabaseStartupAdmission {
@@ -193,6 +207,50 @@ class AgentDatabaseStartupAdmission {
         ? header
         : undefined;
     };
+  }
+
+  recordStateSchemaPreparation(env: NodeJS.ProcessEnv): void {
+    const prepared = this.preparedSchemaHeaders;
+    if (this.stopped || prepared?.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return;
+    }
+    const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+      prepared.statePath,
+      schemaAdmission,
+      () => undefined,
+    );
+    const identity = prepareSqliteDatabaseAdmission(prepared.statePath);
+    if (schema && identity) {
+      prepared.state = { identity, schemaAdmissionId: schema.admissionId };
+    }
+  }
+
+  takePreparedStateSchema(env: NodeJS.ProcessEnv): (() => void) | undefined {
+    const prepared = this.preparedSchemaHeaders;
+    const state = prepared?.state;
+    if (!prepared || !state || prepared.statePath !== resolveOpenClawStateSqlitePath(env)) {
+      return undefined;
+    }
+    const assertCurrent = () => {
+      const schema = getOrLoadSqliteDatabaseAdmissionForPath(
+        prepared.statePath,
+        schemaAdmission,
+        () => undefined,
+      );
+      if (
+        this.stopped ||
+        prepareSqliteDatabaseAdmission(prepared.statePath) !== state.identity ||
+        schema?.admissionId !== state.schemaAdmissionId
+      ) {
+        throw new Error("Prepared startup state schema changed before source inspection");
+      }
+    };
+    try {
+      assertCurrent();
+      return assertCurrent;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */
@@ -438,7 +496,25 @@ class AgentDatabaseStartupAdmission {
                 await previous;
                 assertCurrent();
                 this.publishingAgentId = agentId;
-                await activation.publishAgent(input);
+                // Retry only publication; opening and migration have already completed.
+                for (let attempt = 1; ; attempt++) {
+                  try {
+                    await activation.publishAgent(input);
+                    break;
+                  } catch (error) {
+                    if (
+                      !(error instanceof AgentDatabaseStartupSupersededError) ||
+                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
+                    ) {
+                      throw error;
+                    }
+                    log.warn("agent database startup preparation was superseded; retrying", {
+                      agentId,
+                      attempt,
+                    });
+                    await assertNotDeleted();
+                  }
+                }
                 phase("publication");
                 await assertNotDeleted();
               });

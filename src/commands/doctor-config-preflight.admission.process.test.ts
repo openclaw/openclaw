@@ -16,6 +16,7 @@ import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migrat
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -462,11 +463,16 @@ const STARTUP_RECOVERY = "openclaw doctor --fix";
 const legacyFixtures = createFixtureLifetime();
 afterAll(() => legacyFixtures.cleanup());
 
-function seedMalformedDatabase(stateDir: string, mutation: string, shared = false): string {
+async function seedMalformedDatabase(
+  stateDir: string,
+  mutation: string,
+  shared = false,
+): Promise<string> {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   // Exercise the migration refusal with known shared history, rather than a lost journal.
   const statePath = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   const databasePath = shared
     ? statePath
     : path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -549,7 +555,7 @@ describe("startup legacy store classification", () => {
       fs.mkdirSync(path.join(stateDir, "agent"), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify(config));
       const legacyPath = database
-        ? seedMalformedDatabase(stateDir, mutation, shared)
+        ? await seedMalformedDatabase(stateDir, mutation, shared)
         : path.join(stateDir, "agent", "settings.json");
       if (!database) {
         fs.writeFileSync(legacyPath, '{"legacy":true}\n');

@@ -29,7 +29,13 @@ setupRunAttemptTestHooks();
 afterAll(clearRuntimeConfigSnapshot);
 
 describe("parent session fork", () => {
-  it.each([false, true])("forks with parent cleanup=%s", async (completeParent) => {
+  const cases = [
+    { completeParent: false, rebuilt: false },
+    { completeParent: false, rebuilt: true },
+    { completeParent: true, rebuilt: false },
+    { completeParent: true, rebuilt: true },
+  ];
+  it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
     let inferenceAdmitted = false;
     let sideRequest: JsonObject | undefined;
     const question = {
@@ -37,6 +43,11 @@ describe("parent session fork", () => {
       role: "user",
       content: [{ type: "input_text", text: "Review the active task without executing tools." }],
     };
+    const completed: JsonObject[] = [
+      { type: "function_call", call_id: "completed-call", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "completed-call", output: "Completed tool result" },
+      { role: "assistant", content: "Completed parent answer 4837" },
+    ];
     const harness = createStartedThreadHarness(
       async (method, request) => {
         if (method === "account/read") {
@@ -61,7 +72,7 @@ describe("parent session fork", () => {
               sideRequest = route.context.prepare({
                 instructions: "rebuilt native base",
                 tools: [],
-                input: [{ role: "developer", content: "rebuilt environment" }, question],
+                input: [...nativeInput, ...completed, question],
                 client_metadata: {
                   thread_id: "fork-thread",
                   "x-codex-turn-metadata": JSON.stringify({
@@ -161,6 +172,9 @@ describe("parent session fork", () => {
       { role: "assistant", content: "tool round" },
       { type: "function_call_output", call_id: "parent-call", output: "exact tool result" },
     ];
+    const nativeInput = rebuilt
+      ? [{ role: "developer", content: "rebuilt environment" }, ...parentInput.slice(1)]
+      : parentInput;
     const parentRequest: JsonObject = {
       instructions: "native base",
       tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
@@ -231,7 +245,7 @@ describe("parent session fork", () => {
       expect(inferenceAdmitted).toBe(true);
       expect(sideRequest?.instructions).toBe(expectedRequest.instructions);
       expect(sideRequest?.tools).toEqual(expectedRequest.tools);
-      expect(sideRequest?.input).toEqual([...parentInput, question]);
+      expect(sideRequest?.input).toEqual([...nativeInput, ...completed, question]);
       expect(sideRequest?.tool_choice).toBe("none");
       expect(
         await codexNativeSubagentMonitorRuntime.captureModelSource({

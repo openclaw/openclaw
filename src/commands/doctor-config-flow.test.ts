@@ -2,16 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnv } from "../test-utils/env.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import { warmDoctorConfigFlow } from "./doctor-config-flow-warmup.test-support.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -165,10 +168,12 @@ vi.mock("./doctor/shared/preview-warnings.js", () => ({
   }),
 }));
 
-vi.mock("./doctor-config-preflight.js", async () => {
+vi.mock("./doctor-config-preflight.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-config-preflight.js")>();
   const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const { findDoctorLegacyConfigIssues } = await import("./doctor/shared/legacy-config-issues.js");
   return {
+    ...actual,
     runDoctorConfigPreflight: vi.fn(async () => {
       const input = expectDefined(getDoctorConfigInputForTest(), "Doctor config fixture");
       const parsed = structuredClone(input.parsed ?? input.config);
@@ -189,6 +194,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             input.sourceConfigBeforeMigrations ?? config,
           ),
           config,
+          runtimeConfig: config,
           sourceConfig: config,
           valid: legacyIssues.length === 0,
           warnings: [],
@@ -221,6 +227,7 @@ describe("doctor config flow", () => {
   beforeAll(() => warmDoctorConfigFlow(collectDoctorWarnings));
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     terminalNoteMock.mockClear();
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
@@ -229,6 +236,93 @@ describe("doctor config flow", () => {
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectTailscaleConfigWarningsMock.mockClear();
     collectTailscaleConfigWarningsMock.mockResolvedValue([]);
+  });
+
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it.each([
+    {
+      name: "valid config",
+      config: { gateway: { mode: "local" } },
+      exists: true,
+      status: "loaded",
+      mode: "local",
+    },
+    { name: "no config file", config: {}, exists: false, status: "loaded", mode: undefined },
+    {
+      name: "invalid config",
+      config: { gateway: { bind: "localhost" } },
+      exists: true,
+      status: "error",
+      mode: undefined,
+    },
+  ])(
+    "prepares runtime config for registration only with $name",
+    async ({ config, exists, status, mode }) => {
+      await withTempHome(async (home) => {
+        const pluginDir = path.join(home, "config-reader");
+        await fs.mkdir(pluginDir);
+        await fs.writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "config-reader",
+            kind: "context-engine",
+            configSchema: { type: "object", additionalProperties: false },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "index.cjs"),
+          `module.exports = {
+        id: "config-reader",
+        register(api) {
+          const expected = ${JSON.stringify(mode)};
+          if (api.runtime.config.current().gateway?.mode !== expected) throw new Error("unexpected runtime config");
+        },
+      };`,
+        );
+        let registry: ReturnType<typeof loadPluginRegistryHandle> | undefined;
+        collectDoctorPreviewNotesParamsMock.mockImplementationOnce(() => {
+          registry = withEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, () =>
+            loadPluginRegistryHandle({
+              cache: false,
+              onlyPluginIds: ["config-reader"],
+              config: {
+                plugins: {
+                  allow: ["config-reader"],
+                  load: { paths: [pluginDir] },
+                  slots: { contextEngine: "config-reader", memory: "none" },
+                },
+              },
+            }),
+          );
+        });
+        await using resources = new AsyncDisposableStack();
+        resources.use(await runConfig({ config, exists, preflightMode: "issues" }));
+        expect(registry?.plugins).toContainEqual(
+          expect.objectContaining({
+            id: "config-reader",
+            status,
+            ...(status === "error"
+              ? { error: expect.stringContaining("Runtime config is not prepared") }
+              : {}),
+          }),
+        );
+        expect(readRuntimeConfig().gateway?.mode).toBe(mode);
+      });
+    },
+  );
+
+  it("publishes repaired runtime config when the source config was invalid", async () => {
+    await using result = await runConfig({
+      config: { gateway: { bind: "localhost" } },
+      repair: true,
+      preflightMode: "compat",
+    });
+
+    expect(result.sourceConfigValid).toBe(false);
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.gateway?.bind).toBe("loopback");
+    expect(readRuntimeConfig().gateway?.bind).toBe("loopback");
   });
 
   it("previews and persists context-budget migration with every path reported", async () => {
@@ -530,6 +624,9 @@ describe("doctor config flow", () => {
     expect(repair.shouldWriteConfig).toBe(true);
     expect(repair.cfg.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
     expect(repair.cfg.hooks?.token).not.toBe("shared-gateway-token-1234567890");
+    const laterRuntimeConfig = readRuntimeConfig();
+    expect(laterRuntimeConfig.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
+    expect(laterRuntimeConfig.hooks?.token).toBe(repair.cfg.hooks?.token);
   });
 
   it("reports invalid CLI media models without repairing them", async () => {

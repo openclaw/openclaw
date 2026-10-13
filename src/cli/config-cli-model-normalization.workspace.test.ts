@@ -2,15 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { normalizeConfigMutationModelRefs } from "./config-cli-model-normalization.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
     clearPluginMetadataLifecycleCaches();
     cleanup();
   }),
@@ -37,7 +39,7 @@ function writeProviderPlugin(root: string, prefix: string) {
   );
 }
 
-it("preserves global provider policies across workspace changes without executing plugins", () => {
+it("preserves global provider policies across workspace changes without executing plugins", async () => {
   const home = dirs.make("config-model-workspaces-");
   const previous = path.join(home, "previous");
   const next = path.join(home, "next");
@@ -75,8 +77,8 @@ it("preserves global provider policies across workspace changes without executin
       },
     },
   };
-  withPluginCache(createPluginCache(), () => {
-    const pluginMetadataSnapshot = resolveConfigWidePluginMetadataSnapshot({
+  await withPluginCache(createPluginCache(), async () => {
+    const pluginMetadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
       config: baseConfig,
       env,
       installRecords: {},
@@ -87,15 +89,16 @@ it("preserves global provider policies across workspace changes without executin
     ).toBe("old");
     const options = { pluginMetadataSnapshot, env };
     expect(
-      normalizeConfigMutationModelRefs(baseConfig, options).models?.providers?.custom?.models[0]
-        ?.id,
+      (await normalizeConfigMutationModelRefs(baseConfig, options)).models?.providers?.custom
+        ?.models[0]?.id,
     ).toBe("global/stable");
     const config: OpenClawConfig = {
       ...baseConfig,
       agents: { entries: { ...baseConfig.agents?.entries, secondary: { workspace: next } } },
     };
     expect(
-      normalizeConfigMutationModelRefs(config, options).models?.providers?.custom?.models[0]?.id,
+      (await normalizeConfigMutationModelRefs(config, options)).models?.providers?.custom?.models[0]
+        ?.id,
     ).toBe("global/stable");
   });
 });
