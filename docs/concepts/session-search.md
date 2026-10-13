@@ -40,7 +40,8 @@ cross-agent access.
 Excerpts preserve transcript text, including credentials. Results are bounded by count, excerpt
 length, and total response size.
 
-Each transcript search request allows up to 60 seconds, including worker admission.
+Each transcript search request allows up to 90 seconds, leaving dispatch and
+authorization headroom around the reader's 60-second budget, including worker admission.
 If it times out, retry `sessions_search` with a `sessionKey` to search one session
 or more specific query keywords. A timeout does not mean that no matching
 conversation exists.

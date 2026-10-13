@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -506,8 +507,8 @@ export function createSessionsSearchTool(opts?: {
               truncated?: boolean;
             }>({
               method: "sessions.search",
-              // Transcript readers own a 60-second budget, including worker admission.
-              timeoutMs: 60_000,
+              // Leave dispatch and authorization headroom around the reader's 60-second budget.
+              timeoutMs: 90_000,
               params: {
                 agentId,
                 query,
@@ -528,7 +529,12 @@ export function createSessionsSearchTool(opts?: {
                 })
               : await runSearch();
           } catch (error) {
-            if (error instanceof GatewayProtocolRequestTimeoutError) {
+            if (
+              error instanceof GatewayProtocolRequestTimeoutError ||
+              (isGatewayTransportError(error) &&
+                error.kind === "timeout" &&
+                error.requestDispatched === true)
+            ) {
               throw new Error(
                 "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
                 { cause: error },

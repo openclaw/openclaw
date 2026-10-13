@@ -8,6 +8,7 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
@@ -142,6 +143,8 @@ describe("sessions_search tool", () => {
         await entered.promise;
         await vi.advanceTimersByTimeAsync(10_001);
         expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(50_000);
+        expect(settled).toBe(false);
         if (outcome === "result") {
           response.resolve({
             results: [hit({ sessionKey: "agent:main:main", snippet: "needle found" })],
@@ -150,11 +153,11 @@ describe("sessions_search tool", () => {
             value: { details: { results: [{ messageId: "message-1", snippet: "needle found" }] } },
           });
         } else {
-          await vi.advanceTimersByTimeAsync(50_000);
+          await vi.advanceTimersByTimeAsync(30_000);
           expect(await result).toMatchObject({
             error: {
               message: expect.stringMatching(/Retry sessions_search with a sessionKey/),
-              cause: { code: "CLIENT_TIMEOUT", method: "sessions.search", timeoutMs: 60_000 },
+              cause: { code: "CLIENT_TIMEOUT", method: "sessions.search", timeoutMs: 90_000 },
             },
           });
         }
@@ -162,6 +165,45 @@ describe("sessions_search tool", () => {
         response.resolve({ results: [] });
         await result;
         vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { kind: "timeout", requestDispatched: true, guidance: true },
+    { kind: "timeout", requestDispatched: false, guidance: false },
+    { kind: "closed", requestDispatched: true, guidance: false },
+  ] as const)(
+    "preserves transport diagnostics for $kind, dispatched=$requestDispatched",
+    async ({ kind, requestDispatched, guidance }) => {
+      const failure = new GatewayTransportError({
+        kind,
+        requestDispatched,
+        message: "synthetic transport failure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:40001",
+          urlSource: "fixture",
+          message: "fixture",
+        },
+      });
+      const tool = createSessionsSearchTool({
+        config: { tools: { sessions: { visibility: "self" } } },
+        agentSessionKey: "agent:main:main",
+        callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
+          if (request.method === "sessions.list") {
+            return { sessions: [], hasMore: false } as T;
+          }
+          throw failure;
+        },
+      });
+      const pending = tool.execute("transport-search", { query: "needle" });
+      if (guidance) {
+        await expect(pending).rejects.toMatchObject({
+          message: expect.stringMatching(/Retry sessions_search with a sessionKey/),
+          cause: failure,
+        });
+      } else {
+        await expect(pending).rejects.toBe(failure);
       }
     },
   );
