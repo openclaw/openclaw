@@ -166,6 +166,33 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
+  reportTest.for([undefined, "projects", "batch-cli"] as const)(
+    "classifies the final index write after assertion-red publication: entry=%s",
+    { timeout: 60000 },
+    async (entry, { expect, reports }) => {
+      const result = await reports.fixture(reports.make("oc-report-final-index-"))("failure", {
+        entry,
+        finalIndexFailure: true,
+      });
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toContain("owned final index write failure");
+      const published = json(result.output);
+      expect(inventory(published)).toEqual(
+        expected.map(([name, status]) => [name, name === "beta/one" ? "failed" : status]),
+      );
+      const attempted = json(path.join(result.reportSet!, "index.json.final-write-attempt"));
+      expect(attempted.complete).toBe(true);
+      expect(attempted.aggregate).toBe(result.output);
+      expect(attempted.merge).toMatchObject({ code: 1, signal: null });
+      const failedEntry = attempted.entries.find((attemptedEntry: { config: string }) =>
+        attemptedEntry.config.endsWith("test/vitest/vitest.agents-embedded-agent.config.ts"),
+      );
+      expect(failedEntry.attempts[0].outcome).toMatchObject({ code: 1, signal: null });
+      expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(false);
+    },
+  );
+
   reportTest.for([
     "serial",
     "parallel",
@@ -561,7 +588,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(capture.modules).toEqual([]);
       expect(capture.ended?.reason).toBe("failed");
       expect(attempt.outcome).toMatchObject({ code: 1, signal: null });
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       expect(result.signal).toBeNull();
       expect(index.complete).toBe(false);
       expect(index.entries[1].attempts).toEqual([]);
@@ -612,7 +639,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ([mode, diagnostic], { expect, reports }) => {
       const result = await reports.run(mode);
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       expect(result.stderr).toContain(diagnostic);
       expect(json(path.join(result.reportSet!, "index.json")).complete).toBe(false);
       expect(fs.readFileSync(result.output, "utf8")).toBe("old report");
@@ -639,7 +666,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async (mode, { expect, reports }) => {
       const result = await reports.run(mode);
-      expect(result.code !== 0 || result.signal !== null, result.stderr).toBe(true);
+      if (mode === "cancel" || mode === "batch-cancel") {
+        expect(result.signal).toBe("SIGTERM");
+      } else {
+        expect(result.code, result.stderr).toBe(2);
+      }
       const index = json(path.join(result.reportSet!, "index.json"));
       const first = index.entries[0].attempts[0];
       const staged = path.join(result.reportSet!, "aggregate.json");
@@ -742,7 +773,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ({ expect, reports }) => {
       const result = await reports.run("overlap");
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       const index = json(path.join(result.reportSet!, "index.json"));
       expect(index.complete).toBe(false);
       expect(index.error).toContain("overlapping task identities");
@@ -940,7 +971,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       expect(modules.map((module: { name: string }) => module.name)).toEqual(["beta", "beta"]);
       expect(modules[0].root).not.toBe(modules[1].root);
       expect(modules[0].taskId).not.toBe(modules[1].taskId);
-      expect(result.code, result.stderr).toBe(1);
+      expect(result.code, result.stderr).toBe(2);
       expect(result.stderr).toContain('Project name "beta"');
       expect(result.stderr).toContain("is not unique");
       expect(index.complete).toBe(false);

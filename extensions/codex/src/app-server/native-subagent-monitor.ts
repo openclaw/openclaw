@@ -415,17 +415,26 @@ class Monitor {
     );
     if (!pending) {
       this.finishDisposal();
-      return (this.disposal = Promise.resolve());
     }
     this.disposal = (async () => {
       await Promise.allSettled(
         parents.flatMap((state) => [this.submissions.drain(state), this.assignments.drain(state)]),
       );
-      this.finishDisposal();
-      // Releasing acknowledged children can enqueue their final receipt consumption.
-      await Promise.allSettled(
-        parents.flatMap((state) => [this.submissions.drain(state), this.assignments.drain(state)]),
-      );
+      if (pending) {
+        this.finishDisposal();
+        // Releasing acknowledged children can enqueue their final receipt consumption.
+        await Promise.allSettled(
+          parents.flatMap((state) => [
+            this.submissions.drain(state),
+            this.assignments.drain(state),
+          ]),
+        );
+      }
+      for (const state of parents) {
+        if (this.parentStates.get(state.parentThreadId) !== state) {
+          state.submissionStore?.release?.();
+        }
+      }
     })();
     return this.disposal;
   }
@@ -2385,6 +2394,7 @@ class Monitor {
       this.childCloses.clear(state);
       this.recovery.clearTerminalThreadsForParent(state.parentThreadId);
       this.parentStates.delete(state.parentThreadId);
+      state.submissionStore?.release?.();
       for (const [threadId, known] of this.knownChildren) {
         if (known.parent === state) {
           this.childCloses.retireReceiver(known, () =>

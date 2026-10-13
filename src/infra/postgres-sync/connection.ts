@@ -7,6 +7,7 @@ import {
   Worker,
   type MessagePort,
 } from "node:worker_threads";
+import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
 import {
   POSTGRES_CONNECT_TIMEOUT_MS,
@@ -45,6 +46,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private failure: Error | undefined;
   private requestId = 0;
   private outcomeUnknown = true;
+  private readonly mainThread = threadId === 0;
 
   constructor(
     url: string,
@@ -52,16 +54,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     readonly anchor: DatabaseSync,
     storeId: string,
     options?: {
-      purpose?: "admission" | "migration";
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
     },
   ) {
-    if (threadId === 0 && !options?.purpose) {
-      throw new Error(
-        "PostgreSQL connections must open in a worker; only admission and migrations may open on the main thread",
-      );
-    }
+    assertEngineStoreExecutionAllowed();
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     const { port1, port2 } = new MessageChannel();
@@ -127,6 +124,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   private request(request: BridgeCommand, outcomeUnknown = true) {
+    if (this.mainThread && request.operation !== "close") {
+      assertEngineStoreExecutionAllowed();
+    }
     this.assertOpen();
     this.outcomeUnknown = outcomeUnknown;
     const id = ++this.requestId;

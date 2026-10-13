@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
+import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -62,6 +63,8 @@ it("keeps content actions and focus in Layout across plugin panel swaps", () => 
   };
 
   paint();
+  container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
+  flush();
   expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
   expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
   expect(action("Swap Fixture notes and Chat")).not.toBeNull();
@@ -106,12 +109,14 @@ it("retains focused Layout controls and an open menu when header props refresh",
     mounted.container.remove();
   });
   const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
-  const close = mounted.container.querySelector(".chat-pane__close-pane")!;
-  const split = mounted.container.querySelector(".chat-pane__split-right")!;
   const menu = mounted.container.querySelector<HTMLElement & { open: boolean }>(
     ".chat-pane__layout-menu",
   )!;
   menu.open = true;
+  menu.dispatchEvent(new Event("wa-show"));
+  flush();
+  const close = mounted.container.querySelector(".chat-pane__close-pane")!;
+  const split = mounted.container.querySelector(".chat-pane__split-right")!;
   trigger.focus();
   mounted.update({
     title: "Updated session title",

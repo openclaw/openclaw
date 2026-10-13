@@ -55,13 +55,14 @@ export type SessionTranscriptWorkerReadSource = {
   assertCurrent: () => void;
 };
 
-/** Retain the original physical transcript through preparation, reading and consumption. */
+/** Read through an anchor locator while retaining the requested physical source and its authority. */
 export async function withSessionTranscriptReadSource<T>(
   scope: SessionTranscriptReadScope,
   readInProcess: (scope: SessionTranscriptReadScope) => T | Promise<T>,
   readInWorker: (source: SessionTranscriptWorkerReadSource) => Promise<T>,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
+  throughStorePath?: string,
 ): Promise<T> {
   const captured = {
     ...scope,
@@ -106,7 +107,9 @@ export async function withSessionTranscriptReadSource<T>(
       assertSource: () => void,
       requestedPaths: readonly string[],
     ) => {
-      const options = toDatabaseOptions(resolved);
+      const expectedIdentity = identity.key.startsWith("file:") ? identity : undefined;
+      const readPath = expectedIdentity ? (throughStorePath ?? resolved.path) : resolved.path;
+      const options = toDatabaseOptions({ ...resolved, path: readPath });
       return withSessionHistoryWorkerDatabase(
         { ...options, requestedPaths },
         async (owner) => {
@@ -116,7 +119,6 @@ export async function withSessionTranscriptReadSource<T>(
             claim?.assertCurrent();
           };
           assertCurrent();
-          const expectedIdentity = identity.key.startsWith("file:") ? identity : undefined;
           if (claim && (!expectedIdentity || execution?.agentId !== options.agentId)) {
             throw new Error("Transcript discovery changed its prepared execution owner");
           }
@@ -132,7 +134,7 @@ export async function withSessionTranscriptReadSource<T>(
               : undefined;
           try {
             return await readInWorker({
-              scope: { ...captured, agentId: resolved.agentId, storePath: resolved.path },
+              scope: { ...captured, agentId: resolved.agentId, storePath: readPath },
               resolved,
               owner,
               preparedReads,
@@ -162,7 +164,7 @@ export async function withSessionTranscriptReadSource<T>(
         {
           agentId: selected.logicalAgentId,
           databaseAgentId: selected.database.agentId,
-          path: selected.database.path,
+          path: identity.canonicalPath,
           ownerStorePath: storePath,
           env: selected.database.env,
           sessionKey: selected.sessionKey,
@@ -205,7 +207,7 @@ export async function withSessionTranscriptReadSource<T>(
           };
           assertSource();
           const result = await readResolved(
-            { ...resolved, path: databasePath },
+            { ...resolved, path: selectedIdentity.canonicalPath },
             selectedIdentity,
             assertSource,
             [storePath],

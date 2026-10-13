@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -11,7 +10,6 @@ import type { ChannelProviderOwnedMessageSendingDeliveryAdapter } from "./types.
 
 const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
 const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const loadSessionEntryReadOnly = vi.hoisted(() => vi.fn());
 const settlePendingFinalDelivery = vi.hoisted(() =>
   vi.fn(async (_completion: unknown, state: string) => ({ state })),
 );
@@ -32,11 +30,6 @@ vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
 }));
-
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return { ...actual, loadSessionEntryReadOnly };
-});
 
 vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
   const actual =
@@ -77,11 +70,12 @@ describe("channel turn failed-send custody", () => {
     sessionId: completion.sessionId,
   };
   const replacementWriter = { ...currentWriter, activeWriterRunId: "run-new" };
+  let currentEntry: typeof currentWriter | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
     getGlobalHookRunner.mockReturnValue(null);
-    loadSessionEntryReadOnly.mockReturnValue(undefined);
+    currentEntry = undefined;
     settlePendingFinalDelivery.mockImplementation(async (_completion, state: string) => ({
       state,
     }));
@@ -103,15 +97,14 @@ describe("channel turn failed-send custody", () => {
             expectedWriterRunId: currentWriter.activeWriterRunId,
             sessionKey: completion.sessionKey,
             storePath: completion.storePath,
+            readCurrentSession: () => currentEntry,
           },
         },
       );
       dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
         createPayloadDispatch(payload, operation),
       );
-      loadSessionEntryReadOnly.mockReturnValue(
-        changesAfterRefresh ? currentWriter : replacementWriter,
-      );
+      currentEntry = changesAfterRefresh ? currentWriter : replacementWriter;
       const stages: string[] = [];
       const platformSend = vi.fn(async (_payload: ReplyPayload) => ({ visibleReplySent: true }));
       const providerSend: ChannelProviderOwnedMessageSendingDeliveryAdapter["deliverWithProviderMessageSending"] =
@@ -120,7 +113,7 @@ describe("channel turn failed-send custody", () => {
           await info.onPlatformSendDispatch();
           stages.push("refreshed");
           // Notice reads precede provider entry; revoke only after custody refresh.
-          loadSessionEntryReadOnly.mockReturnValue(replacementWriter);
+          currentEntry = replacementWriter;
           info.assertPlatformSendAuthorized();
           return platformSend(value);
         };
@@ -149,41 +142,42 @@ describe("channel turn failed-send custody", () => {
         }),
       ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
       expect(stages).toEqual(changesAfterRefresh ? ["entered", "refreshed"] : ["entered"]);
-      expect(loadSessionEntryReadOnly).toHaveBeenCalledWith({
-        agentId: "main",
-        readConsistency: "latest",
-        sessionKey: completion.sessionKey,
-        storePath: completion.storePath,
-      });
       expect(platformSend).not.toHaveBeenCalled();
       expect(raw).toHaveBeenCalledTimes(operation === "raw" ? 1 : 0);
       expect(prepared).toHaveBeenCalledTimes(operation === "prepared" ? 1 : 0);
     },
   );
 
-  it("serializes and revalidates custody before every provider post", async () => {
-    const custody = createDirectPendingFinalCustody(
-      setReplyPayloadMetadata({ text: "reply" }, { pendingFinalDeliveryCompletion: completion }),
+  it("retains custody across posts but rejects a replaced writer", async () => {
+    currentEntry = currentWriter;
+    const custody = await createDirectPendingFinalCustody(
+      setReplyPayloadMetadata(
+        { text: "reply" },
+        {
+          pendingFinalDeliveryCompletion: completion,
+          sessionWriterDeliveryAuthority: {
+            agentId: "main",
+            expectedLifecycleRevision: currentWriter.lifecycleRevision,
+            expectedSessionId: completion.sessionId,
+            expectedWriterRunId: currentWriter.activeWriterRunId,
+            sessionKey: completion.sessionKey,
+            storePath: completion.storePath,
+            readCurrentSession: () => currentEntry,
+          },
+        },
+      ),
     );
     if (!custody) {
       throw new Error("expected pending-final custody");
     }
-    const firstCheck = createDeferred<{ state: "unknown" }>();
-    settlePendingFinalDelivery
-      .mockImplementationOnce(async () => firstCheck.promise)
-      .mockResolvedValueOnce({ state: "suppressed" });
-    const first = custody.onPlatformSendDispatch();
-    const second = custody.onPlatformSendDispatch();
-    await Promise.resolve();
+    await custody.onPlatformSendDispatch();
+    await custody.onPlatformSendDispatch();
     expect(settlePendingFinalDelivery).toHaveBeenCalledOnce();
-    firstCheck.resolve({ state: "unknown" });
-    await expect(first).resolves.toBeUndefined();
-    await expect(second).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(1, identity, "unknown", [
-      "prepared",
-      "queued",
-    ]);
-    expect(settlePendingFinalDelivery).toHaveBeenNthCalledWith(2, identity, "unknown", ["unknown"]);
+    currentEntry = replacementWriter;
+    await expect(custody.onPlatformSendDispatch()).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    custody.release();
   });
 
   it.each([

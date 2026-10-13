@@ -1,6 +1,8 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -607,6 +609,24 @@ function requestTools(
 }
 
 describe("OpenAI completions compatibility and tools", () => {
+  it("reuses published wire descriptors while applying current strict compatibility", () => {
+    const { schema: parameters } = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: {},
+    });
+    assert(isRecord(parameters));
+    const context = toolContext(parameters);
+    const first = requestTools(toolsNative, context).tools?.[0];
+    expect(first).toMatchObject({ type: "function", function: { name: "lookup_weather" } });
+    expect(requestTools(toolsNative, context).tools?.[0]).toBe(first);
+    const withoutStrict = requestTools(
+      { ...toolsNative, compat: { supportsStrictMode: false } },
+      context,
+    ).tools?.[0];
+    expect(withoutStrict).not.toHaveProperty("function.strict");
+    expect(requestTools(toolsNative, context).tools?.[0]).toBe(first);
+  });
+
   it("keeps implicit tool choice limited to proxy endpoints", () => {
     const proxyParams = requestTools(
       { provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" },

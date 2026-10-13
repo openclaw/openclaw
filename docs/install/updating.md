@@ -135,6 +135,9 @@ the handoff, the candidate retains exact file and parent-directory identities;
 later replacement still stops the update. Lease read failures report their
 underlying cause instead of a parent-binding mismatch.
 
+Service backups and interrupted agent cleanup also retain exact file identities.
+Older rounded receipts remain readable and upgrade after verification on their next write.
+
 Post-install Doctor also accepts older updaters, including `2026.8.2`, that do not
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.

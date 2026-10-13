@@ -1845,7 +1845,7 @@ describe("qa mock openai server", () => {
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
-  it.each(["tool_call"])(
+  it.each(["dispatch_action"])(
     "makes the empty terminal worker terminal after one %s side effect",
     async (wireName) => {
       const server = await startMockServer();
@@ -1855,7 +1855,7 @@ describe("qa mock openai server", () => {
         input: [makeUserInput("Subagent terminal reply QA worker: empty.")],
       });
       const call = outputToolCall(kickoff, wireName);
-      if (wireName === "tool_call") {
+      if (wireName === "dispatch_action") {
         expect(outputToolArgsFromItem(call)).toMatchObject({
           id: "write",
           args: { path: "qa-terminal-empty-side-effect.txt" },
@@ -1879,7 +1879,7 @@ describe("qa mock openai server", () => {
           call,
           makeToolOutputWithCallId(
             String(writeRequest.plannedToolCallId),
-            wireName === "tool_call"
+            wireName === "dispatch_action"
               ? JSON.stringify({
                   tool: { id: "write", name: "write", source: "core" },
                   result: { content: [{ type: "text", text: "Wrote 40 bytes" }] },
@@ -2841,7 +2841,7 @@ describe("qa mock openai server", () => {
   it.each([
     {
       name: "calls the selected catalog tool after a structured batch search",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: catalogQueries },
@@ -2852,7 +2852,7 @@ describe("qa mock openai server", () => {
     },
     {
       name: "does not call a catalog tool when structured search returns no matching candidate",
-      tools: ["tool_search", "tool_call"],
+      tools: ["tool_search", "dispatch_action"],
       callName: "tool_search",
       callId: "call_tool_search_1",
       args: { queries: [{ query: catalogTarget, limit: 1 }] },
@@ -2873,10 +2873,10 @@ describe("qa mock openai server", () => {
     const item = outputItem(payload);
     if (invokes) {
       expect(item.type).toBe("function_call");
-      expect(item.name).toBe("tool_call");
+      expect(item.name).toBe("dispatch_action");
       expect(JSON.parse(String(item.arguments))).toMatchObject({ id: catalogTarget });
     } else {
-      expect(item.name).not.toBe("tool_call");
+      expect(item.name).not.toBe("dispatch_action");
     }
   });
 

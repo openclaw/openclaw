@@ -210,6 +210,7 @@ scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
 scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
+scripts/lib/vitest-outcome.mts
 scripts/lib/vitest-plan-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
@@ -349,6 +350,7 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/policy.ts
 src/infra/postgres-sync/connection.ts
@@ -579,6 +581,7 @@ src/config/model-provider-config.ts
 src/config/model-provider-overlay-ids.ts
 src/config/model-provider-rows.ts
 src/config/mutate.include-io.ts
+src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
@@ -894,6 +897,7 @@ src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
+src/infra/error-diagnostics.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
@@ -1084,6 +1088,7 @@ src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
+src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
 src/infra/sqlite-readonly-location.ts
@@ -1151,6 +1156,8 @@ src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
 src/infra/sqlite-worker-request-class.ts
+src/infra/sqlite-worker-request-custody.ts
+src/infra/sqlite-writer-admission-client.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
 src/infra/sqlite-worker-transfer.ts
@@ -1687,7 +1694,6 @@ src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
 src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
-src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
@@ -1755,6 +1761,7 @@ src/state/openclaw-agent-db-validation-facts.ts
 src/state/openclaw-agent-db.paths.ts
 src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
+src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-incognito-absence.ts
@@ -1856,6 +1863,7 @@ src/state/openclaw-state-lease-heartbeat.ts
 src/state/openclaw-state-lease-heartbeat.worker.ts
 src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
+src/state/openclaw-state-lease-renewal.worker.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
 src/state/openclaw-state-lease-worker-operation.ts
@@ -1996,6 +2004,7 @@ src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
+src/shared/model-fallback-notice.ts
 src/shared/transcript-only-openclaw-assistant.ts
 src/state/openclaw-agent-execution-work.ts
 packages/gateway-protocol/src/schema/session-participant.ts
@@ -2231,6 +2240,7 @@ src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
 src/config/sessions/session-actor-memory-side-effects.ts
+src/config/sessions/observer-digest.ts
 src/config/sessions/session-actor-memory-sources.ts
 src/config/sessions/session-actor-memory-state.ts
 src/config/sessions/session-actor-memory-storage-dispatch.ts
@@ -2309,6 +2319,7 @@ src/shared/chat-envelope.ts
 src/shared/keyboard-shortcuts.ts
 src/shared/markdown-code.ts
 src/shared/provider-login-command.ts
+src/shared/session-list-visibility.ts
 src/shared/text/assistant-visible-text.ts
 src/shared/text/code-regions.ts
 src/shared/text/downgraded-tool-call-text.ts

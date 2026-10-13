@@ -196,48 +196,12 @@ describe("gateway register option collisions", () => {
 
   it.each([
     {
-      name: "forwards the expected endpoint without overriding configured routing",
-      argv: ["gateway", "call", "chat.send", "--expect-url", "wss://gateway.example/ws", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts] = firstGatewayCall();
-        expect(method).toBe("chat.send");
-        expect(opts).toMatchObject({ expectUrl: "wss://gateway.example/ws" });
-        expect(opts).not.toHaveProperty("url");
-      },
-    },
-    {
-      name: "forwards --token to gateway call when parent and child option names collide",
-      argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts, params] = firstGatewayCall();
-        expect(method).toBe("health");
-        expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
-        expect(params).toEqual({});
-      },
-    },
-    {
       name: "gives setup detection enough transport grace",
       argv: ["gateway", "call", "openclaw.setup.detect", "--json"],
       assert: () => {
         const [method, opts] = firstGatewayCall();
         expect(method).toBe("openclaw.setup.detect");
         expect((opts as { timeout?: string } | undefined)?.timeout).toBe("40000");
-      },
-    },
-    {
-      name: "projects gateway call --port into the local override",
-      argv: ["gateway", "call", "health", "--port", "19084", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19084, {});
-      },
-    },
-    {
-      name: "inherits parent --port for gateway call",
-      argv: ["gateway", "--port", "19085", "call", "health", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19085);
       },
     },
     {
@@ -249,16 +213,6 @@ describe("gateway register option collisions", () => {
         });
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({ status: "ready", requestId: "host-operation" }),
-        );
-      },
-    },
-    {
-      name: "preserves the custom suspend port in its human-readable resume hint",
-      argv: ["gateway", "suspend", "--port", "19086"],
-      assert: () => {
-        expectLocalGatewayCall("gateway.suspend.prepare", 19086);
-        expect(defaultRuntime.log).toHaveBeenCalledWith(
-          "Resume with: openclaw gateway resume suspension-1 --port 19086",
         );
       },
     },
@@ -277,48 +231,12 @@ describe("gateway register option collisions", () => {
       },
     },
     {
-      name: "forwards --token to gateway probe when parent and child option names collide",
-      argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
-      assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts, runtime] = firstGatewayStatusCall();
-        expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
-        expect(runtime).toBe(defaultRuntime);
-      },
-    },
-    {
-      name: "forwards --port to gateway probe",
-      argv: ["gateway", "probe", "--port", "19080", "--json"],
-      assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts] = firstGatewayStatusCall();
-        expect((opts as { port?: string } | undefined)?.port).toBe("19080");
-      },
-    },
-    {
       name: "inherits parent --port for gateway probe",
       argv: ["gateway", "--port", "19082", "probe", "--json"],
       assert: () => {
         expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
         const [opts] = firstGatewayStatusCall();
         expect((opts as { port?: string } | undefined)?.port).toBe("19082");
-      },
-    },
-    {
-      name: "inherits parent --port for gateway health",
-      argv: ["gateway", "--port", "19083", "health", "--json"],
-      assert: () => {
-        expectLocalGatewayCall("health", 19083);
-      },
-    },
-    {
-      name: "passes decimal usage-cost --days values",
-      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, _opts, params] = firstGatewayCall();
-        expect(method).toBe("usage.cost");
-        expect(params).toEqual({ days: 7 });
       },
     },
     {

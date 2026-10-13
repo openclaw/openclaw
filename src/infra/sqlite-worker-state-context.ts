@@ -17,6 +17,8 @@ export type SqliteWorkerStateContext = {
   existingSchemaPath?: string;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
   artifactPreservingReads?: true;
+  /** Actor-owned exclusion for autonomous WAL work, never write authority. */
+  scheduledMaintenanceSuspension?: SharedArrayBuffer;
 };
 
 export function captureSqliteWorkerStateContext(
@@ -33,6 +35,7 @@ export function captureSqliteWorkerStateContext(
     existingSchemaPath: context.existingSchemaPath,
     stateIntegrity: context.stateIntegrity,
     artifactPreservingReads: context.artifactPreservingReads,
+    scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension,
   };
 }
 
@@ -54,7 +57,10 @@ export function sqliteWorkerRequestBytes(
           total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
         bytes,
       ),
-    input.byteLength + (preparation?.byteLength ?? 0) + agentPathBytes,
+    input.byteLength +
+      (preparation?.byteLength ?? 0) +
+      agentPathBytes +
+      (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),
   );
 }
 
@@ -68,6 +74,16 @@ const stateContexts = resolveGlobalSingleton(
       }
     >(),
 );
+
+/** Keep the actor's live maintenance holds after the opening command returns. */
+export function captureSqliteWorkerWalMaintenanceSuspension(): (() => boolean) | undefined {
+  const buffer = stateContexts.getStore()?.scheduledMaintenanceSuspension;
+  if (!buffer) {
+    return undefined;
+  }
+  const holds = new Int32Array(buffer);
+  return () => Atomics.load(holds, 0) > 0;
+}
 
 /** Preserve factory facts across later commands without changing their captured host context. */
 export function withSqliteWorkerExistingDatabase<T>(

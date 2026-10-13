@@ -97,6 +97,31 @@ In particular, `user_background_images` depends on `user_profiles`; its cascadin
 foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
+`state.postgres.sql` and each manifest `file` contain the single runtime form of
+their state DDL. They omit transaction wrappers and fixed schema qualification;
+the owning connection supplies the namespace and transaction. The separate
+`agent.postgres.sql` readiness artifact retains its schema and transaction
+wrappers until the agent-store cutover.
+
+For a manual state-schema check, run `psql` from the generated directory and
+supply the transaction and chosen schema explicitly:
+
+```sql
+\set ON_ERROR_STOP on
+BEGIN;
+CREATE SCHEMA review_state;
+SET LOCAL search_path = review_state;
+SET LOCAL standard_conforming_strings = on;
+\i state.postgres.sql
+-- Include each desired fragment's manifest file, dependencies first.
+\i fragment-user_profiles.postgres.sql
+\i fragment-user_background_images.postgres.sql
+COMMIT;
+```
+
+Use a disposable schema for this readiness check; it does not enable shared-state
+PostgreSQL support or migrate an existing store.
+
 Both engines use the same shared-state schema version (currently 21). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
@@ -139,6 +164,7 @@ removes its isolated schema afterward. This proves DDL equivalence, not runtime
 SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
+SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
@@ -2645,6 +2671,11 @@ yielding between batches. Cache writes wait outside the agent writer FIFO until
 foreground work drains, then commit one session at a time. Report reads use their
 separate worker lane and return partial or stale totals during backfill. Restart
 rediscovers unfinished sessions from their committed checkpoints.
+Expected refresh cancellation during shutdown logs at debug level; refresh or cleanup failures still warn.
+After in-process DDL, worker admission publishes its validated schema even if a
+retained reader adopted another wrapper of the previous shared receipt while it
+was pending. The received schema and physical database proof must remain valid;
+JavaScript wrapper identity does not establish a newer schema revision.
 Append-only refreshes resume after the checkpoint sequence and decode each new
 page once. The transcript owner's existing rewrite watermark invalidates the
 checkpoint after a rewrite; branch changes rebuild from the visible ancestry.

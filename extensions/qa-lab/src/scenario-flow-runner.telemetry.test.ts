@@ -159,9 +159,25 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
         text: reply,
         timestamp: fault === "early-artifact" ? statSync(artifactPath).mtimeMs - 1 : terminalAt,
         toolCalls: (codeMode
-          ? ["exec", "read", "read", "exec", "write", "read"]
-          : ["read", "read", "write"]
-        ).map((name) => ({ name, arguments: { path: "[redacted]" } })),
+          ? ([
+              ["exec", undefined],
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["exec", undefined],
+              ["write", paths.artifact],
+              ["read", paths.artifact],
+            ] as const)
+          : ([
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["write", paths.artifact],
+            ] as const)
+        ).map(([name, file]) => ({
+          name,
+          arguments: file
+            ? { path: path.join(workspaceDir, file) }
+            : { code: "dispatch task tools" },
+        })),
       });
     },
   });

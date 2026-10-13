@@ -424,6 +424,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         let store: Awaited<
           ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>
         >["store"] = {};
+        let sessionAgents = new Map<string, string>();
         let observedProjects: ProjectSummary[] | undefined;
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
           const projection = requireSessionRowProjection(context);
@@ -436,7 +437,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
               "Session projection changed while preparing the listing. Retry the request.",
             );
           }
-          store = loadProjectSessionStore(projection, incognitoStores);
+          ({ store, agents: sessionAgents } = loadProjectSessionStore(projection, incognitoStores));
           assertCurrent();
         }
         if (params.includeObserved && canWrite()) {
@@ -456,7 +457,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           : undefined;
         assertCurrent();
         const recents = recentProfile
-          ? await listProjectRecents(store, recentProfile.aliases, registryProjects)
+          ? await listProjectRecents(store, sessionAgents, recentProfile.aliases, registryProjects)
           : undefined;
         recentProfile?.assertCurrent();
         diagnostics?.mark("response");

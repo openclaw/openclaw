@@ -5,7 +5,10 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
-import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
 import { getOpenIncognitoAgentDatabase } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution.js";
@@ -19,6 +22,7 @@ import {
   addSubagentRunForTests,
   initSubagentRegistry,
   resetSubagentRegistryForTests,
+  testing,
 } from "./subagent-registry.test-helpers.js";
 import {
   makeRestartRecoveryRun as makeRunRecord,
@@ -158,4 +162,83 @@ export function registerRawChildRestoreOwnershipTest(
     });
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
+
+  it.each(["idle", "done"] as const)(
+    "settles a replaced child once when its parent is %s across restarts",
+    async (parentStatus) => {
+      const entry = makeRunRecord({
+        runId: "replaced-child-run",
+        childSessionIdentity: {
+          sessionId: "original-child",
+          lifecycleRevision: "original-revision",
+        },
+        requesterSessionKey: "agent:main:replacement-parent",
+        requesterTurnRunId: "original-parent-run",
+        expectsCompletionMessage: false,
+        completionRequesterSessionId: "original-parent",
+        completionRequesterLifecycleRevision: "parent-revision",
+        execution: {
+          status: "interrupted",
+          interruptionReason: "gateway-restart",
+          startedAt: Date.now() - 1_000,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        },
+      });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: entry.requesterSessionKey },
+        {
+          sessionId: "original-parent",
+          lifecycleRevision: "parent-revision",
+          updatedAt: Date.now(),
+          status: parentStatus === "done" ? "done" : undefined,
+        },
+      );
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: entry.childSessionKey },
+        {
+          sessionId: "replacement-child",
+          lifecycleRevision: "replacement-revision",
+          lifecycleRunId: "replacement-run",
+          updatedAt: Date.now(),
+          status: "done",
+        },
+      );
+      const replacement = loadExactSessionEntry({
+        agentId: "main",
+        sessionKey: entry.childSessionKey,
+      })?.entry;
+      await addSubagentRunForTests(entry);
+      await fixture.settle();
+      await resetSubagentRegistryForTests({ persist: false });
+      rotateAgentEventLifecycleGeneration();
+      await initSubagentRegistry();
+      await activateGatewayRuntime();
+      await fixture.settle();
+      await testing.sweepOnceForTests();
+      const settled = loadSubagentRegistryFromSqlite().get(entry.runId);
+      expect(settled).toMatchObject({
+        execution: {
+          status: "terminal",
+          suppressSessionEffects: true,
+          outcome: {
+            status: "error",
+            error: expect.stringContaining("original session incarnation changed"),
+          },
+        },
+        completionTarget: "parent",
+      });
+      expect(settled?.requesterTurnRunId).toBeUndefined();
+      expect(
+        loadExactSessionEntry({ agentId: "main", sessionKey: entry.childSessionKey })?.entry,
+      ).toEqual(replacement);
+      const endedAt = settled?.execution.endedAt;
+      await resetSubagentRegistryForTests({ persist: false });
+      rotateAgentEventLifecycleGeneration();
+      await initSubagentRegistry();
+      await activateGatewayRuntime();
+      await fixture.settle();
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.execution.endedAt).toBe(endedAt);
+      expect(dispatchAgent).not.toHaveBeenCalled();
+    },
+  );
 }

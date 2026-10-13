@@ -18,6 +18,6 @@ export function prepareMemoryReplyToolAuthorityCaller(
     reads: [],
     assertPrepared: assertCurrent,
     prepareCurrent: async () => assertCurrent(),
-    retainNative: () => ({ assertCurrent, release() {} }),
+    retainCurrent: () => ({ assertCurrent, release() {} }),
   };
 }

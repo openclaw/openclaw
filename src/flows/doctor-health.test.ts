@@ -31,6 +31,12 @@ import { runDoctorHealthFlow } from "./doctor-health.js";
 const support = await import("./doctor-health.test-support.js");
 const { mocks, registerDoctorConfigReceiptTests, postInstallAdvisory } = support;
 
+vi.mock("../commands/doctor-update-refusal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-update-refusal.js")>()),
+  // Git recovery has its own refusal tests; service admission must not inspect the host checkout.
+  resolveUpdateDoctorGitRecovery: async () => undefined,
+}));
+
 describe("runDoctorHealthFlow", () => {
   const { openHistoricalAgentDatabase } = useDoctorHealthFixture();
 

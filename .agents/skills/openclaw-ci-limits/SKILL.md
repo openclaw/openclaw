@@ -348,14 +348,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Frozen/manual targets, retries and fully hosted fallback
   manifests remain outside this first-attempt limit, including existing >45-row
   fallbacks. Do not change the backend variable or existing caps to enable it.
-- The existing extension-package-boundary matrix row requests the 32-class
-  whenever its existing route selects Blacksmith. Its two-CPU compiler reserve
-  admits four children on the observed eight-CPU/30.95-GiB allocation, versus
-  two on the previous 16-class. Run 36248684656 measured a 569s complete job
-  on the 16-class; unchanged duration on the 32-class would add 151.7
-  class-vCPU-minutes (1.17% of that broad run). Include that allowance with
-  Node packing costs until native proof measures the new duration. No jobs,
-  registrations, permissions, compiler checks, or hosted eligibility are added.
+- Current extension-package-boundary checks request the 16-class in both the
+  additional-check matrix and shared SDK producer; frozen targets retain the
+  32-class. The existing two-CPU compiler reserve admits two children on the
+  observed four-CPU 16-class allocation. Keep that resource guard authoritative.
+  Compare equivalent workloads and cache states before claiming savings;
+  historical 16/32-class runs also differed in compiler optimization. See
+  `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
+  permissions, compiler checks, or hosted eligibility are added.
   The package-boundary row has a 30-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
@@ -588,6 +588,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
+- Precisely selected serial CLI-only jobs use the 16-class when every group has
+  one or two explicit files and the existing two-worker fallback, without build,
+  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
+  inventories, runtime selection, timing identities, and process boundaries.
+  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
+  choice for retained Blacksmith CLI jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -641,13 +647,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
   32-class with eight reported CPUs; it does not prove timing on the current
   16-class route or refresh stale timing weights.
-- Eligible real-Gateway jobs retain the existing 32-class and two-row planner
-  split; ordinary PRs omit them. Their private preparation now builds runtime,
-  QA, and Control UI artifacts with SDK declaration generation disabled.
-  `build-artifacts` owns SDK declarations and validation. The old two-compiler
-  memory argument no longer establishes their runner requirement: qualify the
-  complete current job before downsizing, preserving browser workers, complete
-  inventory, build-before-test ordering, routing, deadlines, and caps.
+- Current-target real-Gateway jobs use the 16-class and existing two-row planner
+  split; frozen or unclassified targets retain the 32-class. Ordinary PRs omit
+  them. Private preparation builds runtime, QA, and Control UI artifacts with
+  SDK declaration generation disabled; `build-artifacts` owns SDK declarations
+  and validation. Preserve browser workers, complete inventory, build-before-test
+  ordering, routing, deadlines, and caps. Further sizing changes require complete
+  job qualification, including preparation and desktop transport proof.
 - Current-target `build-artifacts` uses the existing 16-class after a complete
   four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
   SDK declaration generation uses one compiler program with its existing heap

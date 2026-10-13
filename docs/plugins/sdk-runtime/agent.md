@@ -152,16 +152,26 @@ answer can settle after another assistant message has been committed. The helper
 correlates matching text with an uncorrelated assistant occurrence in that run,
 in transcript order, so repeated answers retain distinct identities.
 
-The delivery receipt remains stored, but `chat.history` presents the correlated
-answer once. This does not change provider replay. A run ID is provenance, not
-write authorization; the existing session checks still apply. If no source run
-is supplied, correlation retains the latest-message behavior.
+The delivery receipt remains stored. For text-only replies, `chat.history`
+presents the correlated answer once; rows with media facts or displayable
+non-text content remain visible. This does not change provider replay. A run ID
+is provenance, not write authorization; the existing session checks still apply.
+If no source run is supplied, correlation retains the latest-message behavior.
 
 SQLite resolves delivery idempotency keys through their index independently of
 run correlation. Run correlation reads assistant messages from the producing
 run's indexed input onward; for a legacy run without that input identity, it
 searches only the most recent 4,096 transcript events. Settle those legacy
 deliveries promptly rather than relying on a full-history text search.
+
+Media mirrors retain full references in delivery facts while displaying compact
+filenames. Source correlation uses the authored caption before filename expansion,
+so media and plain answers with identical captions consume distinct occurrences
+in run order. Unkeyed mirrors suppress an exact text-and-media repeat; different
+attachments with the same filename remain distinct. Keyed replay rejects changed
+media references for rows that record them. Earlier fieldless mirrors replay their
+original text and delivery facts without rewriting stored bytes; their
+filename-only representation cannot distinguish same-basename attachments.
 
 ## Bounded model context
 
@@ -349,7 +359,7 @@ the provider's own awaited work.
 
     For native conversation controls, await `getConversationSessionAsync(...)` from `openclaw/plugin-sdk/session-store-runtime` to read the current recorded binding for one transport address. Supply `agentId`, `channel`, `accountId`, `kind` (`direct`, `group`, or `channel`), and the ingress `peerId`; optional `threadId` selects an exact thread. Optional `storePath` and `env` select the same agent store as other session helpers. It returns `{ sessionKey, sessionId }`, or `undefined` when no current binding exists, and follows session resets without creating a session. It does not list active runs or infer a parent address. The synchronous `getConversationSession(...)` is deprecated. Targeted Stop dispatch can provide `replyOptions.isCommandTargetCurrent`, an in-process owner check awaited at the cancellation boundary. A false result rejects a stale target; cancelled owners cannot mark a replacement session aborted.
 
-    `captureSessionEntryCurrentCheckAsync(...)` from `openclaw/plugin-sdk/session-binding-runtime` prepares public entry metadata and its original source together. Supply `fields` for the exact policy values the operation consumes, then await `assertCurrent()` or `isCurrent()` at the effect boundary after other awaited work. Current entry and conversation predicates run in one reader-worker snapshot. Session identity and lifecycle remain part of the predicate unless `matchGeneration: false` is explicitly selected. An optional `expected` entry rejects a changed selection during preparation. The returned entry is descriptive data; mutating it does not alter the retained guard. Pass `source` to typed worker-backed mutation authority, or `entryCurrent` to an owner that accepts a `SessionEntryCurrentCheck`; `source.assertScopeCurrent()` checks only live host ownership and does not replace an effect's current-row check. The never-stable `captureSessionEntryCurrentCheck(...)` facade has been removed; migrate to the awaited checks and prepared source above.
+    `captureSessionEntryCurrentCheckAsync(...)` from `openclaw/plugin-sdk/session-binding-runtime` prepares public entry metadata and its original source together. Supply `fields` for the exact policy values the operation consumes, then await `assertCurrent()` or `isCurrent()` at the effect boundary after other awaited work. Current entry and conversation predicates run in one reader-worker snapshot. Session identity and lifecycle remain part of the predicate unless `matchGeneration: false` is explicitly selected. An optional `expected` entry rejects a changed selection during preparation. The returned entry is descriptive data; mutating it does not alter the retained guard. Call `release()` in the owning operation’s `finally` block after its last authority check. Pass `source` to typed worker-backed mutation authority, or `entryCurrent` to an owner that accepts a `SessionEntryCurrentCheck`; `source.assertScopeCurrent()` checks only live host ownership and does not replace an effect's current-row check. The never-stable `captureSessionEntryCurrentCheck(...)` facade has been removed; migrate to the awaited checks and prepared source above.
 
     `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow. A plugin may select an owned `agentHarnessId`; seed an owned CLI backend with `cliBackendId`, `model`, and `cliSessionBinding`; or seed a persistent ACP session with `acpBackendId` and `acpSessionBinding: { acpAgentId, agentSessionId }`. The ACP variant persists the supplied native agent session id through the canonical SQLite ACP metadata owner so the first turn resumes that external session. The injected runtime restricts plugin-owned CLI and ACP sessions to the calling plugin's `plugin:<id>:` namespace; harness ids must be owned through `registerAgentHarness(...)`. These are ownership invariants, not a sandbox between in-process plugins. Creation rejects an existing row; `label`, `displayName`, and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
 
@@ -420,7 +430,7 @@ Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ plugi
     Default model and provider constants:
 
     ```typescript
-    const model = api.runtime.agent.defaults.model; // e.g. "gpt-6-astra"
+    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.6-sol"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
 

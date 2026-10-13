@@ -19,18 +19,19 @@ export function readSessionRowTranscriptFields(
 ): SessionRowTranscriptFields {
   const transcriptScope = { ...params, agentId: params.storeAgentId ?? params.agentId };
   try {
-    const terminalModel = params.includeTerminalModel
-      ? readSessionTerminalFallbackModel({
-          sessionEntry: params.sessionEntry,
-          sessionScope: transcriptScope,
-        })
-      : undefined;
     const tail = readSessionTranscriptBoundedMessageTailPage(transcriptScope, {
       maxMessages: 20,
       maxBytes: SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
       offset: 0,
       readOnly: true,
     });
+    const terminalModel = params.includeTerminalModel
+      ? readSessionTerminalFallbackModel({
+          sessionEntry: params.sessionEntry,
+          sessionScope: transcriptScope,
+          terminalEvent: tail.newestContiguousEventCount ? tail.events.at(-1)?.event : undefined,
+        })
+      : undefined;
     // Older text cannot stand in for an oversized message skipped at the newest edge.
     const events = tail.newestContiguousEventCount
       ? tail.events.slice(-tail.newestContiguousEventCount)

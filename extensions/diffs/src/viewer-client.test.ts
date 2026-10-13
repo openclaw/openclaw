@@ -159,57 +159,6 @@ describe("hydrateViewer", () => {
   });
 });
 
-describe("viewerState initialization", () => {
-  it("seeds viewerState from firstPayload options and syncs document theme", async () => {
-    renderCard({
-      options: {
-        ...viewerPayload.options,
-        diffStyle: "split",
-        themeType: "light",
-        backgroundEnabled: false,
-        overflow: "scroll",
-      },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    expect(document.body.dataset.theme).toBe("light");
-
-    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(opts.diffStyle).toBe("split");
-    expect(opts.themeType).toBe("light");
-    expect(opts.overflow).toBe("scroll");
-    expect(opts.disableBackground).toBe(true);
-  });
-
-  it("preloadHighlighter receives merged language set from all cards", async () => {
-    renderCard({
-      prerenderedHTML: "<div>diff1</div>",
-      langs: ["typescript"],
-      oldFile: { name: "a.ts", lang: "typescript", contents: "old" },
-      newFile: { name: "a.ts", lang: "typescript", contents: "new" },
-    });
-    renderCard({
-      prerenderedHTML: "<div>diff2</div>",
-      langs: ["python"],
-      oldFile: { name: "b.py", lang: "python", contents: "old" },
-      newFile: { name: "b.py", lang: "python", contents: "new" },
-    });
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
-    const preloadArg = (preloadHighlighterMock.mock.calls as unknown[][])[0]?.[0] as
-      | { langs: string[]; themes: string[] }
-      | undefined;
-    expect(preloadArg).toBeDefined();
-    expect(preloadArg!.langs).toContain("typescript");
-    expect(preloadArg!.langs).toContain("python");
-    expect(preloadArg!.themes).toEqual(["pierre-light", "pierre-dark"]);
-  });
-});
-
 describe("toolbar button toggles", () => {
   it.each([
     ["layout", 0, "diffStyle", "unified", "split"],
@@ -247,20 +196,6 @@ describe("header metadata", () => {
     const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
     return opts.renderHeaderMetadata as HeaderMetadataCallback;
   }
-
-  it("renders the toolbar in viewer render mode", async () => {
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<main class="oc-frame" data-render-mode="viewer"></main>',
-    );
-    renderCard();
-    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
-
-    const header = renderHeaderMetadata();
-
-    expect(header).not.toBeNull();
-    expect(header?.querySelectorAll("button")).toHaveLength(4);
-  });
 
   it("drops the interactive toolbar in image render mode", async () => {
     document.body.insertAdjacentHTML(

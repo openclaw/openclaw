@@ -4,7 +4,6 @@ import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 
 type MentionPerson = { profileId: string; label: string; name: string; avatarUrl?: string };
@@ -157,13 +156,4 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
       </div>
     </Show>
   );
-}
-
-export function renderSelectedHumanMentions(
-  text: string,
-  mentions: readonly HumanMention[] | undefined,
-  onRemove: () => void,
-  avatarUrls?: ReadonlyMap<string, string>,
-) {
-  return solidTemplate(SelectedHumanMentions, { text, mentions, onRemove, avatarUrls });
 }

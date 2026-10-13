@@ -83,6 +83,8 @@ export function recoverCronJobInDatabase(
 ): { removed?: true; interrupted?: InterruptedStartupRun; skipStartupCatchup?: true } {
   const { state, database, storeKey, job, receipt, notifications } = params;
   const nowMs = state.deps.nowMs();
+  const pendingReceiptId =
+    job?.state.runningAtMs === undefined ? undefined : job.state.runningReceiptId;
   const finishReceipt = (
     status: Exclude<CronRunReceipt["status"], "running">,
     atMs: number,
@@ -93,6 +95,7 @@ export function recoverCronJobInDatabase(
         database: database.db,
         receiptSchema: params.receiptSchema,
         handle: receipt,
+        pendingReceiptId,
         status,
         finishedAtMs: atMs,
         error,

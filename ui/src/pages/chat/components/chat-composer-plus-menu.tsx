@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
@@ -616,6 +616,7 @@ function handleMenuSelection(
 }
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const [opened, setOpened] = createSignal(props.menu.open);
   const hasOverrides = () => countSessionToolOverrides(props.menu.toolOverrides) > 0;
   const view = () => (props.menu.showCapabilities ? props.menu.view : "root");
   return (
@@ -629,6 +630,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           handleMenuSelection(event, props.menu)
         }
         onWa-show={() => {
+          setOpened(true);
           if (!props.menu.open) {
             props.menu.onOpenChange(true);
           }
@@ -654,25 +656,27 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         >
           <Icon name="plus" />
         </button>{" "}
-        <Show when={view()} keyed>
-          {(activeView) =>
-            activeView === "skills" ? (
-              <SkillView menu={props.menu} />
-            ) : activeView === "connectors" ? (
-              <ConnectorView menu={props.menu} />
-            ) : activeView.startsWith("tools:") ? (
-              <ToolAccessView menu={props.menu} serverName={activeView.slice("tools:".length)} />
-            ) : activeView.startsWith("library:") ? (
-              <>
-                {renderComposerLibraryMenuSolid(
-                  props.menu.library,
-                  activeView.slice("library:".length),
-                )}
-              </>
-            ) : (
-              <RootView menu={props.menu} />
-            )
-          }
+        <Show when={opened()}>
+          <Show when={view()} keyed>
+            {(activeView) =>
+              activeView === "skills" ? (
+                <SkillView menu={props.menu} />
+              ) : activeView === "connectors" ? (
+                <ConnectorView menu={props.menu} />
+              ) : activeView.startsWith("tools:") ? (
+                <ToolAccessView menu={props.menu} serverName={activeView.slice("tools:".length)} />
+              ) : activeView.startsWith("library:") ? (
+                <>
+                  {renderComposerLibraryMenuSolid(
+                    props.menu.library,
+                    activeView.slice("library:".length),
+                  )}
+                </>
+              ) : (
+                <RootView menu={props.menu} />
+              )
+            }
+          </Show>
         </Show>
       </wa-dropdown>
       <LitContent value={props.menu.addServerDialog} />{" "}

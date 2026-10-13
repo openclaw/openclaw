@@ -33,7 +33,7 @@ import {
   wrapReadToolWithSkillContent,
 } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -393,20 +393,20 @@ describe("createOpenClawCodingTools", () => {
     expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
-  it("lets explicit deny policies remove Tool Search controls", () => {
+  it.each(["dispatch_action", "tool_call"])("honors the shipped dispatcher deny %s", (name) => {
     const tools = createOpenClawCodingTools({
       includeToolSearchControls: true,
       config: {
         tools: {
           profile: "coding",
-          deny: ["tool_call"],
+          deny: [name],
           toolSearch: true,
         },
       },
     });
     const names = new Set(tools.map((tool) => tool.name));
 
-    expect(names.has("tool_call")).toBe(false);
+    expect(names.has("dispatch_action")).toBe(false);
     expect(names.has("read")).toBe(true);
   });
 
@@ -435,7 +435,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
-    expect(names.has("tool_call")).toBe(true);
+    expect(names.has("dispatch_action")).toBe(true);
     expect(names.has("message")).toBe(false);
     expect(names.has("exec")).toBe(false);
   });
@@ -603,7 +603,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
     }
-    const conversationCapabilityProfile = resolveConversationCapabilityProfile({
+    const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
       config,
       agentId: "main",
       sessionKey: requesterSessionKey,
@@ -773,7 +773,7 @@ describe("createOpenClawCodingTools", () => {
 
   registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
 
-  it("materializes additive runtime tools while preserving normal deny policy", () => {
+  it("materializes additive runtime tools while preserving normal deny policy", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const config: OpenClawConfig = {
@@ -785,7 +785,7 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       config,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
         config,
         runtimePluginToolGrant: {
           pluginId: "workboard",

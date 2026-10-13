@@ -132,16 +132,18 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
       proof === "revoked-during-open",
     );
     const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
+    validation.admissionPath = database.path;
+    let entries = 0;
     let peerLease: string | undefined;
     try {
-      const opening = execution.runExisting(source, async () => "opened");
-      if (proof === "revoked-during-open") {
-        await expect(opening).rejects.toThrow("Agent schema admission changed before publication");
-        await execution.release();
-        expect(loadSessionEntryReadOnly(scopes[0]!)).toMatchObject({ sessionId: "victim" });
-      } else {
-        await expect(opening).resolves.toBe("opened");
-      }
+      await expect(
+        execution.runExisting(source, async () => {
+          entries += 1;
+          return "opened";
+        }),
+      ).resolves.toBe("opened");
+      expect(entries).toBe(1);
+      expect(loadSessionEntryReadOnly(scopes[0]!)).toMatchObject({ sessionId: "victim" });
       if (proof.startsWith("two-leases")) {
         const before = readOpenClawAgentIntegrityVerification(database.path, options.env);
         peerLease = claimOpenClawAgentDatabaseLease({ ...options, path: database.path });
@@ -152,7 +154,8 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
       }
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       const transferred = getOpenClawAgentDatabaseValidationForTransfer(database);
-      expect(Boolean(transferred)).toBe(proof !== "revoked-during-open");
+      expect(transferred).toBeDefined();
+      expect(Atomics.load(new Int32Array(transferred!.valid), 0)).toBe(1);
       if (proof === "revoked-after-open") {
         invalidateOpenClawAgentDatabaseValidation(database.path);
       }
@@ -160,7 +163,7 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
         kind: "lifecycle-artifacts",
         value: { removedEntries: 1 },
       });
-      expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
+      expect(fullChecks()).toBe(proof === "revoked-after-open" ? 1 : 0);
       expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
     } finally {

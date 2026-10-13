@@ -1,6 +1,6 @@
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   prepareExecDefaults,
@@ -44,7 +44,7 @@ export async function resolveWorkerToolAuthority(params: {
     { cfg: turn.config, sessionKey: sandboxSessionKey, agentId: turn.agentId },
     { env: process.env, cwd: process.cwd(), assertCurrent: params.assertCurrent },
     async (sandbox) => {
-      const capabilityProfile = resolveConversationCapabilityProfile({
+      const capabilityProfile = await prepareConversationCapabilityProfile({
         ...turn,
         sandboxSessionKey,
         sessionKey: sandboxSessionKey,
