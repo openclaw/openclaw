@@ -356,10 +356,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   historical 16/32-class runs also differed in compiler optimization. See
   `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
   permissions, compiler checks, or hosted eligibility are added.
-  The package-boundary row has a 30-minute whole-job budget: three hosted
+  The package-boundary row has a 40-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
+  Two hosted release validations then passed both checks (128 plugins) and
+  were cancelled at the former 30-minute limit.
   Compiler concurrency, complete inventory, receipt guards, canary, and routing
   remain unchanged.
 - The Plugin SDK API diff row also has a 30-minute whole-job budget. Two hosted
@@ -690,6 +692,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   same rows: each validates the complete graph boundary and intersects selected
   consumers with its original stripe. Empty intersections stay empty; ambiguous
   selection falls back to every canonical graph across those same stripes.
+  Check existence only for compiler inputs: deleted Markdown and UI CSS paths
+  do not widen accompanying code changes; deleted compiler inputs retain full coverage.
   Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
   with stripe 5 in the central row. Keep at most two compiler children per
   stripe and one builder per child. A failing stripe stops its row; other

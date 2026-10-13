@@ -254,6 +254,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+A restart-aborted embedded response retains its already-streamed text as an
+interrupted assistant message when the transcript writer is still available.
+Unfinished tool calls in that response are discarded before persistence.
 A completed reply or a later user message closes that turn to replay.
 
 For authenticated operator turns, recovery revalidates the original caller's

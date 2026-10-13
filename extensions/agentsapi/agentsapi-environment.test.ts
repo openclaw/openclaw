@@ -207,7 +207,7 @@ describe("Agents API attempt environment selection", () => {
       expect(rejected.result.terminal).toMatchObject({
         kind: "failed",
         error: expect.objectContaining({
-          message: expect.stringContaining("web-search policy changed"),
+          message: expect.stringContaining("web-search, or forwarding policy changed"),
         }),
       });
       expect(mocks.fetch).not.toHaveBeenCalled();
@@ -451,6 +451,7 @@ describe("Agents API attempt environment selection", () => {
     const network = { access: "restricted", allowed_domains: ["api.github.com"] };
     const { result } = await attempt("openai_hosted", undefined, undefined, media, {
       openai_host: { network },
+      forwarding: { gatewayTools: false, mcpServers: false },
     });
 
     expect(result).toMatchObject({

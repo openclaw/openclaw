@@ -15,6 +15,7 @@ import {
   sameSessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import {
+  assertSessionTranscriptInitialWriter,
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
@@ -103,7 +104,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       writeAdmission.assertCurrent();
       assertBinding();
       assertNavigation?.();
-      initialWriter?.assertActive();
+      if (initialWriter) {
+        assertSessionTranscriptInitialWriter(initialWriter, identity);
+      }
       assertOwned();
       questionAnswers?.assertCurrent();
     };
