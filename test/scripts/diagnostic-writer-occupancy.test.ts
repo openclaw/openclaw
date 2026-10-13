@@ -88,8 +88,35 @@ describe("writer occupancy log report", () => {
       from: "2026-10-13T07:00:59.500-07:00",
       until: "2026-10-13T14:01:00.500+00:00",
     });
-    expect(report.operations[0]).toMatchObject({ reservationMs: 1_000, queueWaitMs: 0 });
+    expect(report.operations[0]).toMatchObject({
+      reservationMs: 1_000,
+      queueWaitMs: 0,
+      maxReservationMs: 1_000,
+    });
     expect(report.minutes.map((row) => row.operations[0]?.reservationMs)).toEqual([500, 500]);
+    expect(report.topReservations).toEqual([
+      {
+        estimatedEnd: "2026-10-13T14:01:00.500Z",
+        operation: "session-entry.patch",
+        reservationMs: 1_000,
+        queueWaitMs: 0,
+      },
+    ]);
+    const waitOnly = await attributeWriterOccupancy([warning()], {
+      from: "2026-10-13T14:00:58.250Z",
+      until: "2026-10-13T14:00:58.750Z",
+    });
+    expect(waitOnly.operations[0]).toMatchObject({
+      reservationMs: 0,
+      queueWaitMs: 500,
+      maxReservationMs: 0,
+    });
+    expect(waitOnly.topReservations[0]).toEqual({
+      estimatedEnd: "2026-10-13T14:00:58.750Z",
+      operation: "session-entry.patch",
+      reservationMs: 0,
+      queueWaitMs: 500,
+    });
     await expect(attributeWriterOccupancy([], { from: "2026-10-13T14:00:00" })).rejects.toThrow(
       "explicit UTC offsets",
     );

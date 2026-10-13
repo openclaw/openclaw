@@ -204,7 +204,12 @@ export async function attributeWriterOccupancy(
     if (!reservation) {
       ignoredLines++;
     } else if (reservation.end > from && reservation.queued < until) {
-      reservations.push(reservation);
+      reservations.push({
+        ...reservation,
+        queued: Math.max(from, reservation.queued),
+        start: Math.min(until, Math.max(from, reservation.start)),
+        end: Math.min(until, reservation.end),
+      });
     }
   }
   const minuteRows = new Map<
@@ -228,12 +233,12 @@ export async function attributeWriterOccupancy(
     total.count++;
     total.maxReservationMs = Math.max(total.maxReservationMs, item.end - item.start);
     for (
-      let minute = Math.floor(Math.max(from, item.queued) / 60_000) * 60_000;
-      minute < Math.min(until, item.end);
+      let minute = Math.floor(item.queued / 60_000) * 60_000;
+      minute < item.end;
       minute += 60_000
     ) {
-      const low = Math.max(from, minute);
-      const high = Math.min(until, minute + 60_000);
+      const low = minute;
+      const high = minute + 60_000;
       const reservationMs = Math.max(0, Math.min(high, item.end) - Math.max(low, item.start));
       const waitStart = Math.max(low, item.queued);
       const waitEnd = Math.min(high, item.start);
