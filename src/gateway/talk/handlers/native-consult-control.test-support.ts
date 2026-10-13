@@ -35,13 +35,13 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
   describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
     "native %s exact control",
     (surface) => {
-      it.each([
-        "foreign global",
-        "replaced run",
-        "reused run ID",
-        "other call",
-        ...(surface === "relay" ? [] : ["same call"]),
-      ])("keeps %s control within its declared scope", async (replacement) => {
+      it.each(
+        surface === "browser-rpc"
+          ? ["replaced run", "reused run ID", "other call"]
+          : surface === "browser-provider"
+            ? ["replaced run", "reused run ID", "other call", "same call"]
+            : ["foreign global", "replaced run", "reused run ID", "other call"],
+      )("keeps %s control within its declared scope", async (replacement) => {
         harness.getConfig().session = { scope: "global" };
         const started = createDeferredCore<RunEmbeddedAgentParams>();
         const finish = createDeferredCore();

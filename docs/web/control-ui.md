@@ -159,9 +159,12 @@ with their keyboard shortcuts. Open **Subagents** there or from the side-panel
 starts with the panel closed. The first running batch adds it automatically,
 preserving another panel you selected; closing it keeps it closed for that batch.
 Finished results stay open until you close them. While the parent waits on
-subagents, a muted line above the composer shows the count, child name and elapsed
-time, with **View** to open the panel. The panel loads all child pages automatically
-and groups running and finished work, keeping children waiting on their own
+subagents, the conversation keeps each child’s claw, name, and current activity
+together in one clickable row. A single muted timer at the far right shows total
+time since your message, including subagent waits, when that request is known.
+There is no second status line above the composer.
+The panel loads all child pages automatically and groups running and finished
+work, keeping children waiting on their own
 descendants under **Running**. It shows elapsed time and available tool activity,
 and opens each child's existing view-only transcript beside the parent. Running
 rows show public tool progress when available, otherwise the current tool step's

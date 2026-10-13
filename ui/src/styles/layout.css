@@ -1880,7 +1880,7 @@ openclaw-settings-save-indicator:empty {
    here so gateway threads and native coding catalogs cannot drift apart. */
 .sidebar-recent-session {
   --sidebar-child-session-toggle-width: max(34px, calc(36px * var(--control-ui-text-scale)));
-  --session-row-bg: transparent;
+  --session-row-bg: var(--session-row-tint, transparent);
 
   display: flex;
   align-items: center;
@@ -1896,6 +1896,32 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+/* A wash makes tags scannable without coloring the title or replacing the
+   active/selected fill. Pinned rows consume the same tint variables. */
+.sidebar-recent-session--colored {
+  --session-row-tint: color-mix(
+    in srgb,
+    var(--session-color) var(--session-color-tint),
+    transparent
+  );
+  --session-row-hover-tint: color-mix(
+    in srgb,
+    var(--session-color) var(--session-color-hover-tint),
+    transparent
+  );
+  --session-row-muted: color-mix(in srgb, var(--text) 30%, var(--muted));
+}
+
+/* Muted text must not lose contrast as the row surface becomes stronger. */
+.sidebar-recent-session--colored:is(
+  :hover,
+  :focus-within,
+  .sidebar-recent-session--active,
+  .sidebar-recent-session--selected
+) {
+  --session-row-muted: var(--text);
+}
+
 .sidebar-recent-session--colored::before {
   content: "";
   position: absolute;
@@ -1908,7 +1934,10 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session:hover {
-  --session-row-bg: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  --session-row-bg: var(
+    --session-row-hover-tint,
+    color-mix(in srgb, var(--bg-hover) 78%, transparent)
+  );
 
   color: var(--text);
 }
@@ -1920,14 +1949,6 @@ openclaw-settings-save-indicator:empty {
    does not degrade to the weaker hover fill while the row is under pointer. */
 .sidebar-recent-session.sidebar-recent-session--active {
   --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
-
-  color: var(--text-strong);
-}
-
-/* Multi-select is an accent wash so it stays distinguishable by hue from the
-   neutral --active fill when a selection includes the active row. */
-.sidebar-recent-session.sidebar-recent-session--selected {
-  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 
   color: var(--text-strong);
 }
@@ -2148,7 +2169,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -3022,7 +3043,7 @@ a:is(
    keeps the list's --text: a session name is content in both zones, and pinning
    a row must not make it read as dimmer than the same row further down. */
 .sidebar-zone-entry .sidebar-recent-session {
-  --session-row-bg: transparent;
+  --session-row-bg: var(--session-row-tint, transparent);
 
   position: relative;
   min-height: max(32px, var(--sidebar-session-row-min-height));
@@ -3066,17 +3087,28 @@ a:is(
 }
 
 .sidebar-zone-entry .sidebar-recent-session:hover {
-  --session-row-bg: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  --session-row-bg: var(
+    --session-row-hover-tint,
+    color-mix(in srgb, var(--bg-hover) 84%, transparent)
+  );
 
   color: var(--text);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
-  --session-row-bg: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
 
   color: var(--text-strong);
   border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* Multi-select overrides both tag and active fills, including pinned rows. */
+.sidebar-recent-session.sidebar-recent-session--selected,
+.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--selected {
+  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+
+  color: var(--text-strong);
 }
 
 .sidebar-zone-entry .sidebar-recent-session__aside {
@@ -4687,7 +4719,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   white-space: nowrap;
   font-size: var(--control-ui-text-xs);
   line-height: 18px;
-  color: var(--muted);
+  color: var(--session-row-muted, var(--muted));
 }
 
 .sidebar-recent-session__channel {

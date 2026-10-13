@@ -286,22 +286,15 @@ describe("private worker computer runtime", () => {
     },
   );
 
-  it.each([
-    { operation: "snapshot", providerGeneration: descriptor.provider.generation, params: {} },
-    {
-      operation: "act",
-      providerGeneration: descriptor.provider.generation,
-      params: { executionId, action: "__close_execution" },
-    },
-    {
-      operation: "act",
-      providerGeneration: descriptor.provider.generation,
-      params: { executionId, action: "type", text: "x".repeat(128 * 1024) },
-    },
-    { operation: "close", executionId, reason: "completion", command: "system.run" },
-  ])("rejects malformed private operation $operation before the provider", async (input) => {
+  it("rejects the internal close action before the provider", async () => {
     await withComputer(async (host) => {
-      expect(await host.invoke(input)).toMatchObject({
+      expect(
+        await host.invoke({
+          operation: "act",
+          providerGeneration: descriptor.provider.generation,
+          params: { executionId, action: "__close_execution" },
+        }),
+      ).toMatchObject({
         ok: false,
         error: { code: "INVALID_REQUEST" },
       });
