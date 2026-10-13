@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   linkEmail,
   setDisplayName,
@@ -54,6 +55,26 @@ function holdMentionRead() {
 }
 
 describe("temporary human mention Inbox", () => {
+  it("recovers the same authenticated reader after the profile catalog becomes ready", async () => {
+    await withInbox(
+      async (f) => {
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE" },
+        });
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: true,
+          payload: { items: [] },
+        });
+        await f.post();
+        expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+      },
+      {},
+      { retainProfileCatalog: false },
+    );
+  });
+
   it("dismisses an absent mention while an unrelated session is published", async () => {
     await withInbox(async (f) => {
       await f.post("retained");

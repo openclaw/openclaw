@@ -11,6 +11,7 @@ import {
 } from "../infra/deferred-plugin-migrations.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -27,8 +28,8 @@ import {
 
 describe("config IO with deferred plugin migrations", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       cleanup();
     });
   });
@@ -59,6 +60,59 @@ describe("config IO with deferred plugin migrations", () => {
     return { root, configPath, env, ioOptions };
   }
 
+  it("normal reads and writes never inspect deferred migration records", async () => {
+    const root = tempDirs.make("openclaw-canonical-config-");
+    const configPath = path.join(root, "openclaw.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18789 } }));
+    await recordDeferredPluginMigrations({
+      env,
+      pending: [{ pluginId: "sample", reason: "Missing plugin", command: "openclaw doctor --fix" }],
+    });
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    {
+      using db = new DatabaseSync(databasePath);
+      // A pending-record read must fail even though canonical config remains usable.
+      db.prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?").run(
+        "invalid migration report",
+        "deferred-plugin-migration:sample",
+      );
+    }
+    const io = createConfigIO({
+      env,
+      configPath,
+      observe: false,
+      pluginValidation: "skip",
+      shellEnvFallback: "defer",
+    });
+    expect(io.loadConfig().gateway?.port).toBe(18789);
+    expect((await io.loadConfigAsync()).gateway?.port).toBe(18789);
+    expect((await io.readConfigFileSnapshot()).valid).toBe(true);
+    expect(
+      (await io.readConfigFileSnapshotWithPluginMetadata({ prepareValidation: "strict" })).snapshot
+        .valid,
+    ).toBe(true);
+    expect(readCurrentConfigForPolicyCheck({ env, configPath }).gateway?.port).toBe(18789);
+    await io.writeConfigFile(
+      { gateway: { mode: "local", port: 18790 } },
+      {
+        skipPluginValidation: true,
+        skipRuntimeSnapshotRefresh: true,
+      },
+    );
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.port).toBe(18790);
+    const prepared = await io.readConfigFileSnapshotForWrite();
+    await replaceConfigFile({
+      ...prepared,
+      io,
+      nextConfig: { ...prepared.snapshot.sourceConfig, gateway: { mode: "local", port: 18791 } },
+      writeOptions: { ...prepared.writeOptions, ...writeOptions },
+    });
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8")).gateway.port).toBe(18791);
+    expect(() => readDeferredPluginMigrations({ env })).toThrow();
+  });
+
   it.each(["new", "stronger"])(
     "protects a %s migration obligation recorded after config write planning",
     async (change) => {
@@ -73,7 +127,10 @@ describe("config IO with deferred plugin migrations", () => {
         await recordDeferredPluginMigrations({ env, pending: [pendingPlugin] });
       }
       const stronger = { ...pendingPlugin, configPaths: [["session", "store"]] };
-      const io = createConfigIO(ioOptions);
+      const io = createConfigIO({
+        ...ioOptions,
+        deferredPluginMigrations: change === "stronger" ? [pendingPlugin] : [],
+      });
       await expect(
         io.writeConfigFile(
           { gateway: { mode: "local", port: 18790 } },
@@ -89,11 +146,14 @@ describe("config IO with deferred plugin migrations", () => {
       expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
       expect(readDeferredPluginMigrations({ env })).toEqual([stronger]);
 
-      using contender = new DatabaseSync(openOpenClawStateDatabase({ env }).path);
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      using contender = new DatabaseSync(databasePath);
       contender.exec("PRAGMA busy_timeout = 0");
       let publicationChecked = false;
       const resumedIo = createConfigIO({
         ...ioOptions,
+        deferredPluginMigrations: [stronger],
         fs: {
           ...fs,
           renameSync: (from, to) => {
@@ -141,7 +201,7 @@ describe("config IO with deferred plugin migrations", () => {
     fs.writeFileSync(includePath, includeRaw);
     await recordDeferredPluginMigrations({ env, pending: [pendingPlugin] });
     const stronger = { ...pendingPlugin, configPaths: [["session", "store"]] };
-    const io = createConfigIO(ioOptions);
+    const io = createConfigIO({ ...ioOptions, deferredPluginMigrations: [pendingPlugin] });
     const prepared = await io.readConfigFileSnapshotForWrite();
     await expect(
       replaceConfigFile({
@@ -162,10 +222,11 @@ describe("config IO with deferred plugin migrations", () => {
     expect(fs.existsSync(`${includePath}.bak`)).toBe(false);
     expect(readDeferredPluginMigrations({ env })).toEqual([stronger]);
 
-    const refreshed = await io.readConfigFileSnapshotForWrite();
+    const refreshedIo = createConfigIO({ ...ioOptions, deferredPluginMigrations: [stronger] });
+    const refreshed = await refreshedIo.readConfigFileSnapshotForWrite();
     await replaceConfigFile({
       ...refreshed,
-      io,
+      io: refreshedIo,
       sourceConfig: { ...refreshed.snapshot.sourceConfig, session: { dmScope: "per-peer" } },
       writeOptions: {
         ...refreshed.writeOptions,
@@ -179,7 +240,7 @@ describe("config IO with deferred plugin migrations", () => {
     expect(fs.readFileSync(configPath, "utf8")).toBe(rootRaw);
   });
 
-  it("serves valid config while preserving pending inputs through repair writes and restart", async () => {
+  it("Doctor supplies pending facts to preserve legacy inputs through repair writes", async () => {
     const { configPath, env, ioOptions } = fixture({
       SESSION_ROOT: "/srv/synthetic-session-state",
     });
@@ -212,7 +273,8 @@ describe("config IO with deferred plugin migrations", () => {
     expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
     await recordDeferredPluginMigrations({ env, pending: [pending] });
     closeOpenClawStateDatabaseForTest();
-    const io = createConfigIO(ioOptions);
+    const io = createConfigIO({ ...ioOptions, deferredPluginMigrations: [pending] });
+    const runtimeIo = createConfigIO(ioOptions);
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(true);
     const validation = await io.readConfigFileSnapshotWithPluginMetadata({
@@ -226,9 +288,8 @@ describe("config IO with deferred plugin migrations", () => {
       "/srv/synthetic-session-state/legacy",
     );
     expect(io.loadConfig().gateway?.port).toBe(18789);
-    const policyConfig = readCurrentConfigForPolicyCheck({ env, configPath });
-    expect(policyConfig.gateway?.port).toBe(18789);
-    expect(policyConfig).not.toHaveProperty("legacySample");
+    expect(() => readCurrentConfigForPolicyCheck({ env, configPath })).toThrow();
+    expect((await runtimeIo.readConfigFileSnapshot()).valid).toBe(false);
 
     const replacement = structuredClone(snapshot.sourceConfig);
     replacement.plugins = { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } };
@@ -261,8 +322,8 @@ describe("config IO with deferred plugin migrations", () => {
 
     await recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["sample"] });
     closeOpenClawStateDatabaseForTest();
-    expect((await io.readConfigFileSnapshot()).valid).toBe(false);
-    await io.writeConfigFile(
+    expect((await runtimeIo.readConfigFileSnapshot()).valid).toBe(false);
+    await runtimeIo.writeConfigFile(
       {
         gateway: { mode: "local", port: 18791 },
         session: source.session,
@@ -274,7 +335,7 @@ describe("config IO with deferred plugin migrations", () => {
     expect(migrated).not.toHaveProperty("legacySample");
     expect(migrated).not.toHaveProperty("plugins.entries.sample.config.legacyRoot");
     expect(migrated).toHaveProperty("plugins.entries.sample.config.root", "${SESSION_ROOT}/legacy");
-    expect((await io.readConfigFileSnapshot()).valid).toBe(true);
+    expect((await runtimeIo.readConfigFileSnapshot()).valid).toBe(true);
   });
 
   it("keeps the migrated fixed-store owner while excluding a pending plugin field", () => {

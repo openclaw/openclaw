@@ -304,6 +304,12 @@ it("retains a logical-store worker transcript and refuses writer changes without
         },
         async (pinned) => {
           const assertReceipt = captureWorkerTurnTranscriptSource(pinned);
+          const settlementTarget = { ...pinned, expectedWriterRunId: undefined };
+          const resolveSettlement = () =>
+            resolveWorkerTurnTranscriptTarget({
+              ...settlementTarget,
+              sessionTarget: settlementTarget,
+            });
           incomingRpc.runInAsyncScope(assertReceipt);
           const effect = vi.fn(() => {
             resolveWorkerTurnTranscriptTarget({ ...pinned, sessionTarget: pinned });
@@ -323,6 +329,11 @@ it("retains a logical-store worker transcript and refuses writer changes without
           expect(() => incomingRpc.runInAsyncScope(assertReceipt)).toThrow(
             "transcript identity is no longer current",
           );
+          expect(resolveSettlement()).toEqual(settlementTarget);
+          await patchSessionEntryCore(target, () => ({ activeWriterRunId: undefined }));
+          expect(resolveSettlement()).toEqual(settlementTarget);
+          await patchSessionEntryCore(target, () => ({ lifecycleRevision: "next-lifecycle" }));
+          expect(resolveSettlement).toThrow("transcript identity is no longer current");
         },
       );
       await source.release();

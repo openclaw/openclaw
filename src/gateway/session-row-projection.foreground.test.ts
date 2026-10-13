@@ -13,6 +13,7 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -261,6 +262,67 @@ it("retains transcript previews across metadata edits and consumes committed app
       expect(backfill).not.toHaveBeenCalled();
     } finally {
       projection.dispose();
+    }
+  });
+});
+
+it("reuses an unknown preview until a committed transcript watermark changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preview-notifications",
+      sessionId: "preview-notifications",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Original preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
+    });
+    const initial = observeSessionRowBackfill([scope.sessionKey]);
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await initial;
+      expect(projection.capture(query)?.retainedDatabaseFacts?.transcriptPreview).toBeUndefined();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      emitSessionTranscriptUpdate({ target: scope });
+      emitSessionTranscriptUpdate({
+        target: scope,
+        message: { role: "user", content: "Original preview" },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await projection.ensureMaterialized();
+      await nextTurn();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Original preview",
+      );
+
+      const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [
+          { message: { role: "assistant", content: "Updated preview" } },
+          { message: { role: "assistant", content: "Hidden append", display: false } },
+        ],
+        touchSessionEntry: false,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await refreshed;
+      expect(backfill).toHaveBeenCalledTimes(2);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Updated preview",
+      );
+    } finally {
+      projection.dispose();
+      vi.useRealTimers();
     }
   });
 });

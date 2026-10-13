@@ -174,6 +174,14 @@ declare module "@solidjs/web" {
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
+      "openclaw-systems-page": HTMLAttributes<HTMLElementTagNameMap["openclaw-systems-page"]> &
+        ElementProperties<
+          Pick<HTMLElementTagNameMap["openclaw-systems-page"], "routeData" | "presented">
+        >;
+      "openclaw-systems-sidebar": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-systems-sidebar"]
+      > &
+        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-systems-sidebar"], "controller">>;
       "openclaw-mascot": LegacyAttributes<HTMLElement> & {
         mood?: MascotMood;
         "prop:size"?: number;

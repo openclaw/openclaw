@@ -81,6 +81,8 @@ describe("chat pane session menu boundary", () => {
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
     const items = [...menu.querySelectorAll("wa-dropdown-item")];
     expect(items.length).toBeGreaterThan(0);
     await Promise.all(items.map((item) => item.updateComplete));
@@ -355,6 +357,8 @@ describe("chat pane session menu boundary", () => {
     );
     const menu = container.querySelector("openclaw-chat-header-session-menu");
     expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
     await menu?.updateComplete;
     if (fields.archived === undefined) {
       expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();

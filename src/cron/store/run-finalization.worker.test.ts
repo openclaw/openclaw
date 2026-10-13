@@ -40,6 +40,19 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     const edited = { ...job, name: "edited while running", agentId: "replacement-agent" };
     await saveCronStore(storePath, { version: 1, jobs: [edited] });
     const database = openOpenClawStateDatabase();
+    // Clock skew can make the pending result older than the retained history.
+    // Finalization must protect its stored marker even after clearing the live job.
+    const seedHistory = database.db.prepare(`
+      INSERT INTO cron_run_receipts (
+        receipt_id, store_key, job_id, config_revision, agent_id, status,
+        owner_pid, owner_start_time, started_at_ms, finished_at_ms
+      ) SELECT ?, store_key, job_id, config_revision, agent_id, 'ok',
+               owner_pid, owner_start_time, ?, ?
+        FROM cron_run_receipts WHERE receipt_id = ?
+    `);
+    for (let index = 0; index < 64; index += 1) {
+      seedHistory.run(`history-${index}`, now + 100 + index, now + 101 + index, receipt.receiptId);
+    }
     const finalize = (status: "ok" | "error") =>
       runWithSqliteWorkerStateContext(
         { environment: { OPENCLAW_STATE_DIR: fixture.stateDir } },
@@ -80,6 +93,11 @@ it("commits execution, delivery, and history once despite an owner edit and a du
         .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
         .get(receipt.receiptId),
     ).toEqual({ status: "ok" });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM cron_run_receipts WHERE job_id = ?")
+        .get(job.id),
+    ).toEqual({ count: 64 });
     expect(
       database.db.prepare("SELECT status, ended_at FROM task_runs WHERE source_id = ?").all(job.id),
     ).toEqual([{ status: "succeeded", ended_at: now + 10 }]);

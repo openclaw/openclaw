@@ -139,10 +139,6 @@ export function useMenuMachine(
     closeOnSelect: false,
     "aria-label": overlay.id,
     onOpenChange({ open }) {
-      if (open && (!overlay.trigger?.isConnected || (overlay.parent && !overlay.parent.open))) {
-        service.send({ type: "CONTROLLED.CLOSE" });
-        return;
-      }
       const restore = !open && containsComposed(overlay.surface, service.scope.getActiveElement());
       // Native sibling dismissal must not leave focus behind in the retired branch.
       const handoff =
@@ -272,7 +268,6 @@ export function useMenuMachine(
           focusFromKeyboard = false;
           const target = event.currentTarget;
           const point = { x: event.clientX, y: event.clientY };
-          const parentRevision = overlay.parent?.revision;
           const deltaX = parentBinding.pointerDelta(point.x);
           const protectedTravel =
             parent &&
@@ -299,14 +294,6 @@ export function useMenuMachine(
           // The document pointer listener releases the old child's corridor lock.
           // Decide child opening after that same event, rather than dropping it.
           queueMicrotask(() => {
-            if (
-              overlay.trigger !== target ||
-              !overlay.trigger?.isConnected ||
-              !overlay.parent?.open ||
-              overlay.parent.revision !== parentRevision
-            ) {
-              return;
-            }
             if (parent?.refs.get("pointerRoutingLocked")) {
               return;
             }

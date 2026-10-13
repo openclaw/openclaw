@@ -364,9 +364,10 @@ or protocol-version change.
   scoped; clients refresh via `config.get`.
 - `skills.changed`: connectivity, the skill catalog, config, or eligibility
   changed after the gateway invalidated its skills snapshot. The payload's
-  `reason` is `watch`, `watch-targets`, `manual`, `remote-node`,
-  `config-change`, or `workshop`. Operator-read scoped; clients refresh via
-  `skills.status`.
+  `reason` is `watch`, `watch-unavailable`, `manual`, `remote-node`,
+  `config-change`, or `workshop`. Passive disk changes publish after the background
+  discovery pass (about once per minute); explicit skill changes publish immediately
+  after refresh. Operator-read scoped; clients refresh via `skills.status`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval

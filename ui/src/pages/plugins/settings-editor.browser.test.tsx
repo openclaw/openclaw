@@ -226,28 +226,6 @@ describe("grouped plugin settings", () => {
       expect(model.onConfigPatch).not.toHaveBeenCalled();
     },
   );
-  it("keeps a retired menu bound to the setting action that rendered it", async () => {
-    const { editor, model, update } = await mount();
-    const original = vi.fn();
-    await update({ onAskSetting: original });
-    const menu = editor.querySelector('[data-setting="enabled"] wa-dropdown')!;
-    const replacement = vi.fn();
-    await update({
-      onAskSetting: replacement,
-      model: {
-        ...model,
-        pluginId: "replacement",
-        configHints: {},
-        configSchema: { type: "object", properties: { limit: { type: "number" } } },
-      },
-    });
-    expect(menu.isConnected).toBe(false);
-    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "ask" } } }));
-    expect(replacement).not.toHaveBeenCalled();
-    expect(original).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ path: ["plugins", "entries", "fixture", "config", "enabled"] }),
-    );
-  });
   it.each<{
     name: string;
     overrides: Partial<PluginSettingsEditorModel>;

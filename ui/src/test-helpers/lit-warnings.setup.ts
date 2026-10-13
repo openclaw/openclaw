@@ -1,6 +1,10 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { installPopoverPolyfill } from "./popover.ts";
+import { cleanupSolid } from "./solid-cleanup.ts";
 import { installSafeLocalStorageForTesting } from "./storage.ts";
+
+// Setup files run for every test file; ordinary helpers stay cached with isolate:false.
+afterEach(cleanupSolid);
 
 installPopoverPolyfill();
 

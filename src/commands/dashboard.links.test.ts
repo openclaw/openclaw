@@ -280,7 +280,9 @@ describe("dashboardCommand", () => {
         await expect(dashboardCommand(runtime, { json: true })).rejects.toBe(exit);
       },
     );
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ ok: false, reason }));
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, error: { type: "cli_error", message: reason }, reason }),
+    );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
