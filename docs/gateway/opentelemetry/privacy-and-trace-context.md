@@ -91,15 +91,16 @@ source files after its bundle loaded is picked up by the skill watcher
 the revision, and discovery restamps from the reloaded tree, so later spans
 carry
 the new fingerprint — but spans emitted between the edit and its reload
-carry the previously loaded bundle's fingerprint, and an active delivery
-keeps its generation's identity for the turn. Routes that run without a
+carry the previously loaded bundle's fingerprint, and recorded emissions
+from a prior generation stay attributed to the bundle they were proven
+from. Routes that run without a
 watcher (for example the cron snapshot path, `watch: false`) carry the
 previously loaded identity until their next reload.
 
 The fingerprint is emitted only while tracing is active: `skill.used` events on
 an install with no active tracing consumer (for example a metrics-only
 install) omit `skillFingerprint`, including when a skill's retained snapshot
-entry or delivery receipt still carries a stamped identity from an integrity
+entry still carries a stamped identity from an integrity
 producer that stamps regardless of tracing. Any path while tracing is
 inactive omits the fingerprint, so an internal diagnostic listener never
 observes a fingerprint while no exporter-owned tracing consumer is active.
