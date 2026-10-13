@@ -244,6 +244,8 @@ in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.
 If restart cancellation finishes a collected run before that record commits,
 shutdown retains its recovery custody unless the session or run owner changes.
+Backend-owned restart aborts retain the same custody even when the caller's
+abort signal stays open and lifecycle persistence finishes after reply cleanup.
 Skipped sessions are logged with a reason, including when other sessions recover.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
