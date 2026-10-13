@@ -43,7 +43,12 @@ async function pathExists(targetPath: string) {
 function runStep(command: string, args: string[], options: SpawnSyncOptions = {}) {
   const result = spawnSync(command, args, {
     cwd: rootDir,
-    env: process.env,
+    // Two small dialects do not benefit from native pools sized to a many-core host.
+    env: {
+      ...process.env,
+      RAYON_NUM_THREADS: process.env.RAYON_NUM_THREADS?.trim() || "4",
+      ROLLDOWN_WORKER_THREADS: process.env.ROLLDOWN_WORKER_THREADS?.trim() || "4",
+    },
     stdio: "inherit",
     ...options,
   });
