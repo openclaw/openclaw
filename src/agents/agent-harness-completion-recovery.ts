@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-types.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   prepareSqliteScope,
   toDatabaseOptions,
@@ -274,6 +276,7 @@ export function getOwedHarnessCompletionTask(
 export function createHarnessCompletionSourceAssertion(params: {
   claim: HarnessCompletionRecovery;
   storePath: string;
+  mode?: "admission" | "committed";
   priorAssertion?: SessionSourceAssertion;
 }): SessionSourceAssertion {
   const target = {
@@ -290,6 +293,7 @@ export function createHarnessCompletionSourceAssertion(params: {
           input: {
             sourceRunId: params.claim.sourceRunId,
             claim: params.claim,
+            mode: params.mode,
             admission: resolveSessionTranscriptReadFence({
               agentId: target.agentId,
               sessionId: params.claim.sessionId,
@@ -366,38 +370,50 @@ export function createHarnessCompletionSourceAssertion(params: {
   };
   const prepareSnapshot = (
     snapshot: HarnessCompletionSourceSnapshot,
-    source: CapturedSessionEntryReadSource,
+    source: CapturedSessionEntryReadSource & { databaseIdentity: string },
     assertStorageCurrent: () => void,
     release?: () => void | Promise<void>,
   ): PreparedSessionSourceAuthority => {
-    const assertCurrent = () => {
-      assertStorageCurrent();
-      if (!snapshot.entry || !getOwedHarnessCompletionTask(params.claim, snapshot.entry)) {
-        refuse();
-      }
-      if (snapshot.readError) {
-        throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
-      }
-      if (!snapshot.validInput) {
-        refuse();
-      }
-    };
-    assertCurrent();
+    assertStorageCurrent();
+    if (!snapshot.entry || !getOwedHarnessCompletionTask(params.claim, snapshot.entry)) {
+      refuse();
+    }
+    if (snapshot.readError) {
+      throw decodeSessionTranscriptWorkerReadError(snapshot.readError);
+    }
+    if (!snapshot.validInput) {
+      refuse();
+    }
+    const fields = [
+      "sessionId",
+      "lifecycleRevision",
+      "restartRecoveryHarnessCompletion",
+      "restartRecoveryTerminalDeliveryEvidence",
+    ] as const;
+    const retained = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${source.databaseIdentity}`,
+      sessionKey: target.sessionKey,
+      entry: snapshot.entry,
+      matches: (before, after) =>
+        fields.every((field) => isDeepStrictEqual(before?.[field], after?.[field])),
+    });
     return {
-      assertCurrent,
+      assertCurrent() {
+        assertStorageCurrent();
+        if (
+          !retained.isCurrent() ||
+          !snapshot.entry ||
+          !getOwedHarnessCompletionTask(params.claim, snapshot.entry)
+        ) {
+          refuse();
+        }
+      },
       checks: [
         {
           predicate: {
             source,
             sessionKey: target.sessionKey,
-            fields: [
-              "sessionId",
-              "lifecycleRevision",
-              "restartRecoveryHarnessCompletion",
-              "restartRecoveryTerminalDeliveryEvidence",
-              "restartRecoveryDeliveryRunId",
-              "restartRecoveryRuns",
-            ],
+            fields: [...fields],
             expected: snapshot.entry,
             ...(snapshot.version
               ? { transcript: { sessionId: params.claim.sessionId, version: snapshot.version } }
@@ -406,7 +422,7 @@ export function createHarnessCompletionSourceAssertion(params: {
           refuse,
         },
       ],
-      release,
+      release: () => releaseSessionSourceAuthorities([retained, { release }]),
     };
   };
   const assertSource = () => {
@@ -421,7 +437,9 @@ export function createHarnessCompletionSourceAssertion(params: {
     // The durable requester receipt outlives the original source admission.
     // Each effect scope prepares and validates that receipt before its callback.
   };
-  const prepareSessionSource = async (checkWriteToken = false) => {
+  const prepareSessionSource = async (
+    checkWriteToken = false,
+  ): Promise<PreparedSessionSourceAuthority> => {
     const { claim } = params;
     if (binding) {
       return prepareIncognitoSource();
@@ -457,6 +475,7 @@ export function createHarnessCompletionSourceAssertion(params: {
       const snapshot = await retained.owner.readHarnessCompletionSource({
         env,
         claim,
+        mode: params.mode,
         source,
         ...(admission ? { admission } : {}),
       });

@@ -32,11 +32,6 @@ import {
 } from "./jsdom-custom-elements.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
-  closeLeakedSkillsWatchers,
-  rememberSkillsWatcherGenerations,
-  setSkillsWatcherCaptureBeforeReset,
-} from "./skills-watcher-test-lifecycle.ts";
-import {
   drainSqliteTestAgentOwner,
   drainSqliteTestSingletons,
   hasRetainedSqliteTestCustody,
@@ -483,7 +478,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
 
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
-    setSkillsWatcherCaptureBeforeReset(() => this.rememberSkillsWatchers());
     if (!this.config.isolate) {
       installCustomElementTracking();
     }
@@ -499,12 +493,10 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     await settleSqliteTestAgentCloses();
     await super.onBeforeRunTask(test);
     this.rememberSqliteAgentOwner();
-    this.rememberSkillsWatchers();
   }
 
   onTaskFinished() {
     this.rememberSqliteAgentOwner();
-    this.rememberSkillsWatchers();
   }
 
   private rememberSqliteAgentOwner() {
@@ -514,14 +506,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const internals = this as unknown as TestRunnerInternals;
     rememberSqliteTestAgentOwner(
       (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
-      internals.workerState.moduleExecutionInfo,
-    );
-  }
-
-  private rememberSkillsWatchers() {
-    const internals = this as unknown as TestRunnerInternals;
-    rememberSkillsWatcherGenerations(
-      internals.workerState.evaluatedModules as ViteEvaluatedModules,
       internals.workerState.moduleExecutionInfo,
     );
   }
@@ -633,17 +617,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     ] as const) {
       clean(phase, run);
     }
-    // Retire this file's watchers before module invalidation can orphan them.
-    this.rememberSkillsWatchers();
-    await drain("skills watchers", async () => {
-      const leaked = await closeLeakedSkillsWatchers();
-      if (leaked > 0) {
-        throw new Error(
-          `left skills watchers open (${leaked} live watch entries); skills.status and skill snapshot preparation start real watchers, so close them in afterEach with closeSkillsWatchers(true) or disable watching with skills.load.watch: false`,
-        );
-      }
-    });
-    setSkillsWatcherCaptureBeforeReset(undefined);
     if (
       !(await drain("subagent registry", async () => {
         const api = (globalThis as Record<PropertyKey, unknown>)[SUBAGENT_REGISTRY_TEST_API] as

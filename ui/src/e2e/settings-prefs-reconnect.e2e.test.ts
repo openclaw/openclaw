@@ -1,8 +1,7 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ShellGatewayOwner } from "../app/app-shell-gateway.ts";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -77,10 +76,7 @@ async function proxyReconnect(
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.phase;
+        return window.openclawControlUi?.snapshot().gatewayPhase;
       }),
     )
     .toBe("reconnecting");
@@ -93,10 +89,7 @@ async function proxyReconnect(
   await expect
     .poll(() =>
       page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-        };
-        return app.runtime?.context.gateway.snapshot.phase;
+        return window.openclawControlUi?.snapshot().gatewayPhase;
       }),
     )
     .toBe("connected");
@@ -125,22 +118,27 @@ async function readPendingPrefStorage(page: Page): Promise<Record<string, unknow
 }
 
 async function observePreferenceReplay(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-      shellGateway: ShellGatewayOwner;
-    };
-    const owner = shell.shellGateway;
-    const ensure = owner.ensureRuntimeConfig.bind(owner);
+  await evaluateControlUiContext(page, ({ gateway, runtimeConfig }) => {
     const trace: { phase: string; connected: boolean; canPatch: boolean | undefined }[] = [];
     Object.assign(window, { preferenceReplayTrace: trace });
-    owner.ensureRuntimeConfig = function (snapshot, runtimeConfig) {
+    const record = () => {
       trace.push({
-        phase: snapshot.phase,
-        connected: runtimeConfig?.state.connected ?? false,
-        canPatch: runtimeConfig?.canPatch,
+        phase: gateway.snapshot.phase,
+        connected: runtimeConfig.state.connected,
+        canPatch: runtimeConfig.canPatch,
       });
-      return ensure(snapshot, runtimeConfig);
     };
+    record();
+    const unsubscribeGateway = gateway.subscribe(record);
+    const unsubscribeConfig = runtimeConfig.subscribe(record);
+    window.addEventListener(
+      "pagehide",
+      () => {
+        unsubscribeGateway();
+        unsubscribeConfig();
+      },
+      { once: true },
+    );
   });
 }
 
@@ -148,24 +146,23 @@ async function waitForPreferenceReplay(page: Page, gateway: MockGatewayControls)
   try {
     return await gateway.waitForRequest("config.patch");
   } catch (error) {
-    const state = await page.evaluate(() => {
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        runtime: { context: ApplicationContext };
-      };
-      const { gateway: source, runtimeConfig, theme } = app.runtime.context;
-      return {
-        phase: source.snapshot.phase,
-        connected: runtimeConfig.state.connected,
-        clientMatches: runtimeConfig.state.client === source.snapshot.client,
-        canPatch: runtimeConfig.canPatch,
-        loading: runtimeConfig.state.configLoading,
-        saving: runtimeConfig.state.configSaving,
-        draftDirty: runtimeConfig.state.configFormDirty,
-        theme: theme.settings.theme,
-        // SAFETY: observePreferenceReplay installs this test-only trace before either reconnect.
-        trace: (Reflect.get(window, "preferenceReplayTrace") as unknown[]).slice(-24),
-      };
-    });
+    const state = await evaluateControlUiContext(
+      page,
+      ({ gateway: source, runtimeConfig, theme }) => {
+        return {
+          phase: source.snapshot.phase,
+          connected: runtimeConfig.state.connected,
+          clientMatches: runtimeConfig.state.client === source.snapshot.client,
+          canPatch: runtimeConfig.canPatch,
+          loading: runtimeConfig.state.configLoading,
+          saving: runtimeConfig.state.configSaving,
+          draftDirty: runtimeConfig.state.configFormDirty,
+          theme: theme.settings.theme,
+          // SAFETY: observePreferenceReplay installs this test-only trace before either reconnect.
+          trace: (Reflect.get(window, "preferenceReplayTrace") as unknown[]).slice(-24),
+        };
+      },
+    );
     console.error("[prefs-reconnect] replay failure", state, {
       pendingKeys: (await readPendingPrefStorage(page)).map((prefs) => Object.keys(prefs)),
       configReads: (await gateway.getRequests("config.get")).length,
@@ -248,12 +245,10 @@ suite.define(() => {
         }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await expect
           .poll(() =>
-            page.evaluate(() => {
-              const app = document.querySelector("openclaw-app") as HTMLElement & {
-                runtime: { context: { theme: { settings: { chatSendShortcut: string } } } };
-              };
-              return app.runtime.context.theme.settings.chatSendShortcut;
-            }),
+            evaluateControlUiContext(
+              page,
+              (application) => application.theme.settings.chatSendShortcut,
+            ),
           )
           .toBe("modifier-enter");
         await textarea.press("Enter");
@@ -352,12 +347,10 @@ suite.define(() => {
       await gateway.resolveDeferred("config.patch", committed);
       await expect
         .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector<
-              HTMLElement & { runtime?: { context: ApplicationContext } }
-            >("openclaw-app");
-            return app?.runtime?.context.runtimeConfig.state.configSnapshot;
-          }),
+          evaluateControlUiContext(
+            page,
+            (application) => application.runtimeConfig.state.configSnapshot,
+          ),
         )
         .toMatchObject({ config: committed.config, hash: committed.hash });
       await expect.poll(() => readPendingPrefStorage(page)).toEqual([]);

@@ -1,6 +1,4 @@
-import { For } from "solid-js";
-import "../../components/web-awesome-select.ts";
-import "../../styles/select-picker.css";
+import "../../components/select-picker.ts";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -14,34 +12,23 @@ export function LanguageSelect(props: {
   systemLocale: Locale;
   onLocaleChange: (locale: Locale | undefined) => void;
 }) {
-  const value = () => props.localeOverride ?? "system";
-  const systemLabel = () => `${t("common.system")} (${languageLabel(props.systemLocale)})`;
   return (
-    <wa-select
-      class="settings-select"
-      prop:value={value()}
-      onChange={(event) => {
-        const next = event.currentTarget.value;
-        props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === next));
+    <openclaw-select-picker
+      class="settings-select picker-select"
+      prop:params={{
+        label: t("quickSettings.language"),
+        value: props.localeOverride ?? "system",
+        options: [
+          {
+            value: "system",
+            label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
+          },
+          ...SUPPORTED_LOCALES.map((locale) => ({ value: locale, label: languageLabel(locale) })),
+        ],
+        showOptionTooltips: false,
+        onChange: (value: string) =>
+          props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
       }}
-    >
-      <span slot="label" class="settings-control__sr-label">
-        {t("quickSettings.language")}
-      </span>
-      <wa-option value="system" prop:label={systemLabel()} prop:selected={value() === "system"}>
-        {systemLabel()}
-      </wa-option>
-      <For each={SUPPORTED_LOCALES}>
-        {(option) => (
-          <wa-option
-            value={option}
-            prop:label={languageLabel(option)}
-            prop:selected={value() === option}
-          >
-            {languageLabel(option)}
-          </wa-option>
-        )}
-      </For>
-    </wa-select>
+    />
   );
 }

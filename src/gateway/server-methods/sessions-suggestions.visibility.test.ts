@@ -800,7 +800,14 @@ describe("suggestions queued behind provider review", () => {
           await withinTest(
             awaitGateBeforeSettlement(
               metadataQueued.promise,
-              request,
+              request.then((result) => {
+                if (!result.responses.some(([ok]) => ok)) {
+                  throw new Error(
+                    `suggestion failed before its metadata writer entered the queue: ${JSON.stringify(result.responses)}`,
+                  );
+                }
+                return result;
+              }),
               "suggestion finished before its metadata writer entered the queue",
             ),
             signal,

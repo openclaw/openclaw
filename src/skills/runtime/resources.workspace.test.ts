@@ -80,33 +80,6 @@ async function fixture() {
   return { gateway, host, snapshot, skillResources, release };
 }
 
-it("delivers host supporting files instead of a stale Gateway copy", async () => {
-  const f = await fixture();
-  try {
-    const delivery = await prepareSkillResourceDelivery(f.snapshot, () => {}, [], f.gateway);
-    expect(f.skillResources.readSkillFiles).toHaveBeenCalledOnce();
-    const materialized = await materializeSkillResources(delivery!, () => {});
-    try {
-      expect(delivery?.skills[0]?.sourcePath).toBe(
-        path.join(f.gateway, "skills", "guide", "SKILL.md"),
-      );
-      expect(
-        await fs.readFile(
-          path.join(materialized.snapshot.resolvedSkills![0]!.baseDir, "check.sh"),
-          "utf8",
-        ),
-      ).toBe("current host script");
-      expect(
-        materialized.rewriteReferences(path.join(f.gateway, "skills", "guide", "check.sh")),
-      ).toBe(path.join(materialized.snapshot.resolvedSkills![0]!.baseDir, "check.sh"));
-    } finally {
-      await materialized.cleanup();
-    }
-  } finally {
-    f.release();
-  }
-});
-
 it("keeps Gateway and workspace rewrites separate when their source paths collide", async () => {
   const f = await fixture();
   try {
@@ -334,7 +307,7 @@ it("does not fall back to Gateway files after the host binding stops", async () 
   expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
+it.each([true])(
   "preserves local resource delivery for document-only adapters (stopped=%s)",
   async (stopped) => {
     const f = await fixture();

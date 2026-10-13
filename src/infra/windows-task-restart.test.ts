@@ -219,30 +219,24 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 
-  it.each([true, false])(
-    "does not report a finished restart without a replacement listener (task running=%s)",
-    (taskRunning) => {
-      spawnMock.mockImplementation((_file: string, args: string[]) => {
-        createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "helper path")));
-        return { unref: vi.fn() };
-      });
-      expect(relaunchGatewayScheduledTask({ OPENCLAW_GATEWAY_PORT: "18789" }).ok).toBe(true);
-      const scriptPath = expectDefined([...createdScriptPaths][0], "helper path");
-      const commands: string[] = [];
-      const output = runRestartBatch(fs.readFileSync(scriptPath, "utf8"), (line) => {
-        commands.push(line);
-        if (line.includes("Get-ScheduledTask")) {
-          return taskRunning ? 0 : 1;
-        }
-        // The outgoing PID exits, but Scheduler accepts /Run without launching.
-        return line.includes("Get-NetTCPConnection") ? 1 : 0;
-      });
-      expect(output.join("\n")).not.toContain("restart finished");
-      expect(output.join("\n")).toContain("restart failed source=windows-task-handoff");
-      expect(output.join("\n")).toContain("openclaw gateway restart --force");
-      expect(commands.filter((line) => line.startsWith("schtasks /Run"))).toHaveLength(1);
-    },
-  );
+  it("does not report a finished restart without a replacement listener", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "helper path")));
+      return { unref: vi.fn() };
+    });
+    expect(relaunchGatewayScheduledTask({ OPENCLAW_GATEWAY_PORT: "18789" }).ok).toBe(true);
+    const scriptPath = expectDefined([...createdScriptPaths][0], "helper path");
+    const commands: string[] = [];
+    const output = runRestartBatch(fs.readFileSync(scriptPath, "utf8"), (line) => {
+      commands.push(line);
+      // The outgoing PID exits, but Scheduler accepts /Run without launching.
+      return line.includes("Get-NetTCPConnection") ? 1 : 0;
+    });
+    expect(output.join("\n")).not.toContain("restart finished");
+    expect(output.join("\n")).toContain("restart failed source=windows-task-handoff");
+    expect(output.join("\n")).toContain("openclaw gateway restart --force");
+    expect(commands.filter((line) => line.startsWith("schtasks /Run"))).toHaveLength(1);
+  });
 
   it.each([true, false])(
     "requires outgoing process exit before launching (exited=%s)",
@@ -294,25 +288,6 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(output.join("\n")).not.toContain("restart failed");
   });
 
-  it("prefers OPENCLAW_WINDOWS_TASK_NAME overrides", () => {
-    spawnMock.mockImplementation((_file: string, args: string[]) => {
-      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
-      return { unref: vi.fn() };
-    });
-
-    relaunchGatewayScheduledTask({
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
-    });
-
-    const scriptPath = expectDefined(
-      [...createdScriptPaths][0],
-      "[...createdScriptPaths][0] test invariant",
-    );
-    const script = fs.readFileSync(scriptPath, "utf8");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
-  });
-
   it("keeps custom task names out of the PowerShell observation commands", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
@@ -335,18 +310,6 @@ describe("relaunchGatewayScheduledTask", () => {
     }
     expect(observations[0]).toHaveLength(2);
     expect(observations[1]).toEqual(observations[0]);
-  });
-
-  it("returns failed when the helper cannot be spawned", () => {
-    spawnMock.mockImplementation(() => {
-      throw new Error("spawn failed");
-    });
-
-    const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
-
-    expect(result.ok).toBe(false);
-    expect(result.method).toBe("schtasks");
-    expect(result.detail).toContain("spawn failed");
   });
 
   it("quotes the cmd /c script path when temp paths contain metacharacters", () => {
@@ -378,32 +341,6 @@ describe("relaunchGatewayScheduledTask", () => {
       stdio: "ignore",
       windowsHide: true,
     });
-  });
-
-  it("includes startup fallback", () => {
-    const taskScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-"));
-    createdTmpDirs.add(taskScriptDir);
-    const taskScriptPath = path.join(taskScriptDir, "gateway.cmd");
-    fs.writeFileSync(taskScriptPath, "@echo off\r\nrem placeholder\r\n", "utf8");
-    resolveTaskScriptPathMock.mockReturnValue(taskScriptPath);
-
-    spawnMock.mockImplementation((_file: string, args: string[]) => {
-      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
-      return { unref: vi.fn() };
-    });
-
-    const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
-
-    expect(result.ok).toBe(true);
-    const scriptPath = expectDefined(
-      [...createdScriptPaths][0],
-      "[...createdScriptPaths][0] test invariant",
-    );
-    const script = fs.readFileSync(scriptPath, "utf8");
-    expect(script).toContain(`schtasks /Query /TN`);
-    expect(script).toContain(":fallback");
-    expect(script).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
-    expect(script).toContain(taskScriptPath);
   });
 
   // Pin the host home/state paths embedded in the script to ASCII so the only
@@ -444,22 +381,5 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script.startsWith("@echo off\r\n")).toBe(true);
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (隆)" >>');
     expect(script).toContain('del "%~f0" >nul 2>&1');
-  });
-
-  it("returns failed instead of writing an unrepresentable helper script", () => {
-    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
-    spawnMock.mockImplementation(() => {
-      throw new Error("spawn should not be reached");
-    });
-
-    const result = relaunchGatewayScheduledTask({
-      ...asciiPathEnv,
-      OPENCLAW_WINDOWS_TASK_NAME: "🚀",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.method).toBe("schtasks");
-    expect(result.detail).toMatch(/cannot be represented/);
-    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

@@ -522,7 +522,6 @@ extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-search.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	1
-extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
 extensions/memory-core/src/migration/doctor-memory-sidecar-import.ts	6
 extensions/memory-core/src/migration/doctor-memory-sidecar.ts	1
@@ -1628,7 +1627,7 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/embedding.ts	2
-src/cli/capability-cli/image.ts	10
+src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
@@ -1767,7 +1766,6 @@ src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
 src/commands/doctor/shared/stale-auth-order.ts	4
-src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
@@ -2292,7 +2290,6 @@ src/plugin-sdk/allowlist-config-edit.ts	6
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
-src/plugin-sdk/approval-native-helpers.ts	1
 src/plugin-sdk/approval-reaction-binding.ts	2
 src/plugin-sdk/channel-config-helpers.ts	15
 src/plugin-sdk/channel-config-ui-hints.ts	1
@@ -2527,7 +2524,6 @@ src/skills/runtime/remote-probe-utils.ts	2
 src/skills/runtime/remote-skills.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
-src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	4
 src/snapshot/manifest.ts	1
 src/state/local-onboarding-state.ts	1

@@ -149,6 +149,7 @@ import type {
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
+import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
@@ -371,6 +372,7 @@ export type SessionTranscriptWorkerInput =
 /** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
 export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
   validation?: OpenClawAgentDatabaseReadValidation;
+  projectionReceipt?: SessionTranscriptProjectionReceipt;
 };
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;

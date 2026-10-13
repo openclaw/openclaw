@@ -654,11 +654,7 @@ final class DashboardManager {
             let needsRecovery = !source.isWindowOpen || !source.canDeliverNativeCommands
             source.dispatchNativeCommand(command)
             source.show()
-            guard needsRecovery, source.pendingGatewaySwitch == nil else { return }
-            if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
-                return
-            }
-            self.switchTarget(target, in: source, forceReload: true)
+            if needsRecovery { self.recoverDashboard(source) }
             return
         }
         self.pendingOpenCommands.append(command)
@@ -681,6 +677,15 @@ final class DashboardManager {
                 self.showFailure(error)
             }
         }
+    }
+
+    func recoverDashboard(_ source: DashboardWindowController) {
+        guard source.pendingGatewaySwitch == nil else { return }
+        let target = self.target(for: source) ?? self.mainTarget
+        if source === self.controller, target == .primary, self.showConfiguredWindowIfPossible() {
+            return
+        }
+        self.switchTarget(target, in: source, forceReload: true)
     }
 
     private func installMainController(_ controller: DashboardWindowController) {

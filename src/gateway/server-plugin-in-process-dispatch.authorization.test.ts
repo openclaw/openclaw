@@ -7,6 +7,11 @@ import {
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
+import {
+  getOwnedSessionTranscriptActor,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -84,6 +89,70 @@ describe("typed in-process agent authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each([false, true])(
+    "launches a different session without the caller's transcript writer (tool authority: %s)",
+    async (toolAuthority) => {
+      const database = { agentId: "main", path: "/synthetic/launch-transcript" };
+      const owner = createMemorySessionActorOwner(database);
+      const callerTarget = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:dashboard:incognito-caller",
+        sessionId: "caller-session",
+      };
+      const launchedTarget = {
+        ...callerTarget,
+        sessionKey: "agent:main:launched",
+        sessionId: "launched-session",
+      };
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey: callerTarget.sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      const sessionActor = { actor, database };
+      const context = createContext();
+      const result = { runId: "launched-run", status: "accepted" };
+      startTurn.mockImplementation(async ({ io }) => {
+        await Promise.resolve();
+        expect(getOwnedSessionTranscriptActor(launchedTarget)).toBeUndefined();
+        io.emitAcceptance([true, result, undefined]);
+      });
+      const launch = () =>
+        dispatchGatewayMethodInProcess(
+          "agent",
+          {
+            message: "Run in another session",
+            idempotencyKey: result.runId,
+            sessionKey: launchedTarget.sessionKey,
+          },
+          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+        );
+      try {
+        await withOwnedSessionTranscriptWrites(
+          { sessionTarget: callerTarget, sessionActor, withTranscriptWrite: async (run) => run() },
+          async () => {
+            expect(getOwnedSessionTranscriptActor(callerTarget)).toBe(sessionActor);
+            expect(() => getOwnedSessionTranscriptActor(launchedTarget)).toThrow(
+              "session writer claim changed before transcript persistence",
+            );
+            await expect(
+              toolAuthority
+                ? withOperatorToolGatewayAuthority(
+                    { operatorRoleActor: { kind: "system" }, scopes: ["operator.write"] },
+                    launch,
+                  )
+                : launch(),
+            ).resolves.toEqual(result);
+            expect(getOwnedSessionTranscriptActor(callerTarget)).toBe(sessionActor);
+          },
+        );
+      } finally {
+        await actor.release();
+        owner.close();
+      }
+    },
+  );
 
   it.each([
     ["agent", { message: "owned turn", idempotencyKey: "host-owned" }],

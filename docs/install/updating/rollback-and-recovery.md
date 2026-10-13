@@ -151,8 +151,10 @@ openclaw update cleanup --dry-run
 ### Full-state recovery requires a backup
 
 Package updates keep pre-migration SQLite snapshots alongside the package
-backup until verified successful activation removes them with that backup.
-Rollback, failed or unverified completion, and refused restoration retain them.
+backup until verified successful activation removes restorable snapshots with that backup.
+Snapshots whose source write generations could not be sealed remain available
+for manual recovery even after successful activation. Rollback, failed or
+unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
 retained path. Older snapshot directories are not automatically removed: their
 ownership and successful outcome cannot be proven from existing receipts.
@@ -264,7 +266,9 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation. When the Gateway answers with the
 update's target version, that observation supersedes a saved runtime-verification
 restart warning; the original failed run and any migration rollback restrictions
-remain recorded. A restored Gateway must pass its own verification checks
+remain recorded. An unsafe Doctor process settlement keeps its recovery guidance
+until the recovery owner verifies settlement; a responding Gateway alone cannot
+clear that refusal. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 
 In the Control UI, open **Settings → Updates** and choose **Diagnose update** to

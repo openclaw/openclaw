@@ -19,6 +19,7 @@ import {
   resolveSqliteWorkerModuleUrl,
   retainSqliteWorkerAdmissionCleanup,
   retainSqliteWorkerAdmissionPathReferences,
+  suspendSqliteWorkerScheduledMaintenance,
   validateSqliteWorkerDatabaseLocator,
 } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
@@ -192,6 +193,12 @@ export class SqliteWorkerBroker {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     let actor = this.actors.get(key);
+    if (actor?.slot.failed) {
+      // Retained sibling clients must not pin a failed actor to its dead slot.
+      await waitForSqliteOpen(this.lifecycle.retireActor(actor), options.signal);
+      return this.openAdmitted(options, client);
+    }
+    let resumeScheduledMaintenance: (() => void) | undefined;
     if (actor?.retirementRequested || actor?.cleanupState === "pending") {
       const pending = actor.retirementRequested ? actor.retirement : actor.closing;
       if (pending) {
@@ -214,6 +221,7 @@ export class SqliteWorkerBroker {
         (actor.nativeLostObservers ??= new Set()).add(options.onNativeLost);
       }
       actor.references += 1;
+      resumeScheduledMaintenance = suspendSqliteWorkerScheduledMaintenance(actor, maintenanceScope);
     } else {
       const slot = await this.lifecycle.acquireSlot(
         options,
@@ -242,7 +250,7 @@ export class SqliteWorkerBroker {
         slot,
         references: 1,
         opened: Promise.resolve(),
-        openDispatch: { dispatched: false },
+        openDispatch: { custody: slot.custody.createRequest() },
         initialized: false,
         backendClosed: false,
         databasePath,
@@ -250,6 +258,7 @@ export class SqliteWorkerBroker {
         stateDatabasePath: options.stateDatabasePath,
       };
       this.actors.set(key, actor);
+      resumeScheduledMaintenance = suspendSqliteWorkerScheduledMaintenance(actor, maintenanceScope);
       slot.actors.add(actor);
       slot.pendingOpens -= 1;
       const opening = actor;
@@ -318,6 +327,7 @@ export class SqliteWorkerBroker {
         throw actor.slot.failed;
       }
     } catch (error) {
+      resumeScheduledMaintenance?.();
       this.lifecycle.releaseActorReference(actor);
       if (!actor.references) {
         const errors = [error];
@@ -326,7 +336,7 @@ export class SqliteWorkerBroker {
             await this.lifecycle.closeActor(actor, options.maintenanceScope);
           } else {
             const nativeOpenMayHaveEntered =
-              actor.openDispatch.dispatched &&
+              actor.openDispatch.custody.postAttempted &&
               !actor.openDispatch.openNotEntered &&
               !actor.openDispatch.openRefused;
             if (!nativeOpenMayHaveEntered && !actor.slot.failed) {
@@ -383,6 +393,7 @@ export class SqliteWorkerBroker {
       release: async () => {
         if (!referenceReleased) {
           referenceReleased = true;
+          resumeScheduledMaintenance?.();
           this.lifecycle.releaseActorReference(owned);
           this.stores.delete(store);
           this.clients.delete(client);
@@ -505,6 +516,7 @@ export class SqliteWorkerBroker {
     }
     const result = createDeferredCore<unknown>();
     const job: Job = {
+      custody: dispatchState?.custody ?? slot.custody.createRequest(),
       observation,
       signal,
       maintenanceScope,
@@ -518,6 +530,7 @@ export class SqliteWorkerBroker {
       detach: () => signal?.removeEventListener("abort", abort),
     };
     const abort = () => {
+      job.custody.cancel();
       const index = slot.queue.indexOf(job);
       if (index >= 0) {
         slot.queue.splice(index, 1);
@@ -609,6 +622,7 @@ export class SqliteWorkerBroker {
   }
 
   private dispatchJob(slot: Slot, job: Job): void {
+    job.custody.activate();
     slot.current = job;
     slot.worker.ref();
     job.observation.started();
@@ -621,6 +635,7 @@ export class SqliteWorkerBroker {
         // Retire uncertain transfers or failed prepared-custody cleanup before settlement.
         this.fail(slot, error, toErrorObject(error, "SQLite worker transfer failed"));
       } else {
+        job.custody.retire();
         slot.current = undefined;
         this.finish(slot, job, error);
         this.dispatch(slot);

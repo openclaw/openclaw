@@ -74,6 +74,7 @@ export async function prepareRequiredWorkerCreatedSession(params: {
   prepare: SessionPlacementAdmissionProvider["withRequiredSession"];
   session: { entry: Pick<SessionEntry, "sessionId">; key: string; agentId: string };
   assertCurrent: () => void;
+  retainDispatch?: () => () => void;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.requiredProfile || params.pendingWorktree || params.requestedProjectGitUrl) {
@@ -96,6 +97,6 @@ export async function prepareRequiredWorkerCreatedSession(params: {
     },
     params.assertCurrent,
     params.signal,
-    { waitForReady: false },
+    { waitForReady: false, retainDispatch: params.retainDispatch },
   );
 }

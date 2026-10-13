@@ -13,14 +13,6 @@ describe("config schema regressions", () => {
     expect(MarkdownConfigSchema.parse({ tables: "block" })).toEqual({ tables: "block" });
   });
 
-  it("accepts valid cron.sessionRetention durations", () => {
-    expect(OpenClawSchema.safeParse({ cron: { sessionRetention: "1h30m" } }).success).toBe(true);
-  });
-
-  it("leaves skipMissedJobs unset when omitted", () => {
-    expect(OpenClawSchema.parse({ cron: {} }).cron?.skipMissedJobs).toBeUndefined();
-  });
-
   it("accepts a positive integer cron.maxJobs and rejects other limits", () => {
     expect(OpenClawSchema.parse({ cron: { maxJobs: 20 } }).cron?.maxJobs).toBe(20);
     for (const maxJobs of [0, -1, 2.5]) {

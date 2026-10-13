@@ -82,6 +82,10 @@ export async function withNativeIncognitoTurnCompletion<T>(
       return project(snapshot).entry;
     };
     const completion: AgentTurnCompletion = {
+      assertCurrent() {
+        assertCurrent();
+        return assertEntry(loadSessionEntry(params));
+      },
       current: () => project(snapshot).entry,
       refresh,
       patch(reducer) {

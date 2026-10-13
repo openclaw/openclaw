@@ -187,8 +187,9 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Recovery lookahead keeps its read budget; every response has the same byte target.
-    const maxResponseBytes = Math.min(maxBytes ?? Infinity, 512 * 1024, maxHistoryBytes);
+    // Keep the default response small while honoring explicit back-scroll budgets.
+    // Recovery lookahead retains its separate read budget.
+    const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId

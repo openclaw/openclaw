@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,7 +16,7 @@ import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/deliver
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
-import type { CronFailureRepairRequest } from "../cron/service/state.js";
+import type { CronFailureRepairRequest, CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type {
   CronFailureNotificationDelivery,
@@ -29,8 +30,12 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
+import {
+  runWithGatewayDetachedWorkContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
+import { waitForAgentJob } from "./agent-turn/agent-job.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
 import { dispatchGatewayLifecycleMethod } from "./server-recovery-runtime-context.js";
 
@@ -55,40 +60,62 @@ type CronFailureAlertParams = Parameters<
   ssrfPolicy?: SsrFPolicy;
 };
 
+/** Keeps the scheduler's persisted deadline and the repair turn's timeout identical. */
+export function createGatewayCronFailureRepair(
+  cfg: OpenClawConfig,
+  resolveGatewayContext: GatewayContextResolver | undefined,
+): Pick<CronServiceDeps, "failureRepairTimeoutMs" | "runCronFailureRepair"> {
+  return {
+    failureRepairTimeoutMs: resolveAgentTimeoutMs({ cfg }),
+    runCronFailureRepair: (request) => runGatewayCronFailureRepair(request, resolveGatewayContext),
+  };
+}
+
 /**
  * The owner conversation receives the repair request as an ordinary turn: its own session,
  * workspace, and tool policy, with the reply delivered to its last route (thread included).
  * Only its authored reply reaches the chat: runtime failure payloads (timeouts, provider
  * errors) are not posted, and the job's next failure alert owns escalation.
  */
-export async function runGatewayCronFailureRepair(
+async function runGatewayCronFailureRepair(
   request: CronFailureRepairRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
 ): Promise<void> {
-  await runWithGatewayIndependentRootWorkContinuation(
-    () =>
-      dispatchGatewayLifecycleMethod(
-        "agent",
-        {
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          sessionKey: request.sessionKey,
-          message: request.message,
-          deliver: true,
-          bestEffortDeliver: true,
-          inputProvenance: {
-            kind: "internal_system",
-            sourceTool: "cron_failure_repair",
-            jobId: request.jobId,
-          },
-          idempotencyKey: `cron-failure-repair:${request.repairId}`,
+  const runId = `cron-failure-repair:${request.repairId}`;
+  const deadlineAtMs = Date.now() + request.timeoutMs;
+  // The cron run may retire its async scope before this independent repair settles.
+  await runWithGatewayDetachedWorkContinuation(async () => {
+    await dispatchGatewayLifecycleMethod(
+      "agent",
+      {
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        sessionKey: request.sessionKey,
+        message: request.message,
+        timeout: Math.ceil(request.timeoutMs / 1000),
+        deliver: true,
+        bestEffortDeliver: true,
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "cron_failure_repair",
+          jobId: request.jobId,
         },
-        {
-          internalDeliverySuppressErrors: true,
-          ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
-        },
-      ),
-    "cron:failure-repair",
-  );
+        idempotencyKey: runId,
+      },
+      {
+        internalDeliverySuppressErrors: true,
+        timeoutMs: request.timeoutMs,
+        ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
+      },
+    );
+    const settled = await waitForAgentJob({
+      runId,
+      source: "agent",
+      timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+    });
+    if (!settled || settled.timeoutPhase === "gateway_draining") {
+      throw new Error("Cron failure repair did not settle before its agent timeout or shutdown.");
+    }
+  }, "cron:failure-repair");
 }
 
 function redactWebhookUrl(url: string): string {

@@ -1,7 +1,7 @@
 // Skill loading tests cover bundled, plugin, and workspace skill resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -34,16 +34,13 @@ import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { shouldIncludeSkill } from "./config.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: () => [],
-}));
-
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
 let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 const pluginEnvSnapshot = captureEnv(["OPENCLAW_DISABLE_BUNDLED_PLUGINS"]);
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
+  config: { plugins: { enabled: false } },
   managedSkillsDir: path.join(workspaceDir, ".managed"),
   bundledSkillsDir: path.join(workspaceDir, ".bundled"),
 });
@@ -314,6 +311,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         await buildWorkspaceSkillsPrompt(workspaceDir, {
           ...resolveTestSkillDirs(workspaceDir),
           config: {
+            plugins: { enabled: false },
             skills: {
               limits: {
                 maxSkillsPromptChars: 4_000,

@@ -25,6 +25,7 @@ import type * as deliveryTarget from "../cron/isolated-agent/delivery-target.js"
 import { CronService } from "../cron/service.js";
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
+import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   OutboundDeliveryError,
@@ -39,7 +40,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -275,19 +275,26 @@ import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { fireOnExitJob } from "./server-cron-event-dispatch.js";
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
-function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
+function buildGatewayCronService(
+  params: Omit<Parameters<typeof buildGatewayCronServiceRuntime>[0], "storePath">,
+) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
-  if (typeof legacyStore !== "string") {
-    return buildGatewayCronServiceRuntime(params);
-  }
-  const env = {
-    ...process.env,
-    OPENCLAW_SKIP_CRON: "0",
-    OPENCLAW_STATE_DIR: path.dirname(legacyStore),
-  };
-  // These fixtures predate the config-to-SQLite move; seed the canonical machine-state owner.
-  writeConfigMachineState("cron.store", legacyStore, { env });
-  return buildGatewayCronServiceRuntime({ ...params, env });
+  const env =
+    typeof legacyStore === "string"
+      ? {
+          ...process.env,
+          OPENCLAW_SKIP_CRON: "0",
+          OPENCLAW_STATE_DIR: path.dirname(legacyStore),
+        }
+      : (params.env ?? process.env);
+  return buildGatewayCronServiceRuntime({
+    ...params,
+    env,
+    storePath: resolveSelectedCronJobsStorePath(
+      typeof legacyStore === "string" ? legacyStore : undefined,
+      env,
+    ),
+  });
 }
 
 function createCronConfig(name: string): OpenClawConfig {

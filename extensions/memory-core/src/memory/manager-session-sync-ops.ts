@@ -74,6 +74,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
   ): Promise<SessionTranscriptCorpusEntry[]> {
     let entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
+      config: this.cfg,
       includeContentRevision: false,
       readOnly: this.database.readOnly,
     });

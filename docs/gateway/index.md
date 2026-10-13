@@ -77,7 +77,7 @@ Gateway config reload watches the active config file path (resolved from profile
 
 ### Module compile cache
 
-The packaged CLI and the compiled `dist/index.js` entry automatically enable
+The packaged CLI and the compiled `dist/entry.js` and `dist/index.js` entries automatically enable
 Node's on-disk module compile cache. This includes compiled source deployments
 that retain their Git checkout. Cache entries live outside the release directory,
 under the operating system's temporary directory by default. Set

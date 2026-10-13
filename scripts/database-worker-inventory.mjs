@@ -26,6 +26,38 @@ const testSuites = new Set([
 ]);
 const reviewed = new Map([
   [
+    "src/config/sessions/goals-operations.ts",
+    {
+      priority: 99,
+      evidence:
+        "Ordinary sessions.goal mutations use goals-operations.worker.ts; receipt reads use session-transcript.worker.ts. Shared receipt kernels also serve native incognito and session-accessor.sqlite-transcript-turn.ts's retained native transaction. goals-management.ts retains native mutation for opaque SDK or cross-store source authority; do not classify these security-boundary callers as worker-only.",
+    },
+  ],
+  [
+    "src/infra/session-cost-usage-cache.kernel.ts",
+    {
+      priority: 99,
+      evidence:
+        "Durable refreshes use usageCache.writeRollup/prune in the agent execution worker. Shared rollup kernels also serve session-cost-usage-cache.sqlite.ts's native incognito and exclusive maintenance/deletion scopes; the incognito cutover owns their remaining runtime exposure.",
+    },
+  ],
+  [
+    "src/infra/session-cost-usage-cache.sqlite.ts",
+    {
+      priority: 99,
+      evidence:
+        "createCacheWriter.write dispatches durable writes through captured agent execution. Its native branch is selected only when supportsOpenClawAgentDatabaseExecution rejects process-held incognito or native maintenance/deletion custody; incognito remains separate migration debt.",
+    },
+  ],
+  [
+    "src/infra/outbound/current-conversation-bindings.ts",
+    {
+      priority: 99,
+      evidence:
+        "Bundled callers use awaited worker methods. Synchronous update/list/delete remain reachable through v2026.10.2's account manager and SessionBindingService SDK methods. The shared V1/V2 manager factory returns both method sets, so these escaped receivers remain conservative T1, not proven T1-compat or worker-only.",
+    },
+  ],
+  [
     "src/agents/github-oauth-records.native.ts",
     {
       priority: 99,
@@ -150,15 +182,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/gateway/operator-approval-store.boot.ts",
-    {
-      tier: "T2",
-      priority: 99,
-      evidence:
-        "Only server-aux-handlers.ts calls orphan closure and terminal pruning during Gateway boot admission; ordinary approval operations use the worker.",
-    },
-  ],
-  [
     "src/gateway/worker-environments/store.ts",
     { priority: 7, evidence: "Environment access listing and prepared-pool maintenance" },
   ],
@@ -272,6 +295,37 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/infra/session-cost-usage-cache.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSessionCostUsageRefreshLockInDatabase"],
+        evidence:
+          "session-incognito-compute.worker.ts handles session.compute.usage.refreshLock and session.compute.store.refreshLock. The only other caller is acquireSessionCostUsageRefreshLockInDatabase, reached through loadUsageCacheOperations by worker-side usageCache.acquireLock dispatch.",
+      },
+      {
+        tier: "W",
+        operations: [
+          "acquireSessionCostUsageRefreshLockInDatabase",
+          "deleteSessionCostUsageRefreshLockInDatabase",
+        ],
+        evidence:
+          "Only loadUsageCacheOperations in openclaw-agent-execution-operations.ts calls these kernels, through usageCache.acquireLock/releaseLock worker handlers. session-incognito-compute.worker.ts also dispatches those handlers for native incognito refreshes; neither receiver runs on the Gateway main thread.",
+      },
+    ],
+  ],
+  [
+    "src/infra/outbound/current-conversation-bindings.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearPersistedCurrentConversationBindingsForTests"],
+        evidence:
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+      },
+    ],
+  ],
   [
     "src/flows/doctor-tool-schema-projection.ts",
     [
@@ -1134,6 +1188,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-entry-availability.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["loadExactSessionEntryReadOnlyResult"],
+        evidence:
+          "Only acp/runtime/session-meta-doctor.ts calls this availability probe, from repairAcpSessionMetaKeysForDoctor and readClaimBinding for plugin Doctor claim inspection. Runtime identity evidence uses the separate operations in this file.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-entry-list.read.ts",
     [
       {
@@ -1245,17 +1310,6 @@ const reviewedOperations = new Map([
         operations: ["embedSessionColdArchivesInSnapshot"],
         evidence:
           "infra/backup-sqlite-snapshot.ts:292 via backup-create.ts:320,332,352; snapshot/openclaw-snapshot-copy.ts:72 via local-repository.ts:148 and git-backup.ts:310. Roots are commands/backup.ts:52, backup-sqlite.ts:80, backup-git.ts:131, Doctor/update backup and developer reliability scripts; SQL targets a temporary snapshot.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/config-revision-token.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["loadOrCreateConfigRevisionKey", "loadGatewayConfigRevisionKey"],
-        evidence:
-          "Gateway construction at server-kernel-request-runtime.ts:48; local-request-context.ts:107 also initializes it via agents/agent-command-local.ts:61 for standalone commands/boot. Existing Gateway scopes return before local allocation at local-request-context.ts:237. Request hashing captures the key and performs no SQL.",
       },
     ],
   ],
@@ -1751,9 +1805,19 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["terminalizeBoundDeliveryQueueEntry", "pruneOrdinaryDeliveryReceipts"],
+        operations: [
+          "terminalizeBoundDeliveryQueueEntry",
+          "pruneOrdinaryDeliveryReceipts",
+          "pruneDeliveryQueueTombstones",
+        ],
         evidence:
-          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Bounded pruning also serves native namespace migration through delivery-queue-sqlite.kernel.ts:192. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+      },
+      {
+        tier: "W",
+        operations: ["pruneDeliveryQueueTombstoneAges"],
+        evidence:
+          "Sole runtime caller: src/infra/delivery-queue.worker.ts:480 → delivery-queue-sqlite.kernel.ts:409.",
       },
     ],
   ],
@@ -2218,9 +2282,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        operations: ["repairOpenClawAgentDatabasePaths"],
         evidence:
-          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: runStateIntegrityHealth in src/flows/doctor-health-contribution-runners.state.ts.",
       },
     ],
   ],
@@ -2260,6 +2324,12 @@ const reviewedOperations = new Map([
   [
     "src/state/user-model-accounts.ts",
     [
+      {
+        tier: "W",
+        operations: ["updateUserModelAuthProfile"],
+        evidence:
+          "Only agents/auth-profiles/store.worker.ts calls this writer, in authProfiles.personalReplace and authProfiles.personalUsage. These registered worker handlers update credentials and usage respectively; no Gateway main-thread receiver remains.",
+      },
       {
         tier: "W",
         operations: ["connectUserModelAccount"],
@@ -2373,10 +2443,16 @@ const reviewedOperations = new Map([
     "src/trajectory/runtime-store.sqlite.ts",
     [
       {
+        tier: "W",
+        operations: ["appendSqliteTrajectoryRuntimeEventsWithWriter"],
+        evidence:
+          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts; incognito sinks dispatch session.trajectory.append through session-incognito-side-data.worker.ts. The synchronous sink fallback is removed; direct native append and retention exist only in runtime-store.test-support.ts.",
+      },
+      {
         tier: "T3",
         operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
         evidence:
-          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow and trajectory export. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. The runtime-testing SDK exports the async loader, not this native row reader. Native append and retention remain T1.",
+          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. Trajectory export and the runtime-testing SDK use the async loader, not this native row reader.",
       },
     ],
   ],
@@ -2397,6 +2473,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, incognito side-data, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
+  "src/claws/provenance-runtime-read.kernel.ts", // Only openclaw-state-worker-runtime.ts reads consent rows; host imports are types.
   "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
   "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
@@ -2421,6 +2499,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/standing-intents-kernel.ts", // Standing-intent worker command dispatcher only.
 
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.

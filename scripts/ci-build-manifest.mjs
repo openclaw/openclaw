@@ -950,6 +950,13 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "scripts/generate-postgres-schema.mts",
+  "scripts/lib/postgres-schema-catalog.mts",
+  "test/scripts/generate-postgres-schema.test.ts",
+  "src/state/*schema*",
+  "src/state/openclaw-state-db-contract.ts",
+  "src/state/postgres-schema.generated/**",
+  "src/cron/store/runtime-authority-store.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
@@ -1334,7 +1341,7 @@ const additionalChecks = [
   {
     check_name: "check-additional-extension-package-boundary",
     group: "extension-package-boundary",
-    runner: "blacksmith-32vcpu-ubuntu-2404",
+    runner: frozenTarget ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
   },
   {
     check_name: "check-additional-runtime-topology-architecture",

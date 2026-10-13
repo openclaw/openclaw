@@ -7,10 +7,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
 import {
   getSubagentRunsForRequesterSession,
@@ -47,7 +44,6 @@ export async function recoverInterruptedSubagentRow(
     });
     return { status: "deferred" };
   }
-  warnLegacySubagentAuthority(entry, params.warn);
   let expectedObservation = entry;
   const childSessionKey = entry.childSessionKey.trim();
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();

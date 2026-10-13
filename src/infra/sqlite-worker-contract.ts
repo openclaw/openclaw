@@ -2,6 +2,7 @@ import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_SOURCE_FENCE,
@@ -11,6 +12,18 @@ import type { SqliteWalCheckpointSnapshot } from "./sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
+
+export type SqliteWorkerRequestCustodyDescriptor = {
+  slot: Int32Array<SharedArrayBuffer>;
+  request: Int32Array<SharedArrayBuffer>;
+};
+
+export type SqliteWorkerAdmissionRequest = {
+  stage: "open" | "prepare" | "transaction" | "commit";
+  facts: unknown;
+  /** Opt-in wait budget in milliseconds; omission retains the live-owner wait. */
+  deadlineMs?: number;
+};
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 /** Process-private locator; live owner admission remains separate from this identity. */
@@ -73,8 +86,10 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   stateDatabasePath?: string;
   databaseAdmissions?: SqliteDatabaseAdmissions;
+  timing?: DiagnosticWorkerRequestFields["timing"];
 } & (
   | {
       type: "open";
@@ -96,6 +111,7 @@ export type SqliteWorkerRequest = {
 
 export type SqliteWorkerReply = {
   id: number;
+  timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
   databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (

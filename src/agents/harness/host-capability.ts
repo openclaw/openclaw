@@ -683,7 +683,7 @@ export function createAgentHarnessHostCapabilities(params: {
   return {
     capabilities,
     setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
-    runWithScope: (run) => {
+    runWithScope: async (run) => {
       const preparedCaller = getGatewayToolCallerIdentity();
       if (preparedCaller?.operationalRunInstance === operationalRunInstance) {
         personalToolParticipants ??= preparedCaller.personalToolParticipants;
@@ -691,21 +691,25 @@ export function createAgentHarnessHostCapabilities(params: {
           callerIdentity.personalToolParticipants = personalToolParticipants;
         }
       }
-      const nodeAuthorities = createSessionNodeAuthorities(
+      const { release, ...nodeAuthorities } = await createSessionNodeAuthorities(
         attempt,
         params.pluginId,
         requiredNodeCommands,
         assertActive,
         bindAbortSignal(attempt.abortSignal),
       );
-      return withPluginRuntimeGatewayRequestScope(
-        {
-          isWebchatConnect: () => false,
-          ...getPluginRuntimeGatewayRequestScope(),
-          ...nodeAuthorities,
-        },
-        run,
-      );
+      try {
+        return await withPluginRuntimeGatewayRequestScope(
+          {
+            isWebchatConnect: () => false,
+            ...getPluginRuntimeGatewayRequestScope(),
+            ...nodeAuthorities,
+          },
+          run,
+        );
+      } finally {
+        release?.();
+      }
     },
     close: () => {
       if (!active) {

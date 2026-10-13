@@ -219,7 +219,6 @@ export function createSubagentRegistryRestorer(config: {
       if (authority.status === "mismatch") {
         continue;
       }
-      warnLegacySubagentAuthority(entry, warn);
       if (entry.collect && entry.execution.status === "queued") {
         const { childSessionIdentity: cleanupSessionEntry, queuedLaunch: launch } = entry;
         if (!launch || authority.status === "legacy-unverified") {
@@ -388,6 +387,7 @@ export function createSubagentRegistryRestorer(config: {
           await restoreSubagentRunMetadata(runs, stateContext, assertCurrent);
           assertCurrent();
         }
+        warnLegacySubagentAuthority(runs.values(), warn);
         await completeRestore();
       } catch (err) {
         if (restoreState !== "succeeded") {
@@ -425,7 +425,6 @@ export function createSubagentRegistryRestorer(config: {
       if (authority.status === "mismatch") {
         return false;
       }
-      warnLegacySubagentAuthority(entry, warn);
       // Descriptorless restore failures enter here without onStartFailure; their
       // provisional session must survive the same pending cancellation receipt.
       for (

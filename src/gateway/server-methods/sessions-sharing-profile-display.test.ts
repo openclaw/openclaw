@@ -73,7 +73,13 @@ describe("sharing owner display", () => {
       );
       const context = sessionSharingTestContext(vi.fn());
       const client = identifiedClient(profile.id, "Old login name");
-      for (const name of ["Current owner", "Renamed owner"]) {
+      for (const [index, name] of ["Current owner", "Renamed owner"].entries()) {
+        const directoryEmail = `directory-only-${index}@example.test`;
+        const directoryOnly = ensureProfileForEmail(directoryEmail);
+        expect(setDisplayName(directoryOnly.id, null)).toMatchObject({
+          displayName: null,
+          githubIdentity: null,
+        });
         setDisplayName(profile.id, name);
         const responses = await callSessionSharingHandler(
           "session.members.listEvidence",
@@ -86,6 +92,7 @@ describe("sharing owner display", () => {
           owner: { id: profile.id, label: name, identity: { type: "profile", id: profile.id } },
           identities: expect.arrayContaining([
             expect.objectContaining({ id: profile.id, label: name }),
+            expect.objectContaining({ id: directoryOnly.id, label: directoryEmail }),
           ]),
           role: "owner",
         });

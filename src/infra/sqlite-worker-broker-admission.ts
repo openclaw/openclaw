@@ -203,6 +203,27 @@ export function retainSqliteWorkerAdmissionPathReferences(actor: Actor, paths: S
   };
 }
 
+/** All clients of one shared actor suspend its timer while maintenance retains it. */
+export function suspendSqliteWorkerScheduledMaintenance(
+  actor: Actor,
+  maintenanceScope: PreparedSqliteWorkerOpen["maintenanceScope"],
+): (() => void) | undefined {
+  if (!actor.stateContext) {
+    return undefined;
+  }
+  const buffer = (actor.stateContext.scheduledMaintenanceSuspension ??= new SharedArrayBuffer(
+    Int32Array.BYTES_PER_ELEMENT,
+  ));
+  if (!maintenanceScope) {
+    return undefined;
+  }
+  const holds = new Int32Array(buffer);
+  Atomics.add(holds, 0, 1);
+  return () => {
+    Atomics.sub(holds, 0, 1);
+  };
+}
+
 export async function resolveOpenedSqliteWorkerIdentity(
   databasePath: string,
   previous: DatabasePathIdentity,
@@ -294,6 +315,9 @@ export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: J
   if (actor && stateContext) {
     assertSqliteWorkerActorStateContext(actor, stateContext);
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
-    request.stateContext = stateContext;
+    request.stateContext = {
+      ...stateContext,
+      scheduledMaintenanceSuspension: actor.stateContext?.scheduledMaintenanceSuspension,
+    };
   }
 }
