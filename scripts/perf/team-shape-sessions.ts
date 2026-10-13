@@ -6,7 +6,11 @@ import { replaceSessionOwnerInTransaction } from "../../src/config/sessions/sess
 import { recordSessionParticipantFromWorker } from "../../src/config/sessions/session-accessor.sqlite-participants.native.js";
 import { appendTranscriptEventsInTransaction } from "../../src/config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
+import { executeSqliteQuerySync } from "../../src/infra/kysely-sync.js";
 import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
+import { userProfilesDb } from "../../src/state/user-profiles-internal.js";
+import { ensureUserProfilesSchema } from "../../src/state/user-profiles-schema.js";
 
 export type TeamShapeSession = { sessionKey: string; sessionId: string };
 
@@ -49,6 +53,30 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   }
   const env = { ...process.env, OPENCLAW_STATE_DIR: options.stateDir };
   const databaseOptions = { agentId: "main", env };
+  ensureUserProfilesSchema({ env });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // Fixed fixture identities keep owner/participant lookups populated and reproducible.
+      executeSqliteQuerySync(
+        db,
+        userProfilesDb(db)
+          .insertInto("user_profiles")
+          .values(
+            Array.from({ length: 24 }, (_, index) => ({
+              id: `team-shape-profile-${index}`,
+              display_name: `Synthetic teammate ${index}`,
+              avatar: null,
+              avatar_mime: null,
+              avatar_sha256: null,
+              merged_into: null,
+              created_at: options.now,
+              updated_at: options.now,
+            })),
+          ),
+      );
+    },
+    { env },
+  );
   const digest = createHash("sha256").update(String(options.seed)).digest();
   let randomState = digest.readUInt32LE(0);
   const random = () => {
@@ -140,7 +168,12 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     let messageIndex = 0;
     let parentId: string | null = null;
     let events: TranscriptEvent[] = [
-      { type: "session", version: 3, id: session.sessionId, timestamp: timestamps[index]! },
+      {
+        type: "session",
+        version: 3,
+        id: session.sessionId,
+        timestamp: new Date(timestamps[index]!).toISOString(),
+      },
     ];
     let batchBytes = 0;
     const flush = () => {
@@ -163,10 +196,11 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
         type: "message",
         id,
         parentId,
-        timestamp: timestamps[index]!,
+        timestamp: new Date(timestamps[index]!).toISOString(),
         message: {
           role: messageIndex % 2 === 0 ? "user" : "assistant",
           content: [{ type: "text", text }],
+          timestamp: timestamps[index]!,
         },
       });
       parentId = id;

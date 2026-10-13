@@ -108,6 +108,7 @@ describe("Team-shaped fixture CLI", () => {
       expect(agent.prepare("SELECT count(*) AS n FROM session_participants").get()).toEqual({
         n: 60,
       });
+      expect(state.prepare("SELECT count(*) AS n FROM user_profiles").get()).toEqual({ n: 24 });
       expect(state.prepare("SELECT count(*) AS n FROM subagent_runs").get()).toEqual({ n: 20 });
       expect(state.prepare("SELECT count(*) AS n FROM worktrees").get()).toEqual({ n: 1 });
       expect(state.prepare("SELECT count(*) AS n FROM projects").get()).toEqual({ n: 1 });

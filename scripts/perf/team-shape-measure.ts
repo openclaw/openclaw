@@ -45,12 +45,26 @@ try {
   });
   const timings: number[] = [];
   let responseBytes = 0;
+  let returnedSessions = 0;
+  let totalSessions = 0;
   let firstCallMs = 0;
   // First call includes cold projection cost; five warmups precede steady-state samples.
   for (let index = 0; index < samples + 5; index++) {
     const start = performance.now();
     const result = await request("sessions.list", { limit, rowMode: "compact", archived: "all" });
     const elapsed = performance.now() - start;
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !("count" in result) ||
+      typeof result.count !== "number" ||
+      !("totalCount" in result) ||
+      typeof result.totalCount !== "number"
+    ) {
+      throw new Error("sessions.list returned no session counts");
+    }
+    returnedSessions = result.count;
+    totalSessions = result.totalCount;
     if (index === 0) {
       firstCallMs = elapsed;
     }
@@ -74,6 +88,8 @@ try {
         p95Ms: percentile(0.95),
         p99Ms: percentile(0.99),
         responseBytes,
+        returnedSessions,
+        totalSessions,
       },
       null,
       2,
