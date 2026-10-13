@@ -32,7 +32,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
@@ -3227,7 +3226,6 @@ describe("chat attachment picker", () => {
   });
 
   it("infers video preview glyphs from filenames when MIME is absent", async () => {
-    vi.spyOn(attachmentPayloadStore, "getChatAttachmentVideoPosterUrl").mockReturnValue(null);
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
