@@ -51,6 +51,7 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
+// mock-isolation: Capture Windows environment routing without opening SQLite or touching disk.
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   executeExistingOpenClawStateRead: mocks.read,
 }));
