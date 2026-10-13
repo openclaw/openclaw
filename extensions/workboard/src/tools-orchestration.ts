@@ -105,7 +105,8 @@ export function createWorkboardOrchestrationTools(params: {
     {
       name: "workboard_stats",
       label: "Workboard Stats",
-      description: "Summarize Workboard counts by status and assignee for one board or all boards.",
+      description:
+        "Summarize Workboard counts by status and assignee for one board or all boards; byStatus includes archived cards, activeByStatus and archivedByStatus split the same scope.",
       parameters: strictObject({
         boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
       }),
