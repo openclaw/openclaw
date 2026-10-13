@@ -1,3 +1,5 @@
+import type { ConfiguredModelProviderRequest } from "../config/types.provider-request.js";
+
 /** Auth override accepted from sanitized provider/model request config. */
 export type ProviderRequestAuthOverride =
   | {
@@ -43,6 +45,12 @@ export type ProviderRequestTransportOverrides = {
   tls?: ProviderRequestTlsOverride;
 };
 
+/** Rate-limit override accepted from sanitized provider/model request config. */
+export type ProviderRequestRateLimitOverride = NonNullable<
+  ConfiguredModelProviderRequest["rateLimit"]
+>;
+
 export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
   allowPrivateNetwork?: boolean;
+  rateLimit?: ProviderRequestRateLimitOverride;
 };

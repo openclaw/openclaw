@@ -5,6 +5,7 @@ import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { ENVIRONMENT_FIELD_LABELS } from "./schema.labels.environment.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
+import { PROVIDER_REQUEST_FIELD_LABELS } from "./schema.labels.provider-request.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -437,9 +438,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.request.tls.cert": "Model Provider Request TLS Cert",
   "models.providers.*.request.tls.key": "Model Provider Request TLS Key",
   "models.providers.*.request.tls.passphrase": "Model Provider Request TLS Passphrase",
-  "models.providers.*.request.tls.serverName": "Model Provider Request TLS Server Name",
-  "models.providers.*.request.tls.insecureSkipVerify": "Model Provider Request TLS Skip Verify",
-  "models.providers.*.request.allowPrivateNetwork": "Model Provider Request Allow Private Network",
+  ...PROVIDER_REQUEST_FIELD_LABELS,
   "models.providers.*.models": "Model Provider Model List",
   "models.providers.*.models[].agentRuntime": "Model Runtime",
   "models.providers.*.models[].agentRuntime.id": "Model Runtime ID",

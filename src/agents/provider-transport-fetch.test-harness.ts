@@ -12,6 +12,7 @@ const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
   ensureModelProviderLocalServiceMock,
+  getModelProviderRequestTransportMock,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
@@ -54,6 +55,7 @@ const {
     >(() => undefined),
     fetchWithSsrFGuardMock: vi.fn(),
     ensureModelProviderLocalServiceMock: vi.fn(),
+    getModelProviderRequestTransportMock: vi.fn<(model: unknown) => unknown>(() => undefined),
     mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
       ...current,
       ...overrides,
@@ -88,33 +90,37 @@ vi.mock("./provider-local-service.js", () => ({
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
   getModelProviderRequestRouteFacts: vi.fn(() => undefined),
-  getModelProviderRequestTransport: vi.fn(() => undefined),
+  getModelProviderRequestTransport: getModelProviderRequestTransportMock,
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
 }));
 
 // Static re-exports can load the transport before Vitest installs these mocks.
-const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+const { buildGuardedModelFetch, testing } = await import("./provider-transport-fetch.js");
 export {
   buildGuardedModelFetch,
   buildProviderRequestDispatcherPolicyMock,
   ensureModelProviderLocalServiceMock,
   fetchWithSsrFGuardMock,
+  getModelProviderRequestTransportMock,
   managedStreamCleanupRegistrations,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
+  testing,
 };
 
 export function installProviderTransportFetchTestHooks() {
   beforeEach(() => {
     managedStreamCleanupRegistrations.length = 0;
+    testing.resetProviderRequestRateLimitBucketsForTests();
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
     ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
+    getModelProviderRequestTransportMock.mockReset().mockReturnValue(undefined);
     buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
     mergeModelProviderRequestOverridesMock.mockClear();
     resolveProviderRequestPolicyConfigMock
