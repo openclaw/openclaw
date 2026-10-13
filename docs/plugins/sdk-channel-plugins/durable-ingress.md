@@ -119,7 +119,7 @@ or non-replay transport, and cover the retention contract with tests.
 Drain dispatch runs command side effects before the ingress row reaches its
 completion tombstone. A process crash between those steps replays the row and
 can execute the side effect again. This at-least-once crash window is the
-default contract. For non-idempotent work such as config writes, storage
+default contract. For work that is not safe to repeat such as config writes, storage
 clears, or visible acknowledgements outside the reply lane, use
 `createIngressEffectOnce(...)` from
 `openclaw/plugin-sdk/ingress-effect-once`. Give each call the stable ingress
@@ -211,7 +211,7 @@ For channels using the durable ingress drain, the account monitor's stop path
 must first settle all accepted transport admissions, then dispose and await its
 drain. Starting the account opens the same account-keyed queue, whose initial
 drain recovers undispatched durable rows. Do not add a second reload-specific
-replay pass; queue recovery is the canonical restart path.
+replay pass; queue recovery is the standard restart path.
 
 When replacing a known transport identity whose event IDs can overlap the previous
 identity, await the core-provided queue's `purge()` before resetting its transport

@@ -21,7 +21,7 @@ records remaining main-thread call sites and the ratchet that prevents growth.
 PostgreSQL shared-state generation requires PostgreSQL 16+, preserves lazy feature
 fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
-for catalog equivalence and the explicit v22 pending-promotion exceptions.
+for catalog equivalence and the portable v22 identity columns.
 
 The Gateway process is the single owner of every OpenClaw database and its state.
 Its workers and native handles share that ownership. Committed write receipts
@@ -34,6 +34,12 @@ keep a transaction when their results require one consistent snapshot.
 CLI, Doctor, cron, and plugin child processes must route mutations through the
 Gateway or acquire exclusive ownership while it is stopped. First admission,
 migration, repair, and final live-authority checks retain their existing owners.
+
+Admitted updater mutation guards read current recovery rows directly rather than
+starting a synchronous snapshot subprocess for every effect. Explicit
+artifact-preserving inspection still uses private snapshots. Initial recovery
+admission, finalization checks, executor authority, and refusal of newly committed
+recovery remain unchanged; no recovery decision is cached across an await.
 
 Agent deletion status is loaded on first admission and retained per agent in the
 physical shared database's process-owned facts. Journal writers publish pending,

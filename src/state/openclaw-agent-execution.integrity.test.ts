@@ -149,6 +149,22 @@ function createNativeGeneration(
   );
 }
 
+function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent,
+    createAdmission: (binding) => () => ({
+      nativeLocations: binding.nativeLocations,
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        binding.authorize(request);
+        assertCurrent();
+        if (!grant()) {
+          throw new Error("Native integrity fixture lost its retained admission");
+        }
+      }, binding.attachment),
+    }),
+  };
+}
+
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
   async (outcome) => {
@@ -163,19 +179,7 @@ it.each(["confirmed close", "native exit"] as const)(
     expect(hostLeases).toHaveLength(1);
     const context = captureOpenClawStateWorkerContext({ env });
     const assertCurrent = () => context.admission.assertCurrent();
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent,
-      createAdmission: (binding) => () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          assertCurrent();
-          if (!grant()) {
-            throw new Error("Native close fixture lost admission");
-          }
-        }, binding.attachment),
-      }),
-    };
+    const source = createNativeSource(assertCurrent);
     const generation = createNativeGeneration(
       database.agentId,
       database.path,
@@ -330,21 +334,7 @@ it.each(["settled", "pending"] as const)(
   async (timing) => {
     const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-prepare-missing-")) };
     const execution = captureOpenClawAgentDatabaseExecution({ agentId: "main", env });
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: () => execution.assertCurrent(),
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            execution.assertCurrent();
-            if (!grant()) {
-              throw new Error("Missing database fixture lost admission");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
+    const source = createNativeSource(() => execution.assertCurrent());
     try {
       const missing = execution.runExisting(source, async () => "unexpected");
       if (timing === "settled") {
@@ -375,19 +365,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   const bytes = fs.readFileSync(pathname);
   const context = captureOpenClawStateWorkerContext({ env });
   const assertCurrent = () => context.admission.assertCurrent();
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent,
-    createAdmission: (binding) => () => ({
-      nativeLocations: binding.nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        binding.authorize(request);
-        assertCurrent();
-        if (!grant()) {
-          throw new Error("External store fixture lost its admission");
-        }
-      }, binding.attachment),
-    }),
-  };
+  const source = createNativeSource(assertCurrent);
   const generation = createNativeGeneration("main", pathname, context, assertCurrent);
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
@@ -424,6 +402,10 @@ it.each([
   "closed-host-blocked-last",
   "closed-host-revoked",
   "closed-host-replaced",
+  "closed-host-dirty-receipt-verifier",
+  "closed-host-dirty-receipt-stopped-verifier",
+  "closed-host-dirty-receipt-rollback-verifier",
+  "closed-host-dirty-receipt-revoked-verifier",
   "closed-host-no-receipt",
   "closed-host-no-receipt-verifier",
   "closed-host-no-receipt-rollback-verifier",
@@ -439,8 +421,9 @@ it.each([
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
   const missingReceipt = proof.startsWith("closed-host-no-receipt");
+  const dirtyReceipt = proof.startsWith("closed-host-dirty-receipt");
   const siblingLease =
-    (closedHost && !missingReceipt && proof !== "closed-host-blocked-last") ||
+    (closedHost && !missingReceipt && !dirtyReceipt && proof !== "closed-host-blocked-last") ||
     proof.startsWith("two-leases")
       ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
       : undefined;
@@ -460,7 +443,7 @@ it.each([
   const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
     ? undefined
     : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
+  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last" || dirtyReceipt) {
     database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
     const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
     try {
@@ -469,7 +452,7 @@ it.each([
         .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
         .get();
       database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
       expect(database.db.isOpen).toBe(false);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {
@@ -477,6 +460,15 @@ it.each([
     }
   } else if (closedHost) {
     closeOpenClawAgentDatabaseByPath(database.path);
+  }
+  if (dirtyReceipt) {
+    clearOpenClawAgentDatabaseValidationCache(database.path);
+    if (proof === "closed-host-dirty-receipt-rollback-verifier") {
+      using writer = openNodeSqliteDatabase(database.path);
+      writer.exec("PRAGMA journal_mode=DELETE");
+    } else if (proof === "closed-host-dirty-receipt-revoked-verifier") {
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+    }
   }
   if (proof === "closed-host-no-receipt-revoked-verifier") {
     clearOpenClawAgentIntegrityVerification(database.path, env);
@@ -492,7 +484,10 @@ it.each([
   const verifier = proof.endsWith("verifier")
     ? verification.startOpenClawDatabaseIntegrityVerifier({ env })
     : undefined;
-  if (proof === "closed-host-no-receipt-stopped-verifier") {
+  if (
+    proof === "closed-host-no-receipt-stopped-verifier" ||
+    proof === "closed-host-dirty-receipt-stopped-verifier"
+  ) {
     await verifier!.stop();
   }
   const assertCurrent = () => {
@@ -576,6 +571,22 @@ it.each([
       store.close();
     }
   }
+  const verified = createDeferredCore();
+  const applyResults = verificationImplementation.applyOpenClawDatabaseVerificationResults;
+  const application =
+    proof === "closed-host-dirty-receipt-verifier"
+      ? vi
+          .spyOn(verificationImplementation, "applyOpenClawDatabaseVerificationResults")
+          .mockImplementation(async (options) => {
+            try {
+              await applyResults(options);
+              verified.resolve();
+            } catch (error) {
+              verified.reject(error);
+              throw error;
+            }
+          })
+      : undefined;
   const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
     if (proof === "closed-host-no-receipt-retired-verifier") {
@@ -606,7 +617,10 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    if (proof === "closed-host-no-receipt-verifier") {
+    if (
+      proof === "closed-host-no-receipt-verifier" ||
+      proof === "closed-host-dirty-receipt-verifier"
+    ) {
       expect(integrityCheck).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           path: database.path,
@@ -623,6 +637,7 @@ it.each([
         proof === "closed-host-blocked" ||
         proof === "closed-host-blocked-last" ||
         proof === "closed-host-no-receipt-verifier" ||
+        proof === "closed-host-dirty-receipt-verifier" ||
         proof === "two-leases" ||
         proof === "two-leases-unknown-owner" ||
         proof === "two-leases-missing-metadata" ||
@@ -630,10 +645,15 @@ it.each([
         ? [0, 0]
         : [1, 1],
     );
+    if (proof === "closed-host-dirty-receipt-verifier") {
+      await verified.promise;
+      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+    }
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
     integrityCheck.mockRestore();
     await verifier?.stop();
+    application?.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -643,7 +663,7 @@ it.each([
       }
     }
   }
-  if (proof === "closed-host-blocked-last") {
+  if (proof === "closed-host-blocked-last" || proof === "closed-host-dirty-receipt-verifier") {
     expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
   }
 });
@@ -768,19 +788,7 @@ it.runIf(process.platform === "linux")(
           throw new Error("Crash fixture admission revoked");
         }
       };
-      const source: AgentDatabaseRequestExecutionSource = {
-        assertCurrent,
-        createAdmission: (binding) => () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            assertCurrent();
-            if (!grant()) {
-              throw new Error("Crash fixture lost its current native admission");
-            }
-          }, binding.attachment),
-        }),
-      };
+      const source = createNativeSource(assertCurrent);
       const execution = idle
         ? captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env })
         : undefined;

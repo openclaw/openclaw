@@ -1,6 +1,7 @@
 -- Generated runtime DDL; the owner supplies search_path and the transaction.
 
 CREATE TABLE "execution_decision_facts" (
+  "cursor_id" bigint NOT NULL,
   "receipt_id" text COLLATE "C" NOT NULL,
   "context_id" text COLLATE "C" NOT NULL,
   "execution_id" text COLLATE "C" NOT NULL,
@@ -34,5 +35,7 @@ CREATE TABLE "execution_decision_facts" (
 );
 
 CREATE INDEX "execution_decision_facts_context_occurred_idx" ON "execution_decision_facts" (("context_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
+
+CREATE UNIQUE INDEX "execution_decision_facts_cursor_id_idx" ON "execution_decision_facts" (("cursor_id") ASC NULLS FIRST);
 
 CREATE INDEX "execution_decision_facts_run_occurred_idx" ON "execution_decision_facts" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);

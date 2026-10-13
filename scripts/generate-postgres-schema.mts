@@ -33,18 +33,7 @@ const MINIMUM_POSTGRES_VERSION = 16;
 const WORKBOARD_OUTPUT = "extensions/workboard/src/workboard-schema.postgres.sql";
 const WORKBOARD_PORT_OUTPUT = "src/infra/database-engine/workboard-port.generated.json";
 const OUTPUT = "src/state/postgres-schema.generated";
-export const pendingPromotion = Object.freeze([
-  {
-    name: "idx_acp_sessions_resume_agent",
-    reason:
-      "v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column",
-  },
-  {
-    name: "idx_acp_sessions_resume_acpx",
-    reason:
-      "v22 promotion follow-up PR4b (#169254): derive the ACP resume value once and index its promoted column",
-  },
-]);
+export const pendingPromotion: readonly { name: string; reason: string }[] = Object.freeze([]);
 export const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
   column,
   reason: "PostgreSQL text cannot hold NUL; the guard is enforced by the type.",

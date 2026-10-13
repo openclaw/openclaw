@@ -167,7 +167,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     }
     if (canonical && !canonical.buffer.equals(legacy.backup.bytes)) {
       return warn(
-        "WhatsApp canonical credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
+        "WhatsApp current credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
         true,
       );
     }
@@ -199,7 +199,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     const previous = await receipts.lookup(sourceIdentity);
     if (previous && (!canonical || previous.targetDigest !== credentialSetDigest(targetFiles))) {
       return warn(
-        "WhatsApp credential migration previously started, but its complete canonical credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
+        "WhatsApp credential migration previously started, but its complete current credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
         Boolean(canonical),
       );
     }
@@ -256,7 +256,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       const target = await credentials.read(relativePath);
       if (!target.buffer.equals(backup.bytes)) {
         throw new Error(
-          "WhatsApp canonical credentials changed during import; original files retained.",
+          "WhatsApp current credentials changed during import; original files retained.",
         );
       }
       targets.push({
@@ -281,7 +281,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
           !current.buffer.equals(target.buffer)
         ) {
           throw new Error(
-            "WhatsApp canonical credentials changed during import; original backup retained.",
+            "WhatsApp current credentials changed during import; original backup retained.",
           );
         }
         return undefined;

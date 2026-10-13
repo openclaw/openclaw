@@ -144,8 +144,19 @@ export async function markRestartAbortedMainSessions(params: {
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const result = { marked: 0, skipped: 0 };
   const skipReasons = new Map<string, number>();
-  const recordSkip = (reason: string) => {
+  const skippedSessions = new Set<string>();
+  const markedSessions = new Set<string>();
+  const recordSkip = (reason: string, sessionKey: string) => {
     skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+    if (skippedSessions.has(sessionKey)) {
+      return;
+    }
+    skippedSessions.add(sessionKey);
+    if (skippedSessions.size <= 100) {
+      mainSessionRecoveryLog.warn(
+        `skipped restart recovery session: ${JSON.stringify({ sessionKey: sessionKey.slice(0, 256), reason })}`,
+      );
+    }
   };
   // Channel work can outlive its chat-run registration. The admission owner
   // retains the authoritative store and session identities until the turn releases.
@@ -238,7 +249,7 @@ export async function markRestartAbortedMainSessions(params: {
               sessionId: entry.sessionId,
             });
             if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
-              recordSkip("owner_changed");
+              recordSkip("owner_changed", sessionKey);
               return undefined;
             }
             if (
@@ -247,11 +258,11 @@ export async function markRestartAbortedMainSessions(params: {
                 requester,
               })
             ) {
-              recordSkip("yielded_continuation");
+              recordSkip("yielded_continuation", sessionKey);
               return undefined;
             }
             if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
-              recordSkip("not_main_session");
+              recordSkip("not_main_session", sessionKey);
             }
             const runs = normalizeMainSessionRecoveryRunFences([
               ...(entry.restartRecoveryRuns ?? []).filter(
@@ -284,17 +295,30 @@ export async function markRestartAbortedMainSessions(params: {
         });
         result.marked += storeResult.marked;
         result.skipped += storeResult.skipped;
+        if (storeResult.marked > 0) {
+          markedSessions.add(selectedSessionKey);
+        }
       } catch (error) {
         assertAgentRunLifecycleGenerationCurrent(currentLifecycleGeneration);
         if (!isCurrent || isCurrent()) {
           throw error;
         }
         result.skipped++;
-        recordSkip("owner_changed");
+        recordSkip("owner_changed", selectedSessionKey);
       }
     }
   }
 
+  for (const run of activeRuns) {
+    if (!markedSessions.has(run.sessionKey) && !skippedSessions.has(run.sessionKey)) {
+      recordSkip("no_matching_session", run.sessionKey);
+    }
+  }
+  if (skippedSessions.size > 100) {
+    mainSessionRecoveryLog.warn(
+      `restart recovery skip diagnostics omitted ${skippedSessions.size - 100} additional session(s)`,
+    );
+  }
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(
       `marked ${result.marked} interrupted main session(s) for restart recovery${

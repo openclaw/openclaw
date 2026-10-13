@@ -471,9 +471,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
   const admission = observeColdAdmission(f.databaseOptions.path, "historical-check");
   archiveHook.afterMaterialize = () => {
     archiveHook.afterMaterialize = undefined;
-    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions), {
-      eviction: true,
-    });
+    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions));
     invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
     clearOpenClawAgentIntegrityVerification(f.databaseOptions.path, f.databaseOptions.env);
     admission.armHistoricalCheck();

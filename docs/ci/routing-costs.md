@@ -41,8 +41,9 @@ Current package-boundary checks request the Blacksmith 16-class in both the
 additional-check matrix and the shared SDK producer. Frozen targets retain the
 32-class. The existing two-CPU reservation admits two compilers on the observed
 four-CPU 16-class allocation, versus four on the eight-CPU 32-class allocation.
-The 30-minute deadline and compiler, canary, hosted, retry, trust, and cache
-policies remain unchanged; this adds no jobs or registrations.
+Compiler, canary, hosted, retry, trust, and cache policies remain unchanged;
+this adds no jobs or registrations. The additional-check row has a 40-minute
+deadline; the SDK producer keeps its own budget.
 
 The October 13 sizing review covered 2,063 boundary jobs in the preceding
 24 hours. On the 32-class, median and p95 peak memory were 26.35% and 27.66%

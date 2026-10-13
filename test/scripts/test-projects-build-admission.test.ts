@@ -1292,7 +1292,7 @@ describe("test-projects build admission", () => {
           path.resolve("dist/control-ui"),
           "rebuilt-runtime",
         );
-        assetBuildId = commands.runtimeBuildId;
+        assetBuildId = commands.prepare.mock.lastCall?.[0].env.OPENCLAW_CONTROL_UI_BUILD_ID;
       } finally {
         runtime.resolve(mixed ? { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" } : 0);
         ui?.resolve(0);

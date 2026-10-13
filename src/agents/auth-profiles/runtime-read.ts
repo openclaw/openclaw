@@ -249,7 +249,7 @@ export function createAuthProfileStoreRuntimeReader({
     );
     // Capture every selected source before yielding, including an absent inherited database.
     const credentialProfileId =
-      !scope.isolated && profileId && !isUserModelAuthProfileId(profileId) ? profileId : undefined;
+      profileId && !isUserModelAuthProfileId(profileId) ? profileId : undefined;
     const credentialAuthorities = new Map(
       credentialProfileId
         ? [...agentReads].map(([databasePath, reader]) => {
@@ -325,7 +325,21 @@ export function createAuthProfileStoreRuntimeReader({
       preparedReader.assertCurrent();
       rowsByPath.set(databasePath, rows);
       const store = inCapturedScope(() =>
-        loadAuthProfileStoreForAgent(ownerAgentDir, requestOptions, env, rows),
+        loadAuthProfileStoreForAgent(
+          ownerAgentDir,
+          {
+            ...requestOptions,
+            onReadOwner: requestOptions.onReadOwner
+              ? (owner) =>
+                  requestOptions.onReadOwner?.({
+                    ...owner,
+                    readCurrentCredential: credentialAuthority?.readCurrentCredential,
+                  })
+              : undefined,
+          },
+          env,
+          rows,
+        ),
       );
       demand.owner = {
         databasePath,

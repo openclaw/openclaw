@@ -1,6 +1,6 @@
 import { statSync } from "node:fs";
 import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
-import { isSqliteWalWorkerMaintained } from "../infra/sqlite-wal-write-admission.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { releaseAgentCreationClaimHandle } from "./agent-creation-claim.js";
 import { releaseAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
@@ -17,31 +17,26 @@ export function createAgentDatabaseHandleCloser(cache: {
   failures: ReadonlyMap<string, unknown>;
   idleTimers: WeakMap<OpenClawAgentDatabase["db"], Disposable>;
 }) {
-  return function closeCachedOpenClawAgentDatabase(
-    database: OpenClawAgentDatabase,
-    options: { eviction?: boolean } = {},
-  ): void {
-    // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
-    // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
+  return function closeCachedOpenClawAgentDatabase(database: OpenClawAgentDatabase): void {
+    // Retiring handles checkpoint once without waiting for peer readers.
     const lease = cache.leases.get(database.path);
     const alreadyClosed = !database.db.isOpen;
-    const delegated = isSqliteWalWorkerMaintained(database.db);
     const priorCheckpointError = database.walMaintenance.health?.state === "error";
     let clean: { path: string; identity: string } | undefined;
     let retainRuntimeProof: boolean;
     try {
+      if (!alreadyClosed) {
+        setSqliteBusyTimeout(database.db, 0);
+      }
       disposeNodeSqliteDependents(database.db);
-      const checkpointed = database.walMaintenance.close(
-        options.eviction ? { checkpointMode: "PASSIVE" } : undefined,
-      );
-      const healthy = !cache.failures.has(database.path);
-      const pathCurrent = !alreadyClosed && healthy && isOpenClawAgentDatabasePathCurrent(database);
-      // Delegated and reader-pinned closes retain runtime proof; restart proof needs a checkpoint.
-      retainRuntimeProof =
-        healthy &&
+      database.walMaintenance.close({ checkpointMode: "TRUNCATE" });
+      const healthy =
+        !cache.failures.has(database.path) &&
         !priorCheckpointError &&
-        (alreadyClosed ||
-          (pathCurrent && (delegated || database.walMaintenance.health?.state === "blocked")));
+        database.walMaintenance.health?.state !== "error";
+      const pathCurrent = !alreadyClosed && healthy && isOpenClawAgentDatabasePathCurrent(database);
+      // Healthy peer handles keep runtime proof; restart proof still needs an empty WAL.
+      retainRuntimeProof = healthy && (alreadyClosed || pathCurrent);
       if (database.db.isOpen) {
         database.db.close();
       }
@@ -49,10 +44,8 @@ export function createAgentDatabaseHandleCloser(cache: {
         const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
         // Native last-close may finish a checkpoint; a pinned WAL must remain unsealed.
         const closedWithEmptyWal =
-          delegated &&
-          !priorCheckpointError &&
           (statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0;
-        if (typeof identity === "string" && (checkpointed || closedWithEmptyWal)) {
+        if (typeof identity === "string" && closedWithEmptyWal) {
           clean = { path: database.path, identity };
         }
       }

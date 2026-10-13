@@ -12,6 +12,10 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+When the latest history page has no visible messages, for example because tool
+activity is hidden, the pane loads earlier history automatically. An incomplete
+history page does not show the new-chat welcome screen.
+
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
 option changes only that conversation. Explicit choices stay in this browser for this
@@ -23,6 +27,11 @@ rows expand to show the usual tool cards and output. Animated dots mark the curr
 working state, not completed work. Startup, approval, question, and subagent-wait
 controls keep their distinct presentation. Text appears as it arrives, including
 short fragments before a tool call or the final response.
+
+If an inactive run's saved history ends during tool use and has no terminal
+assistant message, Chat keeps its commentary and tool activity visible and marks
+the run **Interrupted**. This presentation does not resume the run or recover an
+answer that was never saved.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
