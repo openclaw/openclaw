@@ -323,7 +323,7 @@ function downgradeRichBlockTags(text: string): string {
     return offset + entityIndex * 3;
   };
   const lists: Array<{ name: string; next: number }> = [];
-  const items: Array<{ marker: number }> = [];
+  const items: number[] = [];
   const parts: string[] = [];
   let codeDepth = 0;
   let cursor = 0;
@@ -351,14 +351,10 @@ function downgradeRichBlockTags(text: string): string {
     const raw = text.slice(start, end);
     append(text.slice(cursor, start));
     cursor = end;
-    if (raw.startsWith("<")) {
-      if (tag.name === "code" || tag.name === "pre") {
-        codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-      }
-      append(raw);
-      continue;
+    if (raw.startsWith("<") && (tag.name === "code" || tag.name === "pre")) {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
     }
-    if (codeDepth > 0) {
+    if (raw.startsWith("<") || codeDepth > 0) {
       append(raw);
       continue;
     }
@@ -384,7 +380,7 @@ function downgradeRichBlockTags(text: string): string {
           boundary();
           const list = lists.at(-1);
           append("  ".repeat(Math.max(0, lists.length - 1)));
-          items.push({ marker: parts.length });
+          items.push(parts.length);
           append(list?.name === "ol" ? `${list.next++}. ` : "• ");
         }
         break;
@@ -393,8 +389,8 @@ function downgradeRichBlockTags(text: string): string {
         if (!tag.closing && attrs.get("type") === "checkbox") {
           const marker = attrs.has("checked") ? "[x] " : "[ ] ";
           const item = items.at(-1);
-          if (item) {
-            parts[item.marker] = marker;
+          if (item !== undefined) {
+            parts[item] = marker;
           } else {
             append(marker);
           }
