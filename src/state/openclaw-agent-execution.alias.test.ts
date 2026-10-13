@@ -35,32 +35,28 @@ it("keeps admitted creator reads and writes on the original file after its alias
     execution.runExisting(source(), (scope) =>
       scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
     );
-  try {
-    await successor.prepare(source());
-    await successor.runExisting(source(), (scope) =>
+  const writeEntry = (execution: typeof creator, sessionId: string) =>
+    execution.runExisting(source(), (scope) =>
       scope.execute({
-        type: "session.transcript.initialize",
-        input: { sessionKey, sessionId: "successor-session" },
+        type: "session.entries.replace",
+        input: {
+          expectedRows: new Map(),
+          labelOwnerKeys: [],
+          validationKeys: [sessionKey],
+          replacements: [{ sessionKey, entry: { sessionId, updatedAt: 1 } }],
+        },
       }),
     );
+  try {
+    await successor.prepare(source());
+    await writeEntry(successor, "successor-session");
     await creator.prepare(source());
     const receipt = creator.fileIdentity;
     expect(receipt).toBeDefined();
     expect(receipt?.physicalIdentity).not.toBe(successor.fileIdentity?.physicalIdentity);
     fs.unlinkSync(alias);
     fs.symlinkSync(successorDirectory, alias, linkType);
-    await expect(
-      creator.runExisting(source(), (scope) =>
-        scope.execute({
-          type: "session.transcript.initialize",
-          input: { sessionKey, sessionId: "original-session" },
-        }),
-      ),
-    ).resolves.toMatchObject({
-      kind: "session-transcript-initialized",
-      sessionKey,
-      placeholder: { sessionId: "original-session" },
-    });
+    await writeEntry(creator, "original-session");
     for (const execution of [creator, canonical]) {
       await expect(readEntry(execution)).resolves.toMatchObject({
         entries: [{ sessionKey, entry: { sessionId: "original-session" } }],

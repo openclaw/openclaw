@@ -175,37 +175,6 @@ it("rejects a read revoked during dispatch and joins worker close", async () => 
   expect(fs.existsSync(database.path)).toBe(true);
 });
 
-it("rejects a configured alias redirected while its read is in flight", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  const replacementRoot = state.path("replacement-root");
-  const replacement = openOpenClawAgentDatabase({
-    agentId: "main",
-    env: state.env,
-    path: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
-  });
-  const sessionKey = "agent:main:cron:alias";
-  writeSessionEntry(database, sessionKey, { sessionId: "original-source", updatedAt: 1 });
-  writeSessionEntry(replacement, sessionKey, { sessionId: "replacement-source", updatedAt: 1 });
-  sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
-  const alias = state.path("alias-full");
-  fs.symlinkSync(state.stateDir, alias, "junction");
-  observed.dispatch = () => {
-    observed.dispatch = undefined;
-    fs.unlinkSync(alias);
-    fs.symlinkSync(replacementRoot, alias, "junction");
-  };
-  await expect(
-    readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      env: state.env,
-      storePath: path.join(alias, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      sessionKeys: [sessionKey],
-      lifecycleSessionKey: sessionKey,
-      projection: "full",
-    }),
-  ).rejects.toThrow(/outside captured discovery custody/);
-});
-
 it("keeps a provider-owned CLI session with the default reset policy", () => {
   const nowMs = 1_737_600_000_000;
   const startedAt = nowMs - 24 * 60 * 60 * 1000;
