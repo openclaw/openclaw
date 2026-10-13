@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import {
@@ -14,7 +15,11 @@ import {
   retainSqliteDatabaseAdmissionLocation,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
-import { SqliteWorkerError, type SqliteWorkerAdmissionRequest } from "./sqlite-worker-contract.js";
+import {
+  SqliteWorkerError,
+  type SqliteWorkerAdmissionRequest,
+  type SqliteWorkerExecutionAuthority,
+} from "./sqlite-worker-contract.js";
 import {
   SQLITE_COLD_ADMISSION_PENDING,
   exchangeDatabaseAdmissions,
@@ -74,6 +79,28 @@ const commitObserverBindings = new WeakMap<
   SqliteWorkerOperationAdmission,
   (observer: CommitObserver) => void
 >();
+
+// Source and bundled callers can share one admission object in the same process.
+const executionAuthorities = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerExecutionAuthorities"),
+  () => new WeakMap<SqliteWorkerOperationAdmission, SqliteWorkerExecutionAuthority>(),
+);
+
+export function bindSqliteWorkerExecutionAuthority(
+  admission: SqliteWorkerOperationAdmission,
+  authority: SqliteWorkerExecutionAuthority,
+): void {
+  if (executionAuthorities.has(admission)) {
+    throw new SqliteWorkerError("SQLite execution authority is already bound", "closed");
+  }
+  executionAuthorities.set(admission, Object.freeze(authority));
+}
+
+export function readSqliteWorkerExecutionAuthority(
+  admission: SqliteWorkerOperationAdmission,
+): SqliteWorkerExecutionAuthority | undefined {
+  return executionAuthorities.get(admission);
+}
 
 /** Private publication binding leaves released SDK admission factories structurally unchanged. */
 export function observeSqliteWorkerCommittedFacts(

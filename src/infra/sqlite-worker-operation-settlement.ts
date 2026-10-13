@@ -9,6 +9,7 @@ import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   SqliteWorkerError,
   type SqliteWorkerAdmissionTimeoutError,
+  type SqliteWorkerExecutionAuthority,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
@@ -16,6 +17,7 @@ export type SqliteWorkerOperationContext = {
   port: MessagePort;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   attachment?: { value: unknown };
   refusal?: SqliteWorkerError | InstanceType<typeof SqliteWorkerAdmissionTimeoutError>;
   committed?: { facts: unknown };

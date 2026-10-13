@@ -3978,6 +3978,40 @@ export const en: TranslationMap & {
       lockedSessionModel: "Session model",
       thinkingLevel: "Chat thinking level",
     },
+    permissions: {
+      title: "Grant {permissions}",
+      neededOn: "OpenClaw needs access on {node} to continue this action.",
+      openApp:
+        "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
+      ready: "Access is available. You can ask the agent to try again.",
+      grant: "Grant {permissions}",
+      relaunch: "Relaunch OpenClaw",
+      tryAgain: "Try again",
+      retryMessage: "I granted {permissions}, try again.",
+      states: {
+        "not-determined": "Choose Grant to review the permission request.",
+        denied: "Choose Grant to open System Settings and allow access for OpenClaw.",
+        "restart-required":
+          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
+        "stale-grant":
+          "macOS may be using a stale permission grant. Choose Grant to review it in System Settings.",
+        "disabled-in-openclaw": "Choose Grant to review and enable this capability in OpenClaw.",
+      },
+      capabilities: {
+        notifications: "Notifications",
+        accessibility: "Accessibility",
+        eventPosting: "Event Posting",
+        screenRecording: "Screen Recording",
+        microphone: "Microphone",
+        speechRecognition: "Speech Recognition",
+        camera: "Camera",
+        cameraEnabled: "Camera in OpenClaw",
+        location: "Location",
+        computerControl: "Computer Control",
+        canvas: "Canvas",
+        automation: "Automation",
+      },
+    },
     toolCards: {
       tool: "Tool",
       canvas: "Canvas",

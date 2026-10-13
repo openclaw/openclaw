@@ -8,6 +8,12 @@ Gateway startup/tests needing only static descriptors must not load bundled plug
 - Add descriptor's core resolver, plugin artifact, mirrored full-plugin export together.
 - Reuse suite servers, authenticated contexts, clients unless proving fresh connect/auth; reset state explicitly. Manual-RPC tests: disable schedulers/pollers/background loops unless proving lifecycle.
 
+## Process-Owned Files
+
+- Gateway owns its files (auth profiles, agent/workspace identity, database identity, config): load once, serve from the owner's memory, update write-through on its own writes. Hot request paths never re-read, stat, or realpath them.
+- Rare external writers (CLI processes, Doctor, manual edits): one watcher per owner or the config reload watcher, never per-request checks. List writers that bypass the Gateway before caching.
+- Authority revalidates the owner's in-memory revision, not disk; a swapped/foreign database file must still be detected before the next privileged write.
+
 ## Best-Effort Callbacks And Telemetry
 
 - Network telemetry/callbacks off turn/token paths. Queue via lifecycle owner with bounds + visible overflow/coalescing.
