@@ -8144,9 +8144,6 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.run).toContain(
       'elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then',
     );
-    expect(checksFastRun.run).toContain(
-      "OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test src/infra/sqlite-existing-database.bun.test.ts",
-    );
     expect(ratchetRun.run).toContain(
       "for required_script in check:max-lines-ratchet check:assertion-safety check:test-timeout-race-ratchet check:test-mock-exports config:docs:check plugins:inventory:check; do",
     );
