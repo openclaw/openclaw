@@ -92,7 +92,7 @@ export class SidebarPeopleController implements ReactiveController {
 
   hostUpdated(): void {
     const { online, activityProfileIds } = sidebarPresenceScope(this.host);
-    const scope = JSON.stringify([online, ...Array.from(activityProfileIds).sort()]);
+    const scope = JSON.stringify([online, ...Array.from(activityProfileIds).toSorted()]);
     if (scope !== this.activityScope) {
       this.activityScope = scope;
       // New headers need deadlines; unchanged commits must retain pre-render wakeups.
