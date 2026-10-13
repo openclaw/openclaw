@@ -226,6 +226,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run-orchestrator.suspension.test.ts",
   "src/agents/embedded-agent-runner/run.cli-dispatch-lane.test.ts",
   "src/agents/embedded-agent-runner.run-embedded-agent.finalization-scope.test.ts",
+  "src/agents/embedded-agent-runner.source-reply-retry.test.ts",
   "src/skills/runtime/session-snapshot.integration.test.ts",
   "src/agents/runtime-plugins.context-engine.integration.test.ts",
   "src/context-engine/context-engine.test.ts",
