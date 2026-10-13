@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -111,6 +115,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-fault-sequences-"));
   scenarioRoot = await fs.realpath(rawRoot);
+  setRuntimeConfigSnapshot(fallbackConfig());
   supervisorSpawnMock.mockReset();
   testMocks.nativeRunBudgetAttempt.mockReset();
   testMocks.runCliAgent.mockReset();
@@ -126,6 +131,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await fs.rm(scenarioRoot, { recursive: true, force: true });
 });
 
