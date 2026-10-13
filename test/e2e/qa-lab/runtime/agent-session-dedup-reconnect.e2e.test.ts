@@ -1,7 +1,6 @@
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { redactQaGatewayDebugText } from "../../../../extensions/qa-lab/src/gateway-log-redaction.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -178,16 +177,14 @@ describe("agent session deduplication across reconnect", () => {
       cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));
       onTestFailed(() => {
         process.stderr.write(
-          redactQaGatewayDebugText(
-            JSON.stringify({
-              firstAgentSentAfterMs,
-              firstAgentRequestTiming,
-              providerRequestCount: provider.requests.length,
-              clientConnected: clientA.connected,
-            }),
-          ).slice(0, 2_000) + "\n",
+          JSON.stringify({
+            firstAgentSentAfterMs,
+            firstAgentRequestTiming,
+            providerRequestCount: provider.requests.length,
+            clientConnected: clientA.connected,
+          }).slice(0, 2_000) + "\n",
         );
-        process.stderr.write(redactQaGatewayDebugText(gateway.logs()).slice(-12_000) + "\n");
+        process.stderr.write(gateway.logs().slice(-12_000) + "\n");
       });
       stage = "accept-original-run";
       const acceptedA = await clientA.request<AgentResult>(
