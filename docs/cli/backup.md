@@ -341,12 +341,35 @@ world-writable. OpenClaw checks this when initializing or adopting a repository
 and before every create. On POSIX systems, repair unsafe permissions with
 `chmod 700 <repository>` after confirming its ownership.
 
-The repository must be dedicated to OpenClaw backups. An existing `global/` or
-`agents/<agentId>/` scope is backup-owned only when it is empty or contains a
-valid schema-version-1 `manifest.json`. OpenClaw refuses to replace any other
-scope. With `--all`, it validates every existing entry under `agents/` before
-removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
-before anything is deleted.
+Use a dedicated repository for OpenClaw backups. Within `global/` and
+`agents/<agentId>/`, OpenClaw manages only `manifest.json`, `schema.sql`, and the
+`tables/<table>.jsonl` files declared by that scope's valid schema-version-1
+manifest. Refresh and stale-agent cleanup replace or remove those artifacts,
+not whole directories. Unrelated documents and filesystem metadata such as
+`.DS_Store` remain untouched, including inside a backup scope or its `tables/`
+directory. Directories are removed only when empty.
+
+OpenClaw checks all selected scopes before refreshing or pruning. An existing
+file that would collide with a new backup artifact without belonging to the
+previous manifest causes a refusal; so does a non-regular artifact or a symbolic
+link in a managed directory path. Preserve or move the conflicting path before
+retrying. These checks also protect committed or staged files whose working copy
+is missing. Unrelated entries do not block backups merely by being present.
+Finish or abort any ongoing Git merge, rebase, cherry-pick, or revert before
+creating a backup; backup commits must not conclude an operator's Git operation.
+
+Verification and restore, including of older refs, read only the manifest,
+schema, and declared table files. Extra files are ignored and never become
+database content. Missing or non-regular declared artifacts still fail, as do
+invalid database identities, table hashes, row counts, or SQLite integrity.
+Restores validate the recorded supported schema version and preserve it;
+they do not migrate historical data during verification.
+Agent index definitions are rebuilt canonically in private staging when needed;
+this does not change table data or the recorded schema version. Newer unsupported
+versions and mismatched ownership/version markers still fail. Run `openclaw
+doctor --fix` when adopting an older restored database for the current runtime.
+Historical global tables retain their recorded DDL; current indexes and columns
+are applied only by normal schema migration, not by Git backup verification.
 
 With `--all`, only agents removed from the configuration have their scopes
 pruned. If a configured agent's database is missing or cannot pass snapshot
@@ -358,8 +381,10 @@ selected database cannot be copied, and a run with no copyable databases fails.
 
 You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Explicit agent selections, `--all`, and scheduled backups resolve each database from its configured `agentDir`; historical artifact verification and restore use the artifact's recorded agent id without requiring that agent to remain in the current configuration. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries use a fixed order, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
 
-Git staging is restricted to the backup-owned `global` and `agents` paths;
-unrelated files elsewhere in an adopted repository are never staged.
+Git commits include only refreshed or pruned backup artifacts. Unrelated
+untracked files and operator-staged changes remain outside the backup commit,
+even inside a backup scope. Already-committed unrelated files remain in Git;
+backup creation does not scrub their history or remove them from later trees.
 
 `--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
 

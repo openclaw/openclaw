@@ -65,7 +65,7 @@ async function startHttpHarness(options?: {
   const dispatchInbound =
     options?.onDispatch ??
     (async (message) => {
-      taskStore.completeNext(message.contextId, `echo: ${message.text}`, message.peerName);
+      taskStore.complete(message.taskId, `echo: ${message.text}`);
     });
   const handler = createA2aHttpHandler({
     config,
@@ -162,6 +162,30 @@ function sendRequest(options?: {
     },
   };
 }
+
+describe("A2A message replay", () => {
+  it("returns the existing task for a peer message ID before and after completion", async () => {
+    const dispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch: dispatch });
+    const request = sendRequest({ messageId: "same-message", returnImmediately: true });
+    const first = (await (await harness.post(request)).json()) as {
+      result: { task: { id: string; contextId: string; status: { state: string } } };
+    };
+    const replay = await (await harness.post(request)).json();
+    expect(replay).toEqual(first);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    harness.taskStore.fail(first.result.task.id, "provider unavailable");
+    expect(await (await harness.post(request)).json()).toMatchObject({
+      result: { task: { id: first.result.task.id, status: { state: "TASK_STATE_FAILED" } } },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const otherPeer = (await (await harness.post(request, "beta-secret")).json()) as typeof first;
+    expect(otherPeer.result.task.id).not.toBe(first.result.task.id);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("A2A HTTP agent discovery", () => {
   it("serves both public discovery paths with the canonical bounded v1.0 card", async () => {
@@ -400,8 +424,8 @@ describe("A2A HTTP authentication and request limits", () => {
     const harness = await startHttpHarness();
     const taskA = harness.taskStore.create("ctx-large-a", "alpha");
     const taskB = harness.taskStore.create("ctx-large-b", "alpha");
-    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
-    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+    harness.taskStore.complete(taskA.id, "a".repeat(600 * 1024));
+    harness.taskStore.complete(taskB.id, "b".repeat(600 * 1024));
     const stringifySpy = vi.spyOn(JSON, "stringify");
 
     const response = await harness.post([
