@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi, onTestFinished } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -190,36 +191,35 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
   }
 });
 
-test.each(["assistant", "item", "tool", "thinking", "approval", "empty", "error"])(
-  "chat.send defers its title until %s progress or settlement",
-  async (stream) => {
-    const terminalOnly = stream === "empty" || stream === "error";
+test.for(["reply", "empty", "error"])(
+  "chat.send names its session before %s startup or progress",
+  async (outcome, { signal }) => {
     const { storePath } = await createSessionStoreDir();
     const { ws } = await openClient();
-    let dispatchFinished = false;
-    let stopTitleObserver = () => {};
     const dispatchStarted = createDeferredCore();
     const titlePersisted = createDeferredCore();
-    const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
-    let runId: string | undefined;
+    const dispatchPending = createDeferredCore();
+    let dispatchFinished = false;
+    let stopTitleObserver = () => {};
     let sessionKey: string | undefined;
     const eventContext = new AsyncLocalStorage<string>();
     dashboardTitleGenerationMocks.generate.mockImplementation(async () =>
       eventContext.getStore() ? "Wrong event context" : "Generated Dashboard Title",
     );
     dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
-      runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
-      if (!terminalOnly) {
-        replyOptions?.onAgentRunStart?.(runId);
-      }
       dispatchStarted.resolve();
-      await dispatchPending;
+      await dispatchPending.promise;
       dispatchFinished = true;
-      if (!terminalOnly) {
-        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      }
-      if (stream === "error") {
+      if (outcome === "error") {
         throw new Error("Reply preparation failed");
+      }
+      if (outcome === "reply") {
+        const runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
+        replyOptions?.onAgentRunStart?.(runId);
+        eventContext.run("provider event", () => {
+          emitAgentEvent({ runId, stream: "assistant", data: { text: "Planning the release" } });
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        });
       }
       return {
         queuedFinal: false,
@@ -229,7 +229,7 @@ test.each(["assistant", "item", "tool", "thinking", "approval", "empty", "error"
     try {
       const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
         agentId: "main",
-        key: `agent:main:dashboard:title-during-${stream}`,
+        key: `agent:main:dashboard:title-before-${outcome}`,
       });
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
@@ -242,45 +242,26 @@ test.each(["assistant", "item", "tool", "thinking", "approval", "empty", "error"
           titlePersisted.resolve();
         }
       });
-
       const sent = await rpcReq(ws, "chat.send", {
         sessionKey,
         message: "Help me plan the release",
-        idempotencyKey: `dashboard-title-during-${stream}`,
+        idempotencyKey: `dashboard-title-before-${outcome}`,
       });
       expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
       await dispatchStarted.promise;
-      expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
-      if (terminalOnly) {
-        finishDispatch();
-      } else {
-        eventContext.run("provider event", () =>
-          emitAgentEvent({
-            runId: requireNonEmptyString(runId, "reply run id"),
-            stream,
-            data: { text: "Planning the release", phase: "update", kind: "preamble" },
-          }),
-        );
-      }
-      await titlePersisted.promise;
-      emitAgentEvent({
-        runId: requireNonEmptyString(runId, "reply run id"),
-        stream,
-        data: { text: "Continuing the release plan", phase: "update", kind: "preamble" },
-      });
-      expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalledOnce();
-      expect(dispatchInboundMessageMock).toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-        displayName: "Generated Dashboard Title",
-      });
-      expect(dispatchFinished).toBe(terminalOnly);
+      await withinTest(titlePersisted.promise, signal);
+      expect(dispatchFinished).toBe(false);
+      const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", { agentId: "main" });
+      expect(listed.payload?.sessions.find((row) => row.key === sessionKey)?.displayName).toBe(
+        "Generated Dashboard Title",
+      );
     } finally {
       stopTitleObserver();
       const released = getSessionWorkAdmissionRelease({
         scope: storePath,
         identities: [sessionKey],
       });
-      finishDispatch?.();
+      dispatchPending.resolve();
       await released;
       ws.close();
     }
