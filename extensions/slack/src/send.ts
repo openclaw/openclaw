@@ -4,7 +4,6 @@ import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  MessageReceipt,
   MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -54,7 +53,11 @@ import {
   resolveSlackQuestionActionIds,
   SLACK_QUESTION_FINALIZATION_BLOCKS,
 } from "./reply-action-ids.js";
-import { createSlackSendReceipt, createSlackSendReceiptFromResults } from "./send-results.js";
+import {
+  createSlackSendReceipt,
+  createSlackSendReceiptFromResults,
+  type SlackSendResult,
+} from "./send-results.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { cacheSlackDmChannelId, readCachedSlackDmChannelId } from "./slack-dm-channel-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
@@ -219,19 +222,7 @@ function resolvePostedMessageThreadTs(response: {
   return typeof threadTs === "string" ? normalizeSlackThreadTsCandidate(threadTs) : undefined;
 }
 
-export type SlackSendResult = {
-  messageId: string;
-  channelId: string;
-  /** Workspace of the validated transport client; channelId stays platform-native. */
-  teamId?: string;
-  receipt: MessageReceipt;
-  threadTs?: string;
-  meta?: {
-    slackQuestionActionIds: string[];
-    slackQuestionMessageId?: string;
-    [SLACK_QUESTION_FINALIZATION_BLOCKS]?: (Block | KnownBlock)[];
-  };
-};
+export type { SlackSendResult } from "./send-results.js";
 
 export async function updateMessageSlack(params: {
   cfg: OpenClawConfig;
