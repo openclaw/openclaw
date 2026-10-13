@@ -461,9 +461,9 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--accent);
 }
 
-.settings-section__help-popover::part(body) {
-  max-width: 280px;
-  padding: var(--space-3) var(--space-4);
+.settings-section__help-popover {
+  --oc-overlay-max-width: 280px;
+  --oc-popover-padding: var(--space-3) var(--space-4);
 }
 
 .settings-section__help-panel {

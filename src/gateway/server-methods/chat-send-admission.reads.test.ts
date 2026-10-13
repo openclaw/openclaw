@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -10,6 +12,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { retainGatewayPluginMetadata } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
@@ -29,6 +33,7 @@ import {
   sharingPolicyClient,
 } from "../session-sharing.test-utils.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
@@ -125,6 +130,187 @@ it.each(["absent", "admitted"] as const)(
           sql.restore();
         }
       });
+    });
+  },
+);
+
+it.each(["unchanged", "caller revoked", "session replaced"] as const)(
+  "joins native worker result completion before chat admission (%s)",
+  async (change) => {
+    await withOpenClawTestState({ label: "chat-placement-settlement" }, async () => {
+      const cfg = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const sessionKey = "agent:main:dashboard:placement-settlement";
+      const runId = "chat-placement-settlement";
+      const scope = { agentId: "main", sessionKey };
+      const entry: SessionEntry = { sessionId: "placement-settlement-session", updatedAt: 1 };
+      replaceSessionEntrySync(scope, entry);
+      const database = openOpenClawStateDatabase();
+      const placements = createWorkerSessionPlacementStore({ database });
+      const active = await advancePlacementFixtureToActive(placements, database, {
+        ...scope,
+        sessionId: entry.sessionId,
+      });
+      const claim = await placements.claimTurn({
+        ...scope,
+        sessionId: entry.sessionId,
+        claimId: "prior-worker-claim",
+        runId: "prior-worker-run",
+        owner: {
+          kind: "worker",
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+      });
+      await placements.markWorkspaceResultPending(claim);
+      await placements.acceptWorkspaceResult(claim);
+      const request = await normalizeChatSendRequest({
+        client: null,
+        params: { sessionKey, message: "Continue", idempotencyKey: runId },
+      });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => cfg,
+        workerSessionPlacementService: placements,
+      });
+      const prepared = await prepareChatSendSession({
+        request: request.value,
+        client: null,
+        context,
+        isDirectExternalUser: true,
+      });
+      if (!prepared.ok) {
+        throw new Error("Session preparation failed");
+      }
+      const session = await qualifyChatSendSession(prepared.value);
+      const acquired = createDeferred();
+      const consume = createDeferred();
+      const committed = createDeferred();
+      const consuming = createDeferred();
+      const releaseReply = createDeferred();
+      const preparePlacement = placements.prepareSessionPlacement.bind(placements);
+      using delayedRead = vi.spyOn(placements, "prepareSessionPlacement");
+      delayedRead.mockImplementationOnce(async (sessionId) => {
+        const facts = await preparePlacement(sessionId);
+        acquired.resolve();
+        await consume.promise;
+        return facts;
+      });
+      const observeCommit = operationAdmission.observeSqliteWorkerCommittedFacts;
+      let publishCommit: (() => void) | undefined;
+      using delayedPublication = vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts");
+      delayedPublication.mockImplementation((admission, observer) => {
+        observeCommit(admission, (receipt) => {
+          if (
+            isRecord(receipt.facts) &&
+            isRecord(receipt.facts.placement) &&
+            receipt.facts.placement.sessionId === entry.sessionId &&
+            receipt.facts.placement.turnClaim === null
+          ) {
+            publishCommit = () => observer(receipt);
+            committed.resolve();
+          } else {
+            observer(receipt);
+          }
+        });
+      });
+      const receiveReply = brokerReply.receiveSqliteWorkerReply;
+      using delayedReply = vi.spyOn(brokerReply, "receiveSqliteWorkerReply");
+      delayedReply.mockImplementation((slot, reply, owner) => {
+        if (
+          slot.current?.request.type === "execute" &&
+          reply.ok &&
+          !reply.transfer &&
+          !reply.input
+        ) {
+          const receipt: unknown = deserialize(reply.value);
+          if (
+            isRecord(receipt) &&
+            isRecord(receipt.placement) &&
+            receipt.placement.sessionId === entry.sessionId
+          ) {
+            void releaseReply.promise.then(() => receiveReply(slot, reply, owner));
+            return;
+          }
+        }
+        receiveReply(slot, reply, owner);
+      });
+      const respond = vi.fn();
+      let callerCurrent = true;
+      let nativePending = false;
+      let completion: Promise<unknown> | undefined;
+      const pending = admitChatSend({
+        request: request.value,
+        session,
+        client: null,
+        context,
+        respond,
+        assertCurrent() {
+          if (!callerCurrent) {
+            throw new Error("Original chat caller revoked during worker settlement");
+          }
+          if (nativePending) {
+            consuming.resolve();
+          }
+        },
+      });
+      let admitted: Awaited<typeof pending> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          acquired.promise,
+          pending,
+          "chat skipped placement acquisition",
+        );
+        completion = placements.completeWorkspaceResultAndReleaseTurn(claim);
+        await awaitGateBeforeSettlement(
+          committed.promise,
+          completion,
+          "worker completion skipped its native commit",
+        );
+        nativePending = true;
+        consume.resolve();
+        await awaitGateBeforeSettlement(
+          consuming.promise,
+          pending,
+          "chat skipped writer-ordered validation",
+        );
+        if (change === "caller revoked") {
+          callerCurrent = false;
+        } else if (change === "session replaced") {
+          replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
+        }
+        nativePending = false;
+        publishCommit?.();
+        releaseReply.resolve();
+        admitted = await pending;
+        expect(admitted.ok, JSON.stringify(respond.mock.calls[0]?.[2])).toBe(
+          change === "unchanged",
+        );
+        if (change === "unchanged") {
+          expect(context.chatAbortControllers.get(runId)?.sessionId).toBe(entry.sessionId);
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          expect(context.chatAbortControllers.size).toBe(0);
+          expect(respond.mock.calls[0]?.[2]?.message).toContain(
+            change === "caller revoked"
+              ? "Original chat caller revoked"
+              : "changed while starting work",
+          );
+        }
+      } finally {
+        consume.resolve();
+        publishCommit?.();
+        releaseReply.resolve();
+        await Promise.allSettled([pending, ...(completion ? [completion] : [])]);
+        if (admitted?.ok) {
+          admitted.value.cleanupAdmittedRun();
+        }
+        clearAgentRunContext(runId);
+      }
     });
   },
 );

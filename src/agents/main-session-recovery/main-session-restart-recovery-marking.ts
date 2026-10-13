@@ -237,6 +237,15 @@ export async function markRestartAbortedMainSessions(params: {
                 run.sessionId === entry.sessionId &&
                 (entry.lifecycleRunId === run.runId ||
                   entry.restartRecoveryDeliveryRunId === run.runId ||
+                  // Terminal persistence clears lifecycleRunId but retains this paired fence.
+                  (entry.status === "interrupted" &&
+                    entry.abortedLastRun === true &&
+                    entry.lastRunId === run.runId &&
+                    entry.restartRecoveryRuns?.some(
+                      (fence) =>
+                        fence.runId === (run.sourceRunId ?? run.runId) &&
+                        fence.lifecycleGeneration === run.lifecycleGeneration,
+                    )) ||
                   run.observedAt === undefined ||
                   asFiniteNumber(entry.updatedAt) === undefined ||
                   (entry.updatedAt < run.observedAt &&

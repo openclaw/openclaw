@@ -528,7 +528,8 @@ describe("Git operation host lifecycle", () => {
           requiresFullCheckout: false,
         });
         expect(directoryBytes).toBe(43);
-        expect(source).toEqual({ worktreeIds: ["preparation-source"], complete: true });
+        expect(source).toMatchObject({ worktreeIds: ["preparation-source"], complete: true });
+        expect(source.ownedPaths).toContainEqual({ id: "preparation-source", path: peer });
         expect(heldRequests).toBe(1);
       } finally {
         release.resolve();

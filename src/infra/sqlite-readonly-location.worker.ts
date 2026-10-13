@@ -319,7 +319,7 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
           });

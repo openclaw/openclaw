@@ -35,32 +35,7 @@ export function BoardCoreWidget(props: {
   );
 }
 
-export function BoardWidgetMenu(props: {
-  widget: BoardWidget;
-  tabs: readonly BoardTab[];
-  disabled: boolean;
-  onSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
-}) {
-  return (
-    <wa-dropdown
-      class="board-widget__menu"
-      placement="bottom-end"
-      onWa-select={(event) => props.onSelect(event)}
-    >
-      <button
-        class="board-widget__menu-trigger"
-        slot="trigger"
-        type="button"
-        aria-label={t("board.widget.menuLabel")}
-        title={t("board.widget.menuLabel")}
-      >
-        ⋮
-      </button>
-      <BoardWidgetMenuItems widget={props.widget} tabs={props.tabs} disabled={props.disabled} />
-    </wa-dropdown>
-  );
-}
-
+// The unported chat header still embeds these rows in its Web Awesome menu.
 export function BoardWidgetMenuItems(props: {
   widget: BoardWidget;
   tabs: readonly BoardTab[];

@@ -320,6 +320,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   options?: Pick<
     ConfigSnapshotMetadataReadOptions,
     | "allowCurrentPluginMetadata"
+    | "completePluginMetadata"
     | "deferredPluginMigrations"
     | "allowSuspiciousRecovery"
     | "isolateEnv"
@@ -339,6 +340,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     lowerPrecedenceEnv: options?.lowerPrecedenceEnv,
     pluginValidation: options?.skipPluginValidation ? "skip" : undefined,
   }).readConfigFileSnapshotWithPluginMetadata({
+    completePluginMetadata: options?.completePluginMetadata,
     prepareValidation: options?.prepareValidation,
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
