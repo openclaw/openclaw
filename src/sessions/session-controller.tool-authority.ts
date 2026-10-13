@@ -148,6 +148,7 @@ type OperationToolAuthority = Pick<
   | "bindToolAuthorityRouteAsync"
   | "setAutomaticFallbackRoute"
   | "personalToolParticipants"
+  | "requesterPrincipalKey"
 > & {
   bindBackendFingerprint(fingerprint: string | undefined): void;
   bindAttemptSnapshot(snapshot: ReplyToolAuthoritySnapshot): Promise<() => void>;
@@ -222,6 +223,9 @@ export function createReplyOperationToolAuthority(lifecycle: {
   }
 
   const result: OperationToolAuthority = {
+    get requesterPrincipalKey() {
+      return snapshot?.requesterPrincipalKey;
+    },
     get personalToolParticipants() {
       return participants;
     },

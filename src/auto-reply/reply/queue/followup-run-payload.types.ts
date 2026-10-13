@@ -77,6 +77,8 @@ type FollowupRunObservers = Pick<
 };
 
 export type FollowupRunPayload = {
+  /** Original config owner, read only when this input receives a new execution admission. */
+  readAdmissionConfig?: () => OpenClawConfig;
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
   prompt: string;

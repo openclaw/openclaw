@@ -1,12 +1,136 @@
-import { vi } from "vitest";
-import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/runs.js";
-import { registerTestEmbeddedRun as setActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
+import { afterEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
+import {
+  detachActiveEmbeddedRun as clearActiveEmbeddedRun,
+  attachActiveEmbeddedRun as setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+  type EmbeddedAgentQueueMessageOptions,
+} from "./embedded-agent-runner/runs.js";
+import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
+import { captureRequesterOrigin } from "./requester-origin.js";
 
-export function activeRun(
+export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main") {
+  const requesterOrigin = captureRequesterOrigin({
+    sessionKey,
+    messageProvider: "telegram",
+    senderId: "sessions-requester",
+  });
+  if (!requesterOrigin) {
+    throw new Error("sessions-send fixture requires a requester session");
+  }
+  return {
+    agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
+    sessionKey,
+    requesterOrigin,
+  };
+}
+
+const activeOwners: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  await Promise.all(activeOwners.splice(0).map((close) => close()));
+});
+
+/** Publish through the same admitted attempt owner as the runtime under test. */
+export async function setSessionsSendTestActiveRun(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  sessionKey: string,
+  requesterSessionKey?: string,
+  storeScope?: string,
+) {
+  const caller = createSessionsSendTestCaller(requesterSessionKey);
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
+  const storePath =
+    storeScope ??
+    resolveSessionStorePathCore(getRuntimeConfigSnapshot()?.session?.store, { agentId });
+  const target = captureSessionTarget({
+    storeScope: storePath,
+    sessionKey,
+    agentId,
+    incarnation: sessionId,
+  });
+  const operation = getSessionControllerOperation(sessionKey, target);
+  const runId = handle.runId ?? `sessions-target:${sessionId}`;
+  const sessionFile = `/tmp/${sessionId}.jsonl`;
+  const admission = prepareAgentRunAdmission({
+    cfg: {},
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      agentId,
+      runId,
+      ingress: { kind: "system", state: "present", boundary: "sessions-send-test" },
+    },
+  });
+  const ready = createDeferred();
+  const closed = createDeferred();
+  const completion = (async () => {
+    try {
+      await withPreparedEmbeddedRunToolAuthority(
+        {
+          admittedRunContext: await admission.admit("embedded", "sessions-send-test"),
+          replyOperation: operation,
+        },
+        {
+          sessionId,
+          sessionKey,
+          runId,
+          agentId,
+          sessionFile,
+          sessionTarget: { agentId, sessionId, sessionKey, storePath },
+          workspaceDir: "/tmp/sessions-send-test",
+          config: {},
+          provider: "openai",
+          modelId: "gpt-test",
+          requesterOrigin: caller.requesterOrigin,
+        },
+        undefined,
+        async (prepared) => {
+          handle.runId = runId;
+          handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+          setActiveEmbeddedRun(
+            sessionId,
+            handle,
+            sessionKey,
+            sessionFile,
+            agentId,
+            prepared.replyOperation,
+          );
+          ready.resolve();
+          await closed.promise;
+        },
+      );
+    } catch (error) {
+      ready.reject(error);
+      throw error;
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      admission.close();
+    }
+  })();
+  // The owner stays open through the test; cleanup joins any late failure.
+  void completion.catch(() => {});
+  activeOwners.push(async () => {
+    closed.resolve();
+    await completion;
+  });
+  await ready.promise;
+}
+
+export async function activeRun(
   sessionKey: string,
   options: {
     sessionId?: string;
     storeScope?: string;
+    requesterSessionKey?: string;
     streaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     rejects?: boolean;
@@ -17,7 +141,7 @@ export function activeRun(
       throw new Error("active session ended before queued steering message was committed");
     }
   });
-  setActiveEmbeddedRun(
+  await setSessionsSendTestActiveRun(
     options.sessionId ?? "caller-active-session",
     {
       queueMessage,
@@ -38,11 +162,8 @@ export function activeRun(
       abort: () => {},
     },
     sessionKey,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    { storeScope: options.storeScope },
+    options.requesterSessionKey,
+    options.storeScope,
   );
   return queueMessage;
 }

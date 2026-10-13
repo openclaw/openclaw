@@ -506,6 +506,16 @@ async function resumeMainSessionWithinAdmission(
       agentParams,
       controllerInput,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryRequesterSource
+        ? {
+            restartRecoveryRequesterTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
       ...(sourceRunId && params.entry.restartRecoveryOperatorSource
         ? {
             restartRecoveryOperatorTarget: {

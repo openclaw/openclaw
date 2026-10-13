@@ -30,16 +30,19 @@ import {
 import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import {
   controlUiClient,
   initializeRepository,
 } from "../server.sessions.create.projects.test-support.js";
+import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -80,7 +83,12 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const logGateway = { ...createSubsystemLogger("test/gateway"), info: vi.fn() };
+    const clients = new Set<GatewayClient & { connId: string }>();
     const context = {
+      getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+        new Set(
+          [...clients].filter((client) => !filter || filter(client)).map((client) => client.connId),
+        ),
       logGateway,
       getSessionEventSubscriberConnIds: () => new Set(["custody-observer"]),
       broadcastToConnIds: vi.fn((event: string, payload: unknown) => {
@@ -109,7 +117,29 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         }
       }),
     };
-    const requestOptions = { ...controlUiClient, context };
+    const profile = ensureGatewayOwnerProfile("Gateway Owner");
+    const requestOptions = {
+      context,
+      client: {
+        ...createOperatorWsClient({
+          connId: "prestart-owner",
+          clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
+          scopes: ["operator.write"],
+        }),
+        usesSharedGatewayAuth: true,
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        },
+        internal: {
+          authenticatedOperator: true as const,
+          operatorRoleActor: { kind: "system" as const },
+        },
+      },
+    };
+    clients.add(requestOptions.client);
     // Read through the public handler with the same live custody and physical session.
     const readInputCustody = async () => {
       const response = await directSessionReq<{
@@ -375,6 +405,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       initialOperation?.complete();
       releaseInitialRun.resolve();
       await released;
+      clients.clear();
       worktreeSpy.mockRestore();
       dispatchInboundMessageMock.mockReset();
       runtime.execute.mockReset();

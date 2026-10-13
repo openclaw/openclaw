@@ -100,6 +100,33 @@ describe("followup queue authority", () => {
     },
   );
 
+  it("keeps different original requesters in separate collected turns on the same route", async () => {
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+      const run = createRun({
+        prompt: `${senderId} request ${index}`,
+        originatingChannel: "telegram",
+        originatingTo: "shared-chat",
+      });
+      run.run.senderId = "shared-receiver";
+      run.run.requesterOrigin = {
+        sessionKey: "agent:research:telegram:group:requesters",
+        messageProvider: "telegram",
+        senderId,
+      };
+      q.add(run);
+    }
+    q.start();
+    await q.done.promise;
+    expect(q.calls).toHaveLength(2);
+    expect(q.calls[0]?.prompt).toContain("alice request 0");
+    expect(q.calls[0]?.prompt).not.toContain("bob request");
+    expect(q.calls[1]?.prompt).toContain("bob request 1");
+    expect(q.calls[1]?.prompt).toContain("bob request 2");
+    expect(q.calls[1]?.prompt).not.toContain("alice request");
+    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
+  });
+
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
     const conversationToolPolicy = {

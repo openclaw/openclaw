@@ -1,4 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { RestartRecoveryBeforeAgentReplyState } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
@@ -43,6 +44,7 @@ export type ReplyRestartRecoveryClaimControllerParams = {
     | undefined
   >;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
   inputProvenance?: InputProvenance;
   admissionRunId?: unknown;
   executionRunId?: string;

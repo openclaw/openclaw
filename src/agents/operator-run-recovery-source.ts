@@ -9,6 +9,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
+import type { RequesterOrigin } from "./requester-origin.js";
 
 /** Admission writes this with its source claim, never by reconstructing session attribution. */
 export function createRestartRecoveryOperatorSource(params: {
@@ -18,6 +19,7 @@ export function createRestartRecoveryOperatorSource(params: {
   sessionKey: string;
   sourceRunId: string;
   inputProvenance?: InputProvenance;
+  requesterOrigin?: RequesterOrigin;
 }): RestartRecoveryOperatorSource | undefined {
   const { authority, entry, sessionKey } = params;
   if (!authority) {
@@ -46,7 +48,12 @@ export function createRestartRecoveryOperatorSource(params: {
     entry.cronRunContinuation ||
     (params.inputProvenance &&
       params.inputProvenance.kind !== "external_user" &&
-      !requesterSettle) ||
+      !(
+        params.inputProvenance.kind === "inter_session" &&
+        (params.requesterOrigin
+          ? params.requesterOrigin.operatorProfileId === authority.profileId
+          : requesterSettle)
+      )) ||
     isCronSessionKey(sessionKey) ||
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||

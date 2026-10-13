@@ -201,17 +201,29 @@ export function createGatewayInstanceRuntime(
       const recoveryTarget = dispatchOptions.restartRecoveryOperatorTarget
         ? { ...dispatchOptions.restartRecoveryOperatorTarget }
         : undefined;
+      const requesterTarget = dispatchOptions.restartRecoveryRequesterTarget
+        ? { ...dispatchOptions.restartRecoveryRequesterTarget }
+        : undefined;
       // The source claim authorizes only its exact replacement turn, not any
       // payload dispatched by the same internal runtime.
       const assertRecoveryTarget = () => {
+        for (const target of [recoveryTarget, requesterTarget]) {
+          if (
+            target &&
+            (payload.agentId !== target.agentId ||
+              payload.sessionKey !== target.sessionKey ||
+              payload.expectedExistingSessionId !== target.sessionId ||
+              payload.idempotencyKey !== target.recoveryRunId)
+          ) {
+            throw new Error("Restart recovery dispatch does not match its source claim.");
+          }
+        }
         if (
           recoveryTarget &&
-          (payload.agentId !== recoveryTarget.agentId ||
-            payload.sessionKey !== recoveryTarget.sessionKey ||
-            payload.expectedExistingSessionId !== recoveryTarget.sessionId ||
-            payload.idempotencyKey !== recoveryTarget.recoveryRunId)
+          requesterTarget &&
+          recoveryTarget.sourceRunId !== requesterTarget.sourceRunId
         ) {
-          throw new Error("Restart recovery dispatch does not match its operator claim.");
+          throw new Error("Restart recovery requester and operator sources differ.");
         }
       };
       assertRecoveryTarget();
@@ -243,7 +255,24 @@ export function createGatewayInstanceRuntime(
         : undefined;
       let delegatedToolPolicyHandoffId: string | undefined;
       try {
+        const requesterOrigin = requesterTarget
+          ? await (
+              await loadOperatorRecovery()
+            ).restoreGatewayRequesterRecovery({
+              target: requesterTarget,
+              assertCurrent: assertRecoveryCurrent,
+            })
+          : undefined;
         assertRecoveryCurrent();
+        if (requesterTarget && !requesterOrigin) {
+          throw new Error("Restart recovery requester source is unavailable; send a new request.");
+        }
+        if (
+          requesterOrigin?.operatorProfileId &&
+          requesterOrigin.operatorProfileId !== restoredOperator?.authority.profileId
+        ) {
+          throw new Error("Restart recovery requester has no matching operator authority.");
+        }
         delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
           ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
           : undefined;
@@ -255,6 +284,7 @@ export function createGatewayInstanceRuntime(
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
           restoredOperator ||
+          requesterOrigin ||
           dispatchOptions.scopes ||
           dispatchOptions.syntheticScopes,
         );
@@ -265,6 +295,14 @@ export function createGatewayInstanceRuntime(
                   ? { kind: "operator", profileId: restoredOperator.authority.profileId }
                   : { kind: "system" },
                 operatorRunAuthority: restoredOperator?.authority,
+                agentToolCaller:
+                  requesterOrigin && requesterTarget
+                    ? {
+                        agentId: requesterTarget.agentId,
+                        sessionKey: requesterTarget.sessionKey,
+                        requesterOrigin,
+                      }
+                    : undefined,
                 allowModelOverride:
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,

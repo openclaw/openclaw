@@ -1,7 +1,8 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
@@ -18,7 +19,10 @@ import { transcriptMessage } from "../config/sessions/transcript-message.test-su
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
+import {
+  readPendingUserTurnTranscriptAdmission,
+  readUserTurnRequesterOrigin,
+} from "./user-turn-transcript-admission.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -77,6 +81,109 @@ describe("user turn transcript persistence", () => {
   }
 
   describe("trusted human transcript ownership", () => {
+    it("keeps producer requester custody through staging, replay, and collection", async () => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const requesterOrigin = {
+        sessionKey: "agent:main:telegram:group:requesters",
+        messageProvider: "telegram",
+        senderId: "bob",
+        memberRoleIds: ["member"],
+      };
+      const original = structuredClone(requesterOrigin);
+      const input = { text: "continue", idempotencyKey: "requester-custody:user", requesterOrigin };
+      const resolvingTarget = createDeferred();
+      const releaseTarget = createDeferred();
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        trackInputCompletion: true,
+        pendingInputRequestFingerprint: "authenticated-requester-custody",
+        target: async () => {
+          resolvingTarget.resolve();
+          await releaseTarget.promise;
+          return target;
+        },
+      });
+      const exposedMessage = expectDefined(recorder.message, "producer message");
+      const copied = createUserTurnTranscriptRecorder({
+        message: { ...structuredClone(exposedMessage), idempotencyKey: "copied-custody:user" },
+        target,
+      });
+      const recorders = [recorder, copied];
+      requesterOrigin.senderId = "alice";
+      requesterOrigin.memberRoleIds.push("admin");
+      exposedMessage["__openclaw"] = { requesterOrigin: { ...original, senderId: "alice" } };
+      expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(original);
+      expect(readUserTurnRequesterOrigin({ ...recorder })).toBeUndefined();
+      expect(readUserTurnRequesterOrigin(copied)).toBeUndefined();
+      try {
+        const staging = recorder.stageApproved!({
+          runId: "requester-custody",
+          assertCurrent: () => {},
+        });
+        await awaitGateBeforeSettlement(
+          resolvingTarget.promise,
+          staging,
+          "staging settled before resolving its target",
+        );
+        exposedMessage["__openclaw"] = { requesterOrigin: { ...original, senderId: "carol" } };
+        releaseTarget.resolve();
+        expect(await staging).toBe(true);
+        expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(original);
+        expect(recorder.getPendingInputMessage?.()?.["__openclaw"]?.requesterOrigin).toMatchObject(
+          original,
+        );
+
+        expect(
+          await copied.stageApproved!({ runId: "copied-custody", assertCurrent: () => {} }),
+        ).toBe(true);
+        expect(readUserTurnRequesterOrigin(copied)).toBeUndefined();
+        expect(copied.getPendingInputMessage?.()).not.toHaveProperty("__openclaw.requesterOrigin");
+        await copied.persistApproved();
+
+        recorder.finishPendingInput?.("interrupted");
+        await recorder.waitForPendingInputSettlement?.();
+        const replay = createUserTurnTranscriptRecorder({
+          input: { text: input.text, idempotencyKey: input.idempotencyKey },
+          trackInputCompletion: true,
+          pendingInputRequestFingerprint: "authenticated-requester-custody",
+          target,
+        });
+        recorders.push(replay);
+        expect(
+          await replay.stageApproved!({ runId: "requester-custody", assertCurrent: () => {} }),
+        ).toBe(true);
+        expect(readUserTurnRequesterOrigin(replay)).toMatchObject(original);
+        const aggregate = createUserTurnTranscriptRecorder({
+          input: {
+            text: "Collected original request",
+            idempotencyKey: "collected-custody:user",
+            requesterOrigin: readUserTurnRequesterOrigin(replay),
+          },
+          pendingInputSources: [replay],
+          target,
+        });
+        recorders.push(aggregate);
+        expectDefined(aggregate.message, "collected message")["__openclaw"] = {
+          requesterOrigin: { ...original, senderId: "alice" },
+        };
+        const result = await aggregate.persistApproved();
+        expect(result?.message["__openclaw"]?.requesterOrigin).toMatchObject(original);
+        const messages = await readTranscriptMessages(target);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).not.toHaveProperty("__openclaw.requesterOrigin");
+        expect(messages[1]).toHaveProperty("__openclaw.requesterOrigin", original);
+      } finally {
+        releaseTarget.resolve();
+        for (const current of recorders) {
+          current.finishPendingInput?.("interrupted");
+        }
+        await Promise.all(
+          recorders.map(async (current) => current.waitForPendingInputSettlement?.()),
+        );
+      }
+    });
+
     it("normalizes synthetic owner facts after asynchronous input resolution", async () => {
       const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
       const sender = { id: "author", identity: { type: "profile" as const, id: "author" } };

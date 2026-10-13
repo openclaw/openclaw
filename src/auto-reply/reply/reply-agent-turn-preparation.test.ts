@@ -10,6 +10,12 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
+import {
+  createRun,
+  createOperation,
+  createDefaults,
+  registerFollowupOwnerPolicyCases,
+} from "./followup-turn-admission.owner-policy.test-support.js";
 import type { FollowupRun } from "./queue.js";
 
 const state = vi.hoisted(() => ({
@@ -92,50 +98,6 @@ vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
 
-function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
-  return {
-    prompt: "queued prompt",
-    enqueuedAt: 1,
-    run: {
-      agentId: "agent",
-      agentDir: "/tmp/agent",
-      sessionId: "queued-session",
-      sessionKey: "main",
-      sessionFile: "/tmp/queued.jsonl",
-      workspaceDir: "/tmp",
-      config: {},
-      provider: "anthropic",
-      model: "claude",
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-    },
-    ...overrides,
-  };
-}
-
-function createOperation(sessionId = "queued-session") {
-  return {
-    sessionId,
-    abortSignal: new AbortController().signal,
-    setPhase: vi.fn(),
-    abortForRestart: vi.fn(() => true),
-    retainFailureUntilComplete: vi.fn(),
-    fail: vi.fn(),
-    complete: vi.fn(),
-    updateSessionId: vi.fn(),
-  };
-}
-
-function createDefaults(overrides: Record<string, unknown> = {}) {
-  return {
-    typing: {} as never,
-    typingMode: "never" as const,
-    defaultModel: "claude",
-    sessionKey: "main",
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
@@ -213,6 +175,7 @@ describe("prepareReplyAgentTurn", () => {
     expect(state.preflight).not.toHaveBeenCalled();
   });
 
+  registerFollowupOwnerPolicyCases({ admitFollowupTurn: prepareReplyAgentTurn, state });
   it.each([
     "paused",
     "blocked",

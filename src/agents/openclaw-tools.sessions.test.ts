@@ -29,7 +29,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -42,18 +42,30 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { registerSessionsSendParticipantTests } from "./openclaw-tools.sessions-participants.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
-import { activeRun } from "./openclaw-tools.sessions-steering.test-support.js";
+import {
+  activeRun,
+  createSessionsSendTestCaller,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import {
   observeSessionSendContinuations,
   registerSessionsSendLateReplyTests,
   registerSessionsSendTimeoutTests,
 } from "./openclaw-tools.sessions-timeout.test-support.js";
+import {
+  agentParams,
+  cloneTestConfig,
+  createSessionsSendGatewayScope,
+  getSessionTool,
+  installMessagingTestRegistry,
+  mockAcceptedChildFollowup,
+  mockGatewayResponses,
+  seedSession,
+  TEST_CONFIG,
+  type GatewayCall,
+} from "./openclaw-tools.sessions.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-import { createSessionsChannelTestRegistry } from "./tools/sessions-channel-fixture.test-support.js";
-import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
-import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import * as sessionsSendFollowup from "./tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
@@ -61,59 +73,6 @@ const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-s
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-scoped-session-send-");
 const continuations = observeSessionSendContinuations();
-
-const TEST_CONFIG = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-  tools: {
-    sessions: { visibility: "all" },
-    agentToAgent: { enabled: true },
-  },
-} as OpenClawConfig;
-
-function installMessagingTestRegistry() {
-  setActivePluginRegistry(
-    createSessionsChannelTestRegistry([
-      { id: "discord", label: "Discord", chatTypes: ["direct", "channel", "thread"] },
-      {
-        id: "whatsapp",
-        label: "WhatsApp",
-        chatTypes: ["direct", "group"],
-        preferSessionLookupForAnnounceTarget: true,
-      },
-    ]),
-  );
-}
-
-function getSessionTool(
-  name: "sessions_list" | "sessions_history" | "sessions_send",
-  options?: {
-    agentSessionKey?: string;
-    agentChannel?: string;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-  },
-) {
-  return {
-    sessions_list: createSessionsListTool,
-    sessions_history: createSessionsHistoryTool,
-    sessions_send: createSessionsSendTool,
-  }[name]({
-    ...options,
-    agentChannel: options?.agentChannel as never,
-    config: options?.config ?? TEST_CONFIG,
-    callGateway: callGatewayMock,
-  });
-}
-
-async function seedSession(sessionKey: string, sessionId = sessionKey) {
-  await upsertSessionEntryCore(
-    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey },
-    { sessionId, updatedAt: 1 },
-  );
-}
 
 async function writeFinal(sessionKey: string, runId: string, text: string, sessionId = sessionKey) {
   await persistSessionTranscriptTurn(
@@ -136,40 +95,6 @@ async function writeFinal(sessionKey: string, runId: string, text: string, sessi
       ],
     },
   );
-}
-
-function cloneTestConfig() {
-  return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
-}
-
-type GatewayCall = {
-  method?: string;
-  params?: Record<string, unknown>;
-};
-
-function mockGatewayResponses(responses: Record<string, unknown>) {
-  callGatewayMock.mockImplementation(
-    async (request: GatewayCall) => responses[request.method ?? ""] ?? {},
-  );
-}
-
-type AgentCallParams = {
-  message?: string;
-  lane?: string;
-  channel?: string;
-  sessionKey?: string;
-  extraSystemPrompt?: string;
-  inputProvenance?: {
-    kind?: string;
-    sourceSessionKey?: string;
-    sourceChannel?: string;
-    sourceTool?: string;
-    sourceRole?: string;
-  };
-};
-
-function agentParams(call: { params?: unknown }): AgentCallParams {
-  return (call.params ?? {}) as AgentCallParams;
 }
 
 describe("sessions tools", () => {
@@ -263,7 +188,7 @@ describe("sessions tools", () => {
       error: expect.stringContaining("no active run"),
     });
     expect(calls.some((request) => request.method === "agent")).toBe(false);
-    const queueMessage = activeRun(targetKey, {
+    const queueMessage = await activeRun(targetKey, {
       sessionId: "active-target",
       sourceReplyDeliveryMode: "automatic",
     });
@@ -735,7 +660,7 @@ describe("sessions tools", () => {
     async ({ key, rejects, deliveryMode, streaming, reason }) => {
       await seedSession("agent:re-portal:main");
       await seedSession(key, "caller-active-session");
-      const queueMessage = activeRun(key, {
+      const queueMessage = await activeRun(key, {
         rejects,
         streaming,
         sourceReplyDeliveryMode: deliveryMode,
@@ -743,15 +668,19 @@ describe("sessions tools", () => {
       mockGatewayResponses({
         agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
       });
-      const result = await getSessionTool("sessions_send", {
-        agentSessionKey: "agent:re-portal:main",
-        agentChannel: "telegram",
-        config: cloneTestConfig(),
-      }).execute("active-send", {
-        sessionKey: key,
-        message: "[TASK-COMPLETE] occupancy ready",
-        timeoutSeconds: 0,
-      });
+      const result = await withGatewayToolCallerIdentity(
+        createSessionsSendTestCaller("agent:re-portal:main"),
+        () =>
+          getSessionTool("sessions_send", {
+            agentSessionKey: "agent:re-portal:main",
+            agentChannel: "telegram",
+            config: cloneTestConfig(),
+          }).execute("active-send", {
+            sessionKey: key,
+            message: "[TASK-COMPLETE] occupancy ready",
+            timeoutSeconds: 0,
+          }),
+      );
       expect(result.details).toMatchObject({
         status: "error",
         sessionKey: key,
@@ -807,7 +736,10 @@ describe("sessions tools", () => {
       { agentId: "main", sessionKey: targetKey },
       { sessionId, updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
     );
-    const queueMessage = activeRun(targetKey, { sessionId });
+    const queueMessage = await activeRun(targetKey, {
+      sessionId,
+      requesterSessionKey: requesterKey,
+    });
     if (busyPastDeadline) {
       queueMessage.mockImplementationOnce(async (_text, options) => {
         // Admission succeeds, but this busy run cannot commit before the delivery deadline.
@@ -824,17 +756,21 @@ describe("sessions tools", () => {
       if (rejection) {
         queue.mockResolvedValueOnce({ status: "rejected", reason: rejection });
       }
-      mockGatewayResponses({
-        agent: { runId: "child-followup", status: "accepted" },
-        "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
-      });
-      const result = await getSessionTool("sessions_send", {
-        agentSessionKey: requesterKey,
-      }).execute("child-send", {
-        sessionKey: targetKey,
-        message: "deps are ready",
-        timeoutSeconds: 0,
-      });
+      mockAcceptedChildFollowup();
+      const caller = createSessionsSendTestCaller(requesterKey);
+      const result = await withPluginRuntimeGatewayRequestScope(
+        createSessionsSendGatewayScope(),
+        () =>
+          withGatewayToolCallerIdentity(caller, () =>
+            getSessionTool("sessions_send", {
+              agentSessionKey: requesterKey,
+            }).execute("child-send", {
+              sessionKey: targetKey,
+              message: "deps are ready",
+              timeoutSeconds: 0,
+            }),
+          ),
+      );
       expect(result.details).toMatchObject({
         status: "accepted",
         sessionKey: targetKey,
@@ -852,6 +788,7 @@ describe("sessions tools", () => {
           debounceMs: 0,
           deliveryTimeoutMs: 30_000,
           waitForTranscriptCommit: false,
+          requesterOrigin: caller.requesterOrigin,
           onQueueAccepted: expect.any(Function),
           userTurnTranscriptRecorder: expect.any(Object),
         },
@@ -889,7 +826,7 @@ describe("sessions tools", () => {
     const ordinaryActiveKey = "agent:main:main";
     await seedSession("agent:re-portal:main");
     await seedSession(ordinaryActiveKey, "ordinary-active-session");
-    const queueMessage = activeRun(ordinaryActiveKey, {
+    const queueMessage = await activeRun(ordinaryActiveKey, {
       sessionId: "ordinary-active-session",
       sourceReplyDeliveryMode: "automatic",
     });
@@ -943,8 +880,9 @@ describe("sessions tools", () => {
     };
     await upsertSessionEntryCore(parentScope, { sessionId: "durable-parent", updatedAt: 1 });
     await upsertSessionEntryCore(runScope, { sessionId: "caller-active-session", updatedAt: 1 });
-    const queueMessage = activeRun(runScopedCallerKey, {
+    const queueMessage = await activeRun(runScopedCallerKey, {
       streaming: false,
+      requesterSessionKey: requesterKey,
       storeScope: runScope.storePath,
     });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -972,11 +910,15 @@ describe("sessions tools", () => {
       },
     });
 
-    const result = await tool.execute("call-run-scoped-caller", {
-      sessionKey: runScopedCallerKey,
-      message: "[TASK-COMPLETE] re-portal occupancy ready",
-      timeoutSeconds: 0,
-    });
+    const result = await withGatewayToolCallerIdentity(
+      createSessionsSendTestCaller(requesterKey),
+      () =>
+        tool.execute("call-run-scoped-caller", {
+          sessionKey: runScopedCallerKey,
+          message: "[TASK-COMPLETE] re-portal occupancy ready",
+          timeoutSeconds: 0,
+        }),
+    );
 
     expect(result.details).toMatchObject({
       status: "accepted",
@@ -1019,7 +961,8 @@ describe("sessions tools", () => {
       { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
       { sessionId: targetSessionId, updatedAt: 1 },
     );
-    const queueMessage = activeRun(runScopedTargetKey, {
+    const queueMessage = await activeRun(runScopedTargetKey, {
+      requesterSessionKey: requesterKey,
       sessionId: targetSessionId,
       streaming: false,
       storeScope: storePath,
@@ -1053,11 +996,15 @@ describe("sessions tools", () => {
       callGateway: callGatewayMock,
     });
 
-    const result = await tool.execute("exact-cron-send", {
-      sessionKey: runScopedTargetKey,
-      message: "do not reroute this exact message",
-      timeoutSeconds: 0,
-    });
+    const result = await withGatewayToolCallerIdentity(
+      createSessionsSendTestCaller(requesterKey),
+      () =>
+        tool.execute("exact-cron-send", {
+          sessionKey: runScopedTargetKey,
+          message: "do not reroute this exact message",
+          timeoutSeconds: 0,
+        }),
+    );
 
     expect(result.details).toMatchObject({
       status: "error",

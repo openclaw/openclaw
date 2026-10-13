@@ -285,7 +285,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
-  /** Trusted channel-configured policy for this admitted conversation turn. */
+  /** @deprecated Channel-configured snapshot for the original external request. Use the channel policy resolver; retained through the next Plugin SDK major. */
   ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;

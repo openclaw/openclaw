@@ -32,7 +32,6 @@ import {
   createSteerParams,
 } from "./agent-runner-steer-adoption.test-support.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import {
@@ -40,6 +39,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
+import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
@@ -499,7 +499,7 @@ describe("question response custody through reply adoption", () => {
             commandBody: text,
             followupRun: incoming,
             sessionKey: key,
-            sessionCtx: { Provider: "webchat" },
+            sessionCtx: { Provider: "webchat", SenderId: run.run.senderId },
             sessionEntry:
               change === "permission"
                 ? { sessionId: run.run.sessionId, updatedAt: 0, permissionMode: "guarded" }

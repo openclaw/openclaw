@@ -15,6 +15,7 @@ import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerFastAutoProgressCases } from "./dispatch-from-config.fast-progress.cases.js";
 import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
+import { registerQueuedFollowupNoticeCases } from "./dispatch-from-config.queue-notices.test-support.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -657,44 +658,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
-  it("reports queue-cap rejection instead of a temporary model failure", async () => {
-    setNoAbort();
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    const deliveredTexts: string[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async (payload) => {
-        deliveredTexts.push(payload.text ?? "");
-      }),
-    });
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const runState = resolveReplyOperationRunState(opts);
-      if (!runState) {
-        throw new Error("expected reply operation state");
-      }
-      runState.admission = { status: "skipped", reason: "queue-cap" };
-      return undefined;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
-      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
-    expect(deliveredTexts).not.toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
-    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
-    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "skipped",
-        reason: "queue-cap",
-        sessionKey: "test:queue-cap",
-      }),
-    );
-  });
+  registerQueuedFollowupNoticeCases(NO_VISIBLE_REPLY_FALLBACK_TEXT);
 
   it("does not report a pending continuation as an empty terminal reply", async () => {
     setNoAbort();

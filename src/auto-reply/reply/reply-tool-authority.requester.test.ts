@@ -1,0 +1,117 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import {
+  createTestReplyOperation,
+  queueCurrentReplyRunMessage,
+} from "./reply-run-registry.test-helpers.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
+
+describe("reply requester authority", () => {
+  afterEach(() => {
+    testing.resetSessionControllerForTest();
+  });
+
+  it.each<{
+    name: string;
+    senderId: string | undefined;
+    accountId?: string;
+    senderName?: string;
+    unknownOwner?: boolean;
+    accepted: boolean;
+  }>([
+    { name: "same channel requester", senderId: "alice", accepted: true },
+    { name: "another channel requester with equal permissions", senderId: "bob", accepted: false },
+    {
+      name: "same sender on another account",
+      senderId: "alice",
+      accountId: "other",
+      accepted: false,
+    },
+    { name: "display-name drift", senderId: "alice", senderName: "Alice renamed", accepted: true },
+    { name: "unidentified input", senderId: undefined, accepted: false },
+    {
+      name: "unidentified owner and input",
+      senderId: undefined,
+      unknownOwner: true,
+      accepted: false,
+    },
+  ])(
+    "preserves requester identity for $name",
+    async ({ senderId, accountId, senderName, unknownOwner, accepted }) => {
+      const run = createQueueTestRun({ prompt: "Alice's work" });
+      if (unknownOwner) {
+        delete run.run.senderId;
+      }
+      const operation = createTestReplyOperation({ sessionId: "requester-identity" });
+      const snapshot = prepareReplyToolAuthority(run);
+      await operation.bindToolAuthoritySnapshotAsync(snapshot);
+      await operation.bindToolAuthorityRouteAsync(run.run);
+      const queueMessage = vi.fn(async () => {});
+      const cancel = vi.fn();
+      operation.attachBackend({ kind: "embedded", cancel, queueMessage });
+      operation.setPhase("running");
+      const incoming = {
+        ...run,
+        run: { ...run.run, senderId, senderName, agentAccountId: accountId },
+      };
+      const outcome = await queueCurrentReplyRunMessage("requester-identity", "change the work", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: toolAuthorityOverlay(incoming),
+      });
+      expect(outcome).toMatchObject(
+        accepted
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
+      );
+      expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(snapshot.fingerprint()).toBe(operation.toolAuthorityFingerprint);
+    },
+  );
+
+  it("uses the new human requester when steering an origin-bearing continuation", async () => {
+    const run = createQueueTestRun({ prompt: "accepted continuation" });
+    run.run.sessionKey = "agent:agent:main";
+    run.run.config = {
+      tools: {
+        toolsBySender: {
+          "id:permitted": { allow: ["read", "message"] },
+          "*": { allow: ["read"] },
+        },
+      },
+    };
+    const continuation = {
+      ...run,
+      run: {
+        ...run.run,
+        requesterOrigin: {
+          sessionKey: "agent:agent:telegram:direct:requester",
+          messageProvider: "telegram",
+          senderId: "permitted",
+        },
+      },
+    };
+    const operation = createTestReplyOperation({ sessionId: "continuation-human-steering" });
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(continuation));
+    await operation.bindToolAuthorityRouteAsync(run.run);
+    const queueMessage = vi.fn(async () => {});
+    operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+    operation.setPhase("running");
+    const inject = (senderId: string) =>
+      queueCurrentReplyRunMessage("continuation-human-steering", "new human instruction", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: {
+          ...toolAuthorityOverlay(run),
+          messageProvider: "telegram",
+          senderId,
+        },
+      });
+    await expect(inject("permitted")).resolves.toEqual({ status: "accepted" });
+    await expect(inject("guest")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "tool_authority_mismatch",
+    });
+    expect(queueMessage).toHaveBeenCalledOnce();
+  });
+});

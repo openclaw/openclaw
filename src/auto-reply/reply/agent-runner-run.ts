@@ -47,6 +47,7 @@ import {
   executePreparedReplyAgentRun,
   prependCompactionNotices,
 } from "./agent-runner-execute.js";
+import { hasReplySteeringRequesterMismatch } from "./agent-runner-fallback-authority.js";
 import { createShouldEmitToolOutput, createShouldEmitToolResult } from "./agent-runner-helpers.js";
 import {
   prepareReplyRunOptions,
@@ -54,7 +55,7 @@ import {
 } from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
-import { commitQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
+import { touchQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
@@ -245,6 +246,10 @@ export async function runReplyAgent(
     const effectiveShouldFollowup = !resetTriggered && shouldFollowup;
     const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
     const activeReplyOperation = controllerInput.mailbox.owner.active;
+    let shouldQueueRequesterMismatch =
+      effectiveShouldSteer &&
+      isActive &&
+      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
     // A source-only reservation still owns completion, but is not a steering target.
     const shouldQueueProvidedSteer =
       effectiveShouldSteer &&
@@ -275,11 +280,18 @@ export async function runReplyAgent(
       messageInjectionDisposition === "none" &&
       terminalDeliveryBlockReason !== undefined;
 
-    const questionInput = await runReplyQuestionInput(params);
+    // Direct question creators can attest their caller before publishing a reply operation.
+    const questionInput: Awaited<ReturnType<typeof runReplyQuestionInput>> =
+      shouldQueueRequesterMismatch && activeReplyOperation
+        ? { handled: false }
+        : await runReplyQuestionInput(params);
     if (questionInput.handled) {
       typing.cleanup();
       return questionInput.payload;
     }
+
+    const questionRequesterMismatch = questionInput.requesterMismatch === true;
+    shouldQueueRequesterMismatch ||= questionRequesterMismatch;
 
     const toolResultOptions = {
       getVerboseLevel: () =>
@@ -297,38 +309,14 @@ export async function runReplyAgent(
 
     const pendingToolTasks = new Set<Promise<void>>();
     const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
-    const touchActiveSessionEntry = async () => {
-      if (
-        opts?.internalEventExecution ||
-        !activeSessionEntry ||
-        !activeSessionStore ||
-        !sessionKey
-      ) {
-        return;
-      }
-      const activityStore = activeSessionStore;
-      // Keep the in-memory snapshot aligned with the pending-reset write boundary.
-      const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
-      if (storePath) {
-        await commitQueuedReplySessionActivity({
-          target: { agentId: followupRun.run.agentId, storePath, sessionKey },
-          expected: activeSessionEntry,
-          updatedAt,
-          assertCurrent: () => {
-            followupRun.operatorAuthority?.assertCurrent();
-          },
-          onCommittedEntry: (entry) => {
-            activeSessionEntry = entry;
-            if (activeSessionEntry) {
-              activityStore[sessionKey] = activeSessionEntry;
-            }
-          },
-        });
-      } else {
-        activeSessionEntry.updatedAt = updatedAt;
-        activityStore[sessionKey] = activeSessionEntry;
-      }
-    };
+    const touchActiveSessionEntry = () =>
+      touchQueuedReplySessionActivity(
+        { ...params, sessionStore: activeSessionStore },
+        activeSessionEntry,
+        (entry) => {
+          activeSessionEntry = entry;
+        },
+      );
 
     const queuedRunFollowupTurn = createFollowupRunner({
       resolveGatewayContext,
@@ -355,6 +343,7 @@ export async function runReplyAgent(
       effectiveShouldSteer &&
       isActive &&
       !shouldQueueProvidedSteer &&
+      !shouldQueueRequesterMismatch &&
       !shouldQueueTerminalReceiptSteer &&
       messageInjectionDisposition === "none"
     ) {
@@ -382,9 +371,10 @@ export async function runReplyAgent(
     const activeRunQueueAction = resolveActiveRunQueueAction({
       hasQueuedFollowups,
       interrupt: resolvedQueue.mode === "interrupt",
-      isActive,
+      isActive: isActive || questionRequesterMismatch,
       isHeartbeat,
-      shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
+      shouldFollowup:
+        effectiveShouldFollowup || shouldQueueProvidedSteer || shouldQueueRequesterMismatch,
       resetTriggered,
     });
     if (activeRunQueueAction === "drop") {
@@ -429,7 +419,11 @@ export async function runReplyAgent(
         return undefined;
       }
       if (replyOperationRunState) {
-        replyOperationRunState.admission = { status: "accepted", mode: "followup" };
+        replyOperationRunState.admission = {
+          status: "accepted",
+          mode: "followup",
+          ...(shouldQueueRequesterMismatch ? { reason: "requester-mismatch" as const } : {}),
+        };
       }
       // The queue must stay dormant while the active owner can still collect
       // messages. Registering after enqueue closes the owner-clear race.

@@ -9,6 +9,8 @@ import type {
   GetReplyOptions,
   ReplyDispatchRun,
 } from "../../auto-reply/get-reply-options.types.js";
+import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
+import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import {
   bindReplySourceInput,
@@ -24,25 +26,20 @@ import { isProgressCardRefreshInputProvenance } from "../../sessions/input-prove
 import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceIdentity,
-  isRpcSourceActive,
   isRpcSourceRegistered,
-  listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
-import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
-import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
+import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import {
   createChatSendDispatchErrorLifecycle,
   resolveChatSendReturnedOutcome,
@@ -60,6 +57,7 @@ import {
   waitForAcceptedChatSendRetry,
 } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { registerChatSendToolEventRecipients } from "./chat-send-tool-event-recipients.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import {
@@ -250,7 +248,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     titleTurn.promise,
   );
   const dispatch = replyDispatch
-    .runAgentMediaTranscript(dispatchAdmission, () =>
+    .runAgentMediaTranscript<DispatchFromConfigResult>(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -343,44 +341,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
               runId !== clientRunId ? { agentRunId: runId } : undefined,
               dispatchStartedAtMs,
             );
-            const observeRun = resolveAgentTurnRunObserver({
-              principal: client,
-              registerToolEventRecipient: context.registerToolEventRecipient,
-            });
-            if (observeRun) {
-              observeRun(runId);
-              // Register for any other active runs *in the same session* so
-              // late-joining clients (e.g. page refresh mid-response) receive
-              // in-progress tool events without leaking cross-session data.
-              const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
-                cfg,
-                sessionKey,
-              );
-              const matchesScope = captureRpcSourceScopeMatcher({
-                storePath,
-                resolveGatewayContext: context.resolveGatewayContext,
-              });
-              for (const [activeRunId, active] of listRpcSourceEntries()) {
-                const identity = getRpcSourceIdentity(active);
-                const sameSelectedAgent =
-                  selectedAgent.agentId !== undefined &&
-                  chatRunBelongsToSelectedAgent({
-                    agentId: identity.agentId,
-                    sessionKey: identity.sessionKey,
-                    defaultAgentId: compatibilityOwnerAgentId,
-                    selectedAgentId: selectedAgent.agentId,
-                  });
-                const sameSession = identity.sessionKey === sessionKey && sameSelectedAgent;
-                if (
-                  activeRunId !== runId &&
-                  sameSession &&
-                  matchesScope(active) &&
-                  isRpcSourceActive(active)
-                ) {
-                  observeRun(activeRunId);
-                }
-              }
-            }
+            registerChatSendToolEventRecipients(
+              { client, context, cfg, sessionKey, selectedAgent, storePath },
+              runId,
+            );
             return options?.completionSource;
           };
           const dispatchInbound = () => {
@@ -549,6 +513,20 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     )
     .then(async (dispatchResult) => {
       diagnostics.finish(queuedFollowup);
+      if (dispatchResult.deferredToActiveRun === "followup" && queuedFollowup.isEnqueued()) {
+        const notices = replyDispatch.deliveredReplies
+          .map(({ input }) => readChatSendReplyPayload(input))
+          .filter(isReplyPayloadStatusNotice);
+        if (notices.length > 0) {
+          await queuedFollowup.onQueuedFollowupReplyBatch({
+            kind: "queued-followup",
+            runId: clientRunId,
+            originatingChannel: admission.originatingRoute.originatingChannel,
+            payloads: notices,
+            completion: { kind: "progress" },
+          });
+        }
+      }
       if (acceptedMessageInjection || queuedFollowup.isEnqueued() || queuedFollowup.isTerminal()) {
         return;
       }

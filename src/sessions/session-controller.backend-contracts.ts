@@ -1,6 +1,7 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../agents/reply-completion.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
@@ -56,6 +57,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** Original requester checked by the host and never forwarded to the backend. */
+  requesterOrigin?: RequesterOrigin;
   /** Host admission after policy preparation; false leaves the input for follow-up. */
   canAdmit?: () => boolean;
   toolAuthorityPreparation?: ReplyToolAuthorityPreparation & {
@@ -89,6 +92,8 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   chatType?: ChatType;
   agentAccountId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
+  conversationId?: string;
+  messageThreadId?: string | number;
   groupId?: string;
   groupChannel?: string;
   groupSpace?: string;
@@ -122,6 +127,8 @@ export type ReplyTurnParticipantInput = Pick<
 >;
 
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  /** Authenticated requester identity, independent of permissions and client reconnections. */
+  requesterPrincipalKey?: string;
   close?(): void;
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */

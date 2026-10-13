@@ -1,5 +1,6 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
@@ -15,6 +16,7 @@ export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
   sessionKey: string;
+  requesterOrigin?: RequesterOrigin;
   /** Exact admitted requester lifetime; identity alone does not establish live authority. */
   assertCurrent?: () => void;
 }>;

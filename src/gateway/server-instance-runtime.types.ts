@@ -16,6 +16,8 @@ export type GatewayInstanceAgentDispatchOptions = {
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   /** Exact process-local source reserved by a durable lifecycle owner. */
   controllerInput?: SessionControllerInput;
+
+  restartRecoveryRequesterTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;

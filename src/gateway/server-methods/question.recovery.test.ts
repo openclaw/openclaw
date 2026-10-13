@@ -133,6 +133,7 @@ beforeEach(async () => {
       watchdogAttempt,
       embeddedRunToolAuthorityBinding: (registration) => ({
         source: "reply",
+        acceptsRequesterOrigin: () => false,
         operation,
         watchdogAttempt,
         project: () => undefined,

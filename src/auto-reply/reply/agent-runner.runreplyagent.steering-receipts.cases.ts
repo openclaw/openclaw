@@ -46,7 +46,10 @@ type SteeringReceiptFixture = {
     attachSteerBackend?: boolean;
   }) => { followupRun: FollowupRun; run: () => Promise<unknown> };
   makeSessionEntry: (overrides?: Partial<SessionEntry>) => SessionEntry;
-  makeSessionFixture: (overrides?: Partial<SessionEntry>) => Promise<{
+  makeSessionFixture: (
+    overrides?: Partial<SessionEntry>,
+    sessionKey?: string,
+  ) => Promise<{
     sessionEntry: SessionEntry;
     sessionStore: Record<string, SessionEntry>;
     storePath: string;
@@ -235,13 +238,17 @@ export function registerSteeringReceiptCases({
   }) => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
     vi.mocked(reserveSteerCandidate).mockImplementation(actualQueue.reserveSteerCandidate);
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: undefined,
-      restartRecoveryDeliveryRunId: "active-recovery",
-      restartRecoveryDeliverySourceRunId: "active-source",
-    });
+    const sessionKey = "agent:main:main";
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+      {
+        status: undefined,
+        restartRecoveryDeliveryRunId: "active-recovery",
+        restartRecoveryDeliverySourceRunId: "active-source",
+      },
+      sessionKey,
+    );
     const active = createReplyOperation({
-      sessionKey: "main",
+      sessionKey,
       sessionId: "session",
       resetTriggered: false,
     });
@@ -274,6 +281,8 @@ export function registerSteeringReceiptCases({
       sessionEntry,
       sessionStore,
       storePath,
+      sessionKey,
+      runOverrides: { agentId: "main" },
     };
     const first = createMinimalRun({
       ...common,
@@ -319,7 +328,7 @@ export function registerSteeringReceiptCases({
         signal,
       );
       await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey: "main" },
+        { agentId: "main", storePath, sessionKey },
         {
           ...sessionEntry,
           restartRecoveryDeliveryReceiptState: "delivered-terminal",
@@ -333,7 +342,7 @@ export function registerSteeringReceiptCases({
       expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
       expect(onDeferred).toHaveBeenCalledOnce();
       expect(secondState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(getExistingFollowupQueue("main")?.items).toEqual([
+      expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([
         expect.objectContaining({
           messageId: "second-parked-input",
           prompt: "answer the second input",
@@ -342,7 +351,7 @@ export function registerSteeringReceiptCases({
     } finally {
       firstAcceptance.resolve(true);
       await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearSessionQueues(["main"], getSessionControllerEntryForOperation(active).target);
+      clearSessionQueues([sessionKey], getSessionControllerEntryForOperation(active).target);
       active.complete();
       injection.mockRestore();
     }

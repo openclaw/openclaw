@@ -1,59 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveRequesterConversationToolPolicy } from "../../agents/requester-tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
-
-export function applyReplyToolAuthorityOverlay(
-  snapshot: ReplyToolAuthorityInput,
-  overlay: ReplyToolAuthorityOverlay,
-): ReplyToolAuthorityInput {
-  return {
-    ...snapshot,
-    originatingChannel: overlay.originatingChannel,
-    operatorAuthority: overlay.operatorAuthority,
-    toolsAllow: overlay.toolsAllow,
-    disableTools: overlay.disableTools,
-    forceRestartSafeTools: overlay.forceRestartSafeTools,
-    forceCodeModeTools: overlay.forceCodeModeTools,
-    run: {
-      ...snapshot.run,
-      permissionMode: overlay.permissionMode,
-      toolOverrides: overlay.toolOverrides,
-      messageProvider: overlay.messageProvider,
-      chatType: overlay.chatType,
-      agentAccountId: overlay.agentAccountId,
-      conversationToolPolicy: overlay.conversationToolPolicy,
-      groupId: overlay.groupId,
-      groupChannel: overlay.groupChannel,
-      groupSpace: overlay.groupSpace,
-      memberRoleIds: overlay.memberRoleIds,
-      spawnedBy: overlay.spawnedBy,
-      senderId: overlay.senderId,
-      senderName: overlay.senderName,
-      senderUsername: overlay.senderUsername,
-      senderE164: overlay.senderE164,
-      senderIsOwner: overlay.senderIsOwner,
-      gitContributorProfileId: overlay.gitContributorProfileId,
-      inputProvenance: overlay.inputProvenance,
-      trustedInternalHandoff: overlay.trustedInternalHandoff,
-      scheduledToolPolicy: overlay.scheduledToolPolicy,
-      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
-      traceAuthorized: overlay.traceAuthorized,
-      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
-      clientCaps: overlay.clientCaps,
-      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
-      toolBindings: overlay.toolBindings,
-    },
-  };
-}
 
 /** Projects current inbound facts against the active run's frozen authority snapshot. */
 export function resolveInboundReplyToolAuthorityOverlay(params: {
@@ -79,6 +37,8 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     chatType: normalizeChatType(ctx.ChatType),
     agentAccountId: ctx.AccountId,
     conversationToolPolicy: ctx.ConversationToolPolicy,
+    conversationId: normalizeOptionalString(ctx.ChatId),
+    messageThreadId: ctx.MessageThreadId,
     groupId: resolveGroupSessionKey(ctx)?.id,
     groupChannel:
       normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
@@ -105,5 +65,72 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
     clientCaps: ctx.GatewayClientCaps,
     gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
     toolBindings: ctx.GatewayRunToolBindings,
+  };
+}
+
+/** Resolve configured conversation policy from the same trusted ingress facts as steering. */
+export function resolveInboundConversationToolPolicy(params: {
+  ctx: RuntimeMsgContext;
+  config: OpenClawConfig;
+  sessionKey?: string;
+}) {
+  const facts = resolveInboundReplyToolAuthorityOverlay({
+    ctx: params.ctx,
+    senderIsOwner: false,
+    disableTools: false,
+  });
+  return resolveRequesterConversationToolPolicy({
+    ...facts,
+    config: params.config,
+    sessionKey: params.sessionKey ?? params.ctx.SessionKey,
+    accountId: facts.agentAccountId,
+    conversationPolicy: facts.conversationToolPolicy,
+  });
+}
+
+export function applyReplyToolAuthorityOverlay(
+  snapshot: ReplyToolAuthorityInput,
+  overlay: ReplyToolAuthorityOverlay,
+): ReplyToolAuthorityInput {
+  return {
+    ...snapshot,
+    originatingChannel: overlay.originatingChannel,
+    operatorAuthority: overlay.operatorAuthority,
+    toolsAllow: overlay.toolsAllow,
+    disableTools: overlay.disableTools,
+    forceRestartSafeTools: overlay.forceRestartSafeTools,
+    forceCodeModeTools: overlay.forceCodeModeTools,
+    run: {
+      ...snapshot.run,
+      requesterOrigin: undefined,
+      permissionMode: overlay.permissionMode,
+      toolOverrides: overlay.toolOverrides,
+      messageProvider: overlay.messageProvider,
+      chatType: overlay.chatType,
+      agentAccountId: overlay.agentAccountId,
+      conversationToolPolicy: overlay.conversationToolPolicy,
+      conversationId: overlay.conversationId,
+      messageThreadId: overlay.messageThreadId,
+      groupId: overlay.groupId,
+      groupChannel: overlay.groupChannel,
+      groupSpace: overlay.groupSpace,
+      memberRoleIds: overlay.memberRoleIds,
+      spawnedBy: overlay.spawnedBy,
+      senderId: overlay.senderId,
+      senderName: overlay.senderName,
+      senderUsername: overlay.senderUsername,
+      senderE164: overlay.senderE164,
+      senderIsOwner: overlay.senderIsOwner,
+      gitContributorProfileId: overlay.gitContributorProfileId,
+      inputProvenance: overlay.inputProvenance,
+      trustedInternalHandoff: overlay.trustedInternalHandoff,
+      scheduledToolPolicy: overlay.scheduledToolPolicy,
+      runtimePluginToolGrant: overlay.runtimePluginToolGrant,
+      traceAuthorized: overlay.traceAuthorized,
+      approvalReviewerDeviceId: overlay.approvalReviewerDeviceId,
+      clientCaps: overlay.clientCaps,
+      gatewayUiCommandTarget: overlay.gatewayUiCommandTarget,
+      toolBindings: overlay.toolBindings,
+    },
   };
 }

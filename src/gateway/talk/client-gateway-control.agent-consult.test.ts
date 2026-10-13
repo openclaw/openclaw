@@ -85,6 +85,7 @@ function publishBackend(
       sessionKey: "agent:researcher:talk",
       operationalRunInstance,
       embeddedRunToolAuthorityBinding: () => ({
+        acceptsRequesterOrigin: () => false,
         source,
         project,
         projectAsync: async (overlay) => project(overlay),
@@ -304,6 +305,7 @@ describe("Talk client agent consult admission", () => {
           operationalRunInstance: consult.instance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
+            acceptsRequesterOrigin: () => false,
             project: () => consult.runId,
             projectAsync: async () => consult.runId,
             assertActive: () => {},

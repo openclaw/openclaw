@@ -2,16 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
-import { captureAgentHarnessCompletionCustody } from "../agents/agent-harness-completion-custody.js";
-import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-  withoutGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
@@ -19,11 +13,7 @@ import {
   type AgentToolGatewayRequestCaller,
   runWithGatewayToolCleanupContext,
 } from "../agents/tools/in-process-gateway.js";
-import * as inProcessGateway from "../agents/tools/in-process-gateway.js";
-import { createSessionStatusTool } from "../agents/tools/session-status-tool.js";
-import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
-import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -35,7 +25,6 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { drainSystemEvents } from "../infra/system-events.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -52,29 +41,22 @@ import {
   invalidateGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
-import { mockSessionStatusModelDependencies } from "./local-request-context.session-status.test-support.js";
+import { registerSessionToolParticipantTests } from "./local-request-context.session-tools.participants.test-support.js";
 import {
   REQUESTER,
   TARGET,
   TARGET_ID,
   INCOGNITO,
-  PARTICIPANT_SHARED,
-  PARTICIPANT_DRAFT,
-  PARTICIPANT_DRAFT_ID,
   withSessionToolsFixture,
   seedSessionToolsFixtureSession,
-  withParticipantSessionToolsFixture,
   drainSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
-import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
-import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
@@ -84,9 +66,6 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 
 const mainSession = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
 const localContext = () => expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
-const draftMessages = {
-  messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-};
 const toolOptions = (config: OpenClawConfig) => ({ config, agentSessionKey: REQUESTER });
 const sessionKeys = () =>
   listSessionEntriesCore({ agentId: "main" }).map((entry) => entry.sessionKey);
@@ -133,268 +112,7 @@ describe("built-in session tool role authority", () => {
 
   afterEach(drainSessionToolsFixture);
 
-  it("uses the named participant's current identity for session reads and writes", () =>
-    withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
-      const options = toolOptions(cfg);
-      const history = createSessionsHistoryTool(options);
-      const read = (sessionKey: string, user?: string) =>
-        history.execute("participant-history", { sessionKey, user });
-      const expectDraft = async (user?: string) =>
-        expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject(draftMessages);
-
-      await expectDraft();
-      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      await expect(read(PARTICIPANT_DRAFT)).rejects.toThrow(
-        `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
-      );
-      expect((await read(PARTICIPANT_DRAFT, bob.profileId)).details).toMatchObject({
-        status: "error",
-        error: expect.stringMatching(/not found|no session found/i),
-      });
-      expect((await read(PARTICIPANT_SHARED, bob.profileId)).details).toMatchObject({
-        messages: [expect.objectContaining({ content: "Shared participant marker" })],
-      });
-      await expectDraft(alice.profileId);
-      await expect(read(PARTICIPANT_DRAFT, "unknown-profile")).rejects.toThrow(/not a participant/);
-
-      const sessionStatus = createSessionStatusTool(options);
-      await expect(
-        sessionStatus.execute("draft-status", {
-          sessionKey: PARTICIPANT_DRAFT,
-          user: bob.profileId,
-        }),
-      ).rejects.toThrow(/not found|not visible/i);
-      const notify = (sessionKey: string) =>
-        createSessionsSendTool(options).execute("participant-notify", {
-          sessionKey,
-          message: "Bob's selected notification",
-          mode: "notify",
-          user: bob.profileId,
-        });
-      expect((await notify(PARTICIPANT_DRAFT)).details).toMatchObject({
-        status: "error",
-        error: expect.stringMatching(/not found|no session found/i),
-      });
-      expect(drainSystemEvents(PARTICIPANT_DRAFT)).toEqual([]);
-      await expect(notify(PARTICIPANT_SHARED)).resolves.toMatchObject({
-        details: { status: "queued", sessionKey: PARTICIPANT_SHARED, runStarted: false },
-      });
-      expect(drainSystemEvents(PARTICIPANT_SHARED)).toEqual([
-        expect.stringContaining("Bob's selected notification"),
-      ]);
-
-      const patch = (user: string) =>
-        createSessionsTool(options).execute("participant-patch", {
-          action: "patch",
-          sessionKey: PARTICIPANT_DRAFT,
-          expectedSessionId: PARTICIPANT_DRAFT_ID,
-          label: "Selected participant write",
-          user,
-        });
-      await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
-      expect(mainSession(PARTICIPANT_DRAFT)?.label).toBeUndefined();
-      await expect(patch(alice.profileId)).resolves.toMatchObject({
-        details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },
-      });
-      expect(mainSession(PARTICIPANT_DRAFT)?.label).toBe("Selected participant write");
-
-      turn.revoke(bob.profileId);
-      await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(/Bob's access changed/);
-      await expectDraft(alice.profileId);
-      await turn.complete();
-      await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
-    }));
-
-  it("reads named-participant status while keeping current-session status local", async () => {
-    mockSessionStatusModelDependencies();
-    await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
-      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      const statusGateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest");
-      onTestFinished(() => statusGateway.mockRestore());
-      const sessionStatus = createSessionStatusTool({
-        ...toolOptions(cfg),
-        runSessionKey: REQUESTER,
-      });
-      await expect(
-        sessionStatus.execute("selected-status", { sessionKey: "current", user: bob.profileId }),
-      ).resolves.toMatchObject({ details: { ok: true, sessionKey: REQUESTER, agentId: "main" } });
-      expect(
-        statusGateway.mock.calls.filter(([request]) => request.method === "sessions.describe"),
-      ).toHaveLength(0);
-    });
-  });
-
-  it.each(["selected history", "unselected history", "unselected wake"] as const)(
-    "rejects %s when another participant steers during preparation",
-    (surface) =>
-      withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
-        const context = localContext();
-        const steer = vi
-          .fn(async () => undefined)
-          .mockImplementationOnce(async () => {
-            expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-            return undefined;
-          });
-        const enqueueWake = vi.fn();
-        const wake = vi.fn(async (opts: { commitGuard?: () => void }) => {
-          opts.commitGuard?.();
-          enqueueWake();
-          return { ok: true as const };
-        });
-        if (surface === "unselected wake") {
-          context.cron = { ...context.cron, prepareWake: steer, wake };
-        } else {
-          context.readChatStartupProjection = steer;
-        }
-        const history = createSessionsHistoryTool(toolOptions(cfg));
-        await expect(
-          surface === "unselected wake"
-            ? dispatchGatewayMethodInProcess("wake", {
-                sessionKey: PARTICIPANT_DRAFT,
-                mode: "now",
-                text: "Wake the draft",
-              })
-            : surface === "unselected history"
-              ? dispatchGatewayMethodInProcess("chat.history", { sessionKey: PARTICIPANT_DRAFT })
-              : history.execute("racing-history", { sessionKey: PARTICIPANT_DRAFT }),
-        ).rejects.toThrow(
-          `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
-        );
-        if (surface === "unselected wake") {
-          expect(enqueueWake).not.toHaveBeenCalled();
-        }
-        const selected = await history.execute("selected-history", {
-          sessionKey: PARTICIPANT_DRAFT,
-          user: alice.profileId,
-        });
-        expect(selected.details).toMatchObject(draftMessages);
-      }),
-  );
-
-  it("limits unselected in-process session calls to the turn's own session after steering", () =>
-    withParticipantSessionToolsFixture(async ({ turn, bob }) => {
-      const read = (sessionKey: string) =>
-        dispatchGatewayMethodInProcess("chat.history", { sessionKey, agentId: "main" });
-      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject(draftMessages);
-      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      await expect(read(REQUESTER)).resolves.toMatchObject({ sessionKey: REQUESTER });
-      await expect(read(REQUESTER.replace("agent:main:", ""))).resolves.toMatchObject({
-        messages: [],
-      });
-      await expect(read(PARTICIPANT_DRAFT)).rejects.toThrow(
-        "Use a session tool with the requester's requester_profile.id as user.",
-      );
-      await expect(dispatchGatewayMethodInProcess("sessions.list", {})).rejects.toThrow(
-        /Several people have steered this turn/,
-      );
-      await expect(
-        dispatchGatewayMethodInProcess("agent.wait", {
-          runId: turn.runtimeIdentity.operationalRunInstance.runId,
-          timeoutMs: 0,
-        }),
-      ).resolves.toMatchObject({ status: "timeout" });
-      await expect(
-        dispatchGatewayMethodInProcess("agent.wait", { runId: "unknown-run", timeoutMs: 0 }),
-      ).rejects.toThrow(/Several people have steered this turn/);
-      await expect(
-        dispatchGatewayMethodInProcess("chat.abort", { sessionKey: PARTICIPANT_DRAFT }),
-      ).rejects.toThrow(/Several people have steered this turn/);
-      await expect(
-        dispatchGatewayMethodInProcess("agent", {
-          sessionKey: REQUESTER,
-          sessionId: PARTICIPANT_DRAFT_ID,
-          message: "unselected transcript override",
-          idempotencyKey: "unselected-transcript-override",
-        }),
-      ).rejects.toThrow(/Several people have steered this turn/);
-      const context = localContext();
-      const custody = await captureAgentHarnessCompletionCustody(
-        createAgentHarnessCompletionScope({ requesterSessionKey: REQUESTER }),
-      );
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => context,
-        getMethodRegistry: createRequestGatewayMethodRegistry,
-        isDispatchAvailable: () => true,
-      });
-      try {
-        expect(custody?.isCurrent()).toBe(true);
-        // The closed recovery principal owns accepted cross-session delivery independently.
-        await expect(
-          runtime.recovery.dispatchSessionMethod("chat.history", { sessionKey: PARTICIPANT_DRAFT }),
-        ).resolves.toMatchObject(draftMessages);
-        context.readChatStartupProjection = async () => {
-          await turn.complete();
-          return undefined;
-        };
-        await expect(read(REQUESTER)).rejects.toThrow(/turn has ended|no longer active/);
-      } finally {
-        runtime.close();
-        custody?.release();
-      }
-    }));
-
-  it("limits runtime-identity-only session reads to the turn's own session after steering", () =>
-    withParticipantSessionToolsFixture(async ({ turn, alice, bob }) => {
-      const context = getPluginRuntimeGatewayRequestScope()?.context;
-      const operatorRunAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
-      if (!context || !operatorRunAuthority) {
-        throw new Error("expected local Gateway context and admitted operator");
-      }
-      const client = sharingPolicyClient({ user: alice.profileId });
-      client.connect.client.id = "gateway-client";
-      client.internal = {
-        syntheticClient: true,
-        agentRuntimeIdentity: turn.runtimeIdentity,
-        operatorRunAuthority,
-        operatorRoleActor: { kind: "operator", profileId: alice.profileId },
-      };
-      const respond = vi.fn<GatewayRequestOptions["respond"]>();
-      const read = (sessionKey = PARTICIPANT_DRAFT) =>
-        withoutGatewayToolCallerIdentity(() =>
-          handleGatewayRequest({
-            req: {
-              type: "req",
-              id: "runtime-participant-history",
-              method: "chat.history",
-              params: { sessionKey, agentId: "main" },
-            },
-            context,
-            client,
-            isWebchatConnect: () => false,
-            respond,
-          }),
-        );
-      const expectRead = async (sessionKey: string | undefined, response: unknown[]) => {
-        respond.mockClear();
-        await expect(read(sessionKey)).resolves.toBeUndefined();
-        expect(respond.mock.calls).toMatchObject([response]);
-      };
-      await expectRead(undefined, [true, draftMessages]);
-      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      await expectRead(REQUESTER, [true, { sessionKey: REQUESTER }]);
-      await expectRead(undefined, [
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining(
-            "Use a session tool with the requester's requester_profile.id as user.",
-          ),
-        },
-      ]);
-      context.readChatStartupProjection = async () => {
-        await turn.complete();
-        return undefined;
-      };
-      await expectRead(REQUESTER, [
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("embedded tool authority is no longer active"),
-        },
-      ]);
-    }));
+  registerSessionToolParticipantTests();
 
   it.each(["live", "missing", "retired"] as const)(
     "visible forks preserve an active first turn only with live requester authority (%s)",

@@ -139,15 +139,15 @@ it.each([false, true])(
           runtimeOwnerToken: runtime.ownerToken,
           captureKey,
         });
+        const request = (name: string, args: Record<string, unknown>) =>
+          sendLoopbackToolCall({
+            token: grant.token,
+            name,
+            args,
+            headers: { "x-openclaw-cli-capture-key": captureKey },
+          });
         const call = async (name: string, args: Record<string, unknown>) =>
-          readOkMcpPayload(
-            await sendLoopbackToolCall({
-              token: grant.token,
-              name,
-              args,
-              headers: { "x-openclaw-cli-capture-key": captureKey },
-            }),
-          );
+          readOkMcpPayload(await request(name, args));
         const workshop = await call("skill_workshop", { action: "list" });
         expect(workshop.result?.isError).toBe(false);
         expect(JSON.parse(String(workshop.result?.content?.[0]?.text))).toMatchObject({
@@ -156,30 +156,38 @@ it.each([false, true])(
         });
         expect(invoke).toHaveBeenCalledOnce();
 
-        const sessions = (user?: string) =>
-          call("sessions", {
+        const requestSessions = (user?: string) =>
+          request("sessions", {
             ...(assignmentOnly
               ? { action: "assign_owner", ownerType: "agent", ownerId: "main" }
               : { action: "group_list" }),
             ...(user ? { user } : {}),
           });
+        const sessions = async (user?: string) => readOkMcpPayload(await requestSessions(user));
+        const expectUnauthorizedSessions = async () => {
+          const response = await requestSessions("alice");
+          expect(response.status).toBe(401);
+          await expect(response.json()).resolves.toEqual({ error: "unauthorized" });
+        };
         expect((await sessions()).result?.isError).toBe(false);
         expect(await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" })).toMatchObject({
+          status: "rejected",
+          reason: "tool_authority_mismatch",
+        });
+        expect((await sessions()).result?.isError).toBe(false);
+        expect((await sessions("bob")).result?.isError).toBe(true);
+        expect(
+          await turn.steer({ profileId: "alice", senderId: "reconnected", name: "Alice" }),
+        ).toMatchObject({
           status: "accepted",
         });
-        const ambiguous = await sessions();
-        expect(ambiguous.result?.isError).toBe(true);
-        expect(ambiguous.result?.content?.[0]?.text).toContain("Alice (user: alice)");
-        expect(ambiguous.result?.content?.[0]?.text).toContain("Bob (user: bob)");
-        expect((await sessions("bob")).result?.isError).toBe(false);
         expect((await sessions("alice")).result?.isError).toBe(false);
         expect((await sessions("unknown")).result?.isError).toBe(true);
-        turn.revoke("bob");
-        expect((await sessions("bob")).result?.isError).toBe(true);
-        expect((await sessions("alice")).result?.isError).toBe(false);
+        turn.revoke("alice");
+        await expectUnauthorizedSessions();
         await turn.complete();
-        expect((await sessions("alice")).result?.isError).toBe(true);
-        expect(callGateway).toHaveBeenCalledTimes(4);
+        await expectUnauthorizedSessions();
+        expect(callGateway).toHaveBeenCalledTimes(3);
       },
     );
   },

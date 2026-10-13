@@ -2,11 +2,13 @@ import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
 import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatch-outcome.types.js";
@@ -96,6 +98,7 @@ type ReplyMessageInjectionOwner = {
     overlay: ReplyToolAuthorityOverlay,
   ): Promise<string | undefined>;
   resolve(params: {
+    requesterOrigin?: RequesterOrigin;
     preparation?: ReplyToolAuthorityPreparation;
     options?: ReplyBackendQueueMessageOptions;
     personalToolParticipant?: ReplyTurnParticipantInput;
@@ -130,6 +133,7 @@ export type ReplyMessageInjectionRejectionReason =
   | "stale_run"
   | "injection_unavailable"
   | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
   | "audio_input_unsupported"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
@@ -190,6 +194,7 @@ export type ReplyOperation = {
   readonly sourceReplyDelivered: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
+  readonly requesterPrincipalKey?: string;
   /** Initial selected model; a concrete attempt must not replace user intent. */
   readonly requestedToolAuthorityRoute?: ReplyToolAuthorityRoute;
   /** Current candidate proven automatic by the fallback owner; identity marks its attempt. */
@@ -654,7 +659,11 @@ export type FollowupRun = FollowupRunPayload & {
 
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
-  | { status: "accepted"; mode: "steer" | "followup" }
+  | {
+      status: "accepted";
+      mode: "steer" | "followup";
+      reason?: "requester-mismatch";
+    }
   | {
       status: "skipped";
       reason:
@@ -691,6 +700,8 @@ export type ReplyOperationRunState = {
     }>;
   };
   admission?: ReplyOperationAdmissionSnapshot;
+  /** Latest queue-owned disposition; original acceptance still records custody. */
+  followupQueueDisposition?: FollowupQueueDisposition;
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
   messageInjectionAborted?: true;
@@ -786,6 +797,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   detached?: true;
   operation?: ReplyOperation;
   sourceTurnId?: string;
+  acceptsRequesterOrigin: (origin: RequesterOrigin) => boolean;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
   projectAsync: (overlay: ReplyToolAuthorityOverlay) => Promise<string | undefined>;

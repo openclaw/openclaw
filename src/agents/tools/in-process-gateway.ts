@@ -251,6 +251,9 @@ async function callAgentToolGatewayRequestBound<T>(
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(method, request.params);
   if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (request.agentToolCaller?.requesterOrigin) {
+      throw new Error("Requester provenance requires trusted in-process Gateway dispatch.");
+    }
     if (boundGateway && !forceTransport) {
       throw new Error(`Gateway instance unavailable for ${method}`);
     }

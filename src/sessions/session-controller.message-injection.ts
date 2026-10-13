@@ -166,6 +166,7 @@ function resolveReplyBackendMessageInjection(
 function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
   options?: ReplyBackendQueueMessageOptions;
+  requesterOrigin?: ReplyMessageInjectionOptions["requesterOrigin"];
   inboundAudio?: boolean;
   personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
@@ -197,6 +198,18 @@ function resolveReplyMessageInjectionRejection(params: {
   }
   const toolAuthority =
     attachment && "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
+  if (params.requesterOrigin) {
+    if (backend?.messageInjectionV2?.version !== 2) {
+      return { reason: "guarded_injection_unsupported" };
+    }
+    try {
+      if (!toolAuthority?.acceptsRequesterOrigin(params.requesterOrigin)) {
+        return { reason: "requester_origin_mismatch" };
+      }
+    } catch {
+      return { reason: "requester_origin_mismatch" };
+    }
+  }
   const canInject = () => {
     if (
       !isCurrentSessionControllerOperation(operation) ||
@@ -208,6 +221,9 @@ function resolveReplyMessageInjectionRejection(params: {
       return false;
     }
     toolAuthority?.assertActive();
+    if (params.requesterOrigin && !toolAuthority?.acceptsRequesterOrigin(params.requesterOrigin)) {
+      return false;
+    }
     return true;
   };
   if (operationState?.turnKind === "direct") {
@@ -375,6 +391,7 @@ export function canInjectReplyMessageTarget(
     const owner = target[replyMessageInjectionTargetOwner];
     const {
       toolAuthorityOverlay,
+      requesterOrigin,
       toolAuthorityPreparation,
       personalToolParticipant,
       assertCurrent,
@@ -397,6 +414,7 @@ export function canInjectReplyMessageTarget(
               }
             : {}),
         },
+        requesterOrigin,
         personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
         inboundAudio,
         allowPendingUserInputAnswer,
@@ -450,6 +468,7 @@ async function beginPreparedReplyMessageInjectionTarget(
   const {
     canAdmit,
     toolAuthorityOverlay,
+    requesterOrigin,
     toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
@@ -483,6 +502,7 @@ async function beginPreparedReplyMessageInjectionTarget(
       ? { reason: "injection_unavailable" }
       : owner.resolve({
           options: queueOptions,
+          requesterOrigin,
           personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
           inboundAudio,
           allowPendingUserInputAnswer,

@@ -155,7 +155,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       onAbandoned: abandoned,
       onSettled: lifecycleSettled,
     },
-    run: { sessionId, sessionKey: queueKey, messageProvider: "telegram" },
+    run: { sessionId, sessionKey: queueKey, messageProvider: "telegram", senderId: "handoff-requester" },
   });
   const activeOperation = createReplyOperation({
     sessionKey: queueKey,

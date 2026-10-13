@@ -11,10 +11,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -23,9 +20,9 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import {
-  bindGatewayContextResolver,
+  captureGatewayContextResolver,
   getGatewayContextResolver,
-} from "../../plugins/runtime/gateway-request-scope.js";
+} from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
 import {
@@ -41,6 +38,7 @@ import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
+import { captureRequesterOrigin, type RequesterOrigin } from "../requester-origin.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -59,6 +57,7 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  requesterOrigin?: RequesterOrigin;
   /** Restrict-only executable surface captured for internal follow-ups. */
   sessionEventToolsAllow?: readonly string[];
   /** An object with no mode retains the producer's default permission posture. */
@@ -149,36 +148,9 @@ export type GatewayToolOperatorSelection = Readonly<{
   assertCurrent: () => void;
 }>;
 
-// Freeze the admitted instance: a later resolver result is a replacement,
-// which retires this caller's routing authority instead of transferring it.
-function bindGatewayToolContextResolver(
-  resolveGatewayContext: GatewayContextResolver | undefined,
-): GatewayContextResolver | undefined {
-  if (!resolveGatewayContext) {
-    return undefined;
-  }
-  let admittedContext: GatewayRequestContext | undefined;
-  try {
-    admittedContext = resolveGatewayContext();
-  } catch {
-    return () => undefined;
-  }
-  if (!admittedContext) {
-    return () => undefined;
-  }
-  const resolveAdmittedContext = () => {
-    try {
-      return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
-  return resolveAdmittedContext;
-}
-
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
+  requesterOrigin?: RequesterOrigin;
   receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
   cronAuthorityCheck?: () => boolean;
@@ -273,13 +245,14 @@ export function createAdmittedGatewayToolCallerIdentity(
   return {
     agentId,
     sessionKey,
+    requesterOrigin: captureRequesterOrigin({ requesterOrigin: params.requesterOrigin }),
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(operatorAuthority ? { operatorAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     ...(params.cronAuthorityCheck ? { cronAuthorityCheck: params.cronAuthorityCheck } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
-    gatewayContextResolver: bindGatewayToolContextResolver(
+    gatewayContextResolver: captureGatewayContextResolver(
       getGatewayContextResolver(params.admittedRunContext),
     ),
     receiptAuthority: composeReceiptAuthority(
@@ -582,6 +555,7 @@ export async function withGatewayToolCallerIdentity<T>(
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
       watchdogAttempt: identity.watchdogAttempt ?? inheritedOwner?.watchdogAttempt,
+      requesterOrigin: inheritedOwner?.requesterOrigin ?? identity.requesterOrigin,
       sessionEventDelivery:
         inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
           ? false
@@ -652,7 +626,7 @@ export async function withGatewayToolCallerIdentity<T>(
       ),
       gatewayContextResolver:
         inheritedOwner?.gatewayContextResolver ??
-        bindGatewayToolContextResolver(identity.gatewayContextResolver),
+        captureGatewayContextResolver(identity.gatewayContextResolver),
       gatewayUiCommandTarget: inheritedValue("gatewayUiCommandTarget"),
       turnSourceChannel:
         (inheritedOwner?.turnSourceChannel ?? identity.turnSourceChannel?.trim()) || undefined,

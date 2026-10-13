@@ -35,6 +35,7 @@ import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js"
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
 import {
@@ -168,6 +169,7 @@ export async function trySessionsSendActiveRunDelivery(
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
   const assertCaller = captureGatewayToolCallerAssertion();
+  const caller = getGatewayToolCallerIdentity();
   try {
     const selection = resolveGatewayToolOperatorSelection();
     selection.assertCurrent();
@@ -202,6 +204,12 @@ export async function trySessionsSendActiveRunDelivery(
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
     if (activeOperation && activeRunSessionId && messageText) {
+      if (!caller?.requesterOrigin) {
+        if (params.mode === "steer") {
+          throw new Error('Cannot verify requester identity for steering; use mode: "followup".');
+        }
+        return {};
+      }
       const queue = async (
         assertCurrent: () => void,
         lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
@@ -218,6 +226,7 @@ export async function trySessionsSendActiveRunDelivery(
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
+          requesterOrigin: caller.requesterOrigin,
           steeringMode: "all",
           debounceMs: 0,
           deliveryTimeoutMs: params.deliveryTimeoutMs,
@@ -248,6 +257,7 @@ export async function trySessionsSendActiveRunDelivery(
             input: {
               text: messageText,
               provenance: inputProvenance,
+              requesterOrigin: caller.requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
               idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
             },
@@ -305,6 +315,12 @@ export async function trySessionsSendActiveRunDelivery(
         // Consumed without a confirmed commit: never replay it as a new turn.
         throw new Error(steer.errorMessage);
       }
+      if (steer.reason === "requester_origin_mismatch") {
+        if (params.mode === "steer") {
+          throw new Error('Active run has a different requester; use mode: "followup".');
+        }
+        return {};
+      }
       fallbackSessionKey = ownChild
         ? undefined
         : resolveCronRunScopedFallbackSessionKey(params.sessionKey);
@@ -347,6 +363,7 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  const caller = getGatewayToolCallerIdentity();
   let fallback:
     | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
     | undefined;
@@ -375,6 +392,15 @@ export async function startSessionsSendAgentRun(
       admissionPending?: boolean;
     }>({
       method: "agent",
+      ...(caller?.requesterOrigin
+        ? {
+            agentToolCaller: {
+              agentId: caller.agentId,
+              sessionKey: caller.sessionKey,
+              requesterOrigin: caller.requesterOrigin,
+            },
+          }
+        : {}),
       params: fallbackSessionKey
         ? {
             ...sendParams,

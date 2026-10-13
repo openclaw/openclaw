@@ -4,6 +4,8 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
+import { readRestartRecoveryRequesterSource } from "../agents/requester-run-recovery-source.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -52,6 +54,31 @@ export type OperatorRecoveryTarget = {
 };
 
 type RecoverySource = Readonly<{ controlUiAdmin: boolean; localOperator: boolean }>;
+
+/** Restore identity only from the exact current restart source, never from transcript metadata. */
+export async function restoreGatewayRequesterRecovery(params: {
+  target: OperatorRecoveryTarget;
+  assertCurrent: () => void;
+}): Promise<RequesterOrigin | undefined> {
+  const target = { ...params.target };
+  params.assertCurrent();
+  const entry = await readSessionEntryReadOnlyInWorker(target, params.assertCurrent);
+  params.assertCurrent();
+  const reservation = entry?.mainRestartRecovery?.reservation;
+  if (
+    !entry ||
+    entry.sessionId !== target.sessionId ||
+    entry.restartRecoveryDeliveryRunId !== target.recoveryRunId ||
+    entry.restartRecoveryDeliverySourceRunId !== target.sourceRunId ||
+    (reservation &&
+      (reservation.runId !== target.recoveryRunId ||
+        reservation.lifecycleGeneration !== getAgentEventLifecycleGeneration()))
+  ) {
+    throw new Error("Restart recovery requester source no longer owns this input.");
+  }
+  return readRestartRecoveryRequesterSource({ ...target, entry });
+}
+
 const recoverySources = new WeakMap<
   AdmittedRunOperatorAuthority,
   {

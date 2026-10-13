@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import { decodeRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import {
   normalizeMessageClientSources,
   readMessageClientSources,
@@ -69,6 +70,20 @@ export type { SessionPendingInputReceipt } from "./session-pending-input-receipt
 
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
+
+/** The private accepted bytes survive mutable receipt projections and replay preparation. */
+export function readSessionPendingInputRequesterOrigin(
+  receipt: SessionPendingInputReceipt,
+): RequesterOrigin | undefined {
+  const owner = receiptOwners.get(receipt);
+  if (!owner) {
+    return undefined;
+  }
+  assertSessionPendingInputLifetimeCurrent(owner);
+  return decodeRequesterOrigin(
+    parseSessionPendingInputMessage(owner.messageJson)["__openclaw"]?.requesterOrigin,
+  );
+}
 
 export function readWithdrawnSessionPendingInputId(
   receipt: SessionPendingInputReceipt | undefined,

@@ -677,6 +677,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
       > & { toolsAllow?: readonly string[][] };
     }
   >;
+  /** Original requester facts retained by the exact host-admitted restart source claim. */
+  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

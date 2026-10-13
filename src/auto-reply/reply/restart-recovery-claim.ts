@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   getRestartRecoveryPendingFinalSourceRunId,
@@ -53,6 +55,9 @@ import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-sou
 export function createReplyRestartRecoveryClaimController(
   params: ReplyRestartRecoveryClaimControllerParams,
 ): ReplyRestartRecoveryClaimController {
+  const requesterOrigin = params.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: params.requesterOrigin })
+    : undefined;
   const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
   // The retry shares delivery correlation with its parent, but owns one internal admission.
   const strandedRetryRunId =
@@ -499,6 +504,12 @@ export function createReplyRestartRecoveryClaimController(
     const hasDeliveryClaim = Boolean(
       recoverableDeliveryContext || transfersControlUiClaim || operatorSource,
     );
+    const claimSourceRunId =
+      transfersControlUiClaim || operatorSource
+        ? recoveryRunId
+        : recoverableDeliveryContext
+          ? sourceTurnId
+          : undefined;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -512,12 +523,16 @@ export function createReplyRestartRecoveryClaimController(
       restartRecoveryDeliveryRequestFingerprint: undefined,
       restartRecoveryDeliveryRunId: hasDeliveryClaim ? recoveryRunId : undefined,
       restartRecoveryOperatorSource: operatorSource,
-      restartRecoveryDeliverySourceRunId:
-        transfersControlUiClaim || operatorSource
-          ? recoveryRunId
-          : recoverableDeliveryContext
-            ? sourceTurnId
-            : undefined,
+      restartRecoveryRequesterSource: claimSourceRunId
+        ? createRestartRecoveryRequesterSource({
+            requesterOrigin,
+            entry,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sourceRunId: claimSourceRunId,
+          })
+        : undefined,
+      restartRecoveryDeliverySourceRunId: claimSourceRunId,
       restartRecoveryRequesterAccountId: transfersControlUiClaim
         ? undefined
         : normalizeOptionalString(params.requesterAccountId),

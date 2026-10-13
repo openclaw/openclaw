@@ -65,7 +65,7 @@ export type ChannelInboundSupplementalResolutionOptions = {
 };
 type BuildChannelInboundEventAccess = {
   commands?: Pick<ChannelIngressCommandAccess, "authorized">;
-  /** Channel-configured policy resolved at the trusted ingress boundary. */
+  /** @deprecated Resolve policy through security.resolveDirectToolPolicy or groups.resolveToolPolicy. Retained for the original external request through the next Plugin SDK major. */
   toolPolicy?: GroupToolPolicyConfig;
   mentions?: {
     canDetectMention: boolean;

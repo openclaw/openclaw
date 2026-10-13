@@ -88,6 +88,7 @@ import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
@@ -1287,6 +1288,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
+      await getSessionWorkAdmissionRelease({
+        scope: mockState.storePath,
+        identities: [requestedSessionId],
+      });
     } else {
       expect(response).toEqual([
         false,
@@ -4142,18 +4147,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
-    expect(mockState.lastDispatchUserTurnInput).toEqual({
-      role: "user",
-      content: "bench update",
-      timestamp: expect.any(Number),
-      idempotencyKey: "idem-system-provenance-acp:user",
-      __openclaw: {
-        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    expect(mockState.lastDispatchUserTurnInput).toEqual(
+      createExpectedAcpUserTurn({
+        content: "bench update",
+        idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
-        transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-      },
-      provenance,
-    });
+        provenance,
+      }),
+    );
   });
 
   it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
@@ -4294,16 +4295,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual({
-        role: "user",
-        content: "bridge image",
-        timestamp: expect.any(Number),
-        idempotencyKey: "idem-user-transcript-acp-images:user",
-        __openclaw: {
-          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-          transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-        },
-      });
+      expect(mockState.lastDispatchUserTurnInput).toEqual(
+        createExpectedAcpUserTurn({
+          content: "bridge image",
+          idempotencyKey: "idem-user-transcript-acp-images:user",
+        }),
+      );
     });
   });
 
