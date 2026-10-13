@@ -1,5 +1,9 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync as canonicalPath } from "../../infra/boundary-path.js";
+import { readGatewayLockProcessCmdline as readCmdline } from "../../infra/gateway-lock-process.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -96,6 +100,25 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
             collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict),
         },
       );
+    }
+    if (
+      params.updateInstallKind === "package" &&
+      inspected.serviceUpdateVerdict?.kind === "unavailable"
+    ) {
+      const owner = process.platform !== "win32" && (await readActiveGatewayLockIdentity());
+      const identity = classifyOpenClawArgv(
+        owner ? (readCmdline(owner.pid, process.platform, params.timeoutMs) ?? []) : [],
+        { requirePackageIdentity: true, pid: owner ? owner.pid : undefined },
+      );
+      if (
+        process.platform === "win32" ||
+        (identity.kind === "openclaw" &&
+          identity.packageIdentity &&
+          canonicalPath(identity.packageIdentity.root) === canonicalPath(params.roots[0] ?? root))
+      ) {
+        const failure = createUpdatePreflightFailure("gateway-stop-unverified");
+        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
+      }
     }
     if (
       foreground &&

@@ -38,6 +38,13 @@ timeout.
 Service-definition refresh recognizes Windows account aliases that resolve to the
 same SID. A different or unresolved account remains protected from automatic repair.
 
+If service inspection is unavailable, package updates refuse before replacement on
+Windows, or when a live Gateway is detected using the same installation on POSIX.
+The public reason is `gateway-stop-unverified`. Stop the Gateway through Task
+Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
+`openclaw update`. POSIX updates without a live installation owner still continue.
+This admission check requires an updated installed updater.
+
 For a global npm installation, the manual recovery path is
 `npm i -g openclaw@<target> --allow-scripts=openclaw`, then
 `openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
