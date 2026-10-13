@@ -41,6 +41,20 @@ afterEach(() => {
 });
 
 describe("Gateway stop deadline independent of restart ownership", () => {
+  it.each([15_000, 85_000, 325_000])(
+    "bounds ordinary stop grace while retaining the %i ms write cleanup deadline",
+    (timeoutMs) => {
+      const drain = resolveGatewayShutdownDrainBudget({
+        budget: { timeoutMs, reserveMs: 10_000, nativeStopBudget: true },
+        action: "stop",
+        forceRestart: false,
+        restartWithoutSupervisor: false,
+        acceptedAtMs: performance.now(),
+      });
+      expect(drain.drainTimeoutMs).toBe(Math.min(20_000, timeoutMs - 10_000));
+      expect(drain.forceExitMs).toBe(timeoutMs);
+    },
+  );
   it("clamps an external system unit running as a service user", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     process.env.INVOCATION_ID = "own";

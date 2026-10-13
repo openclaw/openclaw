@@ -83,6 +83,7 @@ import {
   createBoundWorker,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  prepareIsolatedChildAdmissionProof,
   readBoundExecutionState,
   registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -461,7 +462,7 @@ describe("recursive spawn production boundary", () => {
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
   });
 
-  it("admits a descendant using the active parent turn model", async () => {
+  it("admits an isolated descendant with current policy and the active parent turn model", async () => {
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -510,6 +511,7 @@ describe("recursive spawn production boundary", () => {
       },
     );
     const { context, runtime, identities } = await createBoundGateway(bound);
+    const childProof = await prepareIsolatedChildAdmissionProof(bound);
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
     const modelRunStarted = createDeferred();
     runEmbeddedAgent.mockImplementationOnce(() => {
@@ -567,9 +569,8 @@ describe("recursive spawn production boundary", () => {
         applicableGrantRefs: ["tool:sessions_spawn"],
         runtimeAssuranceRefs: ["spawn-runtime:subagent"],
       });
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
-      ).toMatchObject({
+      const admittedChild = childProof.assertAdmitted(details.childSessionKey, embeddedRun);
+      expect(admittedChild).toMatchObject({
         spawnedBy: parentSessionKey,
         spawnedBySessionId: "parent-session",
         spawnedBySenderIsOwner: true,
@@ -581,10 +582,8 @@ describe("recursive spawn production boundary", () => {
         modelOverrideFallbackOriginModel: "child-model",
       });
       // The receipt's parent id stays out of navigation fields that sessions.list projects.
-      expect(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
-          ?.parentSessionId,
-      ).toBeUndefined();
+      expect(admittedChild.parentSessionId).toBeUndefined();
+      expect(admittedChild.groupId).toBeUndefined();
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
@@ -592,6 +591,7 @@ describe("recursive spawn production boundary", () => {
     } catch (error) {
       failures.push(error);
     } finally {
+      childProof.restore();
       modelRun.resolve({
         payloads: [{ text: "descendant complete" }],
         meta: { durationMs: 1 },

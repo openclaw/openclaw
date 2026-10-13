@@ -172,6 +172,35 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
 }
 
 describe("plugin package facts", () => {
+  it.skipIf(process.platform === "win32")(
+    "reuses checked entry canonical paths until metadata invalidation",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-checked-realpath-"));
+      const source = path.join(root, "index.js");
+      fs.writeFileSync(source, "export default {};\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: root,
+            relativePath: "index.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, path: source, exists: true });
+        nativeRealpath.mockClear();
+        expect(pluginCacheRealpathSync(source)).toBe(source);
+        expect(pluginCacheRealpathSync(source, true)).toBe(source);
+        expect(nativeRealpath).not.toHaveBeenCalled();
+
+        fs.unlinkSync(source);
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(source, true)).toBeNull();
+        expect(pluginCacheRealpathSync(source)).toBeNull();
+      });
+    },
+  );
+
   it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
     const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
     const packageDir = path.join(root, "package");

@@ -170,13 +170,24 @@ export function readAuthProfileRowsReadOnly(
         : { status: "unreadable" };
     return { store: inspection, state: inspection, cacheable: false };
   }
+  let keepReader = retainReader;
   try {
-    return readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+    const rows = readAuthProfileRows(acquired.db, databasePath, "agent", schema);
+    // Another process initializes new agent files; empty schema facts cannot stay pooled.
+    if (
+      rows.store.status === "missing" &&
+      rows.store.reason === "table" &&
+      rows.state.status === "missing" &&
+      rows.state.reason === "table"
+    ) {
+      keepReader = false;
+    }
+    return rows;
   } catch {
     closeAuthProfileReadDatabase(databasePath);
     return { store: { status: "unreadable" }, state: { status: "unreadable" }, cacheable: false };
   } finally {
-    if (!retainReader) {
+    if (!keepReader) {
       closeAuthProfileReadDatabase(databasePath);
     }
   }
