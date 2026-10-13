@@ -37,6 +37,14 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+Complete single-statement effects can use SQLite autocommit through
+`runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
+before the statement, then install committed facts before notifying observers.
+Warm participant contributions and non-message audit inserts use this path;
+new participants, audit pruning, and execution bindings retain transactions.
+Each effect still commits separately. PostgreSQL writes retain their adapter's
+transaction custody.
+
 Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
 New observers capture those resources when admitting a directory. File scans
@@ -453,6 +461,16 @@ SQLite handle. Their commit receipts install membership, owner, category, and
 participant facts through the same retained-fact owner as native writers, then
 release pending publication before notifying row and lifecycle observers. Live
 sharing authority is still checked by the worker's transaction and commit admission.
+
+Entry-only current-source checks prepare their selected fields in the read worker
+and retain them with the existing entry-publication owner. Native and worker writes
+invalidate changed predicates before the next effect check, so those checks need no
+SQLite read on the Gateway. Conversation-bound checks still read the authoritative
+binding until every binding writer publishes its complete derived postimage.
+Source preparation borrows an already-retained entry predicate instead of dispatching
+another exact-entry read. Releasing a mutation's source leaves its selecting reader
+current; releasing that reader revokes every borrower. The destination worker keeps
+its transaction-local source comparison before the effect.
 
 Reply-initialization cohorts reuse those entry facts only when the selected entry
 and its parent are both covered. Cold-archive absence requires a complete actor
@@ -1723,6 +1741,13 @@ preserves the stored preimage; conservative receipt invalidation can require a
 reload. Missing residency, replacement lifecycles, and unknown writes still
 require hydration. Oversized optional actor postimages are
 shed with full-entry enrichment under the existing publication limit.
+Message rewrite preparation and commit also consume the current resident actor's
+hot, reconciled anchor and generation facts. Commit acquires those facts inside
+its writer transaction; prepare-time facts never authorize a later rewrite.
+Both stages still read the exact stored payload bytes, and the conditional update
+rejects concurrent edits. Missing residency uses the existing worker readers.
+Admission- and projection-preserving rewrites publish through the same actor owner;
+resets, cold archives, and incompatible writes invalidate its retained facts.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not
@@ -3287,8 +3312,9 @@ authority without rereading the same database. The existing native receipt publi
 entry facts before releasing FIFO custody, and close joins accepted persistence.
 Receipt insertion checks capacity in the same SQL statement; rejection rolls back
 the Goal and turn without evicting a still-valid retry receipt.
-Incognito Goals use the memory actor. Maintenance and opaque or cross-store
-SDK guards retain native atomicity for durable storage.
+Incognito Goals use the memory actor. All durable management calls use the writer;
+opaque SDK lifetime guards run through its existing host grants rather than a native
+fallback. Prepared storage predicates must belong to the selected agent store.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
 Durable Board writes prepare exact session existence in the session reader and carry
@@ -4405,9 +4431,13 @@ file caches only after acknowledged commit. Doctor relocation retains its native
 transaction. Schemas, retention, durability, and update behavior are unchanged.
 
 Session branch summaries retain compact counts, headlines, and their append
-certificate in the host, keyed by physical database identity and the transcript
-rewrite/append watermark. Read workers validate that snapshot before extending
-it, so worker retirement does not discard the cache. Workers also adopt the host's
+certificate in the host, keyed by database path and session key. The database
+owner's write receipt invalidates this cache without main-thread SQLite reads.
+The maintenance worker selects the current session and reads the transcript
+watermark in the same snapshot as the branch graph. It extends prior summaries
+only for the same physical database and transcript, so worker retirement does not
+discard the cache. A concurrent write may finish while a snapshot is being
+delivered; its receipt makes the next lookup refresh. Workers also adopt the host's
 live database validation receipt before canonical admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
 maintenance reader's prewarming, five-minute idle window, database custody, and
