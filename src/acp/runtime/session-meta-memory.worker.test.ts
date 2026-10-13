@@ -3,10 +3,10 @@ import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { failSessionActorMemoryPublication } from "../../config/sessions/session-actor-memory-publication.test-support.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -39,11 +39,7 @@ it("settles shared ACP metadata before reporting the committed entry publication
       state: "idle",
       lastActivityAt: 100,
     };
-    const stop = sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change && change.sessionKey === sessionKey && change.scope !== "acp") {
-        throw new Error("entry projection unavailable");
-      }
-    });
+    const stop = failSessionActorMemoryPublication(sessionKey);
     try {
       await expect(upsertAcpSessionMeta({ ...scope, mutate: () => meta })).rejects.toMatchObject({
         name: "SessionActorStorageCommittedError",

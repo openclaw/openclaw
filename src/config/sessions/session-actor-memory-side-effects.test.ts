@@ -7,7 +7,6 @@ import {
   persistHeartbeatOutcome,
 } from "../../infra/heartbeat-outcome-store.js";
 import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcome-store.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createSqliteTrajectoryRuntimeSink } from "../../trajectory/runtime-store-writer.js";
 import {
@@ -19,6 +18,7 @@ import { appendTranscriptMessage, upsertSessionEntryCore } from "./session-acces
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
@@ -145,12 +145,7 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 describe("memory session side-data consumers", () => {
   it("reports committed heartbeat publication failures without releasing the claim", async () => {
     const { scope } = await fixture();
-    const fail = () =>
-      sessionChanges.subscribeProjection((change) => {
-        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-          throw new Error("projection unavailable");
-        }
-      });
+    const fail = () => failSessionActorMemoryPublication(scope.sessionKey);
     const stopPersist = fail();
     try {
       await expect(
@@ -183,11 +178,7 @@ describe("memory session side-data consumers", () => {
   it("reports a committed message-tool outcome publication failure after one write", async () => {
     const { scope, actor } = await fixture();
     const sequence = actor.snapshot(authority)!.version.sequence;
-    const stop = sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-        throw new Error("projection unavailable");
-      }
-    });
+    const stop = failSessionActorMemoryPublication(scope.sessionKey);
     try {
       await expect(
         recordMessageToolRunOutcome({
@@ -216,11 +207,7 @@ describe("memory session side-data consumers", () => {
       sessionActor: binding,
     });
     const filter = { engineId: "test", isHeartbeat: false };
-    const stop = sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-        throw new Error("projection unavailable");
-      }
-    });
+    const stop = failSessionActorMemoryPublication(scope.sessionKey);
     try {
       await expect(store.acceptIntent({ ...filter, boundary })).rejects.toMatchObject({
         name: "SessionActorStorageCommittedError",
@@ -249,11 +236,7 @@ describe("memory session side-data consumers", () => {
     }
     const event = trajectory(scope.sessionId, "saved", 1);
     sink.write(event, JSON.stringify(event));
-    const stop = sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-        throw new Error("projection unavailable");
-      }
-    });
+    const stop = failSessionActorMemoryPublication(scope.sessionKey);
     try {
       await expect(sink.flush()).rejects.toMatchObject({
         name: "SessionActorStorageCommittedError",
