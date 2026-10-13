@@ -6421,7 +6421,6 @@
 ["src/cron/isolated-agent/delivery-target.test.ts","../../config/sessions/paths.js","c85cd0da833d1bd42d19142a4094d7531b4cc2922d372af49236d9451c8d12d1",1]
 ["src/cron/isolated-agent/delivery-target.test.ts","../../infra/outbound/channel-selection.runtime.js","c878c515fe9dce329014c57e72be630fb92b889d7bec7c3f8c11097a96e519de",1]
 ["src/cron/isolated-agent/delivery-target.test.ts","../../infra/outbound/targets.runtime.js","d3d5781af414d188466d2ac0fcf3ef0e94acb65354c9975a5a95435b217247c4",1]
-["src/cron/isolated-agent/model-preflight.runtime.test.ts","../../infra/net/fetch-guard.js","fdadfeec534de4036616e568f0a72048f5184e58a33412d299614865ab03ebed",1]
 ["src/cron/isolated-agent/run-session-state.test.ts","../../agents/bootstrap-cache.js","d9507dbdf64d66d0d1d9eb302fb37a8aa3150f96f7656b7e27b0751431612a35",1]
 ["src/cron/isolated-agent/run.delivery-formatting.test.ts","../../infra/outbound/channel-bootstrap.runtime.js","7ea3676d2599fdb869fbba4cb3622dd15a383450bd6d9ebad1c03018c59cf105",1]
 ["src/cron/isolated-agent/run.session-workspace.test.ts","../../agents/worktrees/registry-read.js","f89747aaedd59965b8a6209bff1cb5cb8de1a276929a8c5265282911ab1947ed",1]
