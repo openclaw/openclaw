@@ -287,6 +287,13 @@ export function authProfileSourceExists(sourcePath: string): boolean {
   return state.presence.get(sourcePath)!;
 }
 
+/** Cold credential admission revalidates migration inputs before publishing a new owner. */
+export function admitAuthProfileLegacySources(sourcePaths: Iterable<string>): void {
+  for (const sourcePath of new Set(sourcePaths)) {
+    directoryState(path.dirname(sourcePath)).presence.set(sourcePath, fs.existsSync(sourcePath));
+  }
+}
+
 export function registerAuthProfileFileChangeListener(listener: FileChangeListener) {
   listeners.add(listener);
   return () => {

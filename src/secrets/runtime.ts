@@ -49,6 +49,7 @@ import {
   getActiveSecretsRuntimeRefreshContext,
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
+  hasActiveSecretsRuntimeAuthStorePath,
   graftActiveSecretsRuntimeAuthState,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
   prepareSecretsRuntimeDisplaySnapshot,
@@ -662,17 +663,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
 }
 
 registerRuntimeAuthProfileExternalRefresh(async (paths) => {
-  const snapshot = getActiveSecretsRuntimeSnapshotState();
-  if (
-    !snapshot ||
-    !paths.every((pathname) =>
-      snapshot.authStores.some(
-        (entry) =>
-          entry.databasePath === pathname ||
-          (entry.owner.kind === "resolved" && entry.owner.sharedDatabasePath === pathname),
-      ),
-    )
-  ) {
+  if (!paths.some(hasActiveSecretsRuntimeAuthStorePath)) {
     return false;
   }
   return refreshActiveProviderAuthRuntimeSnapshot();
