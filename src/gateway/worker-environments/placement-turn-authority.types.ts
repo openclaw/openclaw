@@ -1,4 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { WorkerSessionPlacementReadResult } from "./placement-read-projection.types.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -28,6 +29,7 @@ export type ClaimChange = {
       workspacePlacement?: WorkerSessionPlacementRecord;
       projection?: WorkerSessionPlacementReadResult;
       retired?: true;
+      nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
     }
   | { kind: "workspace-result"; facts?: WorkspaceResultPostimage; cleared?: true }
   | { kind: "journal"; present?: boolean; uncertain?: true }

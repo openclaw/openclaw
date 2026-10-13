@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { ok, type Result } from "@openclaw/normalization-core/result";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
@@ -33,6 +34,7 @@ import {
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
+  toUserProfile,
 } from "./user-profiles-internal.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
 import type {
@@ -132,6 +134,16 @@ export function captureResidentUserProfileAccess(
 export function readResidentUserProfileRevision(profileId: string, pathname: string) {
   const catalog = profileCatalogs.get(pathname);
   return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
+}
+
+/** Catalog hydration and committed receipts retain the exact owner binding with its raw row. */
+export function readResidentGatewayOwnerProfile(pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const owner = catalog?.valid ? catalog.rows.get(GATEWAY_OWNER_PROFILE_ID) : undefined;
+  if (!owner || owner.merged_into || owner.gatewayOwnerCreatedAt === undefined) {
+    return undefined;
+  }
+  return toUserProfile({ ...owner, created_at: owner.gatewayOwnerCreatedAt });
 }
 
 /** Sharing pickers consume the session projection's committed display catalog. */

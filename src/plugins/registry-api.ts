@@ -6,6 +6,7 @@ import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
+import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   clearPluginRunContext,
   getPluginRunContext,
@@ -43,6 +44,7 @@ type BoundRegistrars = {
 // Registration exposes these async operations without loading session storage or delivery.
 const loadAttachments = createLazyRuntimeModule(() => import("./host-hook-attachments.js"));
 const loadHookState = createLazyRuntimeModule(() => import("./host-hook-state.js"));
+const loadSteering = createLazyRuntimeModule(() => import("./host-hook-steering.js"));
 
 function resolvePluginPath(input: string, rootDir: string | undefined): string {
   const trimmed = input.trim();
@@ -164,6 +166,37 @@ export function createPluginApiFactory(
                   pluginId: record.id,
                   pluginName: record.name,
                   injection,
+                });
+              },
+              steerActiveRun: async (input) => {
+                if (!resolvePromptInjectionAllowed(params.hookPolicy)) {
+                  return {
+                    steered: false,
+                    reason: `blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                  };
+                }
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { steered: false, reason: "global side effects disabled" };
+                }
+                const isCurrent = capturePluginLifecycleAuthority(
+                  getPluginRecordRegistry(registry, record),
+                  record,
+                  { registration: true },
+                );
+                const assertCurrent = () => {
+                  if (!isCurrent?.()) {
+                    throw new Error(`Plugin "${record.id}" is no longer loaded`);
+                  }
+                };
+                assertCurrent();
+                const { steerPluginActiveRun } = await loadSteering();
+                assertCurrent();
+                return steerPluginActiveRun({
+                  // SAFETY: The host helper reads the SDK's readonly view of the same config data.
+                  cfg: registryParams.runtime.config.current() as OpenClawConfig,
+                  pluginId: record.id,
+                  input,
+                  assertCurrent,
                 });
               },
               emitAgentEvent: (event) => {

@@ -283,7 +283,7 @@ export async function prepareAgentRunUserTurn(params: {
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: params.privateCompletion,
+        trackInputCompletion: params.privateCompletion || settleWakeReplay !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: async () => {

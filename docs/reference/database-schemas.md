@@ -156,11 +156,17 @@ all sibling native handles have drained, preserving their POSIX locks.
 
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
-child reads current credential rows and closes its native reader before transferring
-them, without repeating schema admission on each request. It retains neither schema
-catalogs nor open handles between requests. Cold, snapshot, and artifact-preserving
-reads still admit their own database; owner DDL invalidates the next projection,
-and a replacement physical file cannot borrow the previous file's facts.
+child reads current credential rows through its bounded native reader pool without
+repeating connection setup or schema admission on each request. Retained readers
+are bound to the request's admitted physical identity; the parent joins child
+cleanup before database deletion. Cold, snapshot, and artifact-preserving reads
+still admit their own database; owner DDL invalidates the next projection, and a
+replacement physical file cannot borrow the previous file's reader or facts.
+
+Synchronous plugin discovery inside workers likewise borrows the existing
+shared-state reader pool. Each pass reads current rows, while the native reader
+and its admission survive until worker cleanup or idle expiry. Main-thread
+one-shot reads and artifact-preserving snapshots keep their scoped lifetimes.
 
 Worker dispatch carries snapshots prepared by the admission owner when it publishes
 facts or writer custody. Unchanged requests reuse the registry revision without

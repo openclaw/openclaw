@@ -23,9 +23,6 @@ import {
 } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionSharingTarget,
-  createSessionListEntryFilter,
-  resolveSessionSharingRole,
   prepareProjectedSessionSharing,
   resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
@@ -67,12 +64,10 @@ export function requireVisibleSuggestionRole(params: {
   sessionKey: string;
   target: Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>;
   respond: RespondFn;
-  sharing?: ReturnType<typeof prepareProjectedSessionSharing>;
+  sharing: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {
   const { target, client, cfg, sharing } = params;
-  const entryFilter = hasOperatorBoundary(client, cfg)
-    ? (sharing?.entryFilter ?? createSessionListEntryFilter({ client, cfg }))
-    : undefined;
+  const entryFilter = hasOperatorBoundary(client, cfg) ? sharing.entryFilter : undefined;
   if (!target || entryFilter?.(target.storeKey, target.entry) === false) {
     params.respond(
       false,
@@ -81,7 +76,7 @@ export function requireVisibleSuggestionRole(params: {
     );
     return null;
   }
-  const role = sharing?.roleForTarget(target) ?? resolveSessionSharingRole({ client, cfg, target });
+  const role = sharing.roleForTarget(target);
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
     sessionKey: params.sessionKey,
@@ -94,9 +89,7 @@ export function requireVisibleSuggestionRole(params: {
   if (resolveSessionVisibility(target.entry) !== "draft") {
     return role;
   }
-  const error = sharing
-    ? sharing.authorizeTarget(target)
-    : authorizeSessionSharingTarget({ client, cfg, target });
+  const error = sharing.authorizeTarget(target);
   if (!error) {
     return role;
   }

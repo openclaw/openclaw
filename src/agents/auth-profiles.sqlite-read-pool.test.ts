@@ -72,7 +72,7 @@ function withReaders(
 }
 
 describe("auth profile sqlite reader lifecycle", () => {
-  it("reads a captured owner projection after native close without retaining schema metadata", () => {
+  it("reuses a reader with a captured owner projection after the writer closes", () => {
     const databasePath = path.join(tempDirs.make("auth-schema-transfer-"), "agent.sqlite");
     const writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
     registerOpenClawAgentDatabaseIdentity(writer, databasePath);
@@ -96,8 +96,9 @@ describe("auth profile sqlite reader lifecycle", () => {
           store: { status: "readable", raw: store },
           state: { status: "missing", reason: "table" },
         });
-        expect(open.mock.results[index]?.value.isOpen).toBe(false);
+        expect(open.mock.results[0]?.value.isOpen).toBe(true);
       }
+      expect(open).toHaveBeenCalledOnce();
       expect(
         observed.queries.filter((sql) =>
           /sqlite_(?:schema|master)|\bPRAGMA\s+(?:encoding|user_version|schema_version)\b/iu.test(
@@ -143,7 +144,7 @@ describe("auth profile sqlite reader lifecycle", () => {
             captureSqliteAuthSchema(databasePath, readDatabasePathIdentitySync(databasePath).key),
           ),
         ).toMatchObject({ store, state });
-        // The batched reader closes its native handle; the next read borrows the same facts.
+        // Both readers borrow the same admitted facts after each committed write.
         expect(inspectAgentAuthProfileJsonCellReadOnly(databasePath, "store")).toEqual(store);
         expect(
           reads.queries.filter((sql) => /\b(?:sqlite_master|sqlite_schema)\b/iu.test(sql)),

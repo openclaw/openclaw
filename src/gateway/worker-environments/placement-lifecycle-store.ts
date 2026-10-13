@@ -188,7 +188,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
         }
         return request.facts;
       },
-      stageCommit(committed) {
+      stageCommit(committed, nativeSettlement) {
         const facts = readReceipt(committed);
         if (!facts) {
           throw new Error("Worker placement lifecycle receipt has a different session");
@@ -205,6 +205,7 @@ export function createPlacementLifecycleWorkerOps(runtime: {
               context.admission.identity,
               facts.sessionId,
               facts.retired,
+              nativeSettlement,
             )
           : facts.placement
             ? stagePlacementTurnClaimWorkerPublication(
@@ -213,6 +214,8 @@ export function createPlacementLifecycleWorkerOps(runtime: {
                 undefined,
                 undefined,
                 facts.placement,
+                undefined,
+                nativeSettlement,
               )
             : stagePlacementWorkspaceJournalWorkerPublication(
                 context.admission.identity,

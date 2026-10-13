@@ -45,7 +45,6 @@ import {
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
@@ -187,6 +186,7 @@ it.each(admissionScenarios)(
       let reply: ReturnType<typeof createReplyOperation> | undefined;
       let successor: ReturnType<typeof registerChatAbortController> | undefined;
       let options: DispatchOptions | undefined;
+      let releaseAuthorization: (() => void) | undefined;
       try {
         const respond = vi.fn();
         const params = {
@@ -195,15 +195,13 @@ it.each(admissionScenarios)(
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
-        const authorize = createsDashboardSession
-          ? resolveSessionMutationAuthorizationAsync
-          : resolveSessionMutationAuthorization;
-        const authorization = await authorize({
+        const authorization = await resolveSessionMutationAuthorizationAsync({
           client,
           context,
           method: "chat.send",
           requestParams: params,
         });
+        releaseAuthorization = authorization.authorization?.release;
         expect(authorization.error).toBeNull();
         const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         const request = {
@@ -411,6 +409,7 @@ it.each(admissionScenarios)(
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
         clone.mockRestore();
+        releaseAuthorization?.();
       }
     });
   },
@@ -504,6 +503,7 @@ it.each(
       );
       let token: string | undefined;
       let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
+      const authorizationReleases: Array<() => void> = [];
       async function sendPrompt(runId: string, message: string) {
         const source: Source = {
           entered: createDeferred<DispatchOptions>(),
@@ -512,12 +512,15 @@ it.each(
         };
         sources.set(runId, source);
         const params = { sessionKey, message, idempotencyKey: runId };
-        const authorization = resolveSessionMutationAuthorization({
+        const authorization = await resolveSessionMutationAuthorizationAsync({
           client,
           context,
           method: "chat.send",
           requestParams: params,
         });
+        if (authorization.authorization?.release) {
+          authorizationReleases.push(authorization.authorization.release);
+        }
         expect(authorization.error).toBeNull();
         const respond = vi.fn();
         await handleDirectExternalChatSend({
@@ -757,6 +760,9 @@ it.each(
           if (source.owned) {
             clearAgentRunContext(runId, source.owned.admission.lifecycleGeneration);
           }
+        }
+        for (const release of authorizationReleases) {
+          release();
         }
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();

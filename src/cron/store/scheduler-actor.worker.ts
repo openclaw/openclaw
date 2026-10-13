@@ -1,4 +1,5 @@
 import { BroadcastChannel } from "node:worker_threads";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -29,7 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { requestCronRunsInWorker } from "./run-queue.worker.js";
+import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -71,7 +72,16 @@ type StartupOverflow = {
 const actors = new Map<string, SchedulerActor>();
 
 function emptyResult(): CronSchedulerResult {
-  return { jobs: [], ownerless: [], accepted: [], rejected: [], notifications: [], logs: [] };
+  return {
+    jobs: [],
+    ownerless: [],
+    accepted: [],
+    rejected: [],
+    launches: [],
+    skipped: [],
+    notifications: [],
+    logs: [],
+  };
 }
 
 function readJobs(database: OpenClawStateDatabase, storeKey: string): CronJob[] {
@@ -395,7 +405,10 @@ export function runCronSchedulerInWorker(
   if (command.type === "cron.schedulerStart" && !actor.channels.has(command.input.channelName)) {
     const channel = new BroadcastChannel(command.input.channelName);
     channel.unref();
-    actor.channels.set(command.input.channelName, { channel, paused: false });
+    actor.channels.set(command.input.channelName, {
+      channel,
+      paused: command.input.paused ?? false,
+    });
   }
   if (command.type !== "cron.schedulerStart" && command.input.channelName) {
     const subscriber = actor.channels.get(command.input.channelName);
@@ -492,22 +505,41 @@ export function runCronSchedulerInWorker(
     const owned = candidates.filter(
       (job) => !ownerless.includes(job) && hasScheduledNextRunAtMs(job.state.nextRunAtMs),
     );
-    if (owned.length > 0) {
-      const requested = requestCronRunsInWorker(database, {
-        storeKey: input.storeKey,
-        nowMs,
-        defaultAgentId: snapshot.config.defaultAgentId,
-        requests: owned.map((job) => ({
-          mode: "scheduled",
-          jobId: job.id,
-          configRevision: resolveCronJobConfigRevision(job),
-          scheduledSlotMs: job.state.nextRunAtMs,
-          receiptId: createCronScheduledRunId(input.storeKey, job.id, job.state.nextRunAtMs!),
-        })),
-      });
+    if (
+      command.type !== "cron.schedulerRefresh" &&
+      (owned.length > 0 ||
+        (input.requests?.length ?? 0) > 0 ||
+        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
+    ) {
+      currentJobs();
+      const requested = requestAndDrainCronRunsInWorker(
+        database,
+        {
+          storeKey: input.storeKey,
+          nowMs,
+          defaultAgentId: snapshot.config.defaultAgentId,
+          requests: owned.map((job) => ({
+            mode: "scheduled",
+            jobId: job.id,
+            configRevision: resolveCronJobConfigRevision(job),
+            scheduledSlotMs: job.state.nextRunAtMs,
+            receiptId: createCronScheduledRunId(input.storeKey, job.id, job.state.nextRunAtMs!),
+          })),
+        },
+        {
+          requests: input.requests ?? [],
+          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          schedulingPaused: input.paused,
+        },
+        jobs,
+      );
       result.accepted.push(...requested.accepted);
       result.rejected.push(...requested.rejected);
+      result.launches.push(...requested.launches);
+      result.skipped.push(...requested.skipped);
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
+      result.jobs.push(...requested.launches.map((entry) => entry.job));
+      result.jobs.push(...requested.skipped.flatMap((entry) => (entry.job ? [entry.job] : [])));
     }
     if (overflow.size > 0 && (actor.startupBatch || result.accepted.length > 0)) {
       actor.startupBatch ??= { immediateReceiptIds: new Map(), overflow: new Map() };

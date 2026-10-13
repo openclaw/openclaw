@@ -250,8 +250,8 @@ export async function attachAuthenticatedGatewayConnect(
     scopes.includes(scope),
   );
   if (authenticatedUserId && addedIdentityScopes.length > 0) {
-    logGateway.warn(
-      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} conn=${connId}`,
+    logGateway.info(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
     );
   }
 
