@@ -1,23 +1,27 @@
+// @vitest-environment node
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { openaiMediaUnderstandingProvider } from "../../../../extensions/openai/api.js";
-import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../../config/types.js";
-import { acquireStateDatabaseSchemaLease } from "../../../infra/gateway-state-owner.js";
-import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
-import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { sessionReadHandlers } from "../../server-methods/sessions-read.js";
-import { bindSessionRowProjection } from "../../session-row-projection-access.js";
-import { createSessionRowProjection } from "../../session-row-projection.js";
-import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
-import { createTalkHandlerCaller } from "./handler-invocation.test-support.js";
-import { talkHandlers } from "./index.js";
-import { expectRespondError, expectRespondOk } from "./responses.test-support.js";
+import { openaiMediaUnderstandingProvider } from "../extensions/openai/api.js";
+import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../src/config/types.js";
+import { sessionReadHandlers } from "../src/gateway/server-methods/sessions-read.js";
+import { bindSessionRowProjection } from "../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../src/gateway/session-row-projection.js";
+import { roleClient, rolePolicyConfig } from "../src/gateway/session-sharing.test-utils.js";
+import { createTalkHandlerCaller } from "../src/gateway/talk/handlers/handler-invocation.test-support.js";
+import { talkHandlers } from "../src/gateway/talk/handlers/index.js";
+import {
+  expectRespondError,
+  expectRespondOk,
+} from "../src/gateway/talk/handlers/responses.test-support.js";
+import { acquireStateDatabaseSchemaLease } from "../src/infra/gateway-state-owner.js";
+import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../src/state/openclaw-state-db-async-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
+import { prepareUserProfileCatalog } from "../src/state/user-profile-list.js";
+import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 const sessionKey = "agent:researcher:catalog";
 
