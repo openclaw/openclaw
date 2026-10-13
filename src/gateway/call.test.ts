@@ -419,8 +419,8 @@ describe("callGateway url resolution", () => {
         process.env.OPENCLAW_GATEWAY_TOKEN = "fixture-env-token";
       }
       await callGateway({
-        method: "chat.send",
-        params: { message: "observed destination" },
+        method: "sessions.patch",
+        params: { key: "agent:main:observed", label: "observed destination" },
         expectUrl: expected,
       });
       expect(lastClientOptions?.url).toBe(expected);
@@ -429,7 +429,7 @@ describe("callGateway url resolution", () => {
       );
 
       // The user's snapshot names the first endpoint; a later CLI invocation
-      // reloads configuration before sending its selected-session prompt.
+      // reloads configuration before applying its selected-session edit.
       if (source === "environment") {
         process.env.OPENCLAW_GATEWAY_URL = "wss://replacement.example/ws";
       } else {
@@ -443,9 +443,9 @@ describe("callGateway url resolution", () => {
       lastRequestOptions = null;
       await expect(
         callGateway({
-          method: "chat.send",
+          method: "sessions.patch",
           mode: GATEWAY_CLIENT_MODES.CLI,
-          params: { message: "must not retarget" },
+          params: { key: "agent:main:observed", label: "must not retarget" },
           expectUrl: expected,
         }),
       ).rejects.toThrow("Gateway destination changed");

@@ -560,6 +560,8 @@ describe("syncWorkspaceSkills", () => {
       await fs.writeFile(path.join(staleDir, "SKILL.md"), "# Stale\n", { mode: 0o444 });
       await fs.writeFile(path.join(nestedDir, "old.txt"), "old", { mode: 0o444 });
       await fs.writeFile(outsideFile, "outside", { mode: 0o444 });
+      // Pin the linked target mode independently of the caller's umask.
+      await fs.chmod(outsideFile, 0o444);
       await fs.symlink(outsideDir, path.join(staleDir, "linked-directory"));
       await fs.symlink(outsideFile, path.join(staleDir, "linked-file"));
       await fs.symlink(outsideDir, path.join(targetSkillsDir, "linked-directory"));
