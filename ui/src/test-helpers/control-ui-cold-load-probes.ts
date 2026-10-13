@@ -50,6 +50,7 @@ export function installColdLoadProbes(input: {
   const sidebarLifecycle = new Map<string, Map<SidebarLifecycle, { count: number; ms: number }>>();
   const sidebarOwnerStacks = new Map<string, number>();
   const sidebarRegistration = {
+    // oxlint-disable-next-line typescript/unbound-method -- Save the native method for restoration; Reflect.apply forwards each WeakMap receiver.
     originalSet: WeakMap.prototype.set,
     matches(host: unknown, owner: unknown): owner is SolidSidebarProbeOwner {
       return (
@@ -88,11 +89,13 @@ export function installColdLoadProbes(input: {
     },
     restore() {
       if (WeakMap.prototype.set === sidebarRegistration.set) {
+        // oxlint-disable-next-line no-extend-native -- Restore the native setter immediately after this benchmark-only registration tap.
         WeakMap.prototype.set = sidebarRegistration.originalSet;
       }
     },
   };
   // Tap the existing host→owner registration without exposing a production debug API.
+  // oxlint-disable-next-line no-extend-native, typescript/unbound-method -- This temporary benchmark tap forwards the WeakMap receiver and restores the native setter after capture or teardown.
   WeakMap.prototype.set = sidebarRegistration.set;
   window.addEventListener("pagehide", () => sidebarRegistration.restore(), { once: true });
   const liveEvents = new Map<string, number>();
