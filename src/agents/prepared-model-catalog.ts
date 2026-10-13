@@ -27,6 +27,7 @@ import {
 } from "./prepared-model-runtime-generation-scope.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import {
+  PreparedModelCatalogGenerationMismatchError,
   isPreparedModelRuntimeMissingOwnerError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
@@ -40,6 +41,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch,
   refreshPreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
@@ -95,22 +97,36 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Explicit refresh waits for acquisition; ordinary reads return saved rows during renewal.
-  const inventoryCatalog =
-    refreshFullCatalog === true
-      ? await refreshPreparedModelRuntimeCatalog(snapshot, {
-          refresh: readOnly !== true,
-          ...(providerIds ? { providerIds } : {}),
-        })
-      : undefined;
-  const modelCatalog =
-    inventoryCatalog ??
-    (readOnly === true
-      ? snapshot.readFullModelCatalog?.()
-      : await snapshot.loadFullModelCatalog({
-          refresh: refreshFullCatalog === true,
-          ...(providerIds ? { providerIds } : {}),
-        }));
+  let modelCatalog: ModelCatalogSnapshot | undefined;
+  try {
+    // Explicit refresh waits for acquisition; ordinary reads return saved rows during renewal.
+    const inventoryCatalog =
+      refreshFullCatalog === true
+        ? await refreshPreparedModelRuntimeCatalog(snapshot, {
+            refresh: readOnly !== true,
+            ...(providerIds ? { providerIds } : {}),
+          })
+        : undefined;
+    modelCatalog =
+      inventoryCatalog ??
+      (readOnly === true
+        ? snapshot.readFullModelCatalog?.()
+        : await snapshot.loadFullModelCatalog({
+            refresh: refreshFullCatalog === true,
+            ...(providerIds ? { providerIds } : {}),
+          }));
+  } catch (error) {
+    if (
+      error instanceof PreparedModelCatalogGenerationMismatchError &&
+      error.agentDir === snapshot.agentDir &&
+      (await replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(snapshot))
+    ) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        `prepared model runtime catalog generation was replaced for ${snapshot.agentDir}`,
+      );
+    }
+    throw error;
+  }
   if (!modelCatalog) {
     return snapshot;
   }

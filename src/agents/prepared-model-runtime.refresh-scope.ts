@@ -339,8 +339,9 @@ export function createPreparedModelRuntimeRecovery(host: {
         allowGatewaySubagentBinding: true,
         agentIds: new Set(affected.flatMap((candidate) => candidate.input.agentId ?? [])),
         pluginMetadataSnapshot: owner.snapshot?.metadataSnapshot,
-        isPublicationCurrent: () =>
-          host.canRecover() && host.owners.get(ownerKey(owner.input)) === owner,
+        // publish() synchronously fences this owner before a full refresh may replace it.
+        // Keep the publication current across that expected owner replacement.
+        isPublicationCurrent: host.canRecover,
       })
       .catch((error: unknown) => {
         if (

@@ -446,6 +446,12 @@
       }
     },
     {
+      "files": ["src/agents/prepared-model-runtime.catalog-access.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 710, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
         "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
