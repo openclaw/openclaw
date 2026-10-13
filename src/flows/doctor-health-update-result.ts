@@ -35,17 +35,21 @@ export async function publishDoctorUpdateResult(params: {
       ...contributionWarnings.slice(deferredCount),
     ]),
   );
+  const outcome = { ...doctorResult };
+  delete outcome.warnings;
+  delete outcome.deferredInspectionCheckIds;
   await writeUpdatePostInstallDoctorResult({
     resultPath: updateResult.resultPath,
     result: {
-      ...doctorResult,
-      deferredInspectionCheckIds: updateResult.capture.deferredInspectionCheckIds,
+      ...outcome,
+      ...(updateResult.capture.deferredInspectionCheckIds
+        ? { deferredInspectionCheckIds: updateResult.capture.deferredInspectionCheckIds }
+        : {}),
       ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
       ...(updateResult.capture.fileWrites
         ? { configFileWrites: updateResult.capture.fileWrites }
         : {}),
-      // Replace Doctor's own list even when every entry settled; the writer drops [].
-      warnings,
+      ...(warnings.length ? { warnings } : {}),
       ...(updateResult.capture.configChanges.length
         ? { configChanges: updateResult.capture.configChanges }
         : {}),
