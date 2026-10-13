@@ -27,7 +27,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
 
-For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
+For the shared explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
 See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security).
 
@@ -35,9 +35,20 @@ See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
+If a routed session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
+
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
+
+Continuation mappings survive Gateway restarts in the shared state database's core keyed store (`core:openresponses`, namespace `response-sessions`) for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and store-managed timestamps. No response content is copied, and no separate table or schema migration is required. The keyed store rejects expired mappings immediately on lookup and removes expired rows in bounded batches on subsequent writes to that namespace. Idle Gateways do not run a plugin-state expiry sweep; expired mappings remain unavailable even before their rows are removed. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
+
+An unknown, expired, evicted, or out-of-scope `previous_response_id` returns the same HTTP `400` with `invalid_request_error`, including when `stream: true`. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation. Responses issued before this storage change cannot be recovered after the old Gateway exits.
+
+Incognito responses never create continuation mappings. Continue them explicitly with the same `x-openclaw-session-key` while the Incognito session is alive; using their response ID returns the same `400` as an unknown ID.
 
 ### Explicit incognito session continuation
 
@@ -143,8 +154,9 @@ Current behavior:
 
 - Text inferred from otherwise untyped bytes retains its detected encoding, including UTF-16 and Windows-1252. Declared text charsets remain supported.
 - File content is decoded and added to the **system prompt**, not the user message, so it stays ephemeral (not persisted in session history).
-- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the long `SECURITY NOTICE:` banner to preserve prompt budget; the boundary markers and metadata still apply.
+- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the one-line data-boundary note to preserve prompt budget; the boundary markers and metadata still apply.
 - PDFs are parsed for text first. If little text is found, the first pages are rasterized into images and passed to the model, and the injected file block uses the placeholder `[PDF content rendered to images]`.
+- When page, text, or image limits make extraction partial, the injected file block starts with a bounded `[Partial document: ...]` marker outside the untrusted file-content boundary.
 
 PDF parsing is provided by the bundled `document-extract` plugin, which uses `clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and page rendering.
 
@@ -159,7 +171,8 @@ URL fetch defaults:
 
 ## File + image limits
 
-The endpoint uses a built-in 20 MB request-body limit. File and image source
+The endpoint uses a built-in 20 MB request-body limit and a 60-second body-read
+deadline. Uploads that exceed the deadline return HTTP `408`. File and image source
 policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
@@ -249,11 +262,13 @@ Failed agent runs, including whole-agent timeouts, return a failed response. Str
 
 A reply that ends because the agent reached its output-token budget is returned with `status: "incomplete"` and `incomplete_details: { "reason": "max_output_tokens" }`, and its final message item carries `status: "incomplete"`. Streaming emits these fields on the terminal `response.incomplete` event, so clients dispatching by event type also observe the truncation. This mirrors the `finish_reason: "length"` projection on `/v1/chat/completions`.
 
-Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request returns a failed response (HTTP `500` when not streaming) with the message `agent run was cancelled`, not a provider timeout.
 
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.
+
+If a response ends before complete usage arrives, JSON responses and terminal streaming resources omit `usage` instead of presenting zero or provisional counts as complete. Stream completion does not depend on a usage report arriving.
 
 ## Errors
 

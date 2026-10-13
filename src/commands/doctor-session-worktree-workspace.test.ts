@@ -4,10 +4,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import * as sessionReaders from "../infra/session-sqlite-migration-readers.js";
 import {
   ensureProjectRegistrySchema,
   insertProjectRegistryInDatabase,
@@ -31,10 +36,12 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -53,6 +60,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
   await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir }, async () => {
     const env = { ...process.env };
     const cfg = { agents: { entries: { main: { workspace: repoRoot }, ops: { workspace } } } };
+    setRuntimeConfigSnapshot(cfg);
     // Persisted legacy project setup, not a public Git registration-flow proof.
     ensureProjectRegistrySchema({ env });
     const project = runOpenClawStateWriteTransaction(
@@ -69,7 +77,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       env,
       sessionKey: `agent:${agentId}:legacy-worktree`,
     }));
-    insertRegistryWorktree(env, {
+    await insertRegistryWorktree(env, {
       id: "legacy",
       name: "legacy",
       repoFingerprint: "0123456789abcdef",
@@ -101,9 +109,12 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
     const log = { info: vi.fn(), warn: vi.fn() };
     await runSessionStartupMigration({ cfg, env, log });
     expect(readEntries()).toEqual(before);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(log.warn).not.toHaveBeenCalled();
 
+    const targetDiscovery = vi.spyOn(sessionReaders, "listExistingAgentDatabaseTargets");
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: false });
+    expect(targetDiscovery).toHaveBeenCalledTimes(1);
+    targetDiscovery.mockClear();
     expect(readEntries()).toEqual(before);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Found 2 managed-worktree session(s)"),
@@ -112,6 +123,8 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
     await closeOpenClawAgentDatabasesAsync();
 
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
+    expect(targetDiscovery).toHaveBeenCalledTimes(1);
+    targetDiscovery.mockRestore();
     for (const [index, scope] of scopes.entries()) {
       const original = before[index]!;
       expect(loadExactSessionEntryReadOnly(scope)?.entry).toEqual({
@@ -121,7 +134,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
       expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
     }
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Repaired canonical workspace metadata for 2 of 2"),
+      expect.stringContaining("Repaired saved workspace metadata for 2 of 2"),
       "Session worktrees",
     );
   });

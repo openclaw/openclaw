@@ -1,4 +1,3 @@
-// Matrix type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { CoreConfig } from "../../types.js";
@@ -13,7 +12,6 @@ import type {
   VideoFileInfo,
 } from "../sdk.js";
 
-// Message types
 export const MsgType = {
   Text: "m.text",
   Image: "m.image",
@@ -23,14 +21,12 @@ export const MsgType = {
   Notice: "m.notice",
 } as const;
 
-// Relation types
 export const RelationType = {
   Annotation: MATRIX_ANNOTATION_RELATION_TYPE,
   Replace: "m.replace",
   Thread: "m.thread",
 } as const;
 
-// Event types
 export const EventType = {
   Direct: "m.direct",
   Reaction: MATRIX_REACTION_EVENT_TYPE,

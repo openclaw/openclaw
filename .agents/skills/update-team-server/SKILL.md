@@ -1,44 +1,140 @@
 ---
 name: update-team-server
-description: "Update the operator-configured Team server unattended through its canonical deployment owner; verify serving code, supported migrations, session continuity, and recovery without duplicating the hourly scheduler."
+description: "Update the operator-configured Team server through its canonical owner; trust native validation and acceptance without duplicate checks or schedulers."
 ---
 
 # Update Team server
 
-Keep Team current automatically. Routine deployments, controlled interruptions, and supported upstream-owned migrations are already authorized for this workflow; do not request another routine approval. This is a repository operator skill, not a bundled runtime skill or a deployer implementation.
+Update the operator-configured Team server through the canonical release deployer under explicit per-deployment approval. A Peter-instructed update authorizes execution through that owner; Night Watch coordinates restart timing and receives every deploy/restart notification, but is not an approval gate for that update. Keep unattended deployment disabled. This repository operator skill bundles the interim [deployment controller](controller/README.md); it is not a runtime skill. The native `openclaw update` path will replace the controller after its migration, recovery, and acceptance contracts are proven and adopted.
+
+## Canonical deployer owns live updates
+
+Only the canonical release deployer owns deployment, restart, cutover, rollback,
+and recovery. Peter-instructed updates run through that owner. Night Watch on
+`stable.openclaw.ai` is notified of every deploy/restart, coordinates restart
+timing, and records the verified outcome in the same coordinator session; its
+acknowledgment is not an additional approval or execution gate for a
+Peter-instructed update. Resolve the exact coordinator session and deployment
+host from the private operator record; a matching display name or access alone
+is not authority. Keep unattended deployment disabled. Never edit Team live
+state outside the deployer/owner, invoke direct restarts, or create another
+deployer. Existing per-deployment approval persists through the same scoped
+update and recovery.
+
+Other workers may investigate, test, review, and land scoped fixes in isolated
+worktrees. Repair or landing authority does not authorize a fresh deployment.
+The requester retains coordination and follow-through through native acceptance;
+an acknowledgment or landed repair is not acceptance.
+
+If a live operation is already running, reconcile that exact transaction through
+the existing owner's supported coordination/recovery path. Preserve invocation
+identity, phase, lock, journal, maintenance authority, and receipts; check whether
+writers or children remain active before resuming. Never launch a duplicate
+controller, reassign authority by editing records, blindly kill an operation, or
+bypass a denial. If safe continuation is unavailable, report the concrete blocker
+privately and keep the request open without unauthorized live actions.
 
 ## Resolve the owner
 
-Read the operator-provided private deployment runbook before acting. Resolve and verify the host, access, canonical deployment command, service, hourly timer, lock, journal, release pointers, backup destination, and recovery contract from that configuration. Never guess access or copy private connection details, credentials, state, or receipts into public output.
+### Install or adopt the bundled controller
 
-Verify installed owner capabilities against their current source; this skill does not install a migration phase. Missing access or a safe capability is a concrete blocker: repair through the existing owner within authority, or report what remains unavailable. Never invent success or bypass a denial. Keep source/PR repairs in separate worktrees; do not delay an otherwise safe prepared update for them.
+Use the four-file closure in [controller/README.md](controller/README.md) from one reviewed, merged OpenClaw commit. Never stage a private operations checkout on the deployment host. The README owns the install paths, modes, required private operator profile, source hashes, standalone tests, and detailed adoption contract.
+
+Night Watch alone performs adoption in its coordinated window: settle every old controller reader and any transaction through its current owner; bind installed hashes and current runtime facts; acquire the existing deployment lock without replacing its inode; recheck those facts; preserve and fsync predecessor files and metadata; stage and publish the complete reviewed pair with its matching helpers and operator profile; verify the full closure and unchanged runtime facts before releasing the lock. Never expose a mixed pair to a reader. An unresolved journal requires the matching recovery owner and a reviewed phase-specific adoption, not a generic reinstall. Controller publication itself does not restart the Gateway, enable a timer, or authorize a deployment. Retain the old recovery closure while any transaction references it.
+
+### Reconcile a deployment request
+
+Use the operator-provided private deployment runbook to establish the designated owner, access, canonical command, sole configured cadence, and recovery contract. Reuse known unchanged access, runbook, and source context; do not reread historical registries or rediscover the deployment setup each turn. Reconcile only the current owner, active invocation, lock, and journal before proceeding. Never guess access or copy private connection details, credentials, state, or receipts into public output.
+
+For an approved request, complete that concise reconciliation and promptly invoke the canonical updater through its owner when idle, notifying Night Watch and coordinating restart timing without making its acknowledgment an extra gate. The updater owns validation, migrations, and acceptance; do not add agent-side preflight or postflight checks that repeat its work. Investigate only a concrete native failure, a missing or ambiguous receipt, contradictory current evidence, or an actual ownership conflict. Inspect the relevant source or runbook when resolving that specific gap, not as a routine prerequisite.
+
+This skill does not install a migration phase. Missing access or a safe capability is a concrete blocker: repair through the existing owner within authority, or report what remains unavailable. Never invent success or bypass a denial. Qualify suspected issues against the actual failing path before treating them as defects. Improve this updater guidance when confirmed issues expose a durable gap, and repair confirmed defects within the authorized update scope. Use isolated worktrees and subagents where useful; test and review repairs, then land them through normal CI, PR review, and `scripts/pr` landing without bypassing branch protection. Keep ownership through verified update acceptance; landed repairs alone do not complete the update. Do not delay an otherwise safe prepared update for unrelated repairs.
 
 ## Deploy through one owner
 
-1. Keep the existing hourly timer enabled and active as the sole cadence. Never pause it for proof or create another scheduler/deployer. Inspect the active invocation, lock, and journal; observe an active owner instead of duplicating it. Resolve retained journals through canonical recovery before requesting a new deployment. Do not clear failed status to manufacture idleness.
-2. When idle, request the configured updater service using its documented command. The canonical owner alone controls deployment, Gateway lifecycle, rollback, and recovery. Do not substitute direct restarts, partial build overlays, or an in-place source build.
-3. Keep the incumbent serving while the owner freezes official upstream `main`, builds the complete release off-path, validates it, and seals it. Check runtime-user disk/quota headroom, not just host free space.
-4. Use the owner's genuine, unexpired maintenance authority bound to the incumbent generation. Allow controlled interruption after its configured drain budget; active agents and PTYs are not indefinite vetoes. Pending terminal persistence still blocks interruption. Never relabel DRAINING as READY. Bound shutdown, migration, startup, and verification separately; the drain budget is not total downtime.
+1. Preserve the operator-configured sole cadence and its intended state. A retired host timer may intentionally remain disabled when an authorized Gateway job owns the schedule. Never enable a legacy timer, pause the active cadence for proof, or create another scheduler/deployer. Inspect the active invocation, lock, and journal; observe an active owner instead of duplicating it. Resolve retained journals through canonical recovery before requesting a new deployment. Do not clear failed status to manufacture idleness.
+2. When idle, request the configured updater service through its canonical owner using its documented command. The canonical owner alone controls deployment, Gateway lifecycle, rollback, and recovery. Do not substitute direct restarts, partial build overlays, or an in-place source build.
+3. Keep the incumbent serving while the owner freezes official upstream `main`, builds the complete release off-path, validates it, and seals it. After a new instruction to update to latest main following an interruption or outage, let the native controller freeze official `main` once for that request after canonical recovery permits a new deployment. Follow that recorded target through acceptance; do not chase moving main with externally sampled `--sha` assertions or repeat safe target-mismatch refusals. Let the owner check runtime-user disk/quota headroom as part of its native preparation; do not repeat that check externally.
+4. Use the owner's genuine, unexpired maintenance authority bound to the incumbent generation. Use the configured graceful drain, then the owner's documented bounded-interruption mode when authorized; active agents and PTYs are not indefinite vetoes. Apply existing interruption authorization rather than repeatedly choosing a defer-only policy or asking again. Never bulk-cancel agents, abort sessions, clear queues, manually replay turns, or bypass persistence or locks to force idleness. Pending terminal persistence still blocks interruption. Never relabel DRAINING as READY. Bound shutdown, migration, startup, and verification separately; the drain budget is not total downtime.
 
-## Cross schemas safely
+## Retain ownership through acceptance
 
-Before stopping writers, identify the exact incumbent/candidate reader contracts, supported Doctor migration, and durable phase/recovery owner. Package versions and numeric schema ceilings alone are insufficient. Require the owner to prove these gates before mutation:
+Treat every authorized update request, including a brief ping to update, as an execution obligation until the requested release passes full native acceptance. An acknowledgment, status reply, successful build, restored incumbent, blocker report, or landed repair PR does not complete that obligation. Follow-up pings and clarifications retain the same request and approval; they do not reset ownership or require the requester to ask again. Respect an explicit pause or cancellation.
 
-- A complete database inventory, including configured external agent roots and registered stores; verified WAL-aware backups covering that inventory and protected state. Check backup omissions and sanitization: a portable export is not necessarily a full recovery image. Doctor does not create the backup.
-- The original pre-cutover session-preservation witness, retained through recovery; a filtered session-list page, empty baseline, or fresh-current witness cannot prove historical continuity.
-- Stopped writers and maintenance authority fencing new claims. Only the candidate's supported upstream Doctor flow performs migration; assess its full repair scope, not a presumed single-table operation.
-- Per-database integrity, physical schema, `PRAGMA user_version`, `schema_meta`, ownership, registry, and candidate runtime-readiness checks before and after migration. One successful database or healthy HTTP cannot prove all-agent readiness.
+When the update fails or defers, repeat this loop until it succeeds:
 
-Transactions may commit per database, leaving mixed schemas or stale registry metadata after interruption. Once any database advances beyond the old reader's contract, never automatically restart that old reader, even when candidate verification fails. Preserve the journal and backups; continue through the canonical forward-recovery owner until every store is ready. Before mutation, a safe refusal leaves the incumbent serving. No custom schema SQL, version-marker edits, downgrade, or wholesale backup restoration.
+1. Inspect the exact native outcome, invocation, journal, and current owner; diagnose the cause rather than blindly retrying. For an expected busy or deferred outcome with no confirmed defect, observe the existing owner and use its supported continuation or retry path; skip repair and PR landing.
+2. For a confirmed owned defect, repair the owning invariant in the best coherent way, including connected lifecycle and recovery defects. Do not substitute a workaround, weaker guard, or success-shaped status for a fix.
+3. When a repair is needed, reproduce the failure, prove the repair, obtain review, and land the repair PR through normal CI and landing gates.
+4. Reconcile custody again and redo the update through the canonical owner. Verify the requested release’s full native acceptance; if it fails again, return to diagnosis.
 
-Read [database contracts](https://docs.openclaw.ai/reference/database-schemas) and [backup semantics](https://docs.openclaw.ai/cli/backup); their general recovery examples do not expand this workflow's authority.
+A genuine access or external dependency may pause the blocked action, but not close the request or transfer its ownership. Name the dependency and its owner, pursue supported coordination, and continue independent authorized repair work. Preserve the existing approval for continuation once the dependency is resolved; do not ask for another routine update request or bypass access, ownership, persistence, or recovery safeguards.
+
+Inspect the exact invocation and reconcile its journal before continuing through the same owner. Before ending a turn with work pending, establish an active observation/completion path or a supported continuation through the existing owner. Proactively return with the next actionable result without another user prompt; reporting a blocker is a checkpoint, not task completion. A cadence alone is not proof that this request will resume. If no continuation path is available, report that specific blocker; do not promise unattended follow-through. Preserve safeguards and evidence rather than retrying blindly or creating another scheduler.
+
+## Notify only around actual downtime
+
+Keep Team notifications to two concise notices for an actual interruption: immediately before the canonical owner begins planned downtime, after preparation and cutover gates permit it; and once service is verified back. Starting an update request, preflight, or drain is not itself downtime. Coordinate with the owner's existing notification path so observers do not duplicate notices. If no safe notification boundary is available, report that limitation privately rather than announce speculative downtime or bypass the owner.
+
+Do not post to Team for preflight failures, blocked or deferred attempts, no-op attempts, diagnosis, or other non-actions. Report their outcome, next action, and concrete blockers privately to the requesting user. Quiet Team reporting does not end ownership of the update or waive follow-through, acceptance, recovery, or safety requirements.
+
+For an accepted update, the back-online notice includes concise highlights of changes landed on official `main` between the previous accepted serving commit and the newly accepted serving commit. Resolve both endpoints from the owner's accepted serving records and inspect that exact Git range; do not summarize from request time, a failed candidate, a release label, or moving `main`. Mention only changes included in the accepted range. If that history cannot be verified, say the highlights are unavailable rather than invent them.
+
+If service returns through rollback or same-release recovery, say it is restored on the previous version and the requested update has not succeeded; do not advertise candidate changes as deployed. Send the back-online notice only after the owner's applicable recovery/readiness verification, keep unresolved update blockers private, and continue the requested update through the canonical owner unless paused, canceled, or externally blocked. Keep detailed receipts, logs, private access details, and full hashes out of Team notices.
+
+## Cross schemas through OpenClaw
+
+The candidate release's native update/Doctor owner decides whether every
+installed database can migrate. The controller must not enumerate schema edges,
+rehearse each crossing, implement migrations, or copy database SQL into its
+admission rules. Older databases use OpenClaw's supported forward migrations;
+unknown future schemas and downgrades are refused by that owner.
+
+Keep the incumbent serving during the off-path build. Under the existing
+maintenance authority, drain and stop it, then invoke the candidate's internal
+`update migrate` command. That owner captures WAL-safe database and authored
+configuration backups and records the recovery receipt before running Doctor.
+The controller switches the release pointer only after migration succeeds,
+starts the candidate, and performs its existing readiness and session-continuity
+acceptance. Retain the original pre-cutover session witness.
+
+When recovering a retained native-update journal, first accept a selected,
+live migrated candidate through generation-bound full deployment verification.
+Record its verified marker and retire the exact journal without draining,
+restarting, or restoring; retain the native backup. This includes a selected
+candidate in `ROLLBACK_FAILED`. Only an absent or unverifiable candidate falls
+back to the existing compatibility-checked rollback.
+
+On activation failure, stop the owned candidate before invoking the same candidate's
+`update restore` with the original backup root. Restore the predecessor pointer
+and verify the predecessor only after native restoration succeeds. Retain the
+journal, backups, and displaced candidate state if recovery fails; never start
+an older reader against partially migrated stores. Settle older controller
+transactions with their original closure before adopting the generic path.
+
+For a concrete migration or recovery issue, consult
+[database contracts](https://docs.openclaw.ai/reference/database-schemas) and
+[backup semantics](https://docs.openclaw.ai/cli/backup).
 
 ## Verify and recover
 
-Require the exact invocation's successful deployment receipt, matching new serving/build SHA, stable process generation, RPC, health/startup/readiness, configured channels, unchanged protected policy/identities, and original-witness verification. Reuse the owner's real model-marker receipt; do not send duplicate marker turns. Require journal resolution and an active hourly timer. Supervisor success, a skip, healthy old code, or same-release recovery is not a new deployment.
+The controller's existing `OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to ten
+minutes for each started candidate or restored predecessor. Its shared
+acceptance owner waits for native critical startup and model-agent admission,
+sampled main-thread responsiveness, and an exact-generation RPC response before
+the marker. Responsive CPU/utilization load needs no operator waiver. Deferred
+background recovery and other agents' pending inspections can continue while
+acceptance runs; the model agent's own admission and critical startup still wait.
+Typed dispatch timeouts reconcile the identical request and idempotency key only
+after fresh readiness checks; readiness and reconciliation consume the same
+absolute deadline. The 60-second transport timeout does not shorten this startup
+window. Wrong identity, corruption, protocol/authentication failures, incorrect
+marker receipts, and deadline expiry remain failures with evidence retained.
 
-Bracket live checks with generation and owner-phase checks; never run ordinary RPCs across an active fence or pause the timer for a quiet proof window. Preserve failed outcomes and unresolved journals; do not delete evidence or retry blindly. Use only the owner's compatibility-checked recovery and cleanup, preserving referenced releases, backups, ordinary sessions, unrelated state, and dirty workspaces.
+Use the exact invocation's native terminal acceptance receipt as the authoritative outcome. The native owner performs the serving/build SHA, process generation, RPC, health/startup/readiness, configured-channel, protected-policy/identity, original session-witness, and journal-resolution checks recorded there. Reuse its validation and real model-marker receipt; do not repeat health probes, channel/session/policy audits, migration checks, or marker turns as agent-side acceptance. Preserve the intended state of the configured sole cadence without adding another validation loop. Read the native result, not just the observer process status: observer exit `0` can wrap native exit `75`/deferred and is not accepted deployment. Supervisor success, a skip, healthy old code, rollback, or same-release recovery is not a new deployment.
+
+Missing or ambiguous native acceptance, concrete native failure, contradictory current evidence, or an actual ownership conflict calls for targeted diagnosis through the same owner, not a second validation suite. When that diagnosis needs live checks, respect generation and owner-phase boundaries; never run ordinary RPCs across an active fence or pause the configured cadence for a quiet proof window. Preserve failed outcomes and unresolved journals; do not delete evidence or retry blindly. Use only the owner's compatibility-checked recovery and cleanup, preserving referenced releases, backups, ordinary sessions, unrelated state, and dirty workspaces.
 
 Let [Gateway restart recovery](https://docs.openclaw.ai/gateway/restart-recovery) resume eligible work; do not duplicate it manually. PTYs end, unsaved work may be lost, and recovery budgets/quarantine remain: neither universal recovery nor exactly-once execution is promised.
 
-Report the invocation outcome, observed serving SHA, migration/readiness and continuity proof, recovery phase, and any exact blocker privately. No credential rotation, release publication, security-policy weakening, or unrelated mutations are authorized.
+Keep detailed invocation, serving SHA, migration/readiness, continuity, and recovery receipts private. Report progress and results in one to three short, friendly lines: what happened, what happens next or the exact blocker, and a short SHA only when useful. Light humor is welcome when it does not obscure a failure; omit repeated logs and full hashes. No credential rotation, release publication, security-policy weakening, or unrelated mutations are authorized.

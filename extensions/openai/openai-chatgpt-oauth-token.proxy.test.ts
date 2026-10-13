@@ -28,23 +28,57 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe.each(["exchange", "refresh"] as const)("OpenAI token %s proxy routing", (operation) => {
+describe("OpenAI token proxy routing", () => {
   it.each([
-    { name: "HTTPS_PROXY", variable: "HTTPS_PROXY", proxied: true },
-    { name: "HTTP_PROXY fallback", variable: "HTTP_PROXY", proxied: true },
+    { operation: "exchange", name: "HTTPS_PROXY", variable: "HTTPS_PROXY", proxied: true },
+    { operation: "exchange", name: "HTTP_PROXY fallback", variable: "HTTP_PROXY", proxied: true },
     {
+      operation: "exchange",
       name: "NO_PROXY bypass",
       variable: "HTTPS_PROXY",
       noProxy: "auth.openai.com",
       proxied: false,
     },
-    { name: "no configured proxy", proxied: false },
-    { name: "ALL_PROXY alone", variable: "ALL_PROXY", proxied: false },
-    { name: "empty lowercase override", variable: "HTTPS_PROXY", lowerEmpty: true, proxied: false },
-    { name: "managed proxy", variable: "HTTPS_PROXY", managed: true, proxied: true },
-    { name: "retired owner", variable: "HTTPS_PROXY", retired: true, proxied: false },
-    { name: "aborted caller", variable: "HTTPS_PROXY", aborted: true, proxied: false },
-  ])("preserves $name behavior", async (scenario) => {
+    { operation: "exchange", name: "no configured proxy", proxied: false },
+    { operation: "exchange", name: "ALL_PROXY alone", variable: "ALL_PROXY", proxied: false },
+    {
+      operation: "exchange",
+      name: "empty lowercase override",
+      variable: "HTTPS_PROXY",
+      lowerEmpty: true,
+      proxied: false,
+    },
+    {
+      operation: "exchange",
+      name: "managed proxy",
+      variable: "HTTPS_PROXY",
+      managed: true,
+      proxied: true,
+    },
+    {
+      operation: "exchange",
+      name: "retired owner",
+      variable: "HTTPS_PROXY",
+      retired: true,
+      proxied: false,
+    },
+    {
+      operation: "exchange",
+      name: "aborted caller",
+      variable: "HTTPS_PROXY",
+      aborted: true,
+      proxied: false,
+    },
+    { operation: "refresh", name: "HTTPS_PROXY", variable: "HTTPS_PROXY", proxied: true },
+    {
+      operation: "refresh",
+      name: "aborted caller",
+      variable: "HTTPS_PROXY",
+      aborted: true,
+      proxied: false,
+    },
+  ])("preserves $operation $name behavior", async (scenario) => {
+    const { operation } = scenario;
     for (const key of [
       "HTTP_PROXY",
       "HTTPS_PROXY",

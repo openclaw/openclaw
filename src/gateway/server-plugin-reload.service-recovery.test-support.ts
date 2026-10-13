@@ -26,6 +26,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         const laterEntered = createDeferredCore();
         const laterRelease = createDeferredCore();
         const workRelease = createDeferredCore();
+        let admittedWrite: Promise<void> | undefined;
         let completedWrites = 0;
         const disposed: number[] = [];
         const starts: string[] = [];
@@ -37,6 +38,14 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         const fixture = await createRecoveryFixture({
           abortOnCandidateStart: false,
           initialStop: async () => {
+            assert(original);
+            // Pre-stop calls already drained; cleanup can admit work that recovery must join.
+            admittedWrite = original.runCleanup(() =>
+              original.runConsumer(async () => {
+                await workRelease.promise;
+                completedWrites += 1;
+              }),
+            );
             entered.resolve();
             await release.promise;
             if (outcome === "rejected") {
@@ -82,10 +91,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
         assert(original);
         const generation = fixture.owner.currentClaim();
-        const admittedWrite = original.run(async () => {
-          await workRelease.promise;
-          completedWrites += 1;
-        });
         vi.useFakeTimers();
         let settled = false;
         const pending = fixture
@@ -289,6 +294,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         await expect(fixture.reload()).rejects.toMatchObject({
           details: { committed: false, phase: "drain" },
         });
+        expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
         // Command catalog refresh stops this channel, but its registration is healthy.
         expect(manager.getRuntimeSnapshot().reloadingChannels?.has("sibling")).toBe(false);
         expect(manager.hasCurrentAccountTask("sibling", "default")).toBe(true);
@@ -317,14 +323,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         }
       });
       const fixture = await createRecoveryFixture({
-        prepareConfigEffects: () => {
-          const record = fixture.previousRegistry.plugins.find((plugin) => plugin.id === "first");
-          assert(record);
-          expect(() => getPluginInstance(record)?.retainWork()).toThrow(
-            "replacement is in progress",
-          );
-          return rollback;
-        },
+        prepareConfigEffects: () => ({ retire: () => {}, rollback }),
       });
       const failure = new Error("fixture channel pause failed");
       vi.spyOn(fixture.runtime.channelManager, "pauseChannelStarts").mockImplementationOnce(() => {
@@ -347,10 +346,12 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           const record = fixture.registryOwner.registry.plugins.find(
             (plugin) => plugin.id === "first",
           );
-          expect(record && getPluginInstance(record)?.acceptingCalls).toBe(true);
+          if (restoration === "restored") {
+            expect(record && getPluginInstance(record)?.acceptingCalls).toBe(true);
+          }
         });
         const fixture = await createRecoveryFixture({
-          prepareConfigEffects: () => rollback,
+          prepareConfigEffects: () => ({ retire: () => {}, rollback }),
           recoveryStart: async () => {
             recoveryStarted.resolve();
             await releaseRecovery.promise;
@@ -365,7 +366,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(rollback).not.toHaveBeenCalled();
           releaseRecovery.resolve();
           expect(await reloading).toMatchObject({ details: { committed: false } });
-          expect(rollback).toHaveBeenCalledTimes(restoration === "restored" ? 1 : 0);
+          expect(rollback).toHaveBeenCalledOnce();
         } finally {
           releaseRecovery.resolve();
           await reloading;

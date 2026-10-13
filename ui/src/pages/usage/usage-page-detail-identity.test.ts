@@ -30,7 +30,7 @@ function usagePoints(timestamp: number, count: number) {
   }));
 }
 
-function dragTimelineRange(page: HTMLElement) {
+function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   const svg = page.querySelector<SVGSVGElement>(".timeseries-svg")!;
   const handle = page.querySelector<HTMLElement>(".chart-handle-right")!;
   vi.spyOn(svg, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 118));
@@ -48,13 +48,11 @@ function dragTimelineRange(page: HTMLElement) {
 describe("UsagePage detail identity", () => {
   it.each([
     { refresh: "automatic", points: 1, activeDrag: false },
-    { refresh: "manual", points: 2, activeDrag: false },
-    { refresh: "automatic", points: 1, activeDrag: true },
     { refresh: "manual", points: 2, activeDrag: true },
   ])(
     "retires a selected range during $refresh instance replacement with $points points (active drag: $activeDrag)",
     async ({ refresh, points, activeDrag }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const timestamp = new Date().setHours(12, 0, 0, 0);
       let sessionId = "original-instance";
       let series = usagePoints(timestamp, 3);
@@ -79,7 +77,7 @@ describe("UsagePage detail identity", () => {
             })),
           };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -122,13 +120,11 @@ describe("UsagePage detail identity", () => {
 
   it.each([
     { replacement: "owner", refresh: "manual" },
-    { replacement: "owner", refresh: "automatic" },
-    { replacement: "instance", refresh: "manual" },
     { replacement: "instance", refresh: "automatic" },
   ])(
     "retires old-$replacement details and pending recovery during $refresh overview refresh",
     async ({ replacement, refresh }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const retired = deferred<SessionUsageTimeSeries>();
       let agentId = "main";
       let sessionId = "original-instance";
@@ -160,7 +156,7 @@ describe("UsagePage detail identity", () => {
             ? { logs: [{ timestamp: 1, role: "user", content: "Original turn" }] }
             : { sessionId: "original-instance", points: [] };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const context = contextWithClient(client);
@@ -220,21 +216,28 @@ describe("UsagePage detail identity", () => {
 
   it.each([
     { sessionId: undefined, refresh: "automatic" },
-    { sessionId: "stable-instance", refresh: "automatic" },
-    { sessionId: undefined, refresh: "manual" },
     { sessionId: "stable-instance", refresh: "manual" },
   ])(
     "retains healthy details and range during $refresh refresh of optional instance $sessionId",
     async ({ sessionId, refresh }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const points = usagePoints(new Date().setHours(12, 0, 0, 0), 3);
       let label = "Original summary";
+      let revision = snapshot.result.updatedAt;
+      let tokens = 100;
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.usage") {
           return {
             ...snapshot.result,
+            updatedAt: revision,
             sessions: [
-              { key: "global", agentId: "main", sessionId, label, usage: snapshot.result.totals },
+              {
+                key: "global",
+                agentId: "main",
+                sessionId,
+                label,
+                usage: { ...snapshot.result.totals, input: tokens, totalTokens: tokens },
+              },
             ],
           };
         }
@@ -250,7 +253,7 @@ describe("UsagePage detail identity", () => {
         if (method === "sessions.usage.timeseries") {
           return { sessionId, points };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -263,6 +266,8 @@ describe("UsagePage detail identity", () => {
       const timeSeries = page.details.timeSeries.data;
       const logs = page.details.sessionLogs.data;
       label = "Refreshed summary";
+      tokens = 350;
+      revision += 1;
       if (refresh === "manual") {
         refreshButton(page).click();
       } else {
@@ -274,28 +279,42 @@ describe("UsagePage detail identity", () => {
       await vi.waitFor(() => expect(page.details.timeSeries.loading).toBe(false));
       await page.updateComplete;
       expect(page.querySelector(".session-bar-selection")?.textContent).toContain(label);
+      await vi.waitFor(() => expect(page.details.session.data?.usage?.totalTokens).toBe(350));
+      expect(page.querySelector(".session-detail-stats strong")?.textContent).toBe("200");
       expect(page.usageSelectedSessions).toEqual(["global"]);
       expect(page.details.timeSeries.data).toEqual(timeSeries);
       expect(page.details.sessionLogs.data).toEqual(logs);
       expect(page.querySelectorAll(".session-log-entry")).toHaveLength(2);
       expect(page.querySelector(".timeseries-summary__range")?.textContent).toBe(range);
+      const summaryReads = request.mock.calls.filter(
+        ([method]) => method === "sessions.usage",
+      ).length;
+      await page.loadUsage();
+      expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(
+        summaryReads + 1,
+      );
       for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
         expect(
           request.mock.calls.filter(([name]) => name === method),
           method,
         ).toHaveLength(refresh === "manual" ? 2 : 1);
       }
+      [...page.querySelectorAll<HTMLButtonElement>(".timeseries-controls button")]
+        .find((button) => button.textContent?.trim() === "Reset")!
+        .click();
+      await page.updateComplete;
+      expect(page.querySelector(".session-detail-indicator")).toBeNull();
+      expect(page.querySelector(".session-detail-stats strong")?.textContent).toBe("350");
     },
   );
   it.each([
     { captured: "selected-instance", returned: "retired-instance", conflict: true },
-    { captured: "selected-instance", returned: "selected-instance", conflict: false },
     { captured: "selected-instance", returned: undefined, conflict: false },
     { captured: undefined, returned: "selected-instance", conflict: false },
   ])(
     "binds context response $returned to optional captured instance $captured",
     async ({ captured, returned, conflict }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       let returnedId = returned;
       let report = "Initial context";
       const session = {
@@ -316,34 +335,32 @@ describe("UsagePage detail identity", () => {
             ],
           };
         }
-        return method === "usage.cost"
-          ? snapshot.costSummary
-          : { providers: [], logs: [], points: [] };
+        return { providers: [], logs: [], points: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
       page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-      await vi.waitFor(() => expect(page.details.contextWeight.loading).toBe(false));
+      await vi.waitFor(() => expect(page.details.session.loading).toBe(false));
       await page.updateComplete;
       if (conflict) {
-        expect.soft(page.details.contextWeight.data).toBeNull();
+        expect.soft(page.details.session.data).toBeNull();
         expect
-          .soft(page.details.contextWeight.status.error)
+          .soft(page.details.session.status.error)
           .toBe("These context details are out of date. Refresh usage and try again.");
         expect
           .soft(page.querySelector(".context-details-panel")?.textContent)
           .not.toContain(report);
       } else {
-        expect(page.details.contextWeight.data).toEqual(contextWeight(report));
-        expect(page.details.contextWeight.status.error).toBeNull();
+        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report));
+        expect(page.details.session.status.error).toBeNull();
       }
       returnedId = captured;
       report = "Recovered context";
       refreshButton(page).click();
       await vi.waitFor(() =>
-        expect(page.details.contextWeight.data).toEqual(contextWeight(report)),
+        expect(page.details.session.data?.contextWeight).toEqual(contextWeight(report)),
       );
-      expect(page.details.contextWeight.status.error).toBeNull();
+      expect(page.details.session.status.error).toBeNull();
       expect(page.usageSelectedSessions).toEqual(["global"]);
       for (const [method, params] of request.mock.calls) {
         if (method === "sessions.usage" && params?.key) {

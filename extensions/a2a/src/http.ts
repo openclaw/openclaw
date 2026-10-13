@@ -12,13 +12,13 @@ import {
   runDetachedWebhookWork,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { dispatchA2aInbound } from "./inbound.js";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
   A2aSendMessageParamsSchema,
   A2aTaskRequestParamsSchema,
   extractA2aMessageText,
-  isA2aContextId,
   resolveA2aRpcMethod,
 } from "./protocol.js";
 import type { A2aTaskStore } from "./task-store.js";
@@ -38,13 +38,10 @@ type A2aRpcResponse =
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; result: unknown }
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; error: { code: number; message: string } };
 
-type A2aInboundDispatch = {
-  taskId: string;
-  contextId: string;
-  messageId: string;
-  peerName: string;
-  text: string;
-};
+type A2aInboundDispatch = Pick<
+  Parameters<typeof dispatchA2aInbound>[0],
+  "taskId" | "contextId" | "messageId" | "peerName" | "text"
+>;
 
 type A2aHttpHandlerParams = {
   config: OpenClawConfig;
@@ -226,25 +223,42 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         if (!text) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
-        const contextId = message.contextId ?? `ctx-${randomUUID()}`;
-        if (!isA2aContextId(contextId)) {
-          throw new A2aProtocolError(-32602, "Invalid message contextId");
+        if (message.taskId !== undefined) {
+          const referencedTask = params.taskStore.get(message.taskId, peerName);
+          if (!referencedTask) {
+            throw new A2aProtocolError(-32001, "Task not found");
+          }
+          if (message.contextId !== undefined && message.contextId !== referencedTask.contextId) {
+            throw new A2aProtocolError(
+              -32602,
+              "Message contextId does not match the referenced task",
+            );
+          }
+          // A context-only follow-up starts new work; a task reference must never
+          // silently allocate a replacement for an active or terminal task.
+          throw new A2aProtocolError(
+            -32004,
+            "Task continuation is not supported; omit taskId and reuse contextId to start a new task",
+          );
         }
-
-        const task = params.taskStore.create(contextId, peerName);
-        params.taskStore.start(task.id);
-        // Reserved synchronously while this request is still admitted: a
-        // returnImmediately dispatch outlives the response, and an inherited
-        // released root makes the agent turn fail as gateway-draining.
-        void runDetachedWebhookWork(async () => {
-          await params.dispatchInbound({
-            taskId: task.id,
-            contextId,
-            messageId: message.messageId ?? randomUUID(),
-            peerName,
-            text,
-          });
-        }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        const messageId = message.messageId ?? randomUUID();
+        const task = params.taskStore.create(
+          message.contextId ?? `ctx-${randomUUID()}`,
+          peerName,
+          messageId,
+        );
+        if (params.taskStore.start(task.id)) {
+          // Reserve detached work before the HTTP request releases its admission root.
+          void runDetachedWebhookWork(async () => {
+            await params.dispatchInbound({
+              taskId: task.id,
+              contextId: task.contextId,
+              messageId,
+              peerName,
+              text,
+            });
+          }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        }
 
         if (send.data.configuration?.returnImmediately) {
           result = { task: params.taskStore.get(task.id, peerName) ?? task };
@@ -343,6 +357,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       return true;
     }
 
+    let result: A2aRpcResponse | A2aRpcResponse[] | undefined;
     if (Array.isArray(payload)) {
       if (payload.length === 0) {
         writeJsonResponse(response, 200, createRpcError(null, -32600, "Invalid JSON-RPC request"));
@@ -362,16 +377,10 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       const responses = (
         await Promise.all(payload.map((entry) => processRpcRequest(entry, peerName)))
       ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
-      if (responses.length > 0) {
-        writeRpcResponse(response, responses);
-      } else {
-        response.statusCode = 200;
-        response.end();
-      }
-      return true;
+      result = responses.length > 0 ? responses : undefined;
+    } else {
+      result = await processRpcRequest(payload, peerName);
     }
-
-    const result = await processRpcRequest(payload, peerName);
     if (result) {
       writeRpcResponse(response, result);
     } else {

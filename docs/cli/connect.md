@@ -21,11 +21,29 @@ On the Gateway host, use admin credentials to mint a single-use join URL:
 openclaw devices join-code
 ```
 
-The command prints the URL and a pasteable command:
+The command prints the URL and a pasteable command that installs a background
+node service and enables it to run agent sessions:
 
 ```bash
-npx openclaw connect https://gateway.example/j/<shortcode>
+npx -y openclaw@<gateway-version> connect https://gateway.example/j/<shortcode> --service --session-host
 ```
+
+Only use session hosting on a machine you trust as shared Gateway infrastructure.
+The printed command makes that consent explicit with `--session-host`; the node
+runtime's default remains non-hosting. See [Session hosting](/nodes/session-hosting).
+For a command-only node, omit `--session-host` and keep `--service`.
+The `-y` flag skips npm's package-install confirmation, not OpenClaw pairing or
+session-hosting consent.
+
+The Gateway chooses its own published npm version, even when you run
+`devices join-code` from a different CLI version. Source checkouts and
+unpublished builds use a resolvable matching release-channel tag when available,
+otherwise unpinned `openclaw`, with a note to use a matching Gateway build.
+Registry checks are bounded to two seconds; an unavailable registry also shows
+the matching-build note.
+
+Already have OpenClaw installed? Run: `openclaw connect <join-url> --service --session-host`.
+This uses your installed build instead of npx; make sure it matches the Gateway.
 
 The shortcode has 128 bits of entropy, expires with the setup credential after
 about 10 minutes, and can be fetched exactly once. Mint another code if it
@@ -33,7 +51,7 @@ expires or has already been used.
 
 ## Connect in the foreground
 
-Paste the printed command on the machine you want to connect:
+To connect without installing a service, omit `--service` and `--session-host`:
 
 ```bash
 npx openclaw connect https://gateway.example/j/<shortcode>
@@ -78,6 +96,31 @@ npx openclaw connect https://gateway.example/j/<shortcode> --session-host
 Foreground consent applies only to that process. It does not change
 `openclaw.json`, so the next normal node-host start remains non-hosting.
 
+## Reconnect a paired node
+
+Join URLs and setup codes are single-use, so rerunning the original
+`openclaw connect <join-url>` command after the node stops reports that the
+join code was not found or has expired. The node keeps its paired device token
+and Gateway endpoint in node-host state. Reconnect with
+[`openclaw node run`](/cli/node), repeating any process-scoped flags:
+
+```bash
+openclaw node run --session-host
+```
+
+Running `openclaw connect` without a target does not connect. When node-host
+state has a saved Gateway endpoint and a node device token, it exits with an
+error that prints the matching `openclaw node run` command for the flags you
+passed, to use if that pairing is still current, and the `openclaw connect`
+command to use with a new join URL otherwise. With `--service`, it prints
+`openclaw node install --force` instead, preceded by
+`openclaw config set nodeHost.workerRuns.enabled true` when you also passed
+`--session-host`. If the first enrollment never completed, it only points to
+a new join URL. The device token is not tied to one endpoint: after a failed
+enrollment with a different Gateway, the reconnect command can fail, so
+enroll again instead. To enroll the machine again, mint a new join URL with
+`openclaw devices join-code`.
+
 ## Environment-managed cloud nodes
 
 Worker providers use `--ephemeral` for disposable cloud machines:
@@ -102,11 +145,30 @@ npx openclaw connect https://gateway.example/j/<shortcode> --service
 OpenClaw completes the first authenticated connection before installing the
 service. The short-lived bootstrap token is never stored in the service command
 or node-host configuration; later starts use the durable paired-device token.
-When restarting against that saved endpoint, config credentials for a co-located
-Gateway do not override the paired token. Explicit `OPENCLAW_GATEWAY_TOKEN` or
-`OPENCLAW_GATEWAY_PASSWORD` environment credentials still take precedence.
+When restarting against that saved endpoint, ambient Gateway credentials from
+the environment or a co-located Gateway's config do not override the pairing.
+For an intentional shared-credential override, use `openclaw node run
+--auth-from-env` or `openclaw node install --auth-from-env --force`; see
+[node-host authentication](/cli/node#gateway-auth-for-node-host).
 Use [`openclaw node status`](/cli/node#service-background) to inspect the
 installed service.
+
+When run through `npx`, service installation first installs the selected
+OpenClaw release into `npm` under the node's state directory. The service uses
+that durable installation, not npm's temporary `_npx` cache. The installation
+output shows the package version, chosen runtime, service command, and a node
+update command:
+
+```bash
+npx -y openclaw@latest node install --force
+```
+
+Run it on the node machine with the same profile and state-directory settings.
+It promotes the selected release into the same prefix and rewrites the service,
+without redeeming another join URL. Use `openclaw@beta` or an exact version in
+place of `openclaw@latest` when needed. Reinstalling the same version also repairs
+missing package files. This targets the node even when a separate Gateway is
+installed on the machine.
 
 The service does not host worker sessions by default. To consent to full
 worker-session hosting, add `--session-host`:
@@ -171,7 +233,8 @@ A join code and a paired device have separate lifecycles:
 
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result
-as an unknown code.
+as an unknown code. If this machine already redeemed it, reconnect with the
+saved pairing instead; see [Reconnect a paired node](#reconnect-a-paired-node).
 
 If an HTTPS join URL uses a certificate the local machine does not trust, use
 the direct `oc-pair://` or bare setup-code form that includes the TLS pin.

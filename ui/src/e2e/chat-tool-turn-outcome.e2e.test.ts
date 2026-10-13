@@ -17,6 +17,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { registerItemOnlyOutcomeTest } from "./chat-tool-item-outcomes.test-support.ts";
+import { canonicalParallelBatchHistory } from "./chat-tool-parallel-batch.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -289,7 +290,13 @@ suite.define(() => {
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
     expect(await page.getByText("Command could not finish", { exact: false }).count()).toBe(0);
     await page.locator(".chat-tool-msg-summary").first().click();
-    await page.locator(".chat-json-summary").first().click();
+    const expandedResult = page.locator(".chat-tool-msg-body").first();
+    await expandedResult.locator(".chat-text pre code").waitFor({ state: "visible" });
+    expect(await expandedResult.locator(".chat-text pre code").textContent()).toBe(
+      failedTool(1).content,
+    );
+    expect(await expandedResult.locator("details, .code-block-json-mode").count()).toBe(0);
+    expect(await expandedResult.locator(".code-block-copy").isVisible()).toBe(true);
     await page.getByText("Command could not finish", { exact: false }).waitFor();
     await expect
       .poll(() => page.locator(".chat-tool-card__outcome").first().textContent())
@@ -306,76 +313,12 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-read",
-              name: "read",
-              arguments: { path: "/repo/src/a.ts", offset: 3, limit: 20 },
-            },
-            {
-              type: "toolCall",
-              id: "call-patch",
-              name: "apply_patch",
-              arguments: {
-                input: [
-                  "*** Begin Patch",
-                  "*** Update File: src/a.ts",
-                  "@@",
-                  "-const before = true;",
-                  "+const after = true;",
-                  "*** Add File: src/b.ts",
-                  "+export const created = true;",
-                  "*** End Patch",
-                ].join("\n"),
-              },
-            },
-          ],
-          activity: [
-            {
-              itemId: "tool:call-read",
-              toolCallId: "call-read",
-              kind: "tool",
-              phase: "end",
-              status: "completed",
-              title: "Read source",
-            },
-            {
-              itemId: "tool:call-patch",
-              toolCallId: "call-patch",
-              kind: "tool",
-              phase: "end",
-              status: "completed",
-              title: "Apply patch",
-            },
-          ],
-          timestamp: 1,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-read",
-          toolName: "read",
-          content: [{ type: "text", text: "A_ONLY_fixture" }],
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-patch",
-          toolName: "apply_patch",
-          content: [{ type: "text", text: "Applied patch" }],
-          timestamp: 3,
-        },
-      ],
-    });
+    await installMockGateway(page, { historyMessages: canonicalParallelBatchHistory() });
 
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read source, Apply patch");
+    expect(await activity.textContent()).toContain("2 other operations");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -416,6 +359,8 @@ suite.define(() => {
     expect(await page.getByText("limit:", { exact: true }).count()).toBe(1);
     const patchRow = rows.filter({ hasText: "2 files" });
     await patchRow.click();
+    await expect.poll(() => patchRow.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => page.locator(".chat-diff__row--file .chat-diff__text").count()).toBe(2);
 
     expect(await page.locator(".chat-diff__row--file .chat-diff__text").allTextContents()).toEqual([
       "Update src/a.ts",
@@ -567,7 +512,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
     await captureFactrowProof(page, activity, "dark");
-    expect(await summary.textContent()).toContain("Apply Patch, Exec");
+    expect(await summary.textContent()).toContain("2 other operations");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -615,7 +560,7 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps a message-only turn visible with its first message line", async () => {
+  it("keeps a message-only turn visible with its caption behind disclosure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const message = "Hello Molty, first claw-to-claw hello.";
@@ -650,19 +595,16 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    const row = page.locator(".chat-tool-msg-summary");
     await row.waitFor();
 
-    expect(await page.locator(".chat-work-group").count()).toBe(0);
-    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
-    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    expect(await row.count()).toBe(1);
+    expect(await page.getByText(message, { exact: false }).isVisible()).toBe(false);
     await captureToolActivityProof(page, "message-only-turn-visible");
     await row.click();
-    await page.getByText("action:", { exact: true }).waitFor();
-    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
-      0,
-    );
+    const diagnostics = page.locator(".chat-tool-msg-body");
+    await diagnostics.getByText("Hidden second line.", { exact: false }).waitFor();
+    expect(await diagnostics.textContent()).toContain(message);
     await context.close();
   });
 

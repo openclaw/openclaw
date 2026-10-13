@@ -8,11 +8,33 @@ title: "Talk realtime sessions and delegation"
 sidebarTitle: "Realtime sessions"
 ---
 
+## Split speech in the browser
+
+With `talk.realtime.mode: "stt-tts"`, browser Talk uses separate transcription,
+agent, and speech steps instead of a realtime speech-to-speech provider. Every
+utterance goes through the current chat session, so its configured model and
+tool permissions apply. Set `talk.provider` and `talk.providers.<provider>` for
+Talk output, or leave the provider unset to use the global `tts` configuration.
+
+For local transcription, configure an audio entry in `tools.media.models` as
+described in [Audio and voice notes](/nodes/audio). The browser uses the existing
+Gateway transcription session; the Gateway passes the completed recording to
+the file-transcription owner. Its provider selection, input limits, timeout, and
+fallback policy also apply here. Explicit streaming-provider selections and a
+matching `agents.defaults.voiceModel` take precedence. File transcription produces
+a final transcript after the utterance ends. The catalog marks file transcription
+ready only when a configured provider or CLI command is available.
+
+Capture pauses during the agent response and speech playback, then resumes for
+the next utterance. Stop cancels the call's own chat run and playback. Split Talk
+does not offer realtime voice switching or camera input. Leaving the mode unset
+preserves realtime Talk.
+
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant
-to list the available voices or switch to one. Browser Talk also offers a voice
-picker beside the call controls. The `talk_voice`
+to list the available voices or switch to one. The browser composer keeps only
+call controls; choose the default voice in **Settings → Talk**. The `talk_voice`
 tool lists the current provider, model, voice,
 and supported voice IDs for the call in the current conversation. Setting a
 voice reconnects that call while preserving its chat and captions. The replacement
@@ -86,6 +108,11 @@ remain failures rather than being silently treated as cancellations.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+Speech finalized while an accepted consult is starting remains visible in history
+and does not prevent the agent from adopting that consult's recorded input.
+Completed agent answers and newly admitted tasks still close the older input;
+speech records do not reopen it.
+
 Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or
 assistant messages. This background can include prior calls and backing-agent
@@ -123,15 +150,22 @@ Google Live saves complete utterances during the call, including Gemini 3.1
 transcriptions that omit an explicit transcription-finished flag. Partial text
 stays provisional until the provider's completion boundary.
 
-Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
+Talk uses the same effective tool permissions as text for the same authenticated
+caller, agent, session, target, operation, and final arguments. An action already
+permitted without approval does not gain an extra spoken-confirmation prompt.
+Actions requiring ordinary approval still require that approval through the
+host-authenticated approval flow; saying “yes” or supplying confirmation text to
+the model does not grant permission. Denied actions remain denied.
 
-After a confirmation prompt, say **yes** to confirm the pending action or **no**
-to cancel it. Each confirmation permits one matching action; another action may
-need another confirmation. Native GPT-Live calls use the finalized user speech
-recorded for that call, so generated delegation text cannot supply confirmation.
-When a native consult is blocked by this gate, Talk returns a specific retry
-prompt. If the pending confirmation expires or is cleared before the result,
-Talk reports that the action did not run and asks for a fresh request.
+Gateway shutdown joins accepted voice transcripts, final tool outcomes, and provider-close summaries before releasing persistence resources. Accepted consults keep their persistence ownership until all queued and deferred work finishes, including when diagnostics are disabled. Queued summaries keep their original physical stores while waiting for a delivery slot. Recipient lookup honors `session.store`; voice metadata and delivery markers remain in their separate per-agent store. A missing conversation is reported as a failed digest attempt instead of silently dropping its summary. Provider cleanup failures do not bypass that persistence drain. Stored formats and retry limits are unchanged. Confirmed deliveries retry only their completion marker; partial or uncertain deliveries are not resent. Unresolved outcomes retain a fence for the lifetime of the delivery owner within its existing bounded retry capacity.
+
+Direct provider delegations and chat-backed Talk retain their real voice identity.
+Operator and source revocation, cancellation, sandbox restrictions, node routing,
+and final executable checks still apply. Previous external delivery history can
+supply a reply destination, not the caller's authorization channel. Audio and
+transcript capabilities remain transport-specific. Closing a call can still send
+a compact **Voice call changes** digest for mutating tools to its last non-WebChat
+delivery target.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 

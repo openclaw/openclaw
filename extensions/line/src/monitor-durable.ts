@@ -1,16 +1,9 @@
-// Line plugin module implements monitor durable behavior.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import type { LineChannelData } from "./types.js";
 
 type LineDurableReplyOptions = {
   to: string;
 };
-
-function hasLineChannelData(payload: ReplyPayload): boolean {
-  const lineData = payload.channelData?.line as LineChannelData | undefined;
-  return Boolean(lineData && Object.keys(lineData).length > 0);
-}
 
 export function resolveLineDurableReplyOptions(params: {
   payload: ReplyPayload;
@@ -25,7 +18,8 @@ export function resolveLineDurableReplyOptions(params: {
   if (params.replyToken && !params.replyTokenUsed) {
     return false;
   }
-  if (hasLineChannelData(params.payload)) {
+  const lineData = params.payload.channelData?.line;
+  if (lineData && Object.keys(lineData).length > 0) {
     return false;
   }
   const reply = resolveSendableOutboundReplyParts(params.payload);

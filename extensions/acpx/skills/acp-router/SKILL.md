@@ -104,7 +104,7 @@ Required behavior when ACP backend is unavailable:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in the ACPX plugin package
+   - check that plugin-local pinned acpx is installed in the ACPX plugin package
    - verify `${ACPX_CMD} --version`
 3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
@@ -153,7 +153,7 @@ Use this path to drive harness sessions without `/acp` or subagent runtime.
 
 ### Session naming
 
-Use a deterministic name, for example:
+Use a stable name, for example:
 
 - `oc-<harness>-<conversationId>`
 
@@ -209,8 +209,8 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 Defaults are:
 
 - `openclaw -> openclaw acp`
-- `claude -> bundled @agentclientprotocol/claude-agent-acp@0.75.1`
-- `codex -> bundled @agentclientprotocol/codex-acp@1.10.0 through OpenClaw's isolated CODEX_HOME wrapper`
+- `claude -> bundled @agentclientprotocol/claude-agent-acp@0.79.0`
+- `codex -> bundled @agentclientprotocol/codex-acp@1.12.0 through OpenClaw's isolated CODEX_HOME wrapper`
 - `copilot -> copilot --acp --stdio`
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`

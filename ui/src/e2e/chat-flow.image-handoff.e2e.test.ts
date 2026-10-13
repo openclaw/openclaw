@@ -71,9 +71,17 @@ suite.define(() => {
         const initialHistory = {
           messages: [],
           sessionId,
-          sessionInfo: { key: sessionKey, kind: "direct", hasActiveRun: false, status: "done" },
+          sessionInfo: {
+            key: sessionKey,
+            sessionId,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+          },
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [initialHistory.sessionInfo],
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
@@ -175,12 +183,21 @@ suite.define(() => {
               __openclaw: {
                 id: "pending:accepted-image-input",
                 mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-                media: [{ path: source, contentType: "image/png", fileName: "stable-preview.png" }],
+                media: [
+                  {
+                    path: source,
+                    contentType: "image/png",
+                    fileName: "stable-preview.png",
+                    width: 180,
+                    height: 180,
+                  },
+                ],
               },
             },
           };
           const sessionInfo = {
             key: sessionKey,
+            sessionId,
             kind: "direct",
             activeRunIds: [runId],
             hasActiveRun: true,

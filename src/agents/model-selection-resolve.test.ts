@@ -48,38 +48,27 @@ describe("implicit primary selection with an explicit utility model", () => {
     });
   }
 
-  it.each(["local-utility/small", " Local-Utility/small@utility:setup ", "helper@utility:setup"])(
-    "separates migrated utility ref %s while preserving the legacy implicit primary",
-    (utilityModel) => {
-      const cfg = config();
-      expectDefined(cfg.agents?.defaults, "default agent config").utilityModel = utilityModel;
-      cfg.meta = undefined;
-      expect(resolve(cfg)).toEqual({ provider, model: "small" });
-      expect(resolve(cfg, "worker")).toEqual({ provider, model: "small" });
-
-      cfg.meta = { migrations: { utilityModelSeparation: true } };
-      expect(resolve(cfg)).toEqual({ provider: "ordinary", model: "primary" });
-      expect(resolve(cfg, "worker")).toEqual({ provider: "ordinary", model: "primary" });
-    },
-  );
-
   it.each([
-    { utilityModel: "helper@agent", expectedProvider: "ordinary", expectedModel: "primary" },
-    { utilityModel: "other/small", expectedProvider: provider, expectedModel: "small" },
-    { utilityModel: "", expectedProvider: provider, expectedModel: "small" },
-  ])("honors the agent utility override $utilityModel", (scenario) => {
+    { scope: "defaults", utilityModel: " Local-Utility/small@utility:setup ", excluded: true },
+    { scope: "defaults", utilityModel: "helper@utility:setup", excluded: true },
+    { scope: "agent", utilityModel: "helper@agent", excluded: true },
+    { scope: "agent", utilityModel: "other/small", excluded: false },
+    { scope: "agent", utilityModel: "", excluded: false },
+  ])("separates migrated $scope utility $utilityModel from the legacy primary", (scenario) => {
     const cfg = config();
-    expectDefined(cfg.agents?.entries?.worker, "worker config").utilityModel =
-      scenario.utilityModel;
+    const owner = expectDefined(
+      scenario.scope === "defaults" ? cfg.agents?.defaults : cfg.agents?.entries?.worker,
+      "utility model config owner",
+    );
+    owner.utilityModel = scenario.utilityModel;
     cfg.meta = undefined;
     expect(resolve(cfg, "worker")).toEqual({ provider, model: "small" });
     expect(resolve(cfg)).toEqual({ provider, model: "small" });
 
     cfg.meta = { migrations: { utilityModelSeparation: true } };
-    expect(resolve(cfg, "worker")).toEqual({
-      provider: scenario.expectedProvider,
-      model: scenario.expectedModel,
-    });
+    expect(resolve(cfg, "worker")).toEqual(
+      scenario.excluded ? { provider: "ordinary", model: "primary" } : { provider, model: "small" },
+    );
     expect(resolve(cfg)).toEqual({ provider: "ordinary", model: "primary" });
   });
 
@@ -98,98 +87,64 @@ describe("implicit primary selection with an explicit utility model", () => {
 });
 
 describe("model-selection-resolve OpenRouter compat aliases", () => {
-  it("keeps inherited policy aliases bound to default metadata for per-agent selection", () => {
-    const cfg = {
-      meta: { migrations: { modelPolicyAllowlist: true } },
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { alias: "approved" },
-          },
-          modelPolicy: { allow: ["approved"] },
-        },
-        list: [
-          {
-            id: "worker",
+  it.each([false, true])(
+    "binds policy aliases to their owner (agent policy: %s)",
+    (agentPolicy) => {
+      const cfg = {
+        meta: { migrations: { modelPolicyAllowlist: true } },
+        agents: {
+          defaults: {
             models: {
-              "anthropic/claude-sonnet-4-6": { alias: "approved" },
+              "openai/gpt-5.5": { alias: "approved" },
             },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-    const catalog = [
-      { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
-      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-    ];
-
-    expect(
-      resolveAllowedModelRefCore({
-        cfg,
-        catalog,
-        raw: "approved",
-        defaultProvider: "openai",
-        agentId: "worker",
-      }),
-    ).toEqual({ error: "model not allowed: anthropic/claude-sonnet-4-6" });
-    expect(
-      resolveAllowedModelRefCore({
-        cfg,
-        catalog,
-        raw: "openai/gpt-5.5",
-        defaultProvider: "openai",
-        agentId: "worker",
-      }),
-    ).toEqual({
-      key: "openai/gpt-5.5",
-      ref: { provider: "openai", model: "gpt-5.5" },
-    });
-  });
-
-  it("binds explicit per-agent policy aliases to per-agent metadata", () => {
-    const cfg = {
-      meta: { migrations: { modelPolicyAllowlist: true } },
-      agents: {
-        defaults: {
-          models: { "openai/gpt-5.5": { alias: "approved" } },
-          modelPolicy: { allow: ["approved"] },
-        },
-        list: [
-          {
-            id: "worker",
-            models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } },
             modelPolicy: { allow: ["approved"] },
           },
-        ],
-      },
-    } as OpenClawConfig;
-    const catalog = [
-      { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
-      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-    ];
+          entries: {
+            worker: {
+              models: {
+                "anthropic/claude-sonnet-4-6": { alias: "approved" },
+              },
+              ...(agentPolicy ? { modelPolicy: { allow: ["approved"] } } : {}),
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const catalog = [
+        { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      ];
 
-    expect(
-      resolveAllowedModelRefCore({
-        cfg,
-        catalog,
-        raw: "approved",
-        defaultProvider: "openai",
-        agentId: "worker",
-      }),
-    ).toEqual({
-      key: "anthropic/claude-sonnet-4-6",
-      ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
-    });
-    expect(
-      resolveAllowedModelRefCore({
-        cfg,
-        catalog,
-        raw: "openai/gpt-5.5",
-        defaultProvider: "openai",
-        agentId: "worker",
-      }),
-    ).toEqual({ error: "model not allowed: openai/gpt-5.5" });
-  });
+      expect(
+        resolveAllowedModelRefCore({
+          cfg,
+          catalog,
+          raw: "approved",
+          defaultProvider: "openai",
+          agentId: "worker",
+        }),
+      ).toEqual(
+        agentPolicy
+          ? {
+              key: "anthropic/claude-sonnet-4-6",
+              ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+            }
+          : { error: "model not allowed: anthropic/claude-sonnet-4-6" },
+      );
+      expect(
+        resolveAllowedModelRefCore({
+          cfg,
+          catalog,
+          raw: "openai/gpt-5.5",
+          defaultProvider: "openai",
+          agentId: "worker",
+        }),
+      ).toEqual(
+        agentPolicy
+          ? { error: "model not allowed: openai/gpt-5.5" }
+          : { key: "openai/gpt-5.5", ref: { provider: "openai", model: "gpt-5.5" } },
+      );
+    },
+  );
 
   it("preserves exact configured proxy provider ids for cron-style aliases", () => {
     // Proxy providers can intentionally own short ids like "cron"; keep the

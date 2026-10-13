@@ -2,13 +2,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
-  enforceRatchetScalar,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetScalar,
-  reportRatchetSuccess,
 } from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
@@ -129,17 +128,40 @@ export function main(
   }
   const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
   const baseBudget = readBaseBudget(root, baseRef);
-  if (baseBudget !== null) {
-    enforceRatchetScalar(budget, baseBudget, {
-      increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
-    });
+  const growth =
+    baseBudget !== null && budget > baseBudget
+      ? [
+          {
+            file: BUDGET_PATH,
+            title: "Environment variable count budget",
+            message: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
+          },
+        ]
+      : [];
+  if (reportLimitViolations(growth)) {
+    throw new Error(growth[0]!.message);
   }
   const names = collectEnvVarNames(root, { staged, preparedNames });
-  enforceRatchetScalar(names.length, budget, {
-    decreased: `OPENCLAW_* count ${names.length} is below budget ${budget}; update ${BUDGET_PATH}`,
-    increased: `OPENCLAW_* count ${names.length} exceeds budget ${budget}; update ${BUDGET_PATH}`,
-  });
-  reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
+  const messages =
+    names.length === budget
+      ? []
+      : [
+          `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
+        ];
+  if (
+    reportLimitViolations(
+      messages.map((message) => ({
+        file: BUDGET_PATH,
+        title: "Environment variable count budget",
+        message,
+      })),
+    )
+  ) {
+    throw new Error(messages.join("\n"));
+  }
+  if (messages.length === 0 && growth.length === 0) {
+    console.log(`OPENCLAW_* count ${names.length}/${budget}`);
+  }
   return names.length;
 }
 

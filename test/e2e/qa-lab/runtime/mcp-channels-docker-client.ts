@@ -101,7 +101,6 @@ async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
-  const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
@@ -236,7 +235,7 @@ async function main() {
       "expected one seeded attachment",
     );
     assert(
-      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0], frozenTarget),
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0]),
       `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
     );
 

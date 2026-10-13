@@ -1,6 +1,6 @@
 export type SessionListPhase =
   | "setup"
-  | "modelCatalog"
+  | "materialize"
   | "storeLoad"
   | "filterSetup"
   | "rows"

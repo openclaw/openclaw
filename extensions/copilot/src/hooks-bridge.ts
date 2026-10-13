@@ -8,28 +8,22 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 
 type SdkSessionHooks = NonNullable<SessionConfig["hooks"]>;
-type PreToolUseHandler = NonNullable<SdkSessionHooks["onPreToolUse"]>;
-type PreMcpToolCallHandler = NonNullable<SdkSessionHooks["onPreMcpToolCall"]>;
-type PostToolUseHandler = NonNullable<SdkSessionHooks["onPostToolUse"]>;
-type PostToolUseFailureHandler = NonNullable<SdkSessionHooks["onPostToolUseFailure"]>;
-type UserPromptSubmittedHandler = NonNullable<SdkSessionHooks["onUserPromptSubmitted"]>;
-type SessionStartHandler = NonNullable<SdkSessionHooks["onSessionStart"]>;
-type SessionEndHandler = NonNullable<SdkSessionHooks["onSessionEnd"]>;
-type ErrorOccurredHandler = NonNullable<SdkSessionHooks["onErrorOccurred"]>;
 
 interface CopilotHooksBridgeOptions {
   onUserPromptSubmitted?: (submission: { prompt: string; additionalContext?: string }) => void;
 }
 
-export interface CopilotHooksConfig {
-  onPreToolUse?: PreToolUseHandler;
-  onPreMcpToolCall?: PreMcpToolCallHandler;
-  onPostToolUse?: PostToolUseHandler;
-  onPostToolUseFailure?: PostToolUseFailureHandler;
-  onUserPromptSubmitted?: UserPromptSubmittedHandler;
-  onSessionStart?: SessionStartHandler;
-  onSessionEnd?: SessionEndHandler;
-  onErrorOccurred?: ErrorOccurredHandler;
+export interface CopilotHooksConfig extends Pick<
+  SdkSessionHooks,
+  | "onPreToolUse"
+  | "onPreMcpToolCall"
+  | "onPostToolUse"
+  | "onPostToolUseFailure"
+  | "onUserPromptSubmitted"
+  | "onSessionStart"
+  | "onSessionEnd"
+  | "onErrorOccurred"
+> {
   /**
    * Called when a native SDK hook handler throws. Defaults to console.warn so
    * native hook failures do not terminate the SDK session.
@@ -93,16 +87,16 @@ export function createHooksBridge(
   const errorOccurred = isolate("onErrorOccurred", config.onErrorOccurred, onError);
 
   if (pre) {
-    hooks.onPreToolUse = pre as PreToolUseHandler;
+    hooks.onPreToolUse = pre as SdkSessionHooks["onPreToolUse"];
   }
   if (preMcp) {
-    hooks.onPreMcpToolCall = preMcp as PreMcpToolCallHandler;
+    hooks.onPreMcpToolCall = preMcp as SdkSessionHooks["onPreMcpToolCall"];
   }
   if (post) {
-    hooks.onPostToolUse = post as PostToolUseHandler;
+    hooks.onPostToolUse = post as SdkSessionHooks["onPostToolUse"];
   }
   if (postFailure) {
-    hooks.onPostToolUseFailure = postFailure as PostToolUseFailureHandler;
+    hooks.onPostToolUseFailure = postFailure as SdkSessionHooks["onPostToolUseFailure"];
   }
   if (userPrompt) {
     hooks.onUserPromptSubmitted = async (input, invocation) => {
@@ -123,13 +117,13 @@ export function createHooksBridge(
     };
   }
   if (sessionStart) {
-    hooks.onSessionStart = sessionStart as SessionStartHandler;
+    hooks.onSessionStart = sessionStart as SdkSessionHooks["onSessionStart"];
   }
   if (sessionEnd) {
-    hooks.onSessionEnd = sessionEnd as SessionEndHandler;
+    hooks.onSessionEnd = sessionEnd as SdkSessionHooks["onSessionEnd"];
   }
   if (errorOccurred) {
-    hooks.onErrorOccurred = errorOccurred as ErrorOccurredHandler;
+    hooks.onErrorOccurred = errorOccurred as SdkSessionHooks["onErrorOccurred"];
   }
 
   return Object.keys(hooks).length > 0 ? hooks : undefined;

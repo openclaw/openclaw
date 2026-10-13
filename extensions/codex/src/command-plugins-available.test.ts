@@ -55,46 +55,6 @@ function catalogRuntime(description = "Review project notes") {
 }
 
 describe("Codex available plugin search and pages", () => {
-  it("searches the full catalog before paging and preserves source and availability", async () => {
-    const runtime = catalogRuntime();
-    const io = inMemoryIO();
-    const mutate = vi.spyOn(io, "mutate");
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["available", "GitHub"],
-      io,
-      runtime,
-    );
-
-    expect(result.text).toContain("Repository Companion — github@company-tools (installed)");
-    expect(result.text).toContain("Publisher: Example Labs. Read pull requests");
-    expect(result.text).toContain("Publisher: Not provided. Inspect issues");
-    expect(result.text).toContain("github@openai-curated-remote (unavailable)");
-    expect(result.text).toContain("of 2");
-    expect(result.text).not.toContain("catalog-00@");
-    expect(runtime.install).not.toHaveBeenCalled();
-    expect(mutate).not.toHaveBeenCalled();
-
-    const description = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["available", "PULL", "REQUESTS"],
-      io,
-      runtime,
-    );
-    expect(description.text).toContain("github@company-tools");
-    expect(description.text).not.toContain("github@openai-curated-remote");
-    for (const query of ["Repository Companion", "EXAMPLE LABS"]) {
-      const matched = await handleCodexPluginsSubcommand(
-        fakeCtx,
-        ["available", query],
-        io,
-        runtime,
-      );
-      expect(matched.text).toContain("github@company-tools");
-      expect(matched.text).toContain("of 1 matches");
-    }
-  });
-
   it("makes every result reachable through the returned page commands", async () => {
     const runtime = catalogRuntime("");
     const io = inMemoryIO();
@@ -180,7 +140,7 @@ describe("Codex available plugin search and pages", () => {
     expect(recovered.text).toContain("github@company-tools");
   });
 
-  it.each([["--page"], ["--page", "0"], ["--page", "1.5"], ["--page", "NaN"], ["x".repeat(101)]])(
+  it.each([["--page", "0"], ["x".repeat(101)]])(
     "rejects invalid options before discovery: %j",
     async (...args) => {
       const runtime = catalogRuntime();

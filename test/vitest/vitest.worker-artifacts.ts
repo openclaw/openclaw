@@ -17,7 +17,9 @@ import {
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.
 const declarationNames = new Set(
-  Object.values(vitestWorkerDeclarationEntries).map((source) => path.basename(source, ".ts")),
+  Object.values(vitestWorkerDeclarationEntries).map((source) =>
+    path.basename(source).replace(/\.[cm]?[jt]s$/u, ""),
+  ),
 );
 const ownerKey = Symbol.for("openclaw.vitest.compiled-subprocess-owner");
 const declarationPrefix = "\0openclaw:compiled-subprocess:";
@@ -95,7 +97,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (
         !owner ||
         !importer ||
-        !declarationNames.has(path.basename(source).replace(/\.[jt]s$/u, ""))
+        !declarationNames.has(path.basename(source).replace(/\.[cm]?[jt]s$/u, ""))
       ) {
         return null;
       }

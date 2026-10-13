@@ -54,7 +54,7 @@ defineDiscordVoiceTests((harness) => {
         return closed.promise;
       });
       const closeConversation = vi.spyOn(f.entry.conversations, "close");
-      const stopPlayback = vi.spyOn(f.entry.player, "stop");
+      const stopPlayback = harness.getLastAudioPlayer().stop;
       const leave = f.manager.leave({ guildId: "g1" });
       const finished = vi.fn();
       void leave.then(finished);
@@ -116,6 +116,7 @@ defineDiscordVoiceTests((harness) => {
       expect(f.sink).not.toHaveBeenCalled();
       const conversationClosed = vi.spyOn(f.entry.conversations, "close");
       leaving = f.manager.leave({ guildId: "g1" });
+      await leaving;
       expect(conversationClosed).toHaveBeenCalledOnce();
     } finally {
       batch.resolve();
@@ -171,10 +172,9 @@ defineDiscordVoiceTests((harness) => {
       const reply = vi.fn();
       const command = createDiscordVoiceCommand({
         cfg: {},
-        discordConfig: {},
+        discordConfig: { allowFrom: [OWNER] },
         accountId: "default",
         groupPolicy: "open",
-        useAccessGroups: false,
         getManager: () => f.manager,
         ephemeralDefault: true,
       });

@@ -27,11 +27,11 @@ export function retainRuntimePluginWork(registries: Iterable<PluginRegistry>): (
 
 /** Keep replacement blocked through physical cleanup, including retained cleanup failures. */
 export async function releaseRuntimePluginWork(
-  release: () => void | Promise<void>,
+  release: (() => void | Promise<void>) | undefined,
   releaseWork: () => void,
 ): Promise<void> {
   try {
-    await release();
+    await release?.();
   } catch (error) {
     if (!hasRetainedPluginRuntimeCloseError(error)) {
       releaseWork();

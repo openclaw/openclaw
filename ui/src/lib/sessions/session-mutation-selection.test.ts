@@ -9,10 +9,11 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-it.each(["rename", "archive", "delete"] as const)(
+it.each(["rename", "archive", "delete", "category"] as const)(
   "%s completion preserves loaded and queued foreground queries and reconciles affected managed lists",
   async (operation) => {
     for (const foreground of ["loaded", "queued", "global"] as const) {
+      vi.useFakeTimers();
       const row = {
         key: "agent:main:original",
         sessionId: "original",
@@ -49,6 +50,7 @@ it.each(["rename", "archive", "delete"] as const)(
                   ...row,
                   label: committed && operation === "rename" ? "Renamed" : row.label,
                   archived: committed && operation === "archive",
+                  category: committed && operation === "category" ? "Moved" : undefined,
                 },
               ];
         return sessionsResult(params.agentId === "writer" ? [writer] : mainRows, committed ? 2 : 1);
@@ -69,7 +71,11 @@ it.each(["rename", "archive", "delete"] as const)(
             ? sessions.delete(row.key, options)
             : sessions.patch(
                 row.key,
-                operation === "archive" ? { archived: true } : { label: "Renamed" },
+                operation === "archive"
+                  ? { archived: true }
+                  : operation === "category"
+                    ? { category: "Moved" }
+                    : { label: "Renamed" },
                 options,
               );
         if (foreground === "queued") {
@@ -90,13 +96,19 @@ it.each(["rename", "archive", "delete"] as const)(
             : {
                 ok: true,
                 key: row.key,
-                entry: { ...row, label: "Renamed", archived: operation === "archive" },
+                entry: {
+                  ...row,
+                  label: "Renamed",
+                  archived: operation === "archive",
+                  category: operation === "category" ? "Moved" : undefined,
+                },
               },
         );
+        await vi.advanceTimersByTimeAsync(5_000);
         if (foreground === "queued") {
           // The mutation has reached reconciliation while the old primary request
           // still holds the foreground selection in the roster queue.
-          await vi.waitFor(() => expect(sessions.listSnapshot(managed).result?.ts).toBe(2));
+          expect(sessions.listSnapshot(managed).result?.ts).toBe(2);
         }
         blocked.resolve(sessionsResult([row], 1));
         await pendingRead;
@@ -106,13 +118,17 @@ it.each(["rename", "archive", "delete"] as const)(
         if (foreground !== "global") {
           expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual([writer.key]);
         }
-        await vi.waitFor(() => expect(sessions.listSnapshot(managed).result?.ts).toBe(2));
+        expect(sessions.listSnapshot(managed).result?.ts).toBe(2);
         const affected = sessions.listSnapshot(managed).result?.sessions ?? [];
         if (operation === "delete") {
           expect(affected).toEqual([]);
         } else {
           expect(affected[0]).toMatchObject(
-            operation === "rename" ? { label: "Renamed" } : { archived: true },
+            operation === "rename"
+              ? { label: "Renamed" }
+              : operation === "category"
+                ? { category: "Moved" }
+                : { archived: true },
           );
         }
         expect(
@@ -128,6 +144,7 @@ it.each(["rename", "archive", "delete"] as const)(
         await Promise.allSettled([mutation, pendingRead, selecting]);
         stop();
         sessions.dispose();
+        vi.useRealTimers();
       }
     }
   },

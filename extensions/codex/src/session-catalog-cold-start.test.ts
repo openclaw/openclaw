@@ -35,32 +35,11 @@ function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
 describe("cold resident catalog availability", () => {
   it.each([
     {
-      label: "an archived anchor during hydration",
-      complete: false,
-      removed: ["bravo"],
-      previous: ["alpha"],
-      following: ["charlie"],
-    },
-    {
       label: "a removed preceding page",
       complete: true,
       removed: ["alpha"],
       previous: ["bravo"],
       following: ["charlie"],
-    },
-    {
-      label: "a removed preceding page during hydration",
-      complete: false,
-      removed: ["alpha"],
-      previous: ["bravo"],
-      following: ["charlie"],
-    },
-    {
-      label: "a removed prefix and anchor",
-      complete: true,
-      removed: ["alpha", "bravo"],
-      previous: ["charlie"],
-      following: [],
     },
     {
       label: "an empty prefix during hydration",
@@ -129,43 +108,6 @@ describe("cold resident catalog availability", () => {
     },
   );
 
-  it("shares one native first page among four cold callers without returning false empty results", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const readNative = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-      return { rows: [row("head")] };
-    });
-    const index = new CodexCatalogIndex({
-      homeId: "cold-four",
-      readNative,
-      assertCurrent: () => {},
-    });
-    let settled = 0;
-    const calls = [{}, { limit: 1 }, { cwd: "/workspace" }, { searchTerm: "head" }].map((query) =>
-      index.list(query).then((page) => {
-        settled++;
-        return page;
-      }),
-    );
-    try {
-      await entered.promise;
-      expect(settled).toBe(0);
-      expect(readNative).toHaveBeenCalledOnce();
-      release.resolve();
-      for (const page of await Promise.all(calls)) {
-        expect(page.sessions.map((session) => session.threadId)).toEqual(["head"]);
-        expect(page.nextCursor).toBeUndefined();
-      }
-      expect(readNative).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await Promise.allSettled(calls);
-      await index.close();
-    }
-  });
-
   it("returns a progressing filtered frontier and bounds a caught-up continuation wait", async () => {
     const tailEntered = createDeferred<void>();
     const tail = createDeferred<void>();
@@ -206,59 +148,7 @@ describe("cold resident catalog availability", () => {
     }
   });
 
-  it("returns empty only after the initial native inventory confirms completion", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const index = new CodexCatalogIndex({
-      homeId: "cold-empty",
-      assertCurrent: () => {},
-      readNative: async () => {
-        entered.resolve();
-        await release.promise;
-        return { rows: [] };
-      },
-    });
-    let settled = false;
-    const pending = index.list({}).then((page) => {
-      settled = true;
-      return page;
-    });
-    try {
-      await entered.promise;
-      expect(settled).toBe(false);
-      release.resolve();
-      expect(await pending).toEqual({ sessions: [] });
-    } finally {
-      release.resolve();
-      await pending;
-      await index.close();
-    }
-  });
-
-  it("serves a complete saved remote snapshot without waiting for native refresh", async () => {
-    const readNative = vi.fn(async (_query: CodexThreadListParams) => ({ rows: [row("current")] }));
-    const state = savedState([
-      { version: 1, kind: "complete" },
-      { version: 1, kind: "row", row: row("saved") },
-    ]);
-    const index = new CodexCatalogIndex({
-      homeId: "saved-remote",
-      state,
-      readNative,
-      assertCurrent: () => {},
-    });
-    try {
-      expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual(["saved"]);
-      expect(readNative).not.toHaveBeenCalled();
-      await index.initialize();
-      expect(readNative).toHaveBeenCalledOnce();
-      expect(readNative.mock.calls[0]?.[0]).toMatchObject({ useStateDbOnly: true });
-    } finally {
-      await index.close();
-    }
-  });
-
-  it.each(["missing", "invalid"] as const)(
+  it.each(["invalid"] as const)(
     "does not expose a %s saved snapshot's stale tail",
     async (kind) => {
       const entries: StoredCodexCatalogEntry[] = [

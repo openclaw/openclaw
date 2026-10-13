@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 
 describe("model catalog metadata projection", () => {
   it("retains runtime capabilities without exporting request credentials", () => {
@@ -46,5 +47,35 @@ describe("model catalog metadata projection", () => {
     expect(entry).not.toHaveProperty("headers");
     expect(entry).not.toHaveProperty("authHeader");
     expect(entry).not.toHaveProperty("requestTimeoutMs");
+  });
+  it("keeps synthetic provenance bound to the context metadata and route that supplied it", () => {
+    const base = {
+      provider: "fixture",
+      id: "m",
+      name: "M",
+      api: "openai-responses" as const,
+      baseUrl: "https://first.example/v1",
+      contextWindow: 128_000,
+      contextWindowSource: "synthetic" as const,
+    };
+    expect(
+      overlayCatalogMetadata(base, {
+        ...base,
+        contextWindow: 64_000,
+        contextWindowSource: undefined,
+      }).contextWindowSource,
+    ).toBeUndefined();
+    expect(
+      overlayCatalogMetadata(base, {
+        provider: "fixture",
+        id: "m",
+        name: "M",
+        baseUrl: "https://second.example/v1",
+      }).contextWindowSource,
+    ).toBeUndefined();
+    expect(
+      overlayCatalogMetadata(base, { provider: "fixture", id: "m", name: "M", reasoning: true })
+        .contextWindowSource,
+    ).toBe("synthetic");
   });
 });

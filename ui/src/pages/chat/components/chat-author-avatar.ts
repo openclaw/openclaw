@@ -1,12 +1,18 @@
 import { html, nothing, type TemplateResult } from "lit";
 import {
+  renderIdentityAvatar,
   identityAvatarClass,
   renderAgentIdentityAvatar,
   renderIdentityAvatarImage,
-  resolveIdentityAvatarView,
   type IdentityAvatarView,
 } from "../../../components/identity-avatar-view.ts";
+import "../../../components/channel-avatar.ts";
+import {
+  resolveChannelSenderAvatarUrl,
+  type ChannelSenderAvatarSource,
+} from "../../../lib/chat/channel-sender-avatar.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { readAvatarGatewayContext } from "../../../lib/identity-avatar-context.ts";
 import {
   resolveAvatar,
   type IdentityAvatarInput,
@@ -29,24 +35,12 @@ function renderInitialsAvatar(
   `;
 }
 
-function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
-  if (!view.imageUrl) {
-    return renderInitialsAvatar(view.fallback);
-  }
-  return html`
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-author-avatar",
-      className: "chat-author-avatar__image",
-      ariaHidden: true,
-    })}${renderInitialsAvatar(view.fallback, true)}
-  `;
-}
-
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
   className = "chat-author-avatar",
+  agentAvatar?: { avatar?: string | null; textAvatar?: string | null },
+  channelAvatar?: ChannelSenderAvatarSource,
 ): TemplateResult | typeof nothing {
   const label = formatSenderLabel(sender);
   if (!sender || !label) {
@@ -57,20 +51,44 @@ export function renderChatAuthorAvatar(
     return html`<span class=${className} role="img" aria-label=${label} title=${label}>
       ${renderAgentIdentityAvatar({
         id: sender.identity.id,
-        avatar: avatar.kind === "profile" ? avatar.url : null,
+        avatar: agentAvatar?.avatar ?? (avatar.kind === "profile" ? avatar.url : null),
+        textAvatar: agentAvatar?.textAvatar,
       })}
     </span>`;
   }
-  const view = resolveIdentityAvatarView(sender);
-  const resolved = renderResolvedAvatar(view);
-  return html`<span
-    class=${identityAvatarClass("chat-author-avatar", view)}
-    role="img"
-    aria-label=${label}
-    title=${label}
-  >
-    ${resolved}
-  </span>`;
+  return renderIdentityAvatar(sender, (view) => {
+    const gateway = readAvatarGatewayContext();
+    const channelPhoto = resolveChannelSenderAvatarUrl(
+      sender,
+      channelAvatar,
+      gateway.resourceBasePath,
+    );
+    const resolved = channelPhoto
+      ? html`<openclaw-channel-avatar
+          .routeUrl=${channelPhoto}
+          .authTokens=${gateway.authTokens}
+          .authReady=${Boolean(gateway.origin)}
+          .fallback=${renderInitialsAvatar(view.fallback)}
+        ></openclaw-channel-avatar>`
+      : view.imageUrl
+        ? html`
+            ${renderIdentityAvatarImage({
+              view,
+              fallbackSelector: ".chat-author-avatar",
+              className: "chat-author-avatar__image",
+              ariaHidden: true,
+            })}${renderInitialsAvatar(view.fallback, true)}
+          `
+        : renderInitialsAvatar(view.fallback);
+    return html`<span
+      class=${identityAvatarClass("chat-author-avatar", view)}
+      role="img"
+      aria-label=${label}
+      title=${label}
+    >
+      ${resolved}
+    </span>`;
+  });
 }
 
 export function resolveChatDefaultAvatarPlacement(
@@ -85,9 +103,9 @@ export function resolveChatDefaultAvatarPlacement(
  * stale configured URL); swap to initials instead of a broken image. Lit
  * reuses DOM parts, so a load must clear a prior identity's error state.
  */
-export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
+export function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
+    class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     role="img"
     aria-label="${label}"
@@ -101,7 +119,7 @@ export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, ro
     ${renderIdentityAvatarImage({
       view,
       fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
+      className: "chat-avatar user",
       alt: label,
     })}${initialsAvatar}
   </span>`;

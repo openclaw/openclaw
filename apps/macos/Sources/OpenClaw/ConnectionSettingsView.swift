@@ -370,8 +370,9 @@ struct ConnectionSettingsView: View {
                 currentTarget: self.state.remoteTarget,
                 currentUrl: self.state.remoteUrl,
                 transport: self.state.remoteTransport)
-            { gateway in
-                self.applyDiscoveredGateway(gateway)
+            { _ in
+                // Discovery is only a setup hint. The editor requires independent trusted input.
+                self.showConnectionEditor = true
             }
         } header: {
             Text("Nearby Gateways")
@@ -460,12 +461,7 @@ extension ConnectionSettingsView {
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func applyDiscoveredGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {
-        // Discovery is only a setup hint. The editor requires independent trusted input.
-        self.showConnectionEditor = true
+        AppActivation.shared.presentAlert(alert)
     }
 }
 

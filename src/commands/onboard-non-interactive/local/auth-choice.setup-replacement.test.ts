@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertAuthProfileWithLock } from "../../../agents/auth-profiles/profiles.js";
 import {
   ensureAuthProfileStore,
@@ -8,7 +7,7 @@ import {
 } from "../../../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderAuthMethod } from "../../../plugins/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 const providerChoice = vi.hoisted(() => vi.fn());
@@ -27,16 +26,15 @@ vi.mock("../../runtime-plugin-install.js", () => ({
   }),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterEach, "openclaw-noninteractive-replacement-");
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
 });
 
 it.each([true, false])(
   "preserves stored metadata and working credentials with a new key: %s",
   async (newKey) => {
-    const stateDir = tempDirs.make("openclaw-noninteractive-replacement-");
+    const stateDir = tempDirs.make();
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
@@ -51,7 +49,7 @@ it.each([true, false])(
     await upsertAuthProfileWithLock({ profileId: "openai:default", credential: working, agentDir });
     const config: OpenClawConfig = {
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         defaults: { model: "openai/test-model@openai:default" },
       },
     };

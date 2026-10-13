@@ -1,6 +1,9 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
+import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertDaemonRuntimePinCurrent,
@@ -53,6 +56,8 @@ describe("transactional runtime pin state", () => {
       expect(readDaemonRuntimePin(scope, null).pin).toBeUndefined();
       const explicit = readDaemonRuntimePinForInstall(scope, override, true);
       expect(explicit.pin).toBeUndefined();
+      expect(explicit.revision).toBe(readDaemonRuntimePin(scope, override).revision);
+      expect(explicit.definition).toBe(readDaemonRuntimePin(scope, override).definition);
       commitDaemonRuntimePin(scope, { expected: explicit }, null);
       expect(readDaemonRuntimePin(scope, command).stored).toBe(false);
     });
@@ -79,4 +84,63 @@ describe("transactional runtime pin state", () => {
       expect(readDaemonRuntimePin(scope, updated).pin).toBeUndefined();
     });
   });
+  it.each([
+    { capable: false, cleanup: "deferred", succeeds: true },
+    { capable: true, cleanup: "deferred", succeeds: false },
+    { capable: false, cleanup: "throws", succeeds: false },
+  ] as const)(
+    "reads persisted intent with $cleanup snapshot cleanup (native close capable: $capable)",
+    async ({ capable, cleanup, succeeds }) => {
+      await withOpenClawTestState({ label: "runtime-pin-cleanup" }, async (state) => {
+        const scope = { kind: "gateway" as const, env: state.env };
+        commitDaemonRuntimePin(
+          scope,
+          { expected: readDaemonRuntimePin(scope, command), pin },
+          command,
+        );
+        await closeStateDatabaseForTest();
+
+        const capabilities = sqliteRuntime.getSqliteRuntimeCapabilities();
+        const runtime = vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+          ...capabilities,
+          explicitSqliteCloseReleasesNativeResources: capable,
+        });
+        const prepare = sqliteSnapshots.prepareSqliteReadOnlyLocationSync;
+        const cleanupFailure = new Error("required snapshot cleanup failed");
+        let cleanupSnapshot: (() => boolean) | undefined;
+        const snapshot = vi
+          .spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync")
+          .mockImplementationOnce((pathname) => {
+            const prepared = prepare(pathname);
+            cleanupSnapshot = prepared.cleanup;
+            return {
+              ...prepared,
+              cleanup: vi.fn(prepared.cleanup).mockImplementationOnce(() => {
+                if (cleanup === "throws") {
+                  throw cleanupFailure;
+                }
+                return false;
+              }),
+            };
+          });
+        try {
+          const read = () => readDaemonRuntimePin(scope, command);
+          if (succeeds) {
+            expect(read()).toMatchObject({ stored: true, pin });
+          } else {
+            expect(read).toThrow(
+              cleanup === "throws"
+                ? cleanupFailure
+                : "Shared-state snapshot cleanup is incomplete.",
+            );
+          }
+        } finally {
+          snapshot.mockRestore();
+          runtime.mockRestore();
+          cleanupSnapshot?.();
+          await closeStateDatabaseForTest();
+        }
+      });
+    },
+  );
 });

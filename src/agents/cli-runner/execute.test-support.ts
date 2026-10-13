@@ -1,8 +1,6 @@
 /** Test doubles and setup for CLI execution supervisor and event seams. */
-import type { Mock } from "vitest";
-import { vi } from "vitest";
-import type { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import type { enqueueSystemEvent } from "../../infra/system-events.js";
+import { vi, type Mock } from "vitest";
+import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
@@ -11,9 +9,7 @@ export { buildCliExecLogLine } from "./execute-logging.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
-type EnqueueSystemEventFn = typeof enqueueSystemEvent;
-type RequestHeartbeatFn = typeof requestHeartbeat;
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type EnqueueSessionEventFn = typeof enqueueSessionEventForHost;
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
 export function wrapPreparedCliRunWithTestAdmission<Args extends unknown[], T>(
@@ -36,9 +32,13 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
-export const supervisorSpawnMock: UnknownMock = vi.fn();
-export const enqueueSystemEventMock: UnknownMock = vi.fn();
-export const requestHeartbeatMock: UnknownMock = vi.fn();
+export const supervisorSpawnMock = vi.fn<SupervisorSpawnFn>();
+export const enqueueSessionEventMock = vi.fn<EnqueueSessionEventFn>(() => ({
+  id: "cli-watchdog-event",
+  accepted: Promise.resolve({ ok: true }),
+  cancel: () => true,
+  settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+}));
 
 setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => {
@@ -70,9 +70,7 @@ setCliRunnerExecuteTestDeps({
               }
             : undefined,
         };
-        const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
-          ReturnType<SupervisorSpawnFn>
-        >;
+        const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
           // A defeated or reset once-mock returns undefined; fail loudly instead
           // of letting the run wedge into an opaque test timeout.
@@ -106,12 +104,13 @@ setCliRunnerExecuteTestDeps({
       cancelScope: vi.fn(),
     };
   },
-  enqueueSystemEvent: (
-    text: Parameters<EnqueueSystemEventFn>[0],
-    options: Parameters<EnqueueSystemEventFn>[1],
-  ) => enqueueSystemEventMock(text, options) as ReturnType<EnqueueSystemEventFn>,
-  requestHeartbeat: (options?: Parameters<RequestHeartbeatFn>[0]) =>
-    requestHeartbeatMock(options) as ReturnType<RequestHeartbeatFn>,
+  captureSessionEventTarget: async (agentId, sessionKey) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionKey,
+    generation: "test",
+  }),
+  enqueueSessionEvent: (text, options) => enqueueSessionEventMock(text, options),
 });
 
 type MockRunExit = {

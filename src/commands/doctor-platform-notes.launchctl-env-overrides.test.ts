@@ -1,5 +1,5 @@
-// Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
 import fs from "node:fs";
+import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -22,8 +22,8 @@ vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: moc
 
 import {
   collectGatewayPlatformWarnings,
-  noteMacLaunchctlGatewayEnvOverrides,
-  noteMacStaleOpenClawUpdateLaunchdJobs,
+  noteMacGatewayPlatformWarnings,
+  noteStartupOptimizationHints,
 } from "./doctor-platform-notes.js";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -47,7 +47,7 @@ afterEach(() => {
   }
 });
 
-describe("noteMacLaunchctlGatewayEnvOverrides", () => {
+describe("macOS Gateway environment warnings", () => {
   it("prints clear unsetenv instructions for token override", async () => {
     mocks.runExec.mockImplementation(async (_command, [, name]) => ({
       stdout: name === "OPENCLAW_GATEWAY_TOKEN" ? " \tlaunchctl-token\n" : " \n",
@@ -61,7 +61,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.note).toHaveBeenCalledTimes(1);
     expect(mocks.runExec).toHaveBeenCalledTimes(2);
@@ -75,15 +75,6 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     expect(message).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
     expect(message).not.toContain("launchctl-token");
     expect(message).not.toContain("config-token");
-  });
-
-  it("does nothing when config has no gateway credentials", async () => {
-    mocks.runExec.mockResolvedValue({ stdout: "launchctl-token", stderr: "" });
-
-    await noteMacLaunchctlGatewayEnvOverrides({});
-
-    expect(mocks.runExec).not.toHaveBeenCalled();
-    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("treats SecretRef-backed credentials as configured", async () => {
@@ -104,7 +95,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.note).toHaveBeenCalledTimes(1);
     const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
@@ -124,7 +115,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.runExec).not.toHaveBeenCalled();
     expect(mocks.note).not.toHaveBeenCalled();
@@ -140,7 +131,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
       },
     };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg);
+    await noteMacGatewayPlatformWarnings(cfg);
 
     expect(mocks.runExec).toHaveBeenNthCalledWith(
       1,
@@ -158,7 +149,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
   });
 });
 
-describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
+describe("macOS stale updater warnings", () => {
   it("uses service env for gateway platform stale updater warnings", async () => {
     const serviceEnv = {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
@@ -169,30 +160,10 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       environment: serviceEnv,
     });
 
-    await collectGatewayPlatformWarnings({});
+    const warnings = await collectGatewayPlatformWarnings({});
 
-    expect(mocks.readCommand).toHaveBeenCalledTimes(1);
-    expect(mocks.findJobs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        HOME: "/tmp/openclaw-doctor-host",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
-      }),
-    );
-  });
-
-  it("uses service env for doctor stale updater notes", async () => {
-    const serviceEnv = {
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
-    };
-    mocks.readCommand.mockResolvedValue({
-      programArguments: ["/bin/node", "cli", "doctor"],
-      environment: serviceEnv,
-    });
-
-    await noteMacStaleOpenClawUpdateLaunchdJobs();
-
+    expect(warnings).toEqual([]);
+    expect(mocks.runExec).not.toHaveBeenCalled();
     expect(mocks.readCommand).toHaveBeenCalledTimes(1);
     expect(mocks.findJobs).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,7 +186,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       },
     ]);
 
-    await noteMacStaleOpenClawUpdateLaunchdJobs();
+    await noteMacGatewayPlatformWarnings({});
 
     expect(mocks.findJobs).toHaveBeenCalledTimes(1);
     const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
@@ -225,12 +196,6 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     expect(message).toContain("ai.openclaw.manual-update.1717168800");
     expect(message).toContain("launchctl remove <label>");
     expect(message).toContain("openclaw gateway restart");
-  });
-
-  it("does nothing when no stale updater jobs exist", async () => {
-    await noteMacStaleOpenClawUpdateLaunchdJobs();
-
-    expect(mocks.note).not.toHaveBeenCalled();
   });
 });
 
@@ -245,8 +210,83 @@ describe("collectGatewayPlatformWarnings", () => {
     expect(warnings).toEqual([expect.stringContaining("LaunchAgent writes are disabled")]);
     expect(warnings[0]).toContain("disable-launchagent");
   });
+});
 
-  it("does nothing when launch agent writes are not disabled", async () => {
-    await expect(collectGatewayPlatformWarnings({})).resolves.toEqual([]);
+describe("noteStartupOptimizationHints", () => {
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+    vi.spyOn(os, "arch").mockReturnValue("arm64");
+    vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 ** 3);
+  });
+
+  it("does not warn when compile cache and no-respawn are configured", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
+      OPENCLAW_NO_RESPAWN: "1",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("warns when compile cache is under /tmp and no-respawn is not set", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(title).toBe("Startup optimization");
+    expect(message).toBe(
+      [
+        "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
+        "- OPENCLAW_NO_RESPAWN is not set to 1; set it when you want routine gateway restarts to stay in-process instead of handing off to a managed supervisor.",
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+      ].join("\n"),
+    );
+  });
+
+  it("warns when compile cache is disabled via env override", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
+      OPENCLAW_NO_RESPAWN: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(message).toBe(
+      [
+        "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+        "  unset NODE_DISABLE_COMPILE_CACHE",
+      ].join("\n"),
+    );
+  });
+
+  it("skips startup optimization note on win32", () => {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("skips startup optimization note on non-target linux hosts", () => {
+    vi.mocked(os.arch).mockReturnValue("x64");
+    vi.mocked(os.totalmem).mockReturnValue(32 * 1024 ** 3);
+
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 });

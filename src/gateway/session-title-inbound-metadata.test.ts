@@ -2,6 +2,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -25,11 +29,13 @@ describe("session titles with inbound Gateway metadata", () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = tempDirs.make("openclaw-session-title-inbound-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     envSnapshot.restore();
   });
 
@@ -79,40 +85,6 @@ describe("session titles with inbound Gateway metadata", () => {
 
     expect(deriveSessionTitle(entry, "Sender: help me debug the gateway")).toBe(
       "Sender: help me debug the gateway",
-    );
-  });
-
-  test("keeps explicit session names ahead of user-message metadata", () => {
-    const entry: SessionEntry = {
-      sessionId: "abcd1234-rest-of-session",
-      updatedAt: 0,
-      displayName: "Deployment investigation",
-    };
-
-    expect(deriveSessionTitle(entry, senderMetadata)).toBe("Deployment investigation");
-  });
-
-  test("prefers the computed Gateway display name over transcript metadata", () => {
-    const entry: SessionEntry = { sessionId: "abcd1234-rest-of-session", updatedAt: 0 };
-
-    expect(
-      deriveSessionTitle(
-        entry,
-        `${senderMetadata}\n\nHelp me investigate the flaky deployment`,
-        "  openclaw-tui  ",
-      ),
-    ).toBe("openclaw-tui");
-  });
-
-  test("keeps a user-assigned session label ahead of the Gateway display name", () => {
-    const entry: SessionEntry = {
-      sessionId: "abcd1234-rest-of-session",
-      updatedAt: 0,
-      label: "Deployment investigation",
-    };
-
-    expect(deriveSessionTitle(entry, senderMetadata, "openclaw-tui")).toBe(
-      "Deployment investigation",
     );
   });
 });

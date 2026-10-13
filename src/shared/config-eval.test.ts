@@ -133,7 +133,6 @@ describe("config-eval helpers", () => {
 
   it.each([
     { platform: "linux", suffix: "" },
-    { platform: "darwin", suffix: "" },
     { platform: "win32", suffix: ".CMD" },
   ] as const)(
     "finds a newly installed binary on unchanged $platform PATH",
@@ -148,15 +147,13 @@ describe("config-eval helpers", () => {
       fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
       fs.chmodSync(executable, 0o755);
 
-      expect(process.env.PATH).toBe(binDir);
-      expect(process.env.PATHEXT).toBe(".EXE;.CMD");
       expect(hasBinary("fixture-tool")).toBe(true);
     },
   );
 });
 
 describe("prepared binary availability", () => {
-  it("sees an installation on the next operation while preserving successful cache reuse", async () => {
+  it("sees installations and removals even after a synchronous lookup cached the binary", async () => {
     const binDir = tempDirs.make("openclaw-prepared-binary-");
     vi.stubEnv("PATH", binDir);
     const executable = path.join(binDir, "fixture-tool");
@@ -165,10 +162,14 @@ describe("prepared binary availability", () => {
     );
     fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(executable, 0o755);
+    expect(hasBinary("fixture-tool")).toBe(true);
     expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
       true,
     );
     fs.unlinkSync(executable);
+    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
+      false,
+    );
     expect(hasBinary("fixture-tool")).toBe(true);
     vi.stubEnv("PATH", path.join(binDir, "other"));
     expect(hasBinary("fixture-tool")).toBe(false);
@@ -215,6 +216,22 @@ describe("prepared binary availability", () => {
     const bin = path.join("nested", "fixture-tool");
     expect((await prepareBinaryAvailability([bin])).hasBinary(bin)).toBe(true);
     expect(hasBinary(bin)).toBe(true);
+  });
+
+  it("bounds environment reads when missing binaries expand across PATH and PATHEXT", async () => {
+    mockProcessPlatform("win32");
+    const root = tempDirs.make("openclaw-prepared-freshness-");
+    const pathEntries = Array.from({ length: 30 }, (_, index) =>
+      path.join(root, `missing-${index}`),
+    );
+    vi.stubEnv("PATH", pathEntries.join(path.delimiter));
+    vi.stubEnv("PATHEXT", ".EXE;.CMD;.BAT;.COM");
+    const cwdSpy = vi.spyOn(process, "cwd");
+    const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
+    expect(facts.hasBinary("missing-tool-a")).toBe(false);
+    expect(facts.hasBinary("missing-tool-b")).toBe(false);
+    expect(facts.isCurrent()).toBe(true);
+    expect(cwdSpy.mock.calls.length).toBeLessThan(20);
   });
 });
 

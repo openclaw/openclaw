@@ -1,9 +1,9 @@
 // Tailscale exposure tests cover serve/funnel enablement, preserve-funnel mode,
 // hostname discovery, cleanup handles, and warning paths.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
-  const stopRouteClaim = vi.fn(async () => undefined);
+  const stopRouteClaim = vi.fn<() => Promise<void>>(async () => undefined);
   return {
     stopRouteClaim,
     claimTailscaleRoute: vi.fn(async (_mode: "serve" | "funnel", _target: number | string) => ({
@@ -25,6 +25,7 @@ vi.mock("../infra/tailscale.js", () => ({
 }));
 
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
 import {
@@ -50,7 +51,10 @@ function resetTailscalePublishedOrigin() {
   prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
 }
 
+beforeEach(resetSecretRedactionRegistryForTest);
+
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   resetTailscalePublishedOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
@@ -105,6 +109,7 @@ describe("startGatewayTailscaleExposure", () => {
       MANAGED_BACKEND_PORT,
       18789,
       expect.any(Function),
+      undefined,
     );
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
@@ -141,6 +146,36 @@ describe("startGatewayTailscaleExposure", () => {
     expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
   });
 
+  it("joins claim cleanup when startup stops during hostname discovery", async () => {
+    const hostnameStarted = createDeferred();
+    const hostname = createDeferred<string>();
+    const stopped = createDeferred();
+    const controller = new AbortController();
+    const interrupted = new Error("Gateway stopped during hostname discovery");
+    mocks.getTailnetHostnameAfterServe.mockImplementation(() => {
+      hostnameStarted.resolve();
+      return hostname.promise;
+    });
+    mocks.stopRouteClaim.mockImplementation(() => stopped.promise);
+    const starting = startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      signal: controller.signal,
+      logTailscale: createLogger(),
+    });
+    const result = starting.then(
+      () => "started",
+      (error: unknown) => error,
+    );
+    await hostnameStarted.promise;
+    controller.abort(interrupted);
+    hostname.resolve("fixture.tailnet.ts.net");
+    stopped.resolve();
+    expect(await result).toBe(interrupted);
+    expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+  });
+
   it.each(["serve", "funnel"] as const)(
     "releases the foreground %s claim during cleanup",
     async (mode) => {
@@ -157,6 +192,7 @@ describe("startGatewayTailscaleExposure", () => {
         MANAGED_BACKEND_PORT,
         18789,
         expect.any(Function),
+        undefined,
       );
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
@@ -217,6 +253,7 @@ describe("startGatewayTailscaleExposure", () => {
       MANAGED_BACKEND_PORT,
       18789,
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -245,6 +282,28 @@ describe("startGatewayTailscaleExposure", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each(["serve", "funnel"] as const)(
+    "warns without releasing the %s claim when hostname discovery fails",
+    async (mode) => {
+      const failure = new Error("status output exceeded its buffer");
+      mocks.getTailnetHostname.mockRejectedValue(failure);
+      mocks.getTailnetHostnameAfterServe.mockRejectedValue(failure);
+      const logTailscale = createLogger();
+
+      const cleanup = await startGatewayTailscaleExposure({
+        tailscaleMode: mode,
+        port: 18789,
+        logTailscale,
+      });
+
+      expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
+      expect(getTailscalePublishedOrigin()).toBeUndefined();
+      expect(mocks.stopRouteClaim).not.toHaveBeenCalled();
+      await cleanup?.();
+      expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
+    },
+  );
 
   it("clears the published origin and warns when the foreground claim exits", async () => {
     const { promise: exited, resolve: resolveExit } = createDeferred();
@@ -317,6 +376,7 @@ describe("startGatewayTailscaleExposure", () => {
       MANAGED_BACKEND_PORT,
       18789,
       expect.any(Function),
+      undefined,
     );
   });
 });

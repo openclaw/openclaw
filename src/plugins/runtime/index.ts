@@ -1,12 +1,18 @@
+import { isDeepStrictEqual } from "node:util";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
-// Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
+import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   listImageGenerationProviders,
   listMusicGenerationProviders,
   listVideoGenerationProviders,
 } from "../../media-generation/registry.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -22,15 +28,13 @@ import {
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
-import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
-import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
-import { createRuntimeTasks } from "./runtime-tasks.js";
+import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
-const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("./runtime-tts-request.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -40,14 +44,30 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => {
-      const runtime = await loadGatewayPluginRuntime();
-      return runtime.hasInProcessGatewayContext();
-    },
+    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
+    openPluginPanel: async (params) =>
+      (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
+    readSessionFacts: async (params) =>
+      (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
+    withSessionFacts: async (select, run) =>
+      (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
+    subscribeSessionChanges: subscribeRuntimeSessionChanges,
+    withUserProfileIdentity: async (params, run) => {
+      const captured = {
+        profileId: params.profileId,
+        emails: params.emails.slice(),
+        githubAccountIds:
+          params.githubAccountIds === undefined ? undefined : params.githubAccountIds.slice(),
+      };
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.withTrustedPluginUserProfileIdentity(captured, run);
+    },
+    resolveGitHubAccount: async ({ login, signal }) =>
+      (await loadGatewayPluginRuntime()).resolveTrustedPluginGitHubAccount({ login, signal }),
   };
 }
 
@@ -100,11 +120,8 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       }),
   );
   return {
-    acquireLocalService: (...args) => loadAcquireLocalService(...args),
-    complete: async (params) => {
-      const llm = await loadLlm();
-      return llm.complete(params);
-    },
+    acquireLocalService: loadAcquireLocalService,
+    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
   };
 }
 
@@ -114,6 +131,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   };
   return {
     complete: unavailable,
+    forkSession: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -144,52 +162,151 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
       return await hasSelfContainedGitMetadata(params.path);
     },
     async create(params) {
-      const { managedWorktrees } = await loadService();
-      const record = await managedWorktrees.create(params);
-      await managedWorktrees.acquire(record.id);
-      return { id: record.id, path: record.path, branch: record.branch };
+      return runWithLocalStateOwner({
+        method: "worktrees.create",
+        params: {},
+        target: params.repoRoot,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          const commitGuard = () => {
+            assertCurrent();
+            params.commitGuard?.();
+          };
+          commitGuard();
+          const service = new ManagedWorktreeService({ env, getConfig: () => config });
+          const record = await service.create({ ...params, signal, commitGuard });
+          commitGuard();
+          await service.acquire(record.id, { signal, commitGuard });
+          return { id: record.id, path: record.path, branch: record.branch };
+        },
+      });
     },
     async release(params) {
-      const { managedWorktrees } = await loadService();
-      await managedWorktrees.releaseByPath(params.path);
+      return runWithLocalStateOwner({
+        method: "worktrees.release",
+        params: {},
+        target: params.path,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          assertCurrent();
+          await new ManagedWorktreeService({ env, getConfig: () => config }).releaseByPath(
+            params.path,
+            { signal, commitGuard: assertCurrent },
+          );
+        },
+      });
     },
     async removeIfLossless(params) {
-      const { managedWorktrees } = await loadService();
-      return managedWorktrees.removeIfLosslessByPath(params.path, {
-        ownerKind: params.ownerKind,
-        ownerId: params.ownerId,
+      return runWithLocalStateOwner({
+        method: "worktrees.removeIfLossless",
+        params: {},
+        target: params.path,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          assertCurrent();
+          return new ManagedWorktreeService({
+            env,
+            getConfig: () => config,
+          }).removeIfLosslessByPath(
+            params.path,
+            { ownerKind: params.ownerKind, ownerId: params.ownerId },
+            { signal, commitGuard: assertCurrent },
+          );
+        },
       });
     },
   };
 }
 
 function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["sandbox"] {
-  const resolveWorkspaceAuthority = (
+  const readCurrentEntry = (
     params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0],
+    memory: ReturnType<typeof captureMemoryExactSessionReader>,
   ) =>
-    resolveSandboxWorkspaceAuthority({
-      ...params,
-      sessionEntry: agent.session.getSessionEntry({
+    memory
+      ? memory.read(params.sessionKey, "list")
+      : agent.session.getSessionEntry({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+        });
+  return {
+    resolveWorkspaceAuthority(params) {
+      const memory = captureMemoryExactSessionReader(params);
+      const sessionEntry = readCurrentEntry(params, memory);
+      const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
+        cfg: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      }),
-    });
-  return {
-    resolveWorkspaceAuthority,
-    async prepareWorkspaceAuthority(params) {
-      const authority = resolveWorkspaceAuthority(params);
+        preparedSessionEntry: sessionEntry ?? null,
+      });
+      return resolveSandboxWorkspaceAuthority({ ...params, sessionEntry, preparedRuntimeStatus });
+    },
+    async prepareWorkspaceAuthority(input) {
+      const params = { ...input };
+      const memory = captureMemoryExactSessionReader(params);
+      const sessionEntry = await agent.session.getSessionEntryAsync({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+      });
+      const fields = [
+        "sessionId",
+        "lifecycleRevision",
+        "sandbox",
+        "sandboxMode",
+        "createdActor",
+        "execHost",
+        "execNode",
+        "model",
+        "modelProvider",
+        "modelOverride",
+        "providerOverride",
+      ] as const;
+      const expected = fields.map((field) => structuredClone(sessionEntry?.[field]));
+      const assertCurrent = () => {
+        const current = readCurrentEntry(params, memory);
+        if (fields.some((field, index) => !isDeepStrictEqual(expected[index], current?.[field]))) {
+          throw new Error("Session workspace authority changed during sandbox preparation.");
+        }
+      };
+      assertCurrent();
+      const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        preparedSessionEntry: sessionEntry ?? null,
+      });
+      const authority = await withPreparedSessionCapabilityRead(() =>
+        resolveSandboxWorkspaceAuthority({
+          ...params,
+          sessionEntry,
+          preparedRuntimeStatus,
+        }),
+      );
       if (!authority.sandboxed || authority.confinementError) {
         return authority;
       }
       const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
-      await resolveSandboxContext({
+      assertCurrent();
+      const sandbox = await resolveSandboxContext({
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
         requireCurrentConfig: true,
+        preparedRuntimeStatus,
+        assertCurrent,
       });
-      return authority;
+      try {
+        assertCurrent();
+        return authority;
+      } finally {
+        sandbox?.[Symbol.dispose]?.();
+      }
     },
   };
 }
@@ -199,17 +316,16 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
   base = createRuntimeBase(),
 ) => {
-  const taskFlow = createRuntimeTaskFlow();
-  const tasks = createRuntimeTasks({
-    managedTaskFlow: taskFlow,
-  });
   const agent = createRuntimeAgent();
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
-    // Sourced from the shared OpenClaw version resolver (#52899) so plugins
-    // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    capabilities: base.capabilities,
+    decisions: {
+      evaluate: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+    },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
     agent,
@@ -233,10 +349,9 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         ? { dispatchReplyFromConfig: _options.dispatchReplyFromConfig }
         : undefined,
     ),
-    events: createRuntimeEvents(),
+    events: { onAgentEvent, onSessionTranscriptUpdate },
     logging: createRuntimeLogging(),
     state: base.state,
-    tasks,
 
     tts: createRuntimeTts(),
     mediaUnderstanding: createRuntimeMediaUnderstandingFacade(),

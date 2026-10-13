@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { ApplicationContext } from "../app/context.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createControlUiMockBootstrapConfig,
   controlUiSessionUrl,
@@ -22,7 +24,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const STORAGE_KEY = "openclaw:control-ui:community-invite";
+const STORAGE_KEY = "openclaw:control-ui:community-invite:v2";
 
 async function traceInviteMounts(page: Page) {
   await page.addInitScript(() => {
@@ -53,19 +55,18 @@ async function traceInviteMounts(page: Page) {
 }
 
 async function waitForInvitePolicy(page: Page, enabled: boolean) {
-  await page.waitForFunction((expected) => {
-    const app = document.querySelector("openclaw-app") as
-      | (HTMLElement & {
-          runtime?: {
-            context: {
-              config: { current: { serverVersion: string | null; communityInvite: boolean } };
-            };
-          };
-        })
-      | null;
-    const config = app?.runtime?.context.config.current;
-    return config?.serverVersion != null && config.communityInvite === expected;
-  }, enabled);
+  const application = await getControlUiContextHandle(page);
+  try {
+    await page.waitForFunction(
+      ({ context, expected }) => {
+        const config = context.config.current;
+        return config.serverVersion != null && config.communityInvite === expected;
+      },
+      { context: application, expected: enabled },
+    );
+  } finally {
+    await application.dispose();
+  }
 }
 
 async function settleSidebarIdleWork(page: Page) {
@@ -94,17 +95,21 @@ suite.define(() => {
     const page = await context.newPage();
     await page.addInitScript(() => {
       const observer = new MutationObserver(() => {
-        const app = document.querySelector("openclaw-app") as
-          | (HTMLElement & {
-              runtime?: { context: { config: { current: { communityInvite: boolean } } } };
-            })
-          | null;
+        const application: { current?: ApplicationContext } = {};
+        document.querySelector("openclaw-app")?.firstElementChild?.dispatchEvent(
+          Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+            context: "openclaw.application",
+            callback(value: ApplicationContext) {
+              application.current = value;
+            },
+          }),
+        );
         const sidebar = document.querySelector("openclaw-app-sidebar") as
           | (HTMLElement & { updateComplete: Promise<unknown> })
           | null;
         const row = sidebar?.querySelector(".sidebar-recent-session__link");
         if (
-          !app?.runtime?.context.config.current.communityInvite ||
+          !application.current?.config.current.communityInvite ||
           !sidebar ||
           !row?.getBoundingClientRect().height
         ) {
@@ -149,7 +154,7 @@ suite.define(() => {
     const artworkRequest = new Promise<void>((resolve) => {
       artworkRequested = resolve;
     });
-    await page.route("**/community-art/discord-invite.webp*", async (route) => {
+    await page.route("**/community-art/community-invite-*.webp*", async (route) => {
       artworkRequested();
       await artworkReady;
       await route.continue();
@@ -182,7 +187,7 @@ suite.define(() => {
           .locator(".sidebar-shell__body")
           .evaluate((element) => element.getBoundingClientRect().height),
       ).toBeCloseTo(initial.sidebarHeight, 2);
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
     } finally {
       releaseArtwork();
@@ -264,12 +269,12 @@ suite.define(() => {
             const row = page.locator(
               '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
             );
-            const menu = row.getByRole("button", { name: "Open session menu" });
+            const menu = row.locator(".sidebar-recent-session__link");
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             const card = page.locator(".community-invite-card");
             await expect.poll(() => card.count()).toBe(0);
             if (interaction === "touch") {
-              await menu.tap();
+              await row.locator("[data-sidebar-session-menu]").tap();
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
             } else if (interaction === "keyboard") {
               await page.mouse.move(900, 500);
@@ -315,9 +320,9 @@ suite.define(() => {
                 );
                 expect(await card.count()).toBe(0);
                 await page.keyboard.press("Shift+Tab");
-                await menu.press("Enter");
+                await menu.press("Shift+F10");
               } else if (interaction === "pointer") {
-                await menu.click();
+                await row.click({ button: "right" });
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
               await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
@@ -335,8 +340,14 @@ suite.define(() => {
               }
             }
             await card.waitFor({ state: "visible" });
+            const targetHeights = await card
+              .locator(".invite__cta")
+              .evaluateAll((links) => links.map((link) => link.getBoundingClientRect().height));
+            for (const height of targetHeights) {
+              expect(height).toBeGreaterThanOrEqual(interaction === "touch" ? 44 : 40);
+            }
             if (interaction === "touch") {
-              await menu.tap();
+              await row.locator("[data-sidebar-session-menu]").tap();
             } else {
               await row.hover();
             }
@@ -446,10 +457,16 @@ suite.define(() => {
     }
   });
 
-  it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
+  it("renews the old invitation once and preserves new dismissals across gateway connections", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, { communityInviteDismissed: false });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "openclaw:control-ui:community-invite",
+        JSON.stringify({ dismissedAtMs: 1_760_000_001_000 }),
+      );
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
@@ -458,7 +475,10 @@ suite.define(() => {
 
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
 
-      const cta = page.getByRole("link", { name: "Join us on Discord", exact: true });
+      const cta = page.getByRole("link", {
+        name: "Join the OpenClaw community on Discord",
+        exact: true,
+      });
       expect(await cta.getAttribute("href")).toBe("https://discord.gg/clawd");
       expect(await cta.getAttribute("target")).toBe("_blank");
       expect((await cta.getAttribute("rel"))?.split(/\s+/u)).toEqual(

@@ -4,12 +4,9 @@ import { AcpSessionNewOrdering } from "./session-new-ordering.js";
 
 type Step = { inbound: AnyMessage } | { outbound: AnyMessage };
 
-/**
- * Drives a script through the ordering boundary. Inbound steps are observed the way
- * `serveAcpGateway` observes them — synchronously, before dispatch — so a test can
- * interleave client traffic with agent output and see the resulting wire order.
- */
-async function runSteps(ordering: AcpSessionNewOrdering, steps: Step[]): Promise<AnyMessage[]> {
+/** Observes inbound traffic synchronously before dispatch, as serveAcpGateway does. */
+async function runSteps(steps: Step[]): Promise<AnyMessage[]> {
+  const ordering = new AcpSessionNewOrdering();
   const stream = new TransformStream<AnyMessage, AnyMessage>({
     transform(message, controller) {
       ordering.transformOutbound(message, controller);
@@ -29,12 +26,6 @@ async function runSteps(ordering: AcpSessionNewOrdering, steps: Step[]): Promise
   const writer = stream.writable.getWriter();
   for (const step of steps) {
     if ("inbound" in step) {
-      const inbound = step.inbound as { method?: string; params?: { sessionId?: string } };
-      if (inbound.method === "__forget__") {
-        // Stands in for the session store reporting a removal it performed itself.
-        ordering.forget("evicted-session");
-        continue;
-      }
       ordering.observeInbound(step.inbound);
       continue;
     }
@@ -44,8 +35,12 @@ async function runSteps(ordering: AcpSessionNewOrdering, steps: Step[]): Promise
   return outputPromise;
 }
 
+function request(id: number, method: string, params: unknown): AnyMessage {
+  return { jsonrpc: "2.0", id, method, params };
+}
+
 function newSessionRequest(id: number): AnyMessage {
-  return { jsonrpc: "2.0", id, method: "session/new", params: { cwd: "/tmp" } } as AnyMessage;
+  return request(id, "session/new", { cwd: "/tmp" });
 }
 
 function newSessionResponse(id: number, sessionId: string): AnyMessage {
@@ -61,508 +56,162 @@ function sessionUpdate(sessionId: string, title = "Session"): AnyMessage {
 }
 
 describe("AcpSessionNewOrdering", () => {
-  it("emits a new-session result before updates that reference its session ID", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const update = sessionUpdate("new-session", "New session");
-    const result = newSessionResponse(2, "new-session");
+  const a1 = sessionUpdate("a", "a1");
+  const a2 = sessionUpdate("a", "a2");
+  const a3 = sessionUpdate("a", "a3");
+  const b1 = sessionUpdate("b", "b1");
+  const createdA = newSessionResponse(1, "a");
+  const createdB = newSessionResponse(2, "b");
+  const failed = (id: number): AnyMessage => ({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32602, message: "rejected" },
+  });
+  const load = (id: number) => request(id, "session/load", { sessionId: "a", cwd: "/tmp" });
+  const failA = failed(1);
+  const failB = failed(2);
+  const acceptedLoad: AnyMessage = { jsonrpc: "2.0", id: 11, result: {} };
+  const rejectedLoad = failed(10);
+  const stringIdResponse: AnyMessage = { jsonrpc: "2.0", id: "1", result: { sessionId: "a" } };
+  const permission = request(1, "session/request_permission", { options: [] });
 
-    await expect(
-      runSteps(ordering, [
+  const buffered = Array.from({ length: 257 }, (_, i) => sessionUpdate("unbounded", `update-${i}`));
+  const burstResults = Array.from({ length: 600 }, (_, i) => newSessionResponse(i + 1, `s${i}`));
+  const burstUpdates = Array.from({ length: 600 }, (_, i) => sessionUpdate(`s${i}`));
+  const establishedResults = Array.from({ length: 1100 }, (_, i) =>
+    newSessionResponse(i + 1, `s${i}`),
+  );
+  const lateUpdate = sessionUpdate("late-session");
+  const lateResult = newSessionResponse(9000, "late-session");
+
+  it.each<{ name: string; steps: Step[]; expected: AnyMessage[] }>([
+    {
+      name: "does not recognize a session named by an unaccepted prompt",
+      steps: [
+        { inbound: request(5, "session/prompt", { sessionId: "a", prompt: [] }) },
         { inbound: newSessionRequest(2) },
-        { outbound: update },
-        { outbound: result },
-      ]),
-    ).resolves.toEqual([result, update]);
-  });
-
-  it("does not delay updates for a session ID supplied by the client", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const update = sessionUpdate("existing-session", "Existing session");
-
-    await expect(
-      runSteps(ordering, [
-        {
-          inbound: {
-            jsonrpc: "2.0",
-            id: 3,
-            method: "session/load",
-            params: { sessionId: "existing-session", cwd: "/tmp" },
-          } as AnyMessage,
-        },
-        { outbound: update },
-      ]),
-    ).resolves.toEqual([update]);
-  });
-
-  it("treats a resumed session as established", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const update = sessionUpdate("resumed-session");
-
-    await expect(
-      runSteps(ordering, [
-        {
-          inbound: {
-            jsonrpc: "2.0",
-            id: 4,
-            method: "session/resume",
-            params: { sessionId: "resumed-session", cwd: "/tmp" },
-          } as AnyMessage,
-        },
-        { outbound: update },
-      ]),
-    ).resolves.toEqual([update]);
-  });
-
-  it("does not establish a session ID named by a request the protocol has not accepted", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const prompted = sessionUpdate("never-created");
-    const result = newSessionResponse(2, "other-session");
-
-    // `session/prompt` is valid-shaped but the translator rejects an unknown session.
-    // Recording it here would let any peer grow the set for the process lifetime.
-    // With a `session/new` in flight the difference is observable: an established ID
-    // would go straight out, while this one waits for the response.
-    await expect(
-      runSteps(ordering, [
-        {
-          inbound: {
-            jsonrpc: "2.0",
-            id: 5,
-            method: "session/prompt",
-            params: { sessionId: "never-created", prompt: [] },
-          } as AnyMessage,
-        },
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [createdB, a1],
+    },
+    {
+      name: "keeps numeric and string request IDs distinct",
+      steps: [{ inbound: newSessionRequest(1) }, { outbound: a1 }, { outbound: stringIdResponse }],
+      expected: [stringIdResponse],
+    },
+    {
+      name: "retires recognition on session close",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: createdA },
+        { inbound: request(9, "session/close", { sessionId: "a" }) },
         { inbound: newSessionRequest(2) },
-        { outbound: prompted },
-        { outbound: result },
-      ]),
-    ).resolves.toEqual([result, prompted]);
-  });
-
-  it("only establishes a session from the response correlated to its own request", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const unrelated = newSessionResponse(99, "other-session");
-    const update = sessionUpdate("other-session");
-
-    // Request id 2 is in flight; a result carrying a session ID under a different id
-    // is some other call's payload and must not flush this session's updates.
-    await expect(
-      runSteps(ordering, [
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [createdA, createdB, a1],
+    },
+    {
+      name: "drains failed creations in global arrival order",
+      steps: [
+        { inbound: newSessionRequest(1) },
         { inbound: newSessionRequest(2) },
-        { outbound: update },
-        { outbound: unrelated },
-      ]),
-    ).resolves.toEqual([unrelated]);
-  });
-
-  it("keeps a numeric request ID distinct from the same string ID", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const stringIdResponse = { jsonrpc: "2.0", id: "2", result: { sessionId: "s" } } as AnyMessage;
-
-    await expect(
-      runSteps(ordering, [
+        { outbound: a1 },
+        { outbound: b1 },
+        { outbound: a2 },
+        { outbound: failA },
+        { outbound: failB },
+      ],
+      expected: [failA, failB, a1, b1, a2],
+    },
+    {
+      name: "retires recognition after a rejected load",
+      steps: [
+        { inbound: request(1, "session/load", { sessionId: "a", cwd: "/tmp", mcpServers: [{}] }) },
+        { outbound: failA },
         { inbound: newSessionRequest(2) },
-        { outbound: sessionUpdate("s") },
-        { outbound: stringIdResponse },
-      ]),
-    ).resolves.toEqual([stringIdResponse]);
-  });
-
-  it("releases buffered updates when the session is closed instead of stranding them", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const stranded = sessionUpdate("ghost");
-    const later = sessionUpdate("established");
-
-    const output = await runSteps(ordering, [
-      { outbound: stranded },
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 6,
-          method: "session/close",
-          params: { sessionId: "ghost" },
-        } as AnyMessage,
-      },
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 7,
-          method: "session/load",
-          params: { sessionId: "established", cwd: "/tmp" },
-        } as AnyMessage,
-      },
-      { outbound: later },
-    ]);
-
-    expect(output).toEqual([stranded, later]);
-  });
-
-  it("writes updates through once a session's buffer is full", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const buffered = Array.from({ length: 256 }, (_, index) =>
-      sessionUpdate("unbounded", `buffered-${index}`),
-    );
-    const overflow = sessionUpdate("unbounded", "overflow");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(1) },
-      ...buffered.map((outbound) => ({ outbound })),
-      { outbound: overflow },
-    ]);
-
-    // Failing open preserves the update, and never reorders it against its own
-    // session: the backlog is released in order first, then the overflow follows.
-    // Only the cross-session ordering degrades to pre-fix behavior.
-    expect(output).toEqual([...buffered, overflow]);
-  });
-
-  it("releases an established session ID when the session closes", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const created = newSessionResponse(2, "closing-session");
-    const afterClose = sessionUpdate("closing-session", "after close");
-    const other = newSessionResponse(3, "other-session");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(2) },
-      { outbound: created },
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 9,
-          method: "session/close",
-          params: { sessionId: "closing-session" },
-        } as AnyMessage,
-      },
-      { inbound: newSessionRequest(3) },
-      { outbound: afterClose },
-      { outbound: other },
-    ]);
-
-    // The ID was released on close, so a late update is held behind the in-flight
-    // response rather than passing straight through as an established session would.
-    // Retaining it is what let the set grow for the lifetime of a long-lived bridge.
-    expect(output).toEqual([created, other, afterClose]);
-  });
-
-  it("releases interleaved updates in global arrival order when both creations fail", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const a1 = sessionUpdate("session-a", "a1");
-    const b1 = sessionUpdate("session-b", "b1");
-    const a2 = sessionUpdate("session-a", "a2");
-    const failA = { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "a" } } as AnyMessage;
-    const failB = { jsonrpc: "2.0", id: 2, error: { code: -32603, message: "b" } } as AnyMessage;
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: failA },
-      { outbound: failB },
-    ]);
-
-    // Neither creation returned a session ID, so nothing can establish either one and
-    // all three updates are released together. Grouping the buffer by session emits
-    // a1, a2, b1 here, which reorders b1 against a2 on the wire even though this
-    // boundary promises arrival order.
-    expect(output).toEqual([failA, failB, a1, b1, a2]);
-  });
-
-  it("keeps ordering through a burst larger than any cap this file ever carried", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    // Past the 512 distinct-session cap this used to carry. A rate limit bounds
-    // arrivals, not concurrency, so a slow backend can hold more than that.
-    const BURST = 600;
-    for (let id = 1; id <= BURST; id += 1) {
-      steps.push({ inbound: newSessionRequest(id) });
-    }
-    // Every session emits its update before any result comes back, which is the
-    // shape the real bridge produced under a burst.
-    const updates: AnyMessage[] = [];
-    for (let id = 1; id <= BURST; id += 1) {
-      const update = sessionUpdate(`s${id}`);
-      updates.push(update);
-      steps.push({ outbound: update });
-    }
-    const results: AnyMessage[] = [];
-    for (let id = 1; id <= BURST; id += 1) {
-      const result = newSessionResponse(id, `s${id}`);
-      results.push(result);
-      steps.push({ outbound: result });
-    }
-
-    const output = await runSteps(ordering, steps);
-
-    // The agent admits well over a hundred creations in its default rate window, so
-    // a cap below that would let ordinary accepted traffic disable ordering. Every
-    // result must still precede its own session's update.
-    for (const [i, result] of results.entries()) {
-      const update = updates[i];
-      if (!update) {
-        throw new Error(`Missing update for result ${i}`);
-      }
-      expect(output.indexOf(result)).toBeGreaterThanOrEqual(0);
-      expect(output.indexOf(result)).toBeLessThan(output.indexOf(update));
-    }
-  });
-
-  it("keeps ordering for a bridge that outlives any established-session bound", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const steps: Step[] = [];
-    // A long-lived bridge that never closes its sessions: well past the 1024 bound
-    // this used to carry, ordering must still hold for the next session created.
-    for (let id = 1; id <= 1100; id += 1) {
-      steps.push(
-        { inbound: newSessionRequest(id) },
-        { outbound: newSessionResponse(id, `s${id}`) },
-      );
-    }
-    const update = sessionUpdate("late-session");
-    const created = newSessionResponse(9000, "late-session");
-    steps.push({ inbound: newSessionRequest(9000) }, { outbound: update }, { outbound: created });
-
-    const output = await runSteps(ordering, steps);
-
-    expect(output.slice(-2)).toEqual([created, update]);
-  });
-
-  it("stops recognizing a session the store removed without a close request", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const created = newSessionResponse(2, "evicted-session");
-    const afterEviction = sessionUpdate("evicted-session", "after eviction");
-    const other = newSessionResponse(3, "other-session");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(2) },
-      { outbound: created },
-      // The store reaped or evicted the session; no ACP close was ever sent.
-      { inbound: { jsonrpc: "2.0", method: "__forget__", params: {} } as AnyMessage },
-      { inbound: newSessionRequest(3) },
-      { outbound: afterEviction },
-      { outbound: other },
-    ]);
-
-    expect(output).toEqual([created, other, afterEviction]);
-  });
-
-  it("retires a loaded session the agent rejected", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const rejected = {
-      jsonrpc: "2.0",
-      id: 4,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const late = sessionUpdate("client-chosen");
-    const other = newSessionResponse(5, "other-session");
-
-    const output = await runSteps(ordering, [
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 4,
-          method: "session/load",
-          params: { sessionId: "client-chosen", cwd: "/tmp", mcpServers: [{}] },
-        } as AnyMessage,
-      },
-      { outbound: rejected },
-      { inbound: newSessionRequest(5) },
-      { outbound: late },
-      { outbound: other },
-    ]);
-
-    // The ID was client-chosen and the agent refused it. Had it stayed established,
-    // `late` would have passed straight through; instead it waits behind the
-    // in-flight creation like any unrecognized session — and, uncapped, the set
-    // would otherwise grow by one for every rejected load a peer cares to send.
-    expect(output).toEqual([rejected, other, late]);
-  });
-
-  it("keeps recognizing a live session whose reload was rejected", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const created = newSessionResponse(2, "live-session");
-    const rejectedReload = {
-      jsonrpc: "2.0",
-      id: 6,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const update = sessionUpdate("live-session", "still live");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(2) },
-      { outbound: created },
-      // A second load naming the same, already-live session; the agent refuses it.
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 6,
-          method: "session/load",
-          params: { sessionId: "live-session", cwd: "/tmp" },
-        } as AnyMessage,
-      },
-      { outbound: rejectedReload },
-      { inbound: newSessionRequest(7) },
-      { outbound: update },
-    ]);
-
-    // The session was established before the reload, so the rejection retires
-    // nothing and its update still goes straight out rather than waiting behind
-    // the creation that is now pending.
-    expect(output).toEqual([created, rejectedReload, update]);
-  });
-
-  it("keeps a loaded session the agent accepted", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const accepted = { jsonrpc: "2.0", id: 4, result: {} } as AnyMessage;
-    const update = sessionUpdate("client-chosen");
-
-    const output = await runSteps(ordering, [
-      {
-        inbound: {
-          jsonrpc: "2.0",
-          id: 4,
-          method: "session/load",
-          params: { sessionId: "client-chosen", cwd: "/tmp" },
-        } as AnyMessage,
-      },
-      { outbound: accepted },
-      { inbound: newSessionRequest(5) },
-      { outbound: update },
-    ]);
-
-    expect(output).toEqual([accepted, update]);
-  });
-
-  it("never lets an update pass an earlier one from the same session", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const a1 = sessionUpdate("sa", "a1");
-    const b1 = sessionUpdate("sb", "b1");
-    const a2 = sessionUpdate("sa", "a2");
-    const a3 = sessionUpdate("sa", "a3");
-    const resultA = newSessionResponse(1, "sa");
-    const resultB = newSessionResponse(2, "sb");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: resultA },
-      { outbound: a3 },
-      { outbound: resultB },
-    ]);
-
-    // resultA releases sa's backlog in order, so a3 follows a2 rather than overtaking
-    // it, and neither waits on sb.
-    expect(output).toEqual([resultA, a1, a2, a3, resultB, b1]);
-  });
-
-  it("keeps recognition established by one load when an overlapping load fails", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const load = (id: number) =>
-      ({
-        jsonrpc: "2.0",
-        id,
-        method: "session/load",
-        params: { sessionId: "shared", cwd: "/tmp" },
-      }) as AnyMessage;
-    const accepted = { jsonrpc: "2.0", id: 11, result: {} } as AnyMessage;
-    const rejected = {
-      jsonrpc: "2.0",
-      id: 10,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const update = sessionUpdate("shared");
-
-    const output = await runSteps(ordering, [
-      { inbound: load(10) },
-      { inbound: load(11) },
-      // The second load succeeds first; the first is then rejected.
-      { outbound: accepted },
-      { outbound: rejected },
-      { inbound: newSessionRequest(12) },
-      { outbound: update },
-    ]);
-
-    // Load 11 confirmed the session. Load 10's rejection retires only its own claim,
-    // so the session stays recognized and its update goes straight out.
-    expect(output).toEqual([accepted, rejected, update]);
-  });
-
-  it("delivers a session's text before the prompt response that completes it", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const a1 = sessionUpdate("sa", "a1");
-    const b1 = sessionUpdate("sb", "b1");
-    const a2 = sessionUpdate("sa", "a2");
-    const resultA = newSessionResponse(1, "sa");
-    const chunk = sessionUpdate("sa", "agent_message_chunk");
-    // A prompt's completion carries no sessionId, so it never enters the queue.
-    const endTurn = { jsonrpc: "2.0", id: 9, result: { stopReason: "end_turn" } } as AnyMessage;
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: resultA },
-      { outbound: chunk },
-      { outbound: endTurn },
-    ]);
-
-    // sb is still pending. Holding sa behind it would put end_turn ahead of the text
-    // it completes, since the response bypasses the queue entirely.
-    expect(output.indexOf(chunk)).toBeLessThan(output.indexOf(endTurn));
-    expect(output).toEqual([resultA, a1, a2, chunk, endTurn]);
-  });
-
-  it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const update = sessionUpdate("s");
-    // The outbound stream also carries agent-to-client requests. A client-chosen id
-    // can collide with an in-flight session/new, and settling on the id alone would
-    // release this session's update before the result that introduces it.
-    const permission = {
-      jsonrpc: "2.0",
-      id: 5,
-      method: "session/request_permission",
-      params: { options: [] },
-    } as AnyMessage;
-    const created = newSessionResponse(5, "s");
-
-    await expect(
-      runSteps(ordering, [
-        { inbound: newSessionRequest(5) },
-        { outbound: update },
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [failA, createdB, a1],
+    },
+    {
+      name: "preserves live recognition after a rejected reload",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: createdA },
+        { inbound: load(10) },
+        { outbound: rejectedLoad },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+      ],
+      expected: [createdA, rejectedLoad, a1],
+    },
+    {
+      name: "never lets a session update overtake its backlog",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+        { outbound: b1 },
+        { outbound: a2 },
+        { outbound: createdA },
+        { outbound: a3 },
+        { outbound: createdB },
+      ],
+      expected: [createdA, a1, a2, a3, createdB, b1],
+    },
+    {
+      name: "preserves an accepted load when an overlapping load fails",
+      steps: [
+        { inbound: load(10) },
+        { inbound: load(11) },
+        { outbound: acceptedLoad },
+        { outbound: rejectedLoad },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+      ],
+      expected: [acceptedLoad, rejectedLoad, a1],
+    },
+    {
+      name: "does not settle a creation on an agent-initiated request with the same ID",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: a1 },
         { outbound: permission },
-        { outbound: created },
-      ]),
-    ).resolves.toEqual([permission, created, update]);
-  });
-
-  it("keeps arrival order across sessions when each creation settles in turn", async () => {
-    const ordering = new AcpSessionNewOrdering();
-    const a1 = sessionUpdate("sa", "a1");
-    const b1 = sessionUpdate("sb", "b1");
-    const a2 = sessionUpdate("sa", "a2");
-    const resultA = newSessionResponse(1, "sa");
-    const resultB = newSessionResponse(2, "sb");
-
-    const output = await runSteps(ordering, [
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: resultA },
-      { outbound: resultB },
-    ]);
-
-    // Each session is released whole when its own result is written, so sa's updates
-    // follow resultA in order and do not wait on sb. Within each session the order is
-    // exactly the arrival order.
-    expect(output).toEqual([resultA, a1, a2, resultB, b1]);
+        { outbound: createdA },
+      ],
+      expected: [permission, createdA, a1],
+    },
+    {
+      name: "writes a full session buffer through without dropping its backlog",
+      steps: [{ inbound: newSessionRequest(1) }, ...buffered.map((outbound) => ({ outbound }))],
+      expected: buffered,
+    },
+    {
+      name: "keeps ordering beyond the former 512 concurrent-session cap",
+      steps: [
+        ...burstResults.map((_, i) => ({ inbound: newSessionRequest(i + 1) })),
+        ...burstUpdates.map((outbound) => ({ outbound })),
+        ...burstResults.map((outbound) => ({ outbound })),
+      ],
+      expected: burstResults.flatMap((result, i) => [result, burstUpdates[i]!]),
+    },
+    {
+      name: "keeps ordering beyond the former 1024 established-session cap",
+      steps: [
+        ...establishedResults.flatMap((outbound, i) => [
+          { inbound: newSessionRequest(i + 1) },
+          { outbound },
+        ]),
+        { inbound: newSessionRequest(9000) },
+        { outbound: lateUpdate },
+        { outbound: lateResult },
+      ],
+      expected: [...establishedResults, lateResult, lateUpdate],
+    },
+  ])("$name", async ({ steps, expected }) => {
+    await expect(runSteps(steps)).resolves.toEqual(expected);
   });
 });

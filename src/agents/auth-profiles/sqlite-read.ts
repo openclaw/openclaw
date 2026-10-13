@@ -1,31 +1,38 @@
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import type { PreparedSqliteReadOnlyLocation } from "../../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
-import { prepareSqliteReadOnlyLocation } from "../../infra/sqlite-snapshot-source.js";
-import { withSqliteSourceHandleAsync } from "../../infra/sqlite-source-handle.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  prepareStateDatabaseCanonicalMutation,
-  prepareStateDatabaseSourceExclusion,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../../infra/state-database-coordinator.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
-import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
+} from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import {
+  registerUserModelAuthProfileSecrets,
+  type PersonalCatalogProfiles,
+  type PersonalCatalogSelection,
+} from "../../state/user-model-accounts.js";
+import { captureAuthProfileFileIdentity } from "./file-state.js";
+import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import { receiveAuthProfileUpdateValue } from "./store-update-transfer.js";
 import type {
   AuthProfileStore,
   AuthProfileRowRead,
   PersistedAuthProfileStoreInspection,
+  UserModelAuthProfile,
 } from "./types.js";
 
 /** Decode worker-read facts with the same store/state coercion as synchronous reads. */
@@ -46,7 +53,42 @@ export function loadPersistedAuthProfileStoreFromRows(
 const missing: AuthProfileRowRead = {
   store: { status: "missing", reason: "database" },
   state: { status: "missing", reason: "database" },
+  cacheable: false,
 };
+
+/** Reopen the captured owner's current source for file observation, not a request's old reader. */
+export async function readAuthProfileRowsAtPath(
+  databasePath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<AuthProfileRowRead | undefined> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  const reader =
+    databasePath === context.admission.databasePath
+      ? undefined
+      : prepareAgentAuthProfileRowsRead({
+          databasePath,
+          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+          env,
+        });
+  const read = async () => {
+    try {
+      return await (reader ? reader.read() : readSharedAuthProfileRows(context));
+    } catch (error) {
+      // Retirement cancels observation without establishing a change in persisted credentials.
+      if (reader?.signal.aborted || error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+        return undefined;
+      }
+      try {
+        context.admission.assertCurrent();
+        context.maintenanceScope?.assertAdmission();
+      } catch {
+        return undefined;
+      }
+      throw error;
+    }
+  };
+  return reader ? withAuthProfileCleanup(read, () => reader.dispose()) : read();
+}
 
 function isInspection(value: unknown): value is PersistedAuthProfileStoreInspection {
   return (
@@ -64,6 +106,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): {
+  identity: string | undefined;
+  captureCredentialAuthority: (
+    profileId: string,
+  ) => ReturnType<typeof captureAuthProfileCredentialAuthority> | undefined;
+  signal: AbortSignal;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
@@ -71,36 +118,28 @@ export function prepareAgentAuthProfileRowsRead(options: {
   const databasePath = path.resolve(options.databasePath);
   const agentId = options.agentId;
   const env = cloneEnvWithPlatformSemantics(options.env);
-  let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
-  try {
-    identity = inspectDatabasePathIdentitySync(databasePath);
-  } catch {
-    identity = undefined;
-  }
-  const captured: Result<
-    {
-      root: ReturnType<typeof captureOpenClawStateWorkerContext>;
-      mutation?: () => void;
-      exclusion?: () => void;
-    },
-    unknown
-  > = (() => {
+  const captured: Result<OpenClawStateWorkerContext, unknown> = (() => {
     try {
       return {
         ok: true,
-        value: {
-          root: captureOpenClawStateWorkerContext({ env }),
-          mutation: prepareStateDatabaseCanonicalMutation(databasePath),
-          exclusion: prepareStateDatabaseSourceExclusion(databasePath),
-        },
+        value: captureOpenClawStateWorkerContext({ env }),
       };
     } catch (error) {
       return { ok: false, error };
     }
   })();
+  const uncached =
+    isArtifactPreservingStateRead() || (captured.ok && Boolean(captured.value.maintenanceScope));
+  let fileState: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
+  let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
+  try {
+    fileState = uncached ? undefined : captureAuthProfileFileIdentity(databasePath);
+    identity = fileState ? fileState.identity : inspectDatabasePathIdentitySync(databasePath);
+  } catch {
+    identity = undefined;
+  }
   const controller = new AbortController();
   const pending = new Set<Promise<AuthProfileRowRead>>();
-  const snapshots = new Set<PreparedSqliteReadOnlyLocation>();
   let closed = false;
   let revoked = false;
   let closing: Promise<void> | undefined;
@@ -117,36 +156,29 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (!captured.ok) {
       throw captured.error;
     }
-    captured.value.root.admission.assertCurrent();
-    captured.value.root.maintenanceScope?.assertAdmission();
-    captured.value.mutation?.();
-    captured.value.exclusion?.();
-    if (identity && inspectDatabasePathIdentitySync(databasePath)?.key !== identity.key) {
-      throw new Error("Auth profile database file identity changed during its read");
+    captured.value.admission.assertCurrent();
+    captured.value.maintenanceScope?.assertAdmission();
+    // Captured absence stays empty; a first session may create the file without replacing a read source.
+    if (identity?.key.startsWith("file:")) {
+      if (fileState) {
+        fileState.assertCurrent();
+      } else {
+        const current = inspectDatabasePathIdentitySync(databasePath);
+        if (current?.key !== identity.key || current.birthtime !== identity.birthtime) {
+          throw new Error("Auth profile database file identity changed");
+        }
+      }
     }
-  };
-  const cleanSnapshot = async (snapshot: PreparedSqliteReadOnlyLocation) => {
-    if (!(await snapshot.cleanupAsync())) {
-      throw new Error(
-        `SQLite read-only worker snapshot cleanup failed: ${snapshot.cleanupRoot ?? path.dirname(snapshot.location)}`,
-      );
+    // Cached rows still borrow this read's revocable authority through host composition.
+    if (!closed) {
+      register();
     }
-    snapshots.delete(snapshot);
   };
   const dispose = (): Promise<void> => {
     closed = true;
     controller.abort(new Error("Auth profile read owner closed"));
     closing ??= (async () => {
       await Promise.allSettled(pending);
-      const cleanup = await Promise.allSettled([...snapshots].map(cleanSnapshot));
-      const errors = cleanup.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length > 0) {
-        throw new AggregateError(errors, "Auth profile snapshot cleanup failed", {
-          cause: errors[0],
-        });
-      }
       unregisterRoot?.();
       unregisterAgent?.();
     })().catch((error: unknown) => {
@@ -159,7 +191,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (unregisterAgent || !captured.ok) {
       return;
     }
-    const root = captured.value.root;
+    const root = captured.value;
     const registerOwners = () => {
       unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
         agentId,
@@ -194,97 +226,151 @@ export function prepareAgentAuthProfileRowsRead(options: {
     }
     const operation = (async () => {
       assertCurrent();
-      register();
       if (!identity) {
         return {
           store: { status: "unreadable" },
           state: { status: "unreadable" },
+          cacheable: false,
         } satisfies AuthProfileRowRead;
       }
       if (!identity.key.startsWith("file:")) {
         return missing;
       }
-      if (!captured.ok) {
-        throw captured.error;
-      }
-      const { root, mutation, exclusion } = captured.value;
-      return withStateDatabaseCoordinatorRuntimeDirectory(root.coordinatorRuntime, async () => {
-        let snapshot: PreparedSqliteReadOnlyLocation | undefined;
-        let result: Result<AuthProfileRowRead, unknown>;
-        try {
-          if (mutation || exclusion) {
-            assertCurrent();
-            snapshot = await prepareSqliteReadOnlyLocation(databasePath, {
-              preserveSourceArtifacts: true,
-              signal: controller.signal,
-            });
-            snapshots.add(snapshot);
-          }
-          controller.signal.throwIfAborted();
-          assertCurrent();
-          const sourcePath = snapshot?.location ?? databasePath;
-          const sourceIdentity = snapshot ? inspectDatabasePathIdentitySync(sourcePath) : identity;
-          if (!sourceIdentity?.key.startsWith("file:")) {
-            throw new Error("Auth profile read source no longer identifies its file");
-          }
-          const rows = await withSqliteSourceHandleAsync(sourcePath, () =>
-            runSqliteReadOnlyWorker(sourcePath, {
-              mode: "auth-profile-rows",
-              expectedIdentity: sourceIdentity.key,
-              env,
-              coordinatorRuntime: root.coordinatorRuntime,
-              signal: controller.signal,
-            }),
-          );
-          controller.signal.throwIfAborted();
-          assertCurrent();
-          if (!isInspection(rows.store) || !isInspection(rows.state)) {
-            throw new Error("Auth profile reader returned invalid inspection rows");
-          }
-          result = { ok: true, value: { store: rows.store, state: rows.state } };
-        } catch (error) {
-          result = { ok: false, error };
-        }
-        try {
-          if (snapshot) {
-            await cleanSnapshot(snapshot);
-          }
-        } catch (cleanupError) {
-          throw result.ok
-            ? cleanupError
-            : withSqliteWorkerCleanupFailure(
-                toErrorObject(result.error, "Auth profile read failed"),
-                cleanupError,
-              );
-        }
-        if (!result.ok) {
-          throw result.error;
-        }
-        controller.signal.throwIfAborted();
-        assertCurrent();
-        return result.value;
+      const rows = await runSqliteReadOnlyWorker(databasePath, {
+        mode: "auth-profile-rows",
+        source: "canonical",
+        expectedIdentity: identity.key,
+        env,
+        signal: controller.signal,
       });
+      controller.signal.throwIfAborted();
+      assertCurrent();
+      if (!isInspection(rows.store) || !isInspection(rows.state)) {
+        throw new Error("Auth profile reader returned invalid inspection rows");
+      }
+      return { store: rows.store, state: rows.state, cacheable: rows.cacheable };
     })();
     pending.add(operation);
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  return { read, assertCurrent, dispose };
+  return {
+    identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    captureCredentialAuthority(profileId) {
+      if (!captured.ok) {
+        throw captured.error;
+      }
+      return identity
+        ? captureAuthProfileCredentialAuthority(
+            captured.value,
+            { identity: `${identity.key}:${identity.birthtime ?? ""}`, databasePath },
+            profileId,
+          )
+        : undefined;
+    },
+    signal: controller.signal,
+    read,
+    assertCurrent,
+    dispose,
+  };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
 export async function readSharedAuthProfileRows(
   context: OpenClawStateWorkerContext,
+  artifactPreserving = isArtifactPreservingStateRead(),
 ): Promise<AuthProfileRowRead> {
+  let rows: AuthProfileRowRead | undefined;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+  };
   const result = await runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      await scope.execute({
+        type: "authProfiles.read",
+        input: { artifactPreserving },
+      });
+      return true;
+    },
+    {
+      existingOnly: true,
+      createAdmission: () => ({
+        nativeLocations: [context.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          const facts = request.facts;
+          if (!isRecord(facts) || !(facts.port instanceof MessagePort)) {
+            throw new Error("Auth profile read returned no field transport");
+          }
+          try {
+            assertCurrent();
+            if (request.stage !== "prepare" || facts.kind !== "auth-store-read" || rows) {
+              throw new Error("Auth profile read requested an invalid field transfer");
+            }
+            const value = receiveAuthProfileUpdateValue(facts.port);
+            if (
+              !isRecord(value) ||
+              !isInspection(value.store) ||
+              !isInspection(value.state) ||
+              typeof value.cacheable !== "boolean"
+            ) {
+              throw new Error("Auth profile reader returned invalid inspection rows");
+            }
+            rows = { store: value.store, state: value.state, cacheable: value.cacheable };
+            assertCurrent();
+            if (!grant()) {
+              throw new Error("Auth profile read authority expired");
+            }
+          } finally {
+            facts.port.close();
+          }
+        }),
+      }),
+    },
+  );
+  assertCurrent();
+  if (result && !rows) {
+    throw new Error("Auth profile read completed without its rows");
+  }
+  return rows ?? missing;
+}
+
+/** Read one selected account on the canonical actor; redaction remains caller-owned. */
+export async function readUserModelAuthProfileAsync(
+  authProfileId: string,
+  context: OpenClawStateWorkerContext,
+): Promise<UserModelAuthProfile | undefined> {
+  const profile = await runOpenClawStateWorkerOperation(
     context,
     (scope) =>
       scope.execute({
-        type: "authProfiles.read",
-        input: { artifactPreserving: isArtifactPreservingStateRead() },
+        type: "authProfiles.personal",
+        input: { profileId: authProfileId, artifactPreserving: isArtifactPreservingStateRead() },
       }),
     { existingOnly: true },
   );
   context.admission.assertCurrent();
-  return result ?? missing;
+  if (profile) {
+    registerUserModelAuthProfileSecrets(profile.credential);
+  }
+  return profile;
+}
+
+/** Read links and their selected credentials with one shared-reader freshness probe. */
+export async function readPersonalCatalogProfiles(
+  selection: PersonalCatalogSelection,
+  context: OpenClawStateWorkerContext,
+): Promise<PersonalCatalogProfiles> {
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.catalog", selection },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  context.admission.assertCurrent();
+  const result = reply?.catalog;
+  for (const profile of Object.values(result?.profiles ?? {})) {
+    registerUserModelAuthProfileSecrets(profile.credential);
+  }
+  return result ?? { links: [], profiles: {} };
 }

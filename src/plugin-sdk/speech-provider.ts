@@ -1,23 +1,11 @@
 // Private provider construction helpers; keep registry and execution imports out of this leaf.
 export type { SpeechProviderPlugin } from "../plugins/types.js";
-export type {
-  SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
-  SpeechListVoicesRequest,
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
-  SpeechSynthesisRequest,
-  SpeechSynthesisTarget,
-  SpeechTelephonySynthesisRequest,
-  SpeechVoiceOption,
-} from "../tts/provider-types.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
   resolveSpeechProviderApiKey,
-  scheduleCleanup,
 } from "../tts/tts-provider-helpers.js";
 export { parseSpeechDirectiveNumberOverride } from "../tts/directive-number.js";
 export {

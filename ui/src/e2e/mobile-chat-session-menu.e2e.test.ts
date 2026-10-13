@@ -67,17 +67,15 @@ suite.define(() => {
         const menu = page.getByRole("menu", { name: "Actions for Mobile menu" });
         const menuHost = page.locator("openclaw-chat-header-session-menu");
         await menu.waitFor({ state: "visible" });
-        const rootItems = menuHost.locator(":scope > wa-dropdown > wa-dropdown-item");
-        await expect
-          .poll(() =>
-            rootItems.evaluateAll((items) =>
-              items.map((item) => Math.round(item.getBoundingClientRect().height)),
-            ),
-          )
-          .toEqual(Array.from({ length: 15 }, () => 34));
+        await menuHost
+          .getByRole("menuitem", { name: "Session sharing", exact: true })
+          .waitFor({ state: "visible" });
         await expect
           .poll(() => menu.evaluate((element) => element.getBoundingClientRect().height))
           .toBeLessThan(550);
+        await captureUiProof(suite, page, `mobile-more-followup-after-${colorScheme}.png`);
+
+        await menuHost.locator('wa-dropdown-item[value="compact:open-advanced"]').click();
         const deleteIconColor = await menuHost
           .locator('wa-dropdown-item[value="delete"] .session-menu__icon')
           .evaluate((element) => getComputedStyle(element).color);
@@ -85,8 +83,7 @@ suite.define(() => {
           .locator('wa-dropdown-item[value="delete"] .session-menu__text')
           .evaluate((element) => getComputedStyle(element).color);
         expect(deleteIconColor).toBe(deleteLabelColor);
-        await captureUiProof(suite, page, `mobile-more-followup-after-${colorScheme}.png`);
-
+        await menuHost.getByRole("menuitem", { name: "Back", exact: true }).click();
         await expect
           .poll(() => page.getByRole("button", { name: "Session sharing" }).count())
           .toBe(0);

@@ -10,10 +10,7 @@ const PROJECT_CHECKOUT_LEASE_MS = 30_000;
 const PROJECT_CHECKOUT_WAIT_MS = 30_000;
 
 export class ProjectCheckoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ProjectCheckoutError";
-  }
+  override name = "ProjectCheckoutError";
 }
 
 export async function withProjectCheckoutLifecycle<T>(
@@ -47,11 +44,7 @@ export async function resolveProjectDirectory(projectPath: string): Promise<stri
   return requested;
 }
 
-export async function resolveProjectCheckout(projectPath: string): Promise<{
-  path: string;
-  repoRoot: string;
-  originUrl?: string;
-}> {
+export async function resolveProjectCheckout(projectPath: string) {
   const requested = await resolveProjectDirectory(projectPath);
   if (!insideGitCheckout(requested)) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);

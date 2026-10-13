@@ -3,12 +3,16 @@ import type { CoreConfig } from "../types.js";
 import { hasPendingDiscussionOpenForDestination } from "./binding-generation.js";
 import {
   attachBindingToCurrentActiveSession,
+  bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
 import { resolveDiscussionBindingAccount } from "./eligibility.js";
 import { discussionSessionKey } from "./naming.js";
-import { isClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import {
+  isClickClackDiscussionChannelRevoked,
+  isClickClackDiscussionChannelRevokedAsync,
+} from "./revoked-channel-store.js";
 
 type ClickClackDiscussionRoute = {
   agentId: string;
@@ -21,22 +25,27 @@ type ClickClackDiscussionRouteResolution =
   | { state: "revoked" }
   | { state: "active"; route: ClickClackDiscussionRoute };
 
-export function resolveClickClackDiscussionRoute(params: {
+export async function resolveClickClackDiscussionRoute(params: {
   runtime: PluginRuntime;
-  config: CoreConfig;
   accountId: string;
   serverBaseUrl: string;
   workspaceId: string;
   channelId: string;
-}): ClickClackDiscussionRouteResolution {
-  if (isClickClackDiscussionChannelRevoked(params)) {
+}): Promise<ClickClackDiscussionRouteResolution> {
+  const store = getClickClackDiscussionBindingStore(params.runtime);
+  await store.prepare();
+  let matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
+  let pending = false;
+  if (!matched) {
+    pending = await hasPendingDiscussionOpenForDestination(params);
+    matched = await store.getByChannel(params.serverBaseUrl, params.channelId);
+  }
+  if (await isClickClackDiscussionChannelRevokedAsync({ ...params, binding: matched?.binding })) {
     return { state: "revoked" };
   }
-  const store = getClickClackDiscussionBindingStore(params.runtime);
-  const matched = store.getByChannel(params.serverBaseUrl, params.channelId);
   if (!matched) {
     return {
-      state: hasPendingDiscussionOpenForDestination(params) ? "revoked" : "unbound",
+      state: pending ? "revoked" : "unbound",
     };
   }
   if (matched.binding.accountId !== params.accountId) {
@@ -45,12 +54,14 @@ export function resolveClickClackDiscussionRoute(params: {
   if (matched.binding.serverBaseUrl !== params.serverBaseUrl.replace(/\/+$/u, "")) {
     return { state: "revoked" };
   }
-  if (resolveDiscussionBindingAccount(params.config, matched.binding).state !== "active") {
+  // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
+  const config = params.runtime.config.current() as CoreConfig;
+  if (resolveDiscussionBindingAccount(config, matched.binding).state !== "active") {
     return { state: "revoked" };
   }
   let binding: ClickClackDiscussionBinding | undefined;
   try {
-    binding = attachBindingToCurrentActiveSession({
+    binding = await attachBindingToCurrentActiveSession({
       runtime: params.runtime,
       store,
       sessionKey: matched.sessionKey,
@@ -65,6 +76,19 @@ export function resolveClickClackDiscussionRoute(params: {
     return { state: "revoked" };
   }
   if (!binding) {
+    return { state: "revoked" };
+  }
+  const current = store.get(matched.sessionKey);
+  if (
+    !current ||
+    current.externalRef !== binding.externalRef ||
+    current.channelId !== binding.channelId ||
+    isClickClackDiscussionChannelRevoked({ ...params, binding: current }) ||
+    !bindingMatchesActiveSessionIncarnation(params.runtime, matched.sessionKey, binding) ||
+    // SAFETY: This fresh SDK config is schema-validated; account resolution only reads it.
+    resolveDiscussionBindingAccount(params.runtime.config.current() as CoreConfig, binding)
+      .state !== "active"
+  ) {
     return { state: "revoked" };
   }
   const sessionKey = discussionSessionKey({

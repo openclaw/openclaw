@@ -56,20 +56,33 @@ function requirePayloadString(
   return value;
 }
 
-function requireDiscordSnowflakePayloadString(
-  payload: Record<string, unknown>,
-  key: string,
-  createFailure: PayloadValidationFailureFactory,
-) {
-  const value = requirePayloadString(payload, key, "discord", createFailure);
-  if (!DISCORD_SNOWFLAKE_RE.test(value)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "discord" must include "${key}" as a Discord snowflake string.`,
-    );
-  }
-  return value;
+function createPayloadStringValidator(kind: string, pattern: RegExp, description: string) {
+  return (
+    payload: Record<string, unknown>,
+    key: string,
+    createFailure: PayloadValidationFailureFactory,
+  ) => {
+    const value = requirePayloadString(payload, key, kind, createFailure);
+    if (!pattern.test(value)) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" must include "${key}" as ${description}.`,
+      );
+    }
+    return value;
+  };
 }
+
+const requireDiscordSnowflakePayloadString = createPayloadStringValidator(
+  "discord",
+  DISCORD_SNOWFLAKE_RE,
+  "a Discord snowflake string",
+);
+const requireE164PayloadString = createPayloadStringValidator(
+  "whatsapp",
+  E164_RE,
+  "an E.164 phone number string",
+);
 
 function decodeBuzzPrivateKey(value: string) {
   if (BUZZ_PRIVATE_KEY_HEX_RE.test(value)) {
@@ -224,47 +237,89 @@ function normalizeTelegramTestUserbotCredentialPayload(
   createFailure: PayloadValidationFailureFactory,
 ) {
   const kind = "telegram-test-userbot";
-  if (payload.schemaVersion !== 1 || payload.environment !== "test") {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" must use schemaVersion 1 and environment "test".`,
-    );
+  function fail(detail: string): never {
+    throwPayloadError(createFailure, `Credential payload for kind "${kind}" ${detail}.`);
   }
+  if (payload.schemaVersion !== 1 || payload.environment !== "test") {
+    fail('must use schemaVersion 1 and environment "test"');
+  }
+  const normalizeUser = (user: Record<string, unknown>) => {
+    const testerUserId = requirePayloadString(user, "testerUserId", kind, createFailure);
+    if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+      fail("has invalid tester identity");
+    }
+    const tdlibArchiveBase64 = requirePayloadString(
+      user,
+      "tdlibArchiveBase64",
+      kind,
+      createFailure,
+    );
+    if (!BASE64_RE.test(tdlibArchiveBase64) || tdlibArchiveBase64.length % 4 !== 0) {
+      fail("has invalid tdlibArchiveBase64");
+    }
+    const tdlibArchiveSha256 = requirePayloadString(
+      user,
+      "tdlibArchiveSha256",
+      kind,
+      createFailure,
+    ).toLowerCase();
+    if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+      fail("has invalid tdlibArchiveSha256");
+    }
+    return {
+      testerUserId,
+      tdlibArchiveBase64,
+      tdlibArchiveSha256,
+      tdlibVersion: requirePayloadString(user, "tdlibVersion", kind, createFailure),
+    };
+  };
   const groupId = requirePayloadString(payload, "groupId", kind, createFailure);
   const sutBotId = requirePayloadString(payload, "sutBotId", kind, createFailure);
-  const testerUserId = requirePayloadString(payload, "testerUserId", kind, createFailure);
   if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
-    throwPayloadError(createFailure, `Credential payload for kind "${kind}" has invalid groupId.`);
+    fail("has invalid groupId");
   }
-  if (!TELEGRAM_USER_ID_RE.test(sutBotId) || !TELEGRAM_USER_ID_RE.test(testerUserId)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" has invalid bot or tester identity.`,
-    );
+  if (!TELEGRAM_USER_ID_RE.test(sutBotId)) {
+    fail("has invalid bot identity");
   }
-  const tdlibArchiveBase64 = requirePayloadString(
-    payload,
-    "tdlibArchiveBase64",
-    kind,
-    createFailure,
-  );
-  if (!BASE64_RE.test(tdlibArchiveBase64) || tdlibArchiveBase64.length % 4 !== 0) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" has invalid tdlibArchiveBase64.`,
-    );
+  const primary = normalizeUser(payload);
+  const forumGroupId =
+    payload.forumGroupId === undefined
+      ? undefined
+      : requirePayloadString(payload, "forumGroupId", kind, createFailure);
+  if (forumGroupId && !/^-\d+$/u.test(forumGroupId)) {
+    fail("has invalid forumGroupId");
   }
-  const tdlibArchiveSha256 = requirePayloadString(
-    payload,
-    "tdlibArchiveSha256",
-    kind,
-    createFailure,
-  ).toLowerCase();
-  if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" has invalid tdlibArchiveSha256.`,
-    );
+  const forumTopicId = payload.forumTopicId;
+  if (
+    forumTopicId !== undefined &&
+    (!Number.isSafeInteger(forumTopicId) || Number(forumTopicId) <= 0)
+  ) {
+    fail("has invalid forumTopicId");
+  }
+  let participants: Array<ReturnType<typeof normalizeUser> & { alias: string }> | undefined;
+  if (payload.participants !== undefined) {
+    if (!Array.isArray(payload.participants)) {
+      fail("has invalid participants");
+    }
+    const aliases = new Set(["primary"]);
+    const identities = new Set([primary.testerUserId]);
+    participants = payload.participants.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        fail("has invalid participant");
+      }
+      const participant = value as Record<string, unknown>;
+      const alias = requirePayloadString(participant, "alias", kind, createFailure);
+      if (!/^[a-z][a-z0-9-]*$/u.test(alias) || aliases.has(alias)) {
+        fail("requires distinct lowercase participant aliases");
+      }
+      const user = normalizeUser(participant);
+      if (identities.has(user.testerUserId)) {
+        fail("requires distinct participant identities");
+      }
+      aliases.add(alias);
+      identities.add(user.testerUserId);
+      return { alias, ...user };
+    });
   }
   return {
     schemaVersion: 1,
@@ -276,10 +331,10 @@ function normalizeTelegramTestUserbotCredentialPayload(
       "",
     ),
     sutBotId,
-    testerUserId,
-    tdlibArchiveBase64,
-    tdlibArchiveSha256,
-    tdlibVersion: requirePayloadString(payload, "tdlibVersion", kind, createFailure),
+    ...primary,
+    ...(forumGroupId ? { forumGroupId } : {}),
+    ...(forumTopicId === undefined ? {} : { forumTopicId: Number(forumTopicId) }),
+    ...(participants ? { participants } : {}),
   } satisfies Record<string, unknown>;
 }
 
@@ -317,33 +372,12 @@ function normalizeDiscordCredentialPayload(
   } satisfies Record<string, unknown>;
 }
 
-function requireE164PayloadString(
-  payload: Record<string, unknown>,
-  key: string,
-  kind: string,
-  createFailure: PayloadValidationFailureFactory,
-) {
-  const value = requirePayloadString(payload, key, kind, createFailure);
-  if (!E164_RE.test(value)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" must include "${key}" as an E.164 phone number string.`,
-    );
-  }
-  return value;
-}
-
 function normalizeWhatsAppCredentialPayload(
   payload: Record<string, unknown>,
   createFailure: PayloadValidationFailureFactory,
 ) {
-  const driverPhoneE164 = requireE164PayloadString(
-    payload,
-    "driverPhoneE164",
-    "whatsapp",
-    createFailure,
-  );
-  const sutPhoneE164 = requireE164PayloadString(payload, "sutPhoneE164", "whatsapp", createFailure);
+  const driverPhoneE164 = requireE164PayloadString(payload, "driverPhoneE164", createFailure);
+  const sutPhoneE164 = requireE164PayloadString(payload, "sutPhoneE164", createFailure);
   if (driverPhoneE164 === sutPhoneE164) {
     throwPayloadError(
       createFailure,

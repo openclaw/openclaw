@@ -6,11 +6,13 @@ import type {
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
     id: "stream-job",
+    agentId: "main",
     name: "stream job",
     enabled: true,
     createdAtMs: 1,
@@ -118,12 +120,15 @@ export async function settle(): Promise<void> {
 }
 
 export function createWatchers(
-  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource"> & {
+  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource" | "scheduler"> & {
+    scheduler?: Parameters<typeof createCronStreamWatchers>[0]["scheduler"];
     retireSource?: Parameters<typeof createCronStreamWatchers>[0]["retireSource"];
   },
 ) {
   return createCronStreamWatchers({
     retireSource: vi.fn(async (_jobId, _scheduleKey, identity) => `${identity}:retired`),
     ...params,
+    scheduler:
+      params.scheduler ?? createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
   });
 }

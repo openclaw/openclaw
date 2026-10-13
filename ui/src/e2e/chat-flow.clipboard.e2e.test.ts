@@ -245,7 +245,7 @@ suite.define(() => {
         const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Reviewer" })
           .click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");

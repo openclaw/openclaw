@@ -10,62 +10,80 @@
   </head>
   <body>
     <main id="composer" class="composer">
-      <div class="composer-row">
-        <button
-          id="agent-chip"
-          class="agent-chip"
-          type="button"
-          aria-label="Choose agent"
-          aria-haspopup="menu"
-          aria-expanded="false"
-        >
-          <span id="agent-avatar" class="agent-avatar" aria-hidden="true">A</span>
-          <svg class="agent-chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="m5 6.5 3 3 3-3" />
-          </svg>
-        </button>
-        <input
-          id="message"
-          type="text"
-          placeholder="Message Agent"
-          aria-label="Quick Chat message"
-          autocomplete="off"
-        />
-        <button
-          id="shortcut-settings-button"
-          class="gear"
-          type="button"
-          aria-label="Quick Chat shortcut settings"
-          aria-expanded="false"
-          hidden
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="m9 3-.6 2.5-1.7 1L4.2 6.2 2.7 8.8l1.8 1.8v2.8l-1.8 1.8 1.5 2.6 2.5-.3 1.7 1L9 21h6l.6-2.5 1.7-1 2.5.3 1.5-2.6-1.8-1.8v-2.8l1.8-1.8-1.5-2.6-2.5.3-1.7-1L15 3Z"
-            />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        </button>
-        <button id="send" class="send" type="button" aria-label="Send message" disabled>
-          <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>
-        </button>
-      </div>
-      <p id="status" class="status" role="alert"></p>
+      <button
+        id="agent-chip"
+        class="agent-chip"
+        type="button"
+        aria-label="Choose agent"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        <span id="agent-avatar" class="agent-avatar" aria-hidden="true">A</span>
+        <svg class="agent-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m5 6.5 3 3 3-3" />
+        </svg>
+      </button>
       <section id="reply" class="reply" aria-label="Agent reply" aria-live="polite" hidden>
-        <div class="reply-header">
-          <div class="reply-agent">
-            <span id="reply-agent-avatar" class="agent-avatar-mini" aria-hidden="true">A</span>
-            <span id="reply-agent-name" class="reply-agent-name">Agent</span>
-          </div>
+        <header class="reply-header">
+          <span id="reply-agent-name" class="reply-agent-name">Agent</span>
           <span id="reply-state" class="reply-state" aria-hidden="true"></span>
-        </div>
+        </header>
         <div id="reply-scroll" class="reply-scroll">
+          <div class="reply-prompt-row"><p id="reply-prompt" class="reply-prompt"></p></div>
           <div id="reply-text" class="reply-text"></div>
           <span id="reply-thinking" class="reply-thinking">Thinking…</span>
           <p id="reply-error" class="status reply-error" role="alert"></p>
         </div>
         <div id="reply-widgets" class="reply-widgets" hidden></div>
       </section>
+      <p id="status" class="status" role="alert"></p>
+      <div class="composer-well">
+        <div class="composer-row">
+          <textarea
+            id="message"
+            rows="1"
+            placeholder="Message Agent"
+            aria-label="Quick Chat message"
+            autocomplete="off"
+          ></textarea>
+          <button
+            id="toggle-reply"
+            class="icon-button toggle-reply"
+            type="button"
+            aria-label="Expand reply"
+            aria-expanded="false"
+            aria-controls="reply"
+            disabled
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+          </button>
+        </div>
+        <div class="composer-controls">
+          <button id="open-dashboard" class="dashboard-button" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M11 3h6v6m0-6-8 8M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" />
+            </svg>
+            <span>Open dashboard</span>
+          </button>
+          <span class="controls-spacer"></span>
+          <button
+            id="shortcut-settings-button"
+            class="icon-button gear"
+            type="button"
+            aria-label="Quick Chat shortcut settings"
+            aria-expanded="false"
+            hidden
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 3-.6 2.5-1.7 1L4.2 6.2 2.7 8.8l1.8 1.8v2.8l-1.8 1.8 1.5 2.6 2.5-.3 1.7 1L9 21h6l.6-2.5 1.7-1 2.5.3 1.5-2.6-1.8-1.8v-2.8l1.8-1.8-1.5-2.6-2.5.3-1.7-1L15 3Z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+          <button id="send" class="send" type="button" aria-label="Send message" disabled>
+            <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>
+          </button>
+        </div>
+      </div>
     </main>
     <section id="agent-menu" class="popover" aria-label="Choose agent" hidden>
       <div class="popover-title">Agents</div>
@@ -75,9 +93,7 @@
       <div class="popover-title">Quick Chat shortcut</div>
       <div class="shortcut-row">
         <code id="shortcut-value" class="shortcut-value"></code>
-        <button id="shortcut-capture" class="subtle-button" type="button">
-          Press new shortcut
-        </button>
+        <button id="shortcut-capture" class="subtle-button" type="button">Press new shortcut</button>
         <button id="shortcut-reset" class="subtle-button" type="button">Reset</button>
       </div>
       <p id="shortcut-error" class="shortcut-error" role="alert"></p>

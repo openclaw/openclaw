@@ -161,22 +161,23 @@ describe("doctor gateway service repair policy", () => {
     }
   });
 
-  it.each(["OPENCLAW_SERVICE_REPAIR_POLICY", "OPENCLAW_SUPERVISOR_MODE"])(
-    "never confirms a Doctor repair when %s is external",
-    async (envKey) => {
-      const prompter = createDoctorPrompter({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        options: { repair: true },
-      });
-      const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
+  it.each([
+    { envKey: "OPENCLAW_SERVICE_REPAIR_POLICY", value: "external" },
+    { envKey: "OPENCLAW_SUPERVISOR_MODE", value: "external" },
+    { envKey: "OPENCLAW_UPDATE_IN_PROGRESS", value: "1" },
+  ])("never confirms a Doctor repair deferred by $envKey", async ({ envKey, value }) => {
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true },
+    });
+    const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
 
-      await withEnvAsync({ [envKey]: "external" }, async () => {
-        await expect(
-          confirmDoctorServiceRepair(prompter, { message: "Repair gateway service?" }),
-        ).resolves.toBe(false);
-      });
+    await withEnvAsync({ [envKey]: value }, async () => {
+      await expect(
+        confirmDoctorServiceRepair(prompter, { message: "Repair gateway service?" }),
+      ).resolves.toBe(false);
+    });
 
-      expect(confirm).not.toHaveBeenCalled();
-    },
-  );
+    expect(confirm).not.toHaveBeenCalled();
+  });
 });

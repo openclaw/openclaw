@@ -9,6 +9,9 @@
   "modelPricing": {
     "providers": {
       "kilocode": {
+        "modelsDev": {
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },
@@ -49,6 +52,12 @@
     "properties": {}
   },
   "modelCatalog": {
+    "aliases": {
+      "kilo": {
+        "provider": "kilocode",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "kilocode": "kilo"
     },

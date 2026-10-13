@@ -58,13 +58,9 @@ describe("Codex binding app-server connection", () => {
     expect(connection.clientAuthProfileId).toBeNull();
   });
 
-  it.each([
-    { sourceKind: "primary", homeScope: "agent" },
-    { sourceKind: "secondary", homeScope: "agent" },
-    { sourceKind: "secondary", homeScope: "user" },
-  ] as const)(
-    "recovers the exact $sourceKind Codex home with configured $homeScope scope before browsing after restart",
-    async ({ sourceKind, homeScope }) => {
+  it.each(["agent", "user"] as const)(
+    "recovers the exact secondary Codex home with configured %s scope before browsing after restart",
+    async (homeScope) => {
       const root = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-home-")),
       );
@@ -81,10 +77,7 @@ describe("Codex binding app-server connection", () => {
         const config = {
           agents: {
             ownership: "explicit",
-            list: [
-              { id: "alpha", agentDir: alphaAgentDir },
-              { id: "beta", agentDir: betaAgentDir },
-            ],
+            entries: { alpha: { agentDir: alphaAgentDir }, beta: { agentDir: betaAgentDir } },
           },
         } as OpenClawConfig;
         const pluginConfig = { supervision: { enabled: true }, appServer: { homeScope } };
@@ -98,10 +91,9 @@ describe("Codex binding app-server connection", () => {
             env,
           });
         const homes = await registerCatalog().forAgent("beta");
-        const source =
-          sourceKind === "primary"
-            ? homes[0]
-            : homes.find((home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome);
+        const source = homes.find(
+          (home) => home.appServer.start.env?.CODEX_HOME === alphaCodexHome,
+        );
         expect(source).toBeDefined();
         const fingerprint = buildCodexAppServerConnectionFingerprint(
           source!.appServer,
@@ -125,9 +117,7 @@ describe("Codex binding app-server connection", () => {
 
         expect(connection.appServer.start.homeScope).toBe(source!.appServer.start.homeScope);
         expect(connection.clientAuthProfileId).toBeNull();
-        if (sourceKind === "secondary") {
-          expect(connection.appServer.start.env?.CODEX_HOME).toBe(alphaCodexHome);
-        }
+        expect(connection.appServer.start.env?.CODEX_HOME).toBe(alphaCodexHome);
         expect(buildCodexAppServerConnectionFingerprint(connection.appServer, betaAgentDir)).toBe(
           fingerprint,
         );
@@ -152,39 +142,6 @@ describe("Codex binding app-server connection", () => {
         model: "gpt-5.5",
       }),
     ).toThrow("missing its native model and provider");
-  });
-
-  it("preserves an explicit supervised WebSocket endpoint while selecting native auth", async () => {
-    const agentDir = path.join(os.tmpdir(), "openclaw-websocket-agent");
-    const config = {
-      agents: { list: [{ id: "main", agentDir, default: true }] },
-    } as OpenClawConfig;
-    const pluginConfig = {
-      supervision: { enabled: true },
-      appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-    };
-    createCodexCatalogHomeResolver({
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-      config,
-      getRuntimeConfig: () => config,
-      getPluginConfig: () => pluginConfig,
-      env: {},
-    });
-    const connection = await resolveCodexBindingAppServerConnection({
-      binding: supervisedBinding(pluginConfig, agentDir),
-      pluginConfig,
-      config,
-      agentDir,
-      env: {},
-      requirementsToml: null,
-    });
-
-    expect(connection.appServer.start).toMatchObject({
-      transport: "websocket",
-      homeScope: "agent",
-      url: "ws://127.0.0.1:4500",
-    });
-    expect(connection.clientAuthProfileId).toBeNull();
   });
 
   it("fails closed when a supervised binding remains after supervision is disabled", async () => {

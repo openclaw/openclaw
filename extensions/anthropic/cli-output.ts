@@ -161,7 +161,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
       // misses the latter; requiring a prefix misses the complete leak reproduced in this PR.
       // Complete unfenced examples remain the accepted false positive and surface as format errors.
       completeInvokeCloseIndex !== null ||
-      (completeInvokeCloseIndex === null && hasObservedTruncatedLeakPrefix(text, index, toolName))
+      hasObservedTruncatedLeakPrefix(text, index, toolName)
     ) {
       return true;
     }
@@ -213,10 +213,8 @@ export const parseClaudeCliJsonlEvent: CliBackendParseJsonlEvent = (line) => {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
-  if (!parsed) {
-    return null;
-  }
   if (
+    !parsed ||
     parsed.type !== "result" ||
     typeof parsed.result !== "string" ||
     !hasClaudeRawToolInvocation(parsed.result)

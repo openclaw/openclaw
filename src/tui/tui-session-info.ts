@@ -14,6 +14,19 @@ export type SessionInfoEntry = SessionInfo & {
   providerOverride?: string;
 };
 
+export function copyDefinedSessionInfo<K extends keyof SessionInfo>(
+  target: Pick<SessionInfo, K>,
+  source: Pick<SessionInfo, K> | undefined,
+  keys: readonly K[],
+): void {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value !== undefined) {
+      target[key] = value;
+    }
+  }
+}
+
 /** Compare only session facts that change visible TUI behavior. */
 export function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
   return (

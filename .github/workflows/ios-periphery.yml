@@ -71,10 +71,13 @@ jobs:
               "scripts/check-swift-tools.sh",
               "scripts/format-swift.sh",
               "scripts/install-periphery.sh",
+              "scripts/lib/swift-toolchain.sh",
               "scripts/install-swift-tools.sh",
               "scripts/ios-write-swift-filelist.mjs",
               "scripts/ios-write-swift-filelist.mts",
               "scripts/lint-swift.sh",
+              "scripts/run-swiftlint.mts",
+              "scripts/lib/check-limits.mts",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);
@@ -85,7 +88,7 @@ jobs:
     name: Scan iOS dead code
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -99,19 +102,8 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

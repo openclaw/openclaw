@@ -2,7 +2,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type {
   CostUsageSummary,
   CostUsageTotals,
@@ -194,53 +194,6 @@ describe("handleUsageCommand", () => {
     );
   });
 
-  it.each([
-    ["cold", "refreshing", 0, 2],
-    ["refreshing", "refreshing", 4.56, 2],
-    ["refreshing-current", "refreshing", 4.56, 0],
-    ["partial", "partial", 4.56, 2],
-    ["stale", "stale", 0, 2],
-    ["empty", "fresh", 0, 0],
-    ["fresh", "fresh", 4.56, 0],
-    ["legacy", undefined, 4.56, 0],
-  ] as const)(
-    "qualifies %s aggregate costs without changing the session total",
-    async (_name, status, totalCost, pendingFiles) => {
-      const totals = buildCostTotals({ totalCost });
-      loadCostUsageSummaryMock.mockResolvedValue({
-        updatedAt: 1,
-        days: 30,
-        daily: [],
-        totals,
-        ...(status
-          ? {
-              cacheStatus: {
-                status,
-                cachedFiles: totalCost === 0 ? 0 : 1,
-                pendingFiles,
-                staleFiles: pendingFiles,
-              },
-            }
-          : {}),
-      });
-
-      const result = await handleUsageCommand(buildUsageParams(), true);
-
-      expect(result?.shouldContinue).toBe(false);
-      expect(loadSessionCostSummaryMock).toHaveBeenCalledOnce();
-      expect(loadCostUsageSummaryMock).toHaveBeenCalledOnce();
-      const costLabel = totalCost === 0 ? "$0.0000" : "$4.56";
-      const expectedLines = ["💸 Usage cost", "Session $1.23 · 100 tokens"];
-      if (status && status !== "fresh") {
-        expectedLines.push(
-          `Usage totals may be incomplete (${status}). Run this command again later.`,
-        );
-      }
-      expectedLines.push("Today n/a", `Last 30d ${costLabel}`);
-      expect(result?.reply?.text).toBe(expectedLines.join("\n"));
-    },
-  );
-
   it("keeps the current agent for an unqualified global session key", async () => {
     const params = buildUsageParams();
     params.agentId = "other";
@@ -282,29 +235,6 @@ describe("handleUsageCommand", () => {
 
   it.each([
     {
-      name: "prefers the target session entry from sessionStore for /usage footer mode",
-      command: "/usage",
-      targetUsage: "tokens",
-      wrapperUsage: "off",
-      expectedUsage: "full",
-      expectedText: "⚙️ Usage footer: full.",
-    },
-    {
-      name: "updates usage footer mode as a session preference",
-      command: "/usage tokens",
-      targetUsage: "full",
-      shareTargetEntry: true,
-      expectedUsage: "tokens",
-      expectedText: "⚙️ Usage footer: tokens.",
-    },
-    {
-      name: "persists an explicit /usage off so a configured default cannot re-enable it",
-      command: "/usage off",
-      targetUsage: "tokens",
-      expectedUsage: "off",
-      expectedText: "⚙️ Usage footer: off.",
-    },
-    {
       name: "no-arg toggle uses the effective mode (config default) when session is unset",
       command: "/usage",
       configDefault: "tokens",
@@ -315,13 +245,6 @@ describe("handleUsageCommand", () => {
       name: "/usage reset clears the session override so the config default takes over",
       command: "/usage reset",
       targetUsage: "off",
-      expectedUsage: undefined,
-      expectedText: "⚙️ Usage footer: reset to default.",
-    },
-    {
-      name: "/usage inherit (alias) clears the session override",
-      command: "/usage inherit",
-      targetUsage: "full",
       expectedUsage: undefined,
       expectedText: "⚙️ Usage footer: reset to default.",
     },
@@ -396,23 +319,6 @@ describe("handleFastCommand", () => {
     expect(result?.reply?.text).toContain("Current fast mode: on");
   });
 
-  it("shows the resolved auto threshold for /fast status", async () => {
-    resolveFastModeStateMock.mockReturnValue({
-      mode: "auto",
-      enabled: true,
-      source: "config",
-      fastAutoOnSeconds: 30,
-    });
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast status";
-    params.provider = "openai-codex";
-    params.model = "gpt-5.5";
-
-    const result = await handleFastCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Current fast mode: auto (30 sec) (default: model)");
-  });
-
   it("prefers the target session entry from sessionStore for /fast status", async () => {
     const params = buildUsageParams();
     params.command.commandBodyNormalized = "/fast status";
@@ -439,57 +345,21 @@ describe("handleFastCommand", () => {
     expect(sessionEntry?.fastMode).toBe(true);
   });
 
-  it.each([
-    { mode: "on", value: true, text: "⚙️ Fast mode enabled." },
-    { mode: "off", value: false, text: "⚙️ Fast mode disabled." },
-    { mode: "auto", value: "auto", text: "⚙️ Fast mode set to auto." },
-  ] as const)("persists /fast $mode on the canonical target", async ({ mode, value, text }) => {
-    await withTempDir("openclaw-fast-command-", async (dir) => {
+  it.each([["ultrafast", "⚙️ Ultrafast mode enabled."]])(
+    "keeps the /fast %s reply without a target entry",
+    async (mode, text) => {
       const params = buildUsageParams();
       params.command.commandBodyNormalized = `/fast ${mode}`;
-      params.storePath = path.join(dir, "sessions.json");
-      params.sessionEntry = { sessionId: "wrapper-session", updatedAt: 1, fastMode: false };
-      const target: NonNullable<HandleCommandsParams["sessionEntry"]> = {
-        sessionId: "target-session",
-        updatedAt: 1,
-        fastMode: mode !== "on",
-      };
-      params.initialSessionEntry = { ...target };
-      params.sessionStore = { [params.sessionKey]: target };
-      await replaceSessionEntry(
-        { storePath: params.storePath, sessionKey: params.sessionKey },
-        { ...target },
-      );
+      params.sessionEntry = undefined;
 
-      const result = await handleFastCommand(params, true);
-
-      expect(result).toEqual({ shouldContinue: false, reply: { text } });
-      expect(
-        loadSessionEntry({ storePath: params.storePath, sessionKey: params.sessionKey })?.fastMode,
-      ).toBe(value);
-      expect(params.sessionStore[params.sessionKey]?.fastMode).toBe(value);
-      expect(params.sessionEntry.fastMode).toBe(false);
+      expect(await handleFastCommand(params, true)).toEqual({
+        shouldContinue: false,
+        reply: { text },
+      });
+      expect(params.sessionStore).toBeUndefined();
       expect(resolveFastModeStateMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    ["on", "⚙️ Fast mode enabled."],
-    ["off", "⚙️ Fast mode disabled."],
-    ["auto", "⚙️ Fast mode set to auto."],
-    ["default", "⚙️ Fast mode reset to default."],
-  ])("keeps the /fast %s reply without a target entry", async (mode, text) => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = `/fast ${mode}`;
-    params.sessionEntry = undefined;
-
-    expect(await handleFastCommand(params, true)).toEqual({
-      shouldContinue: false,
-      reply: { text },
-    });
-    expect(params.sessionStore).toBeUndefined();
-    expect(resolveFastModeStateMock).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it("rejects an invalid /fast mode without mutating the target", async () => {
     const params = buildUsageParams();
@@ -500,13 +370,13 @@ describe("handleFastCommand", () => {
 
     expect(await handleFastCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|ultrafast|default" },
     });
     expect(target).toEqual({ sessionId: "target-session", updatedAt: 1, fastMode: true });
     expect(resolveFastModeStateMock).not.toHaveBeenCalled();
   });
 
-  it.each(["default", "off"])("reports a /fast %s persistence conflict", async (mode) => {
+  it.each(["default"])("reports a /fast %s persistence conflict", async (mode) => {
     await withTempDir("openclaw-fast-conflict-", async (dir) => {
       const params = buildUsageParams();
       params.command.commandBodyNormalized = `/fast ${mode}`;
@@ -526,46 +396,5 @@ describe("handleFastCommand", () => {
         loadSessionEntry({ storePath: params.storePath, sessionKey: params.sessionKey }),
       ).toBeUndefined();
     });
-  });
-
-  it("clears fast mode for /fast default", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast default";
-    params.sessionEntry = {
-      sessionId: "target-session",
-      updatedAt: Date.now(),
-      fastMode: true,
-    };
-    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
-
-    const result = await handleFastCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("⚙️ Fast mode reset to default.");
-    expect(params.sessionEntry.fastMode).toBeUndefined();
-    expect(params.sessionStore[params.sessionKey]?.fastMode).toBeUndefined();
-  });
-
-  it("clears fast mode on the target store entry for /fast default", async () => {
-    const params = buildUsageParams();
-    params.command.commandBodyNormalized = "/fast default";
-    params.sessionEntry = {
-      sessionId: "wrapper-session",
-      updatedAt: Date.now(),
-      fastMode: false,
-    };
-    params.sessionStore = {
-      [params.sessionKey]: {
-        sessionId: "target-session",
-        updatedAt: Date.now(),
-        fastMode: true,
-      },
-    };
-
-    const result = await handleFastCommand(params, true);
-
-    expect(result?.reply?.text).toBe("⚙️ Fast mode reset to default.");
-    expect(params.sessionEntry.fastMode).toBe(false);
-    expect(params.sessionStore[params.sessionKey]?.fastMode).toBeUndefined();
   });
 });

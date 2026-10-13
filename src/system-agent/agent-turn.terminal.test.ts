@@ -1,5 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
+import {
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
+  createAgentRunSupersededAbortError,
+} from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
@@ -38,10 +46,46 @@ describe("system-agent terminal failure cleanup", () => {
       runEmbeddedAgent: async () => {
         throw new Error("provider unavailable");
       },
+      guidance: "The inference request failed",
+    },
+    {
+      name: "superseded generation",
+      runEmbeddedAgent: async () => {
+        throw createAgentRunSupersededAbortError();
+      },
+      guidance: "superseded",
+    },
+    {
+      name: "superseded prepared runtime generation",
+      runEmbeddedAgent: async () => {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "prepared model runtime plugin generation was superseded",
+        );
+      },
+      guidance: "runtime was superseded",
+    },
+    {
+      name: "unpublished prepared runtime owner",
+      runEmbeddedAgent: async () => {
+        throw new PreparedModelRuntimeOwnerNotPublishedError("no runtime owner published");
+      },
+      guidance: "prepared inference runtime became unavailable or was superseded",
+    },
+    {
+      name: "superseded terminal result with retained text",
+      runEmbeddedAgent: async () => ({
+        meta: {
+          finalAssistantVisibleText: "An obsolete reply",
+          aborted: true,
+          stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON,
+        },
+      }),
+      guidance: "runtime was superseded",
     },
     {
       name: "empty model output",
       runEmbeddedAgent: async () => ({ payloads: [] }),
+      guidance: "The inference request failed",
     },
     {
       name: "hidden reasoning",
@@ -82,8 +126,10 @@ describe("system-agent terminal failure cleanup", () => {
         meta: {
           finalAssistantVisibleText: "I'll begin by checking the available models.",
           error: { kind: "incomplete_turn", message: "The setup turn timed out." },
+          stopReason: "timeout",
         },
       }),
+      guidance: "timed out",
     },
     {
       name: "failed turn with partial payload text",
@@ -108,7 +154,7 @@ describe("system-agent terminal failure cleanup", () => {
         },
       }),
     },
-  ])("clears partial session state after $name", async ({ runEmbeddedAgent }) => {
+  ])("clears partial session state after $name", async ({ runEmbeddedAgent, guidance }) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-turn-failure-"));
 
     const config: OpenClawConfig = {
@@ -123,31 +169,36 @@ describe("system-agent terminal failure cleanup", () => {
       binding: { sessionId: "uncertain-cli-session" },
     };
 
-    await expect(
-      runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        {
-          ...deps,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: vi.fn(async () => ({
-            exists: true,
-            valid: true,
-            path: "/tmp/openclaw.json",
-            hash: "hash",
-            config,
-            runtimeConfig: config,
-            sourceConfig: config,
-            issues: [],
-          })) as never,
-        },
-      ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    const failure = runSystemAgentTurnWithDeps(
+      {
+        input: "hello",
+        surface: "gateway",
+        approvalArmed: false,
+        session,
+      },
+      {
+        ...deps,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          hash: "hash",
+          config,
+          runtimeConfig: config,
+          sourceConfig: config,
+          issues: [],
+        })) as never,
+      },
+    );
+    await expect(failure).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    const message = await failure.catch((error: unknown) =>
+      error instanceof Error ? error.message : String(error),
+    );
+    expect(message).not.toContain("openclaw onboard");
+    if (guidance) {
+      expect(message).toContain(guidance);
+    }
     expect(session.proposalRef.current).toBeUndefined();
     expect(session.proposalRef.operation).toBeUndefined();
     expect(session.cliSession).toBeUndefined();

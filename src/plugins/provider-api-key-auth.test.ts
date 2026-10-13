@@ -69,6 +69,7 @@ describe("createProviderApiKeyAuthMethod", () => {
 
   it("applies a key-scoped default model during non-interactive auth", async () => {
     const resolveDefaultModel = vi.fn(async () => "example/enabled-model");
+    const toApiKeyCredential = vi.fn(() => null);
     const method = createProviderApiKeyAuthMethod({
       providerId: "example",
       methodId: "api-key",
@@ -88,9 +89,10 @@ describe("createProviderApiKeyAuthMethod", () => {
       opts: { exampleApiKey: "test-token" },
       runtime: createTestRuntime(),
       resolveApiKey: vi.fn(async () => ({ key: "test-token", source: "profile" as const })),
-      toApiKeyCredential: vi.fn(() => null),
+      toApiKeyCredential,
     });
 
+    expect(toApiKeyCredential).not.toHaveBeenCalled();
     expect(resolveDefaultModel).toHaveBeenCalledWith({ apiKey: "test-token", config: {} });
     expect(config?.agents?.defaults?.model).toEqual({ primary: "example/enabled-model" });
   });

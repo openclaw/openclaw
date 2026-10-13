@@ -2,8 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   assertProjectWorktreeImportReport,
   assertProjectWorktreeStartupLog,
@@ -14,9 +13,12 @@ import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const sessionKey = "agent:main:dashboard:legacy-project-worktree";
 const original = {
@@ -121,22 +123,19 @@ function doctorOwnerFixture(files: Record<string, string>) {
 }
 
 describe("published project-worktree Doctor ownership evidence", () => {
-  it("selects the defining Doctor chunk while retaining valid forwarding exports", () => {
-    const { root, identity } = doctorOwnerFixture({
-      "doctor-owner-entry.mjs": schemaForwarder,
-      "doctor-owner-real.mjs": schemaDefinition,
-    });
-    expect(resolveWorkerCellExport(schemaForwarder, schemaSymbol)).toBe(schemaSymbol);
-    expect(
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
-    ).toEqual([
-      "doctor-owner-real.mjs",
-      schemaSymbol,
-      createHash("sha256").update(schemaDefinition).digest("hex"),
-    ]);
-  });
-
-  it.each<{ name: string; files: Record<string, string>; error: RegExp }>([
+  it.each<{
+    name: string;
+    files: Record<string, string>;
+    changed?: boolean;
+    error?: RegExp;
+  }>([
+    {
+      name: "forwarded owner",
+      files: {
+        "doctor-owner-entry.mjs": schemaForwarder,
+        "doctor-owner-real.mjs": schemaDefinition,
+      },
+    },
     {
       name: "two defining owners",
       files: {
@@ -155,23 +154,41 @@ describe("published project-worktree Doctor ownership evidence", () => {
       files: { "doctor-owner-real.mjs": `function ${schemaSymbol}( {` },
       error: /Cannot parse package owner/,
     },
-  ])("rejects $name before importing Doctor code", ({ files, error }) => {
-    const { root, identity } = doctorOwnerFixture(files);
-    expect(() =>
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
-    ).toThrow(error);
-  });
-
-  it("rejects changed candidate owner bytes", () => {
-    const { root, identity } = doctorOwnerFixture({ "doctor-owner-real.mjs": schemaDefinition });
-    writeFileSync(
-      path.join(root, "dist/doctor-owner-real.mjs"),
-      `${schemaDefinition}\n// changed\n`,
-    );
-    expect(() =>
-      resolveWorkerCellFunctionBinding(identity, root, "doctor-owner", schemaSymbol, ts),
-    ).toThrow(/Package owner changed/);
-  });
+    {
+      name: "changed candidate bytes",
+      files: { "doctor-owner-real.mjs": schemaDefinition },
+      changed: true,
+      error: /Package owner changed/,
+    },
+  ])(
+    "resolves only an unchanged defining Doctor chunk: $name",
+    async ({ files, changed, error }) => {
+      const { root, identity } = doctorOwnerFixture(files);
+      if (changed) {
+        writeFileSync(
+          path.join(root, "dist/doctor-owner-real.mjs"),
+          `${schemaDefinition}\n// changed\n`,
+        );
+      }
+      const binding = resolveWorkerCellFunctionBinding(
+        identity,
+        root,
+        "doctor-owner",
+        schemaSymbol,
+        parser,
+      );
+      if (error) {
+        await expect(binding).rejects.toThrow(error);
+      } else {
+        expect(resolveWorkerCellExport(schemaForwarder, schemaSymbol)).toBe(schemaSymbol);
+        expect(await binding).toEqual([
+          "doctor-owner-real.mjs",
+          schemaSymbol,
+          createHash("sha256").update(schemaDefinition).digest("hex"),
+        ]);
+      }
+    },
+  );
 
   it("prepares the independent schema before startup and repairs workspace metadata between runs", () => {
     const root = tempDirs.make("openclaw-project-worktree-doctor-order-");
@@ -320,65 +337,58 @@ ${scenario}
     ]);
   });
 
-  it("preserves the imported shape until Doctor adds only the canonical workspace", () => {
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(original, original, undefined),
-    ).not.toThrow();
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(migrated(), original, "/fixture/project"),
-    ).not.toThrow();
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(migrated(), original, undefined),
-    ).toThrow();
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(original, original, "/fixture/project"),
-    ).toThrow();
-  });
-
-  it("rejects startup rewriting the imported session JSON without changing its fields", () => {
+  it("preserves imported bytes and permits only the Doctor-owned workspace repair", () => {
+    for (const [actual, workspace, accepted] of [
+      [original, undefined, true],
+      [migrated(), "/fixture/project", true],
+      [migrated(), undefined, false],
+      [original, "/fixture/project", false],
+    ] as const) {
+      const check = () => assertProjectWorktreeStartupPreservation(actual, original, workspace);
+      if (accepted) {
+        expect(check).not.toThrow();
+      } else {
+        expect(check).toThrow();
+      }
+    }
+    const corruptions: Array<(value: typeof original) => void> = [
+      (value) => {
+        value.agent.sessions[0]!.updated_at++;
+      },
+      (value) => {
+        value.agent.sessions[0]!.current_session_id = "replacement";
+      },
+      (value) => {
+        value.agent.transcript[0]!.event_json = "rewritten";
+      },
+      (value) => {
+        value.shared.project[0]!.id = "other";
+      },
+      (value) => {
+        value.agent.sessions[1]!.entry_json = '{"changed":true}';
+      },
+      (value) => {
+        value.agent.sessions.pop();
+      },
+      (value) => {
+        const row = value.agent.sessions[0]!;
+        const entry = JSON.parse(row.entry_json);
+        entry.worktree.canonicalWorkspaceDir = "/fixture/agent-default";
+        row.entry_json = JSON.stringify(entry);
+      },
+    ];
+    for (const corrupt of corruptions) {
+      const value = migrated();
+      corrupt(value);
+      expect(() =>
+        assertProjectWorktreeStartupPreservation(value, original, "/fixture/project"),
+      ).toThrow();
+    }
     const rewritten = structuredClone(original);
     const row = rewritten.agent.sessions[0]!;
     row.entry_json = JSON.stringify(JSON.parse(row.entry_json), null, 2);
     expect(() =>
       assertProjectWorktreeStartupPreservation(rewritten, original, undefined),
-    ).toThrow();
-  });
-
-  it.each([
-    "activity",
-    "generation",
-    "transcript",
-    "project",
-    "unrelated",
-    "missing",
-    "wrong-workspace",
-  ])("rejects a changed %s instead of accepting readiness as migration proof", (change) => {
-    const result = migrated();
-    if (change === "activity") {
-      result.agent.sessions[0]!.updated_at++;
-    }
-    if (change === "generation") {
-      result.agent.sessions[0]!.current_session_id = "replacement";
-    }
-    if (change === "transcript") {
-      result.agent.transcript[0]!.event_json = "rewritten";
-    }
-    if (change === "project") {
-      result.shared.project[0]!.id = "other";
-    }
-    if (change === "unrelated") {
-      result.agent.sessions[1]!.entry_json = '{"changed":true}';
-    }
-    if (change === "missing") {
-      result.agent.sessions.pop();
-    }
-    if (change === "wrong-workspace") {
-      const entry = JSON.parse(result.agent.sessions[0]!.entry_json);
-      entry.worktree.canonicalWorkspaceDir = "/fixture/agent-default";
-      result.agent.sessions[0]!.entry_json = JSON.stringify(entry);
-    }
-    expect(() =>
-      assertProjectWorktreeStartupPreservation(result, original, "/fixture/project"),
     ).toThrow();
   });
 
@@ -423,83 +433,62 @@ ${scenario}
     },
   );
 
-  it("accepts published fresh-import counters with separate pre-archive validation", () => {
-    const { report, dryRun, manifest } = publishedImportEvidence();
-    const target = report.targets[0]!;
-    expect(assertProjectWorktreeImportReport(report, target.storePath, dryRun, manifest)).toEqual(
-      target,
-    );
-  });
-
-  it("rejects incomplete import and dry-run receipts", () => {
-    for (const change of [
-      { agentId: "other" },
-      { importedEntries: 1 },
-      { importedTranscriptEvents: 3 },
-      { sqliteEntries: 1 },
-      { legacyEntries: 1 },
-      { referencedTranscriptFiles: 1 },
-      { validatedEntries: 1 },
-      { validatedTranscriptEvents: 1 },
-      { issues: [{ code: "transcript_missing" }] },
+  it("accepts complete published imports and rejects incomplete or mismatched evidence", () => {
+    const valid = publishedImportEvidence();
+    const check = ({ report, dryRun, manifest }: ReturnType<typeof publishedImportEvidence>) =>
+      assertProjectWorktreeImportReport(report, report.targets[0]!.storePath, dryRun, manifest);
+    expect(check(valid)).toEqual(valid.report.targets[0]);
+    for (const { select, changes } of [
+      {
+        select: (e: typeof valid) => e.report.targets[0]!,
+        changes: [
+          { agentId: "other" },
+          { importedEntries: 1 },
+          { importedTranscriptEvents: 3 },
+          { sqliteEntries: 1 },
+          { legacyEntries: 1 },
+          { referencedTranscriptFiles: 1 },
+          { validatedEntries: 1 },
+          { validatedTranscriptEvents: 1 },
+          { issues: [{ code: "transcript_missing" }] },
+        ],
+      },
+      {
+        select: (e: typeof valid) => e.dryRun.targets[0]!,
+        changes: [
+          { validatedEntries: 1 },
+          { validatedTranscriptEvents: 3 },
+          { sqlitePath: "/fixture/other.sqlite" },
+          { issues: [{ code: "transcript_malformed" }] },
+        ],
+      },
+      {
+        select: (e: typeof valid) => e.manifest.targets[0]!,
+        changes: [
+          { validationBeforeArchive: "not_run" },
+          { validationBeforeArchive: "failed" },
+          { validationBeforeArchive: undefined },
+          { agentId: "other" },
+          { storePath: "/fixture/other.json" },
+          { sqlitePath: "/fixture/other.sqlite" },
+          { issues: [{ code: "sqlite_entry_missing" }] },
+        ],
+      },
+      {
+        select: (e: typeof valid) => e.manifest,
+        changes: [
+          { completedAt: undefined },
+          { failedAt: valid.manifest.completedAt },
+          { runId: "other-run" },
+          { targets: [valid.manifest.targets[0], valid.manifest.targets[0]] },
+        ],
+      },
     ]) {
-      const { report, dryRun, manifest } = publishedImportEvidence();
-      const target = report.targets[0]!;
-      expect(() =>
-        assertProjectWorktreeImportReport(
-          { ...report, targets: [{ ...target, ...change }] },
-          target.storePath,
-          dryRun,
-          manifest,
-        ),
-      ).toThrow();
-    }
-    for (const change of [
-      { validatedEntries: 1 },
-      { validatedTranscriptEvents: 3 },
-      { sqlitePath: "/fixture/other.sqlite" },
-      { issues: [{ code: "transcript_malformed" }] },
-    ]) {
-      const { report, dryRun, manifest } = publishedImportEvidence();
-      expect(() =>
-        assertProjectWorktreeImportReport(
-          report,
-          report.targets[0]!.storePath,
-          { ...dryRun, targets: [{ ...dryRun.targets[0], ...change }] },
-          manifest,
-        ),
-      ).toThrow();
-    }
-  });
-
-  it("requires a completed matching manifest with successful pre-archive validation", () => {
-    for (const change of [
-      { validationBeforeArchive: "not_run" },
-      { validationBeforeArchive: "failed" },
-      { validationBeforeArchive: undefined },
-      { agentId: "other" },
-      { storePath: "/fixture/other.json" },
-      { sqlitePath: "/fixture/other.sqlite" },
-      { issues: [{ code: "sqlite_entry_missing" }] },
-    ]) {
-      const { report, dryRun, manifest } = publishedImportEvidence();
-      expect(() =>
-        assertProjectWorktreeImportReport(report, report.targets[0]!.storePath, dryRun, {
-          ...manifest,
-          targets: [{ ...manifest.targets[0], ...change }],
-        }),
-      ).toThrow();
-    }
-    const { report, dryRun, manifest } = publishedImportEvidence();
-    for (const invalid of [
-      { ...manifest, completedAt: undefined },
-      { ...manifest, failedAt: manifest.completedAt },
-      { ...manifest, runId: "other-run" },
-      { ...manifest, targets: [manifest.targets[0], manifest.targets[0]] },
-    ]) {
-      expect(() =>
-        assertProjectWorktreeImportReport(report, report.targets[0]!.storePath, dryRun, invalid),
-      ).toThrow();
+      for (const change of changes) {
+        const evidence = publishedImportEvidence();
+        Object.assign(select(evidence), change);
+        expect(() => check(evidence)).toThrow();
+      }
     }
   });
 });

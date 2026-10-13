@@ -4,6 +4,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -77,7 +78,7 @@ suite.define(() => {
         const session = page.locator(`openclaw-app-sidebar [data-session-key="${sessionKey}"]`);
         await session.waitFor();
         await session.hover();
-        await session.locator("[data-session-menu]").click();
+        await session.click({ button: "right" });
         const menuSurface = page.getByRole("menu", {
           name: "Actions for Release notes",
           exact: true,
@@ -98,9 +99,9 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await waitForControlUiSettingsTakeover(page);
-        const languageSelect = page.locator("#settings-language wa-select");
-        await languageSelect.click();
-        const listbox = languageSelect.locator('[part="listbox"]');
+        const languageSelect = page.locator("#settings-language openclaw-select-picker");
+        await openPicker(languageSelect);
+        const listbox = languageSelect.locator(".picker-select__menu");
         await listbox.waitFor({ state: "visible" });
         if (captureProof && theme === "claw") {
           await page.screenshot({

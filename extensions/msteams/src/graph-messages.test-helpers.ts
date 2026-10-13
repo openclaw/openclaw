@@ -1,4 +1,3 @@
-// Msteams helper module supports graph messages helpers behavior.
 import { beforeEach, vi } from "vitest";
 
 const graphMessagesMockState = vi.hoisted(() => ({

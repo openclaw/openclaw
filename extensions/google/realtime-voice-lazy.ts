@@ -12,6 +12,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import { GOOGLE_REALTIME_VOICE_METADATA } from "./realtime-voice-metadata.js";
 
 const loadGoogleRealtimeVoiceProvider = createLazyRuntimeSurface(
@@ -44,13 +45,6 @@ function resolveGoogleRealtimeProviderConfig(
           }),
         }),
   };
-}
-
-function resolveGoogleRealtimeEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
 }
 
 const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES = 128;
@@ -199,7 +193,7 @@ export function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPl
       Boolean(
         normalizeOptionalString(providerConfig.apiKey) ??
         normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
-        resolveGoogleRealtimeEnvApiKey(),
+        resolveGoogleEnvApiKey(),
       ),
     createBridge: createLazyGoogleRealtimeVoiceBridge,
     createBrowserSession: async (req) => {

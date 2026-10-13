@@ -1,27 +1,35 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
+import type {
+  MarkdownGitHubRepository,
+  MarkdownGitHubRepositoryAliases,
+} from "./markdown-github-repositories.ts";
 
 export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
-type MarkdownCodeBlockChrome = "copy" | "none";
-type MarkdownCodeBlockInteraction = "interactive" | "static";
-type MarkdownTableInteractions = "enabled" | "none";
-type MarkdownRenderMode = "document" | "message";
+// Larger message-mode inputs use the literal-text fallback instead of Markdown parsing.
+export const MARKDOWN_PARSE_LIMIT = 40_000;
 
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
-  codeBlockChrome?: MarkdownCodeBlockChrome;
-  codeBlockInteraction?: MarkdownCodeBlockInteraction;
+  codeBlockChrome?: "copy" | "none";
+  codeBlockInteraction?: "interactive" | "static";
   fileLinks?: boolean;
-  githubRepo?: { owner: string; repo: string } | null;
+  githubRepo?: MarkdownGitHubRepository | null;
+  githubRepositories?: readonly MarkdownGitHubRepositoryAliases[];
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
   progressBars?: boolean;
-  mode?: MarkdownRenderMode;
+  mode?: "document" | "message";
   remoteImages?: boolean;
   sessionLinks?: boolean;
-  tableInteractions?: MarkdownTableInteractions;
+  tableInteractions?: "enabled" | "none";
 };
+
+export type MarkdownGitHubContext = Pick<
+  MarkdownRenderOptions,
+  "githubRepo" | "githubRepositories"
+>;
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
@@ -38,6 +46,7 @@ export function normalizeMarkdownRenderOptions(
     fileLinks: options.fileLinks ?? false,
     githubRepo: options.githubRepo ?? null,
     humanMentions: options.humanMentions ?? [],
+    githubRepositories: options.githubRepositories ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,

@@ -29,7 +29,6 @@ type ReplyRunSettleTimer = {
   scheduleOnce(timeoutMs: number): void;
 };
 
-const activeLeases = new Set<FinalizationLease>();
 const activeSettleTimers = new Set<ReplyRunSettleTimer>();
 const leasesByOwner = new WeakMap<object, FinalizationLease>();
 
@@ -40,10 +39,8 @@ export function createReplyRunSettleTimer(params: {
   let timer: NodeJS.Timeout | undefined;
   const settleTimer: ReplyRunSettleTimer = {
     clear() {
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      clearTimeout(timer);
+      timer = undefined;
       activeSettleTimers.delete(settleTimer);
     },
     renew(timeoutMs) {
@@ -79,13 +76,13 @@ export function createReplyRunFinalizationLease(params: {
 }): FinalizationLease {
   let finalizing = false;
   let defaultDeadlineMs = 0;
-  const workDeadlinesMs = new Map<symbol, number>();
+  let workDeadlineMs = 0;
+  let activeWork = 0;
   const settleTimer = createReplyRunSettleTimer({
     canExpire: () => finalizing && params.canExpire(),
     onExpire: params.onExpire,
   });
   const schedule = () => {
-    const workDeadlineMs = Math.max(0, ...workDeadlinesMs.values());
     const deadlineMs = Math.max(defaultDeadlineMs, workDeadlineMs);
     settleTimer.renew(Math.max(1, deadlineMs - Date.now()));
   };
@@ -103,23 +100,22 @@ export function createReplyRunFinalizationLease(params: {
         return;
       }
       finalizing = true;
-      activeLeases.add(lease);
       recordActivity();
     },
     beginWork(timeoutMs) {
-      const workId = Symbol("reply-finalization-work");
-      workDeadlinesMs.set(
-        workId,
+      activeWork += 1;
+      // Overlapping tasks share the longest active grace; no per-task leases are needed.
+      workDeadlineMs = Math.max(
+        workDeadlineMs,
         Date.now() + resolveTimerTimeoutMs(timeoutMs, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS, 1),
       );
       recordActivity();
-      let active = true;
       return () => {
-        if (!active) {
-          return;
+        activeWork -= 1;
+        if (activeWork <= 0) {
+          activeWork = 0;
+          workDeadlineMs = 0;
         }
-        active = false;
-        workDeadlinesMs.delete(workId);
         if (finalizing) {
           schedule();
         }
@@ -128,9 +124,9 @@ export function createReplyRunFinalizationLease(params: {
     clear() {
       finalizing = false;
       defaultDeadlineMs = 0;
-      workDeadlinesMs.clear();
+      workDeadlineMs = 0;
+      activeWork = 0;
       settleTimer.clear();
-      activeLeases.delete(lease);
       leasesByOwner.delete(params.owner);
     },
     recordActivity,
@@ -144,12 +140,7 @@ export function beginReplyOperationFinalizationWork(owner: object, timeoutMs: nu
 }
 
 export function resetReplyRunSettleTimersForTesting(): void {
-  for (const lease of activeLeases) {
-    lease.clear();
-  }
-  activeLeases.clear();
   for (const timer of activeSettleTimers) {
     timer.clear();
   }
-  activeSettleTimers.clear();
 }

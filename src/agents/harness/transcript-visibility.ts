@@ -1,4 +1,5 @@
 import {
+  isProgressCardRefreshInputProvenance,
   isSubagentCoordinationInputProvenance,
   normalizeInputProvenance,
   type InputProvenance,
@@ -19,7 +20,11 @@ export function projectAgentHarnessTranscriptMessageForDisplay<T extends AgentMe
       ? (normalizeInputProvenance(Reflect.get(params.message, "provenance")) ??
         params.inputProvenance)
       : params.inputProvenance;
-  if (!params.hidden && !isSubagentCoordinationInputProvenance(inputProvenance)) {
+  if (
+    !params.hidden &&
+    !isSubagentCoordinationInputProvenance(inputProvenance) &&
+    !isProgressCardRefreshInputProvenance(inputProvenance)
+  ) {
     return params.message;
   }
   if (Reflect.get(params.message, "display") === false) {

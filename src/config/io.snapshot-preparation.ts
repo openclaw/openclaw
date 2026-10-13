@@ -1,3 +1,4 @@
+import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import { hasAnthropicDefaultSignal } from "./defaults.js";
 import type {
   ConfigSnapshotMetadataLoader,
@@ -9,7 +10,10 @@ import type {
 } from "./io.snapshot-preparation.types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, RuntimeConfig } from "./types.js";
-import { validateConfigObjectWithPluginsAsync } from "./validation.js";
+import {
+  validateConfigObjectWithPluginsAsync,
+  validateConfigObjectWithStrictFactsAsync,
+} from "./validation.js";
 import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 /** Preserve the ordinary reader's lazy defaults, including an unused manifest loader. */
@@ -26,6 +30,22 @@ export function materializeConfigSnapshotDefaults(
   });
 }
 
+export async function materializeConfigSnapshotDefaultsAsync(
+  context: ConfigSnapshotPreparationContext,
+  config: OpenClawConfig,
+  metadata: ConfigSnapshotMetadataLoader,
+): Promise<RuntimeConfig> {
+  if (
+    context.options.pluginValidation !== "core-only" &&
+    (config.models?.providers ||
+      (hasAnthropicDefaultSignal(config, context.deps.env) &&
+        !resolveDirectBundledProviderPolicySurface("anthropic")))
+  ) {
+    await metadata.loadAsync(config);
+  }
+  return materializeConfigSnapshotDefaults(context, config, metadata);
+}
+
 /** Supplied by a native Gateway host, never selected by generic config readers. */
 export function prepareHostConfigSnapshot(request: ValidationRequest): Promise<PreparedValidation>;
 export function prepareHostConfigSnapshot(request: MaterializationRequest): Promise<RuntimeConfig>;
@@ -40,19 +60,24 @@ export async function prepareHostConfigSnapshot(
   }
   const { context, metadata } = request;
   if (request.kind === "materialize") {
-    if (
-      context.options.pluginValidation !== "core-only" &&
-      (request.config.models?.providers ||
-        hasAnthropicDefaultSignal(request.config, context.deps.env))
-    ) {
-      await metadata.loadAsync(request.config);
-    }
-    return materializeConfigSnapshotDefaults(context, request.config, metadata);
+    return materializeConfigSnapshotDefaultsAsync(context, request.config, metadata);
   }
-  const pending = await context.resolveDeferredPluginMigrationsAsync();
+  return prepareConfigSnapshotValidation(request);
+}
+
+/** Runtime validation consumes canonical config; Doctor supplies its own pending facts. */
+export async function prepareConfigSnapshotValidation(
+  request: ValidationRequest,
+): Promise<PreparedValidation> {
+  const { context, metadata } = request;
+  const pending = context.options.deferredPluginMigrations;
+  const validate =
+    request.prepareValidation === "strict"
+      ? validateConfigObjectWithStrictFactsAsync
+      : validateConfigObjectWithPluginsAsync;
   return {
     deferredPluginMigrations: pending,
-    validated: await validateConfigObjectWithPluginsAsync(request.raw, {
+    validated: await validate(request.raw, {
       ...context.pathResolution,
       pluginValidation: context.options.pluginValidation,
       loadPluginMetadataSnapshotAsync: metadata.loadAsync,

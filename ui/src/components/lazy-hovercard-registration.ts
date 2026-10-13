@@ -1,4 +1,5 @@
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import { composedParent } from "../lib/navigation-click.ts";
 
 export type HovercardBootstrapTrigger = "focus" | "pointer";
 
@@ -20,7 +21,15 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
   }
 
   providerFor(target: Element): TElement | null {
-    return target.closest<TElement>(this.params.tag);
+    let element: Element | null = target;
+    while (element) {
+      const owner = element.closest<TElement>(this.params.tag);
+      if (owner) {
+        return owner;
+      }
+      element = composedParent(element);
+    }
+    return null;
   }
 
   async define(): Promise<void> {
@@ -62,7 +71,7 @@ export function hovercardBootstrapIntentActive(
   }
   return focusWithin
     ? document.activeElement instanceof Node && target.contains(document.activeElement)
-    : document.activeElement === target;
+    : target.matches(":focus");
 }
 
 export function remainingHovercardOpenDelay(startedAt: number, openDelayMs: number): number {

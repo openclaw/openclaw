@@ -1,21 +1,68 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import type { CodexThreadListParams } from "./app-server/protocol.js";
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import {
   encodeCodexNativeCursor,
   type CodexNativeCatalogCursor,
   type CodexResidentCatalogCursor,
 } from "./session-catalog-index-cursor.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import type { CodexCatalogListRequest } from "./session-catalog-list-request.js";
+import { CODEX_CATALOG_NATIVE_PAGE_LIMIT } from "./session-catalog-native-projection.js";
 import {
   CatalogParamsError,
   filterCatalogPageByTitle,
   normalizeLimit,
+  readControlCursor,
 } from "./session-catalog-parsing.js";
 import type { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
-import type { CodexCatalogStatusIndex } from "./session-catalog-status.js";
+import {
+  applyCodexCatalogLiveFields,
+  type CodexCatalogStatusIndex,
+} from "./session-catalog-status.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
 } from "./session-catalog-types.js";
+
+/** Background walks share bounded native pages; the index decides when a prefix is current. */
+export async function* readCodexCatalogHydrationPages<
+  T extends { rows: readonly unknown[]; nextCursor?: string },
+>(
+  read: (params: CodexThreadListParams, remainingRows: number) => Promise<T>,
+  useStateDbOnly: boolean,
+) {
+  let cursor: string | undefined;
+  let offset = 0;
+  const cursors = new Set<string>();
+  do {
+    const page = await read(
+      {
+        archived: false,
+        modelProviders: [],
+        sortKey: "recency_at",
+        sortDirection: "desc",
+        limit: CODEX_CATALOG_NATIVE_PAGE_LIMIT,
+        ...(useStateDbOnly ? { useStateDbOnly } : {}),
+        ...(cursor ? { cursor } : {}),
+      },
+      Math.max(0, CODEX_CATALOG_MAX_ROWS - offset),
+    );
+    cursor = readControlCursor(page.nextCursor, "hydration response");
+    if (cursor && cursors.has(cursor)) {
+      throw new Error("Codex catalog repeated a hydration cursor");
+    }
+    if (cursor) {
+      cursors.add(cursor);
+      if (cursors.size > CODEX_CATALOG_MAX_ROWS) {
+        cursors.delete(cursors.values().next().value!);
+      }
+    }
+    yield { ...page, nextCursor: cursor, offset };
+    offset += page.rows.length;
+    await nextTurn();
+  } while (cursor);
+}
 
 /** The resident limit bounds storage, never authoritative discovery. */
 export class CodexCatalogNativePages {
@@ -59,7 +106,6 @@ export class CodexCatalogNativePages {
       const filterCwdLocally = Boolean(cwd && this.settings.hasLiveCwd());
       const ascending = position.backwards && !position.anchorThreadId;
       const pageLimit = position.anchorThreadId ? 64 : limit;
-      const statusRevision = this.status.capture();
       const page = await request.read(Number.POSITIVE_INFINITY, () =>
         options.readNative(
           {
@@ -78,7 +124,7 @@ export class CodexCatalogNativePages {
       );
       options.assertCurrent();
       for (const row of page.rows) {
-        this.status.observe(row, statusRevision);
+        this.status.observe(row);
       }
       if (cwd && !filterCwdLocally && this.settings.hasLiveCwd()) {
         continue;
@@ -125,13 +171,13 @@ export class CodexCatalogNativePages {
         {
           sessions: rows
             .flatMap((row) => row.page.sessions)
-            .map(({ status: _storedStatus, activeFlags: _storedFlags, ...session }) => {
-              const live = this.status.get(session.threadId);
-              return Object.assign(session, this.settings.get(session.threadId), {
-                status: live?.status ?? "notLoaded",
-                ...(live?.activeFlags ? { activeFlags: [...live.activeFlags] } : {}),
-              });
-            })
+            .map((session) =>
+              applyCodexCatalogLiveFields(
+                session,
+                this.status.get(session.threadId),
+                this.settings.get(session.threadId),
+              ),
+            )
             .filter((session) => !cwd || session.cwd === cwd),
         },
         params.searchTerm,

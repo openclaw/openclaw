@@ -13,7 +13,10 @@ import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../pl
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "../plugins/types.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,7 +24,9 @@ import {
 } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
+import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
@@ -34,11 +39,15 @@ import {
   verifyPreparedSidecarRecovery,
   verifyServiceCleanupRecovery,
 } from "./server-plugin-reload.activation.test-support.js";
-import { verifyActiveCallDrainLease } from "./server-plugin-reload.active-call.test-support.js";
 import {
-  verifyGatewayCacheOwnership,
-  verifySharedGatewayCacheOwnership,
-} from "./server-plugin-reload.cache.test-support.js";
+  verifyActiveCallDrainLease,
+  verifyLateActiveCallDrainObservation,
+} from "./server-plugin-reload.active-call.test-support.js";
+import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
+import {
+  verifyDecisionSelectionIsolation,
+  verifyDecisionEarlyReloadRecovery,
+} from "./server-plugin-reload.decisions.test-support.js";
 import {
   verifyManagedCandidateRetirement,
   verifyExpandedReplacementTargets,
@@ -47,7 +56,10 @@ import {
   verifyGatewayCleanupRefusal,
   verifyPendingServiceCleanupRollback,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
-import { verifyGatewayMemoryReplacement } from "./server-plugin-reload.memory.test-support.js";
+import {
+  verifyGatewayMemoryReplacement,
+  verifyGatewayMemoryWatcherRestart,
+} from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
   createPluginReloadRecoveryFixture,
@@ -58,38 +70,34 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
-  verifyFailedRecoveryCleanup,
-  verifyFreshRegistrationRecovery,
-  verifySelfConsumerReload,
+  registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
+  createTranscriptFixtures,
   registerTranscriptFixture,
   startTranscriptReloadFixtureSidecars,
 } from "./server-plugin-reload.transcripts.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginMetadataSnapshot: vi.fn(),
+  resolveConfigWidePluginMetadataSnapshot: vi.fn(),
   loadPluginLookUpTable: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+vi.mock("../config/io.plugin-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.plugin-metadata.js")>()),
+  resolveConfigWidePluginMetadataSnapshotAsync: mocks.resolveConfigWidePluginMetadataSnapshot,
 }));
 vi.mock("../plugins/plugin-lookup-table.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-lookup-table.js")>()),
   loadPluginLookUpTable: mocks.loadPluginLookUpTable,
 }));
 
-// These independent startup tasks do not participate in plugin replacement.
-vi.mock("./server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
+// mock-isolation: Independent startup tasks do not participate in plugin replacement.
 vi.mock("./server-startup-handler-prewarm.js", () => ({
-  scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
+  scheduleGatewayPrewarm: () => [{ stop() {} }],
 }));
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: () => undefined,
@@ -100,11 +108,11 @@ const tempDirs: string[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.loadPluginMetadataSnapshot.mockReset();
+  mocks.resolveConfigWidePluginMetadataSnapshot.mockReset();
   mocks.loadPluginLookUpTable.mockReset();
   resetPluginRuntimeStateForTest();
   resetGatewayWorkAdmission();
-  mocks.loadPluginMetadataSnapshot.mockImplementation(() =>
+  mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(() =>
     Object.assign(
       createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] }),
       { discovery: { candidates: [], diagnostics: [] } },
@@ -119,7 +127,7 @@ afterEach(async () => {
     }
     await clearActivePluginRegistry();
   } finally {
-    activeSessions.clear();
+    await clearTranscriptCapturesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
@@ -135,40 +143,26 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
-it.each(["gateway_stop", "dispose"] as const)(
+it.each(["gateway_stop", "runtime-lifecycle"] as const)(
   "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
   (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
-);
-
-it.each(["registration", "activation"] as const)(
-  "automatically restores a fresh old registration after candidate %s fails",
-  (failure) => verifyFreshRegistrationRecovery(createRecoveryFixture, failure),
 );
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
 
-it("closes resources opened by a recovery that fails before publication", () =>
-  verifyFailedRecoveryCleanup(createRecoveryFixture));
-
-it.each([
-  "own invocation",
-  "between invocations",
-  "pending cleanup",
-  "final checkpoint",
-  "later replacement target",
-] as const)(
-  "rejects reload with a retained consumer during %s before invalidating or stopping runtime",
-  (caller) => verifySelfConsumerReload(createRecoveryFixture, caller),
-);
+registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",
   async (outcome) => {
     let serviceGetter: OpenClawPluginServiceContext["getCron"];
     let hookGetter: PluginHookGatewayContext["getCron"];
+    let hookSignal: PluginHookGatewayContext["abortSignal"];
     const schedulers = ["first", "next"].map((name) => {
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: path.join(makeTrackedTempDir(`reload-cron-${name}`, tempDirs), "jobs.sqlite"),
         cronEnabled: false,
         log: mocks.log,
@@ -201,6 +195,7 @@ it.each(["commit", "rollback"] as const)(
         });
         api.on("gateway_start", (_event, ctx) => {
           hookGetter = ctx.getCron;
+          hookSignal = ctx.abortSignal;
         });
       },
     });
@@ -226,6 +221,13 @@ it.each(["commit", "rollback"] as const)(
     const remove = vi.spyOn(first.cron, "remove");
     await expect(stale.remove("must-not-mutate")).rejects.toThrow("scheduler was replaced");
     expect(remove).not.toHaveBeenCalled();
+    expect(hookSignal?.aborted).toBe(false);
+    if (outcome === "commit") {
+      fixture.runtime.requestEntryLifetime.beginClose();
+    } else {
+      markGatewayRestartDraining();
+    }
+    expect(hookSignal?.aborted).toBe(true);
   },
 );
 
@@ -234,9 +236,7 @@ it("validates expanded replacement targets before draining their live owners", a
 });
 
 it.each([
-  "channel",
   "channel-retry",
-  "hook",
   "publication",
   "notification",
   "memory",
@@ -262,26 +262,8 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
 
-it("keeps a live Gateway's generated setup callbacks through another Gateway's reload", () =>
-  verifyGatewayCacheOwnership(
-    createRecoveryFixture,
-    makeTrackedTempDir("gateway-setup-cache-owner", tempDirs),
-    (load) => mocks.loadPluginMetadataSnapshot.mockImplementation(load),
-  ));
-
-it.each(["lookup", "replacement"] as const)(
-  "keeps a shared boot setup owner through sibling %s",
-  (mode) =>
-    verifySharedGatewayCacheOwnership(
-      createRecoveryFixture,
-      makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
-      (load) => mocks.loadPluginMetadataSnapshot.mockImplementation(load),
-      mode,
-    ),
-);
-
-it.each([5_000, 15_000, 70_000])(
-  "recovers channels after an admitted write outlives the drain deadline (%i ms)",
+it.each([15_000, 70_000])(
+  "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
       createRecoveryFixture,
@@ -289,6 +271,15 @@ it.each([5_000, 15_000, 70_000])(
       holdMs,
     ),
 );
+
+it("keeps restored plugins serving when an expired drain observation settles late", () =>
+  verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
+  verifyCancelledDrainRollbackLease(
+    createRecoveryFixture,
+    makeTrackedTempDir("gateway-cancelled-drain-lease", tempDirs),
+  ));
 
 it("keeps old cleanup owned when the Gateway closes before replacement publication", () =>
   verifyPreCommitRetirementOwnership(createRecoveryFixture));
@@ -303,9 +294,30 @@ it.each(["prepare", "committed"] as const)(
   (boundary) => verifyMalformedReloadFailureReceipt(createRecoveryFixture, boundary),
 );
 
+it("keeps another agent's decision request live across a default selection change", () =>
+  verifyDecisionSelectionIsolation(createRecoveryFixture));
+
 it.each(["held-close", "failed-close"] as const)(
   "drains retained memory before Gateway provider replacement (%s)",
   (mode) => verifyGatewayMemoryReplacement(createRecoveryFixture, mode),
+);
+
+it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
+  "restarts retained memory watchers after provider-only reload (%s)",
+  (providerState, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
+);
+
+it.for([
+  { owner: "retained", failure: "before-drain" },
+  { owner: "retained", failure: "checkpoint" },
+  { owner: "replaced", failure: "checkpoint" },
+  { owner: "retained", failure: "restart" },
+  { owner: "replaced", failure: "restart" },
+] as const)(
+  "recovers $owner memory indexing after early $failure failure",
+  (recovery, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, "initialized", signal, recovery),
 );
 
 it.each(["retry", "shutdown"] as const)(
@@ -373,12 +385,10 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
   },
 );
 
-it.each([false, true])(
-  "refuses recovery after gateway cleanup times out (channels: %s)",
-  (withChannels) => verifyGatewayCleanupRefusal(createRecoveryFixture, withChannels),
-);
+it("refuses recovery after gateway cleanup times out while retaining sibling channels", () =>
+  verifyGatewayCleanupRefusal(createRecoveryFixture));
 
-it("refuses replacement during service startup and keeps retired dispatch fenced across retry", () =>
+it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));
 
 it("retains unrelated discovery after the selected service refuses cleanup", async () => {
@@ -470,6 +480,7 @@ it.each(["commit", "rollback"])(
     });
     let held = false;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: fixture.getConfig,
       channelLogs: {},
       channelRuntimeEnvs: {},
@@ -510,7 +521,7 @@ it.each(["commit", "rollback"])(
   },
 );
 
-it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
+it.each(["rollback", "after-commit error", "late startup"] as const)(
   "keeps discovery handles owned across plugin replacement: %s",
   async (outcome) => {
     await withEnvAsync(
@@ -548,10 +559,6 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               },
             });
           },
-          // Settle the timed-out advertiser after quiescence, while service cleanup owns the drain.
-          initialStop: async () => {
-            releaseStartup.resolve();
-          },
           beforePublish: async () => {
             if (outcome === "rollback") {
               throw publicationFailure;
@@ -585,7 +592,20 @@ it.each(["commit", "rollback", "after-commit error", "late startup"] as const)(
               cause: publicationFailure,
             });
           } else {
-            await fixture.reload();
+            const reloading = fixture.reload();
+            void reloading.catch(() => {});
+            try {
+              await vi.waitFor(() =>
+                expect(fixture.owner.getReloadStatus()).toMatchObject({
+                  phase: "reloading",
+                  deadlineAtMs: expect.any(Number),
+                }),
+              );
+              expect(fixture.firstStop).not.toHaveBeenCalled();
+            } finally {
+              releaseStartup.resolve();
+              await reloading;
+            }
           }
           expect(
             handles.filter((handle) => handle.stops === 0).map((handle) => handle.api),
@@ -625,10 +645,7 @@ it.for([
         plugins: { allow: ["first", "sibling"] },
         transcripts: { autoStart: [entry("first"), entry("sibling")] },
       };
-      const providers = {
-        first: [] as ReturnType<typeof registerTranscriptFixture>[],
-        sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
-      };
+      const { providers, register } = createTranscriptFixtures();
       const failure = new Error("fixture publication rejected");
       const reject = async () => {
         throw failure;
@@ -636,9 +653,7 @@ it.for([
       const fixture = await createRecoveryFixture({
         config,
         abortOnCandidateStart: false,
-        register: (api, owner) => {
-          providers[owner].push(registerTranscriptFixture(api, owner));
-        },
+        register,
         ...(outcome === "rollback" ? { beforePublish: reject } : {}),
         ...(outcome === "after-commit error" ? { afterPublish: reject } : {}),
       });
@@ -867,9 +882,7 @@ it("starts the first configured transcript capture after plugin reload", async (
       config: { plugins: { allow: ["first", "sibling"] } },
       abortOnCandidateStart: false,
       register: (api, owner) => {
-        if (owner === "first") {
-          api.registerReload({ hotPrefixes: ["transcripts"] });
-        } else {
+        if (owner === "sibling") {
           providers.push(registerTranscriptFixture(api, owner));
         }
       },
@@ -893,7 +906,7 @@ it("starts the first configured transcript capture after plugin reload", async (
           ],
         },
       };
-      await fixture.reload(config);
+      await fixture.reload(config, [], ["transcripts.autoStart"]);
       await vi.waitFor(() => expect(provider.watches).toHaveLength(1));
       await provider.waitForCapture(1, signal);
       expect(provider.watches[0]?.cfg).toEqual(config);
@@ -907,10 +920,13 @@ it("starts the first configured transcript capture after plugin reload", async (
   });
 });
 
-it.for(["replace", "remove", "disable"] as const)(
+it.for(["replace", "remove", "disable", "rollback"] as const)(
   "drains changed transcript configuration on a retained plugin before publication: %s",
   async (change, { signal }) => {
-    expect(buildGatewayReloadPlan(["transcripts.autoStart"]).restartGateway).toBe(true);
+    expect(buildGatewayReloadPlan(["transcripts.autoStart"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: true,
+    });
     const stateDir = makeTrackedTempDir("gateway-transcript-config-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const entry = (owner: string, channelId = "original-room") => ({
@@ -919,26 +935,22 @@ it.for(["replace", "remove", "disable"] as const)(
         channelId,
         whenOccupied: true,
       });
+      const retainedSource = { ...entry("sibling", "retained-room"), guildId: "other-guild" };
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },
-        transcripts: { autoStart: [entry("first"), entry("sibling")] },
+        transcripts: { autoStart: [entry("first"), entry("sibling"), retainedSource] },
       };
-      const providers = {
-        first: [] as ReturnType<typeof registerTranscriptFixture>[],
-        sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
-      };
+      const { providers, register } = createTranscriptFixtures();
       const events: string[] = [];
       const fixture = await createRecoveryFixture({
         config,
         abortOnCandidateStart: false,
-        register: (api, owner) => {
-          providers[owner].push(registerTranscriptFixture(api, owner));
-          if (owner === "first") {
-            api.registerReload({ hotPrefixes: ["transcripts"] });
-          }
-        },
+        register,
         beforePublish: async () => {
           events.push("publish");
+          if (change === "rollback") {
+            throw new Error("fixture publication rejected");
+          }
         },
       });
       const nextConfig: OpenClawConfig = {
@@ -949,12 +961,15 @@ it.for(["replace", "remove", "disable"] as const)(
             : {
                 autoStart: [
                   entry("first"),
-                  ...(change === "replace" ? [entry("sibling", "replacement-room")] : []),
+                  retainedSource,
+                  ...(change === "replace" || change === "rollback"
+                    ? [entry("sibling", "replacement-room")]
+                    : []),
                 ],
               },
       };
       expect(
-        buildGatewayReloadPlan(["plugins.entries.first", "transcripts.autoStart"], {
+        buildGatewayReloadPlan(["transcripts.autoStart"], {
           previousConfig: config,
           candidateConfig: nextConfig,
         }),
@@ -968,30 +983,55 @@ it.for(["replace", "remove", "disable"] as const)(
         events.push("unwatch-sibling");
       });
       try {
-        await Promise.all([first.waitForCapture(1, signal), sibling.waitForCapture(1, signal)]);
-        await vi.waitFor(() =>
-          expect(activeSessions.get(sibling.captures[0]!.session.sessionId)?.phase).toBe("active"),
-        );
-        const result = await fixture.reload(nextConfig);
-        expect(result).toMatchObject({ runtime: { pluginIds: ["first"] } });
-        expect(events).toEqual(["unwatch-sibling", "publish"]);
-        expect(sibling.stop).toHaveBeenCalledOnce();
+        await Promise.all([
+          first.waitForActiveCapture(1, signal),
+          sibling.waitForActiveCapture(2, signal),
+        ]);
+        const retainedCapture = sibling.getActiveCaptureForChannel(retainedSource);
+        const result = await fixture
+          .reload(nextConfig, [], ["transcripts.autoStart"])
+          .catch((error: unknown) => error);
+        if (change === "rollback") {
+          expect(result).toMatchObject({ details: { committed: false, pluginIds: [] } });
+          expect(fixture.getConfig()).toBe(config);
+        } else {
+          expect(result).toMatchObject({ runtime: { pluginIds: [] } });
+        }
+        expect(events).toEqual([
+          "unwatch-sibling",
+          ...(change === "disable" ? ["unwatch-sibling"] : []),
+          "publish",
+        ]);
+        expect(sibling.stop).toHaveBeenCalledTimes(change === "disable" ? 2 : 1);
+        expect(first.stop).toHaveBeenCalledTimes(change === "disable" ? 1 : 0);
         expect(fixture.siblingStart).toHaveBeenCalledOnce();
         expect(fixture.siblingStop).not.toHaveBeenCalled();
+        expect(fixture.firstStart).toHaveBeenCalledOnce();
+        expect(fixture.firstStop).not.toHaveBeenCalled();
         expect(providers.sibling).toHaveLength(1);
-        if (change === "replace") {
-          await sibling.waitForCapture(2, signal);
-          expect(sibling.watches).toHaveLength(2);
-          expect(sibling.watches[1]?.source.channelId).toBe("replacement-room");
-          expect(sibling.watches[1]?.cfg).toEqual(nextConfig);
+        if (change === "replace" || change === "rollback") {
+          await sibling.waitForCapture(3, signal);
+          expect(sibling.watches).toHaveLength(3);
+          expect(sibling.watches[2]?.source.channelId).toBe(
+            change === "rollback" ? "original-room" : "replacement-room",
+          );
+          expect(sibling.watches[2]?.cfg).toEqual(change === "rollback" ? config : nextConfig);
         } else {
-          expect(sibling.watches).toHaveLength(1);
-          expect(sibling.captures).toHaveLength(1);
+          expect(sibling.watches).toHaveLength(2);
+          expect(sibling.captures).toHaveLength(2);
         }
+        expect(activeSessions.get(retainedCapture.session.sessionId)).toBe(
+          change === "disable" ? undefined : retainedCapture,
+        );
         expect(mocks.log.warn).not.toHaveBeenCalledWith(expect.stringContaining("already owns"));
       } finally {
         await sidecars.stop();
       }
     });
   },
+);
+
+it.each(["prepare", "drain", "discovery"] as const)(
+  "recovers decision admission after early %s failure",
+  (boundary) => verifyDecisionEarlyReloadRecovery(createRecoveryFixture, boundary),
 );

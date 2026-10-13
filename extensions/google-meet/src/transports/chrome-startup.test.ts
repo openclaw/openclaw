@@ -79,6 +79,9 @@ describe("Google Meet startup ownership", () => {
         gateway: {
           isAvailable: async () => true,
           request: async (_method: string, params: { path: string }) => browser(params),
+          async readSessionFacts() {
+            throw new Error("Unexpected session facts request");
+          },
         },
         nodes: {
           list: async () => ({
@@ -133,7 +136,8 @@ describe("Google Meet startup ownership", () => {
         launch({
           runtime,
           config,
-          fullConfig: {},
+          // Missing-provider rollback must not start unrelated provider runtimes.
+          fullConfig: { plugins: { enabled: false } },
           mode: "bidi",
           meetingSessionId: "startup-owner",
           url: MEET_URL,

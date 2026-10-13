@@ -4,12 +4,53 @@
   border-radius: 50%;
 }
 
-.mention-menu__loading:hover {
-  background: transparent;
+.mention-menu__retry {
+  margin: 8px;
+}
+
+:is(.mention-menu, .composer-context-strip__person)
+  .chat-author-avatar.is-pending
+  .chat-author-avatar__image {
+  display: none;
+}
+
+:is(.mention-menu, .composer-context-strip__person)
+  .chat-author-avatar.is-pending
+  .chat-author-avatar__fallback {
+  display: inline-flex;
+  visibility: visible;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .mention-menu__loading .skeleton::after {
     animation: none;
   }
+}
+
+.cmd-palette__mentions {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.cmd-palette__mentions .composer-context-strip {
+  padding: 6px 18px 10px;
+  border-bottom: 0;
+}
+
+/* The shared picker grows below the launcher instead of floating above a chat. */
+.cmd-palette > .mention-menu {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--card);
+}
+
+.cmd-palette > .mention-menu .slash-menu__scroll {
+  min-height: 0;
+  overscroll-behavior: contain;
 }

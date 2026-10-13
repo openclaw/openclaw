@@ -4,8 +4,10 @@ import OpenClawKit
 extension DeviceSettingsPermission {
     static let macOSPermissions: [Self] = [
         .notifications, .accessibility, .screenRecording, .microphone,
-        .camera, .speechRecognition, .location, .automation,
+        .camera, .speechRecognition, .location,
     ]
+
+    static let macOSAdditionalPermissions: [Self] = [.eventPosting]
 
     var capability: Capability? {
         switch self {
@@ -16,18 +18,8 @@ extension DeviceSettingsPermission {
         case .camera: .camera
         case .speechRecognition: .speechRecognition
         case .location: .location
-        case .automation: .appleScript
+        case .eventPosting: .eventPosting
         case .contacts, .calendars, .reminders, .photos: nil
-        }
-    }
-}
-
-extension DeviceSettingsPermissionStatus {
-    init(_ status: CapabilityAuthorizationStatus?) {
-        switch status {
-        case .granted: self = .granted
-        case .notGranted: self = .denied
-        case .unknown, nil: self = .unavailable
         }
     }
 }

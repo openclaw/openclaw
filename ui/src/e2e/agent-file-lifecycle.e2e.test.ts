@@ -1,5 +1,4 @@
 // Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
-import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -112,9 +111,10 @@ suite.define(() => {
         const panel = modal.locator(".md-preview-dialog__panel");
         const reader = modal.locator(".md-preview-dialog__reader");
         const expand = modal.locator(".md-preview-expand-btn");
-        const tooltip = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn) wa-tooltip");
-        const body = tooltip.locator('[part="body"]');
-        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const tooltipHost = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn)");
+        // Hover-intent timing is covered by the tooltip owner's fake-clock tests.
+        await tooltipHost.evaluate((element) => element.setAttribute("delay", "0"));
+        const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         const hint = tooltip.locator(".tooltip-content");
         const settlePreview = async () => {
           await waitForControlUiProofSurface(dialog, [reader]);
@@ -123,15 +123,20 @@ suite.define(() => {
         const assertHint = async (label: string, screenshot: string) => {
           await reader.hover();
           await expand.hover();
-          await waitForControlUiProofSurface(popup, [body, hint, expand]);
+          await waitForControlUiProofSurface(tooltip, [hint, expand]);
           const trigger = await expand.elementHandle();
           expect(trigger).not.toBeNull();
           try {
             expect(
-              await tooltip.evaluate(
-                (element, anchor) => (element as WaTooltip).anchor === anchor,
-                trigger,
-              ),
+              await tooltipHost.evaluate((element, anchor) => {
+                const host = element as HTMLElement & { anchor?: Element | null };
+                const tooltipAnchor =
+                  host.anchor ??
+                  host.shadowRoot
+                    ?.querySelector<HTMLSlotElement>("slot:not([name])")
+                    ?.assignedElements({ flatten: true })[0];
+                return tooltipAnchor === anchor;
+              }, trigger),
             ).toBe(true);
           } finally {
             await trigger?.dispose();
@@ -209,7 +214,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps save errors visible, retries, and rejects stale cross-agent reads", async () => {
+  it("protects initial file reads, retries errors, and rejects stale cross-agent reads", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -221,6 +226,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          deferredMethods: ["agents.files.get"],
           featureMethods: [
             "agents.files.get",
             "agents.files.list",
@@ -255,9 +261,31 @@ suite.define(() => {
         const fileActions = page.locator(".agent-file-actions");
         const reset = fileActions.getByRole("button", { name: "Reset" });
         const save = fileActions.getByRole("button", { name: "Save" });
+        const preview = fileActions.getByRole("button", { name: "Preview", exact: true });
         const initialRead = await gateway.waitForRequest("agents.files.get");
         expect(initialRead.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
+        await editor.waitFor({ state: "visible" });
+        await captureAgentFileScreenshot(page, "00-initial-read-pending.png");
+        expect(await editor.isDisabled()).toBe(true);
+        expect(await preview.isDisabled()).toBe(true);
+        expect(await save.isDisabled()).toBe(true);
+
+        await gateway.resolveDeferred("agents.files.get", {
+          __mockError: { code: "INTERNAL_ERROR", message: "workspace read failed; retry Refresh" },
+        });
+        await page.getByText("workspace read failed; retry Refresh", { exact: true }).waitFor();
+        await captureAgentFileScreenshot(page, "00-initial-read-failed.png");
+        expect(await editor.isDisabled()).toBe(true);
+        expect(await preview.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
+        await page
+          .locator(".settings-section")
+          .filter({ has: page.getByRole("heading", { name: "Core files" }) })
+          .getByRole("button", { name: "Refresh", exact: true })
+          .click();
         await expect.poll(() => editor.inputValue()).toBe("# Main instructions\n");
+        expect(await editor.isEnabled()).toBe(true);
+        expect(await preview.isEnabled()).toBe(true);
 
         await editor.fill("temporary draft");
         await reset.click();
@@ -271,7 +299,7 @@ suite.define(() => {
         await expect
           .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
           .toBe(true);
-        expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
+        expect(await gateway.getRequests("agents.files.list")).toHaveLength(2);
         await captureAgentFileScreenshot(page, "01-save-error-visible.png");
 
         await gateway.setMethodResponse("agents.files.set", {

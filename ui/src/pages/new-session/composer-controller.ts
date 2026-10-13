@@ -6,17 +6,17 @@ import {
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.ts";
-import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.ts";
-import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
+import { ComposerEmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import { HumanMentionMenu } from "../chat/components/chat-composer-mention-menu.tsx";
+import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.tsx";
 import {
   createSkillMenuState,
   resetSkillMenuState,
-} from "../chat/components/chat-composer-skill-menu.ts";
+} from "../chat/components/chat-composer-skill-menu.tsx";
 import {
   createSlashMenuState,
   resetSlashMenuState,
-} from "../chat/components/chat-composer-slash-menu.ts";
+} from "../chat/components/chat-composer-slash-menu.tsx";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 
 export class NewSessionComposerTextareaController {
@@ -24,6 +24,7 @@ export class NewSessionComposerTextareaController {
   readonly critterVisit = Math.random();
   private textarea: HTMLTextAreaElement | null = null;
   private placeholderFrame: number | null = null;
+  private placeholderRequestUpdate: (() => void) | null = null;
   private placeholderStartedAt: number | null = null;
   private placeholderText = "";
   private placeholderTarget = "";
@@ -53,6 +54,7 @@ export class NewSessionComposerTextareaController {
     if (nextTextarea) {
       observeTextareaOverflow(nextTextarea);
       scheduleTextareaHeightAdjustment(nextTextarea);
+      this.startPlaceholder();
     }
   };
 
@@ -65,6 +67,7 @@ export class NewSessionComposerTextareaController {
   }
 
   getPlaceholder(target: string, message: string, requestUpdate: () => void) {
+    this.placeholderRequestUpdate = requestUpdate;
     if (message.length > 0 || this.placeholderEntered) {
       this.placeholderEntered = true;
       if (this.placeholderFrame !== null) {
@@ -77,23 +80,40 @@ export class NewSessionComposerTextareaController {
       this.resetPlaceholder();
       this.placeholderTarget = target;
     }
-    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
     if (
-      !requestFrame ||
+      !globalThis.requestAnimationFrame ||
       (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false)
     ) {
       this.placeholderText = target;
       this.placeholderEntered = true;
       return target;
     }
+    this.startPlaceholder();
+    return this.placeholderText;
+  }
+
+  private startPlaceholder() {
+    // Rendering can finish after disconnection; the live textarea owns animation.
+    if (!this.textarea?.isConnected || this.placeholderEntered || !this.placeholderTarget) {
+      return;
+    }
+    const target = this.placeholderTarget;
+    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
+    if (!requestFrame) {
+      return;
+    }
     if (this.placeholderFrame === null) {
       const step = (timestamp: number) => {
+        if (!this.textarea?.isConnected) {
+          this.resetPlaceholder();
+          return;
+        }
         this.placeholderStartedAt ??= timestamp;
         const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 180);
         const length = Math.min(target.length, Math.floor(elapsed / 26));
         if (length !== this.placeholderText.length) {
           this.placeholderText = target.slice(0, length);
-          requestUpdate();
+          this.placeholderRequestUpdate?.();
         }
         if (length < target.length) {
           this.placeholderFrame = requestFrame(step);
@@ -104,7 +124,6 @@ export class NewSessionComposerTextareaController {
       };
       this.placeholderFrame = requestFrame(step);
     }
-    return this.placeholderText;
   }
 
   private resetPlaceholder() {
@@ -145,9 +164,6 @@ export class NewSessionComposerTextareaController {
   }
 
   /**
-   * Writes a transcript into the draft at the remembered caret and returns the
-   * new draft, or null when there is nothing to insert.
-   *
    * The captured element value includes keystrokes not yet committed upward.
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
@@ -198,11 +214,7 @@ export class NewSessionComposerTextareaController {
     draftOwnerKey: string,
   ) {
     const normalizedAgentId = agentId.trim();
-    if (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === normalizedAgentId &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    ) {
+    if (this.ownsSkillCommands(client, normalizedAgentId, draftOwnerKey)) {
       return;
     }
     // The controller survives route, agent, and Gateway changes. Invalidate its
@@ -214,7 +226,11 @@ export class NewSessionComposerTextareaController {
     resetSkillMenuState(this.skillMenuState);
   }
 
-  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
+  ownsSkillCommands(
+    client: GatewayBrowserClient | null,
+    agentId: string,
+    draftOwnerKey: string,
+  ): boolean {
     return (
       this.skillCommandClient === client &&
       this.skillCommandAgentId === agentId.trim() &&
@@ -227,6 +243,7 @@ export class NewSessionComposerTextareaController {
     this.composing = false;
     this.mentionMenu.dispose();
     this.resetPlaceholder();
+    this.placeholderRequestUpdate = null;
     this.skillCommandClient = null;
     this.skillCommandAgentId = "";
     this.skillCommandDraftOwnerKey = "";

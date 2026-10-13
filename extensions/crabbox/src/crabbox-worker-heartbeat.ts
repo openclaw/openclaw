@@ -1,5 +1,5 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
+import { crabboxCommandError } from "./crabbox-worker-command.js";
 
 type HeartbeatContext = {
   binary: string;
@@ -19,14 +19,11 @@ type HeartbeatEntry = HeartbeatContext & {
 
 function providerDoesNotSupportHeartbeat(result: SpawnResult): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
-  if (
+  return (
     result.termination === "exit" &&
     result.code === 2 &&
     /\bprovider=\S+ does not support lease heartbeat\b/iu.test(output)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 export function createCrabboxHeartbeatManager(dependencies: {

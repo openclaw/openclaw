@@ -1,4 +1,4 @@
-// Msteams tests cover monitor handler.feedback authz plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
@@ -43,6 +43,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
       shouldLogVerbose: () => false,
     },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       debounce: {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
@@ -149,13 +150,18 @@ describe("msteams feedback invoke authz", () => {
     channelInboundMockState.recordChannelFeedbackEvent.mockClear();
   });
 
-  it("records feedback for an allowlisted DM sender", async () => {
+  it("records DM feedback even when team route allowlists exist", async () => {
     await withFeedbackHandler({
       cfg: {
         channels: {
           msteams: {
             dmPolicy: "allowlist",
             allowFrom: ["owner-aad"],
+            teams: {
+              team123: {
+                channels: { "19:group@thread.tacv2": { requireMention: false } },
+              },
+            },
           },
         },
       } as OpenClawConfig,
@@ -184,43 +190,6 @@ describe("msteams feedback invoke authz", () => {
             conversationId: "a:personal-chat",
           },
         });
-      },
-    });
-  });
-
-  it("keeps DM feedback allowed when team route allowlists exist", async () => {
-    await withFeedbackHandler({
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "allowlist",
-            allowFrom: ["owner-aad"],
-            teams: {
-              team123: {
-                channels: {
-                  "19:group@thread.tacv2": { requireMention: false },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      context: {
-        reaction: "like",
-        conversationId: "a:personal-chat;messageid=bot-msg-1",
-        conversationType: "personal",
-        senderId: "owner-aad",
-        senderName: "Owner",
-        comment: "allowed dm feedback",
-      },
-      assertResult: async () => {
-        expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "default",
-            sessionKey: "msteams:direct:owner-aad",
-            event: expect.objectContaining({ comment: "allowed dm feedback" }),
-          }),
-        );
       },
     });
   });

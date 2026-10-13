@@ -1,9 +1,4 @@
-// Telegram plugin module implements bot access behavior.
-import {
-  firstDefined,
-  isSenderIdAllowed,
-  mergeDmAllowFromSources,
-} from "openclaw/plugin-sdk/allow-from";
+import { mergeDmAllowFromSources } from "openclaw/plugin-sdk/allow-from";
 import type {
   DmPolicy,
   TelegramDirectConfig,
@@ -81,14 +76,3 @@ export function resolveTelegramEffectiveDmPolicy(params: {
   }
   return params.dmPolicy ?? "pairing";
 }
-
-export const isSenderAllowed = (params: {
-  allow: NormalizedAllowFrom;
-  senderId?: string;
-  senderUsername?: string;
-}) => {
-  const { allow, senderId } = params;
-  return isSenderIdAllowed(allow, senderId, true);
-};
-
-export { firstDefined };

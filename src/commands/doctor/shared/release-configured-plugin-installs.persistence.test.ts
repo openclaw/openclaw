@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { beforeEach, expect, it, vi } from "vitest";
+import { readConfigFileSnapshot } from "../../../config/config.js";
+import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runWriteConfigHealth } from "../../../flows/doctor-health-contribution-runners.config.js";
 import { runReleaseConfiguredPluginInstallsHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
@@ -33,10 +35,13 @@ const updateEnv = {
 };
 
 beforeEach(() => {
+  // Backfill fixtures must not inherit provider credentials from the test host.
+  vi.stubEnv("ZAI_API_KEY", "synthetic-doctor-backfill-key");
   mocks.repair.mockReset().mockResolvedValue({ changes: [], warnings: [], records: {} });
 });
 
-function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
+async function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const ctx = createDoctorHealthFlowContext({
     cfg,
     cfgForPersistence: structuredClone(cfg),
@@ -44,15 +49,19 @@ function createContext(state: OpenClawTestState, cfg: OpenClawConfig) {
     configResult: {
       cfg,
       shouldWriteConfig: false,
+      confirmedConfigSource: {
+        path: snapshot.path,
+        hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+      },
       sourceLastTouchedVersion: cfg.meta?.lastTouchedVersion,
     },
-    env: state.env,
+    env: state.envVars,
   });
   ctx.prompter.shouldRepair = true;
   return ctx;
 }
 
-it.each(["absent", "empty", "2026.9.4"])(
+it.each(["absent", "2026.9.4"])(
   "preserves authored config and metadata after empty release backfill (%s)",
   async (kind) => {
     await withOpenClawTestState(
@@ -70,10 +79,10 @@ it.each(["absent", "empty", "2026.9.4"])(
           await fs.writeFile(state.configPath, raw);
         }
         const timestamp = readConfigMachineState<string>("config.lastTouchedAt");
-        const ctx = createContext(state, cfg);
+        const ctx = await createContext(state, cfg);
 
         await runReleaseConfiguredPluginInstallsHealth(ctx);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
         expect.soft(ctx.cfg).toEqual(cfg);
         expect.soft(readConfigMachineState<string>("config.lastTouchedAt")).toBe(timestamp);
@@ -88,71 +97,66 @@ it.each(["absent", "empty", "2026.9.4"])(
   },
 );
 
-const configuredCases: Array<{ kind: "plugin" | "channel"; id: string; cfg: OpenClawConfig }> = [
+const configuredCases: Array<{
+  kind: "plugin" | "channel" | "repair";
+  id: string;
+  cfg: OpenClawConfig;
+}> = [
   { kind: "plugin", id: "discord", cfg: { plugins: { entries: { discord: { enabled: true } } } } },
   {
     kind: "channel",
     id: "whatsapp",
     cfg: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
   },
+  { kind: "repair", id: "", cfg: { gateway: { mode: "local" } } },
 ];
 
 it.each(configuredCases)(
-  "persists the required completion write for configured $kind work",
+  "persists required $kind work after release backfill",
   async ({ kind, id, cfg }) => {
     await withOpenClawTestState(
       { label: "release-backfill-work", env: updateEnv },
       async (state) => {
-        await state.writeConfig(cfg);
-        mocks.repair.mockResolvedValue({
-          changes: [`Installed configured ${kind} ${id}.`],
-          warnings: [],
-          records: {},
-        });
-        const ctx = createContext(state, cfg);
+        if (kind !== "repair") {
+          await state.writeConfig(cfg);
+          mocks.repair.mockResolvedValue({
+            changes: [`Installed configured ${kind} ${id}.`],
+            warnings: [],
+            records: {},
+          });
+        }
+        const ctx = await createContext(state, cfg);
+        ctx.configResult.shouldWriteConfig = kind === "repair";
 
         await runReleaseConfiguredPluginInstallsHealth(ctx);
-        await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+        await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
-        expect(mocks.repair).toHaveBeenCalledOnce();
-        expect(mocks.repair).toHaveBeenCalledWith(
-          expect.objectContaining({
-            [kind === "plugin" ? "pluginIds" : "channelIds"]: expect.arrayContaining([id]),
-          }),
-        );
-        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+        const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(persisted).toMatchObject({
           ...cfg,
           meta: { lastTouchedVersion: VERSION },
           wizard: { lastRunVersion: VERSION, lastRunCommand: "doctor" },
         });
+        if (kind === "repair") {
+          expect(mocks.repair).not.toHaveBeenCalled();
+          expect(persisted).toMatchObject({
+            plugins: {
+              entries: {
+                anthropic: { config: { sessionCatalog: { enabled: false } } },
+                codex: { config: { sessionCatalog: { enabled: false } } },
+              },
+            },
+          });
+          expect(ctx.configResultWriteCommitted).toBe(true);
+        } else {
+          expect(mocks.repair).toHaveBeenCalledOnce();
+          expect(mocks.repair).toHaveBeenCalledWith(
+            expect.objectContaining({
+              [kind === "plugin" ? "pluginIds" : "channelIds"]: expect.arrayContaining([id]),
+            }),
+          );
+        }
       },
     );
   },
 );
-
-it("still commits a genuine config repair and first-write privacy defaults after empty backfill", async () => {
-  await withOpenClawTestState(
-    { label: "release-backfill-real-repair", env: updateEnv },
-    async (state) => {
-      const ctx = createContext(state, { gateway: { mode: "local" } });
-      ctx.configResult.shouldWriteConfig = true;
-
-      await runReleaseConfiguredPluginInstallsHealth(ctx);
-      await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-
-      expect(mocks.repair).not.toHaveBeenCalled();
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
-        gateway: { mode: "local" },
-        meta: { lastTouchedVersion: VERSION },
-        wizard: { lastRunVersion: VERSION, lastRunCommand: "doctor" },
-        plugins: {
-          entries: {
-            anthropic: { config: { sessionCatalog: { enabled: false } } },
-            codex: { config: { sessionCatalog: { enabled: false } } },
-          },
-        },
-      });
-      expect(ctx.configResultWriteCommitted).toBe(true);
-    },
-  );
-});

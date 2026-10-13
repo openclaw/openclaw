@@ -1,14 +1,10 @@
-/**
- * Builds plugin hook context metadata for native agent harness events.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
-import type {
-  PluginHookAgentContext,
-  PluginHookChannelContext,
-  PluginHookContextWindowSource,
-} from "../../plugins/hook-types.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../../plugins/memory-audience.js";
 
 /**
  * Input facts used to build the agent portion of plugin hook events.
@@ -16,33 +12,23 @@ import type {
  * Only stable run/session/model facts are forwarded to plugin hooks; config remains a local
  * construction input so hooks do not accidentally depend on mutable raw configuration.
  */
-export type AgentHarnessHookContext = {
-  runId?: string;
-  trace?: DiagnosticTraceContext;
-  jobId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  workspaceDir?: string;
-  modelProviderId?: string;
-  modelId?: string;
-  messageProvider?: string;
-  accountId?: string;
-  trigger?: string;
-  inputProvenance?: PluginHookAgentContext["inputProvenance"];
-  channelId?: string;
-  contextTokenBudget?: number;
-  contextWindowSource?: PluginHookContextWindowSource;
-  contextWindowReferenceTokens?: number;
+export type AgentHarnessHookContext = Omit<
+  PluginHookAgentContext,
+  | "activeProjectKeys"
+  | "senderExternalId"
+  | "toolAuthority"
+  | "hookInvocation"
+  | "assertMemoryAudienceCurrent"
+> & {
   config?: OpenClawConfig;
-  senderId?: string;
-  chatId?: string;
-  channel?: string;
-  channelContext?: PluginHookChannelContext;
 };
 
 /** Builds the sparse hook context object passed to agent harness plugin hooks. */
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
+  const { memoryAudience } = params;
+  if (memoryAudience) {
+    assertMemoryAudienceSession(memoryAudience, params.sessionKey);
+  }
   return {
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.trace ? { trace: params.trace } : {}),
@@ -50,6 +36,14 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    // The host derives the audience guard from the audience, so hooks never receive one without it.
+    ...(memoryAudience
+      ? {
+          memoryAudience,
+          assertMemoryAudienceCurrent: () => assertMemoryAudienceCurrent(memoryAudience),
+        }
+      : {}),
+    ...(params.sandboxed !== undefined ? { sandboxed: params.sandboxed } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
     ...(params.modelId ? { modelId: params.modelId } : {}),

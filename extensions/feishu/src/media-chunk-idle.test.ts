@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureEnv, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
@@ -53,16 +54,12 @@ describe("saveMediaStreamWithIdleTimeout", () => {
   });
 
   it("times out a stalled SDK-style HTTP stream and closes its connection", async () => {
-    let serverSawClose = false;
+    const socketClosed = createDeferred<void>();
     await withServer(
       (req, res) => {
         res.writeHead(200, { "content-type": "image/jpeg", "content-length": "1048576" });
         res.flushHeaders();
-        const markClose = () => {
-          serverSawClose = true;
-        };
-        req.on("close", markClose);
-        res.on("close", markClose);
+        req.socket.once("close", () => socketClosed.resolve());
       },
       async (baseUrl) => {
         const stalled = await getHttpReadable(`${baseUrl}/media`);
@@ -73,10 +70,7 @@ describe("saveMediaStreamWithIdleTimeout", () => {
           chunkTimeoutMs: 50,
         });
         expect(stalled.destroyed).toBe(true);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 20);
-        });
-        expect(serverSawClose).toBe(true);
+        await socketClosed.promise;
       },
     );
   });

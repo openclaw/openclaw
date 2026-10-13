@@ -1,8 +1,3 @@
-// Discord plugin module implements speaker context behavior.
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { Client } from "../internal/discord.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -24,7 +19,8 @@ type VoiceSpeakerContext = Omit<VoiceSpeakerIdentity, "memberRoleIds"> & {
 export class DiscordVoiceSpeakerContextResolver {
   private readonly cache = new Map<
     string,
-    VoiceSpeakerContext & {
+    {
+      context: VoiceSpeakerContext;
       expiresAt: number;
     }
   >();
@@ -37,9 +33,13 @@ export class DiscordVoiceSpeakerContextResolver {
   ) {}
 
   async resolveContext(guildId: string, userId: string): Promise<VoiceSpeakerContext> {
-    const cached = this.getCachedContext(guildId, userId);
+    const key = `${guildId}:${userId}`;
+    const cached = this.cache.get(key);
     if (cached) {
-      return cached;
+      if (cached.expiresAt > Date.now()) {
+        return { ...cached.context };
+      }
+      this.cache.delete(key);
     }
     const identity = await this.resolveIdentity(guildId, userId);
     const context = {
@@ -53,7 +53,10 @@ export class DiscordVoiceSpeakerContextResolver {
         allowNameMatching: false,
       }).ownerAllowed,
     };
-    this.setCachedContext(guildId, userId, context);
+    this.cache.set(key, {
+      context: { ...context },
+      expiresAt: Date.now() + SPEAKER_CONTEXT_CACHE_TTL_MS,
+    });
     return context;
   }
 
@@ -88,42 +91,6 @@ export class DiscordVoiceSpeakerContextResolver {
       } catch {
         return { id: userId, label: userId, memberRoleIds: [] };
       }
-    }
-  }
-
-  private resolveCacheKey(guildId: string, userId: string): string {
-    return `${guildId}:${userId}`;
-  }
-
-  private getCachedContext(guildId: string, userId: string): VoiceSpeakerContext | undefined {
-    const key = this.resolveCacheKey(guildId, userId);
-    const cached = this.cache.get(key);
-    if (!cached) {
-      return undefined;
-    }
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = asDateTimestampMs(cached.expiresAt);
-    if (now === undefined || expiresAt === undefined || expiresAt <= now) {
-      this.cache.delete(key);
-      return undefined;
-    }
-    return {
-      id: cached.id,
-      label: cached.label,
-      name: cached.name,
-      tag: cached.tag,
-      senderIsOwner: cached.senderIsOwner,
-    };
-  }
-
-  private setCachedContext(guildId: string, userId: string, context: VoiceSpeakerContext): void {
-    const key = this.resolveCacheKey(guildId, userId);
-    const expiresAt = resolveExpiresAtMsFromDurationMs(SPEAKER_CONTEXT_CACHE_TTL_MS);
-    if (expiresAt !== undefined) {
-      this.cache.set(key, {
-        ...context,
-        expiresAt,
-      });
     }
   }
 }

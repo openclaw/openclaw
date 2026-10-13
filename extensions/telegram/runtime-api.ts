@@ -1,4 +1,3 @@
-// Telegram API module exposes the plugin public contract.
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
@@ -61,7 +60,7 @@ export {
   resolveTelegramTransport,
   shouldRetryTelegramTransportFallback,
 } from "./src/fetch.js";
-export { makeProxyFetch } from "./src/proxy.js";
+export { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 export {
   createForumTopicTelegram,
   deleteMessageTelegram,

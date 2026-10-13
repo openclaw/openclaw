@@ -1,4 +1,3 @@
-// Meta plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";

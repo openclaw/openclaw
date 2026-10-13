@@ -31,7 +31,7 @@ export async function createCopilotByokProxy(
 
   const targetBaseUrl = new URL(providerConfig.baseUrl);
   const nonce = randomBytes(12).toString("hex");
-  const targetPathPrefix = trimTrailingSlash(targetBaseUrl.pathname);
+  const targetPathPrefix = targetBaseUrl.pathname.replace(/\/+$/, "");
   const proxyPathPrefix = `/${nonce}${targetPathPrefix}`;
   // Azure rebuilds nonce-less /openai paths, so carry the same per-proxy secret
   // in an SDK provider header and validate it before accepting request bytes.
@@ -39,7 +39,8 @@ export async function createCopilotByokProxy(
   const proxyCredentialHeader = acceptsAzureSdkPaths
     ? createProxyCredentialHeaderName(providerConfig.headers)
     : undefined;
-  const upstreamBearerAuthorization = resolveUpstreamBearerAuthorization(providerConfig);
+  const bearerToken = providerConfig.bearerToken?.trim();
+  const upstreamBearerAuthorization = bearerToken ? `Bearer ${bearerToken}` : undefined;
   const activeFetches = new Set<AbortController>();
   const server = createServer((req, res) => {
     void handleProxyRequest(req, res, {
@@ -79,11 +80,7 @@ export async function createCopilotByokProxy(
         baseUrl: sdkBaseUrl,
         ...(proxyCredentialHeader
           ? {
-              headers: buildSdkProviderHeaders(
-                providerConfig.headers,
-                proxyCredentialHeader,
-                nonce,
-              ),
+              headers: { ...providerConfig.headers, [proxyCredentialHeader]: nonce },
             }
           : {}),
       },
@@ -127,11 +124,10 @@ async function handleProxyRequest(
     }
   });
   try {
-    const isNonceProtected = isNonceProtectedProxyRequest(req, params.proxyPathPrefix);
-    const url = resolveTargetUrl(req, params);
+    const target = resolveTargetUrl(req, params);
     if (
-      !url ||
-      (!isNonceProtected &&
+      !target ||
+      (!target.nonceProtected &&
         (!params.proxyCredentialHeader ||
           !hasValidProxyCredential(req, params.proxyCredentialHeader, params.proxyCredential)))
     ) {
@@ -141,11 +137,11 @@ async function handleProxyRequest(
     }
     const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
     guarded = await fetchWithSsrFGuard({
-      url: url.toString(),
+      url: target.url.toString(),
       init: {
         method: req.method,
         headers: buildProxyRequestHeaders(req.headers, {
-          upstreamBearerAuthorization: isNonceProtected
+          upstreamBearerAuthorization: target.nonceProtected
             ? params.upstreamBearerAuthorization
             : undefined,
           proxyCredentialHeader: params.proxyCredentialHeader,
@@ -195,44 +191,30 @@ function resolveTargetUrl(
     targetBaseUrl: URL;
     targetPathPrefix: string;
   },
-): URL | undefined {
+): { url: URL; nonceProtected: boolean } | undefined {
   const incomingUrl = new URL(req.url ?? "/", `http://${LOOPBACK_HOST}`);
+  const nonceProtected =
+    incomingUrl.pathname === params.proxyPathPrefix ||
+    incomingUrl.pathname.startsWith(`${params.proxyPathPrefix}/`);
   if (
-    incomingUrl.pathname !== params.proxyPathPrefix &&
-    !incomingUrl.pathname.startsWith(`${params.proxyPathPrefix}/`)
+    !nonceProtected &&
+    !(params.acceptsAzureSdkPaths && isAzureSdkProxyPath(incomingUrl.pathname))
   ) {
-    return params.acceptsAzureSdkPaths && isAzureSdkProxyPath(incomingUrl.pathname)
-      ? resolveDirectTargetUrl(incomingUrl, params.targetBaseUrl)
-      : undefined;
+    return undefined;
   }
-  const suffix = incomingUrl.pathname.slice(params.proxyPathPrefix.length);
   const targetUrl = new URL(params.targetBaseUrl);
-  targetUrl.pathname = `${params.targetPathPrefix}${suffix}` || "/";
+  targetUrl.pathname = nonceProtected
+    ? `${params.targetPathPrefix}${incomingUrl.pathname.slice(params.proxyPathPrefix.length)}` ||
+      "/"
+    : incomingUrl.pathname;
   for (const [key, value] of incomingUrl.searchParams) {
     targetUrl.searchParams.append(key, value);
   }
-  return targetUrl;
-}
-
-function resolveDirectTargetUrl(incomingUrl: URL, targetBaseUrl: URL): URL {
-  const targetUrl = new URL(targetBaseUrl);
-  targetUrl.pathname = incomingUrl.pathname;
-  for (const [key, value] of incomingUrl.searchParams) {
-    targetUrl.searchParams.append(key, value);
-  }
-  return targetUrl;
+  return { url: targetUrl, nonceProtected };
 }
 
 function isAzureSdkProxyPath(pathname: string): boolean {
   return pathname === "/openai" || pathname.startsWith("/openai/");
-}
-
-function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: string): boolean {
-  const incomingUrl = new URL(req.url ?? "/", `http://${LOOPBACK_HOST}`);
-  return (
-    incomingUrl.pathname === proxyPathPrefix ||
-    incomingUrl.pathname.startsWith(`${proxyPathPrefix}/`)
-  );
 }
 
 function hasValidProxyCredential(
@@ -281,14 +263,6 @@ function normalizeProxyRequestHeaders(
   return out;
 }
 
-function buildSdkProviderHeaders(
-  headers: ProviderConfig["headers"],
-  proxyCredentialHeader: string,
-  proxyCredential: string,
-): Record<string, string> {
-  return { ...headers, [proxyCredentialHeader]: proxyCredential };
-}
-
 function createProxyCredentialHeaderName(headers: ProviderConfig["headers"]): string {
   for (;;) {
     const name = `${PROXY_CREDENTIAL_HEADER_PREFIX}${randomBytes(12).toString("hex")}`;
@@ -313,11 +287,6 @@ function buildProxyRequestHeaders(
     out["authorization"] = params.upstreamBearerAuthorization;
   }
   return out;
-}
-
-function resolveUpstreamBearerAuthorization(providerConfig: ProviderConfig): string | undefined {
-  const bearerToken = providerConfig.bearerToken?.trim();
-  return bearerToken ? `Bearer ${bearerToken}` : undefined;
 }
 
 function normalizeProxyResponseHeaders(headers: Headers): Record<string, string> {
@@ -366,9 +335,4 @@ function isContentEncodingHeader(key: string): boolean {
     default:
       return false;
   }
-}
-
-function trimTrailingSlash(pathname: string): string {
-  const trimmed = pathname.replace(/\/+$/, "");
-  return trimmed === "" ? "" : trimmed;
 }

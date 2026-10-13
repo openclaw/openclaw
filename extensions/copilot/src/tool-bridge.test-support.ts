@@ -1,4 +1,4 @@
-import type { Tool as SdkTool } from "@github/copilot-sdk";
+import type { Tool as SdkTool, ToolInvocation } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createOpenClawCodingTools as createRealOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -12,19 +12,20 @@ type CopilotToolBridgeTestInput = Omit<
   "agentId" | "attemptParams" | "modelId" | "modelProvider" | "sessionId" | "spawnWorkspaceDir"
 > &
   Partial<Pick<CopilotToolBridgeInput, "agentId" | "modelId" | "modelProvider" | "sessionId">> & {
+    createOpenClawCodingTools?: typeof createRealOpenClawCodingTools;
+    sessionKey?: string;
+    abortSignal?: AbortSignal;
     spawnWorkspaceDir?: CopilotToolBridgeInput["spawnWorkspaceDir"];
     attemptParams?: Omit<CopilotToolBridgeAttemptParams, "hostCapabilities"> &
       Partial<Pick<CopilotToolBridgeAttemptParams, "hostCapabilities">>;
   };
 export type CopilotCodingToolsOptions = NonNullable<
-  Parameters<NonNullable<CopilotToolBridgeInput["createOpenClawCodingTools"]>>[0]
+  Parameters<typeof createRealOpenClawCodingTools>[0]
 >;
-export const testHostCapabilities = createCopilotTestHostCapabilities(
-  createRealOpenClawCodingTools,
-);
+const testHostCapabilities = createCopilotTestHostCapabilities(createRealOpenClawCodingTools);
 
 export function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
-  const { attemptParams, ...baseInput } = input;
+  const { attemptParams, createOpenClawCodingTools, sessionKey, abortSignal, ...baseInput } = input;
   const preparedInput: CopilotToolBridgeInput = {
     agentId: "agent-1",
     modelId: "gpt-4o",
@@ -33,19 +34,26 @@ export function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
     spawnWorkspaceDir: undefined,
     ...baseInput,
     attemptParams: {
+      authProfileStore: { version: 1, profiles: {} },
       ...attemptParams,
-      hostCapabilities: attemptParams?.hostCapabilities ?? testHostCapabilities,
+      sessionKey: attemptParams?.sessionKey ?? sessionKey,
+      abortSignal: abortSignal ?? attemptParams?.abortSignal,
+      hostCapabilities:
+        attemptParams?.hostCapabilities ??
+        (createOpenClawCodingTools
+          ? createCopilotTestHostCapabilities(createOpenClawCodingTools)
+          : testHostCapabilities),
     },
   };
   return createCopilotToolBridgeImpl(preparedInput);
 }
-type ConvertToolOptions = Pick<
-  CopilotToolBridgeInput,
-  "abortSignal" | "beforeExecute" | "onToolCompleted"
-> & {
-  onAgentToolResult?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["onAgentToolResult"];
-  observeToolTerminal?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["observeToolTerminal"];
-};
+type ConvertToolOptions = Pick<CopilotToolBridgeInput, "onToolCompleted"> &
+  Pick<CopilotToolBridgeAttemptParams, "abortSignal"> & {
+    onAgentToolResult?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["onAgentToolResult"];
+    observeToolTerminal?: NonNullable<
+      CopilotToolBridgeInput["attemptParams"]
+    >["observeToolTerminal"];
+  };
 
 export async function convertOpenClawToolToSdkToolForTest(
   sourceTool: AnyAgentTool,
@@ -54,19 +62,32 @@ export async function convertOpenClawToolToSdkToolForTest(
   const bridge = await createCopilotToolBridge({
     abortSignal: options.abortSignal,
     allowModelTools: true,
-    attemptParams:
-      options.onAgentToolResult || options.observeToolTerminal
-        ? {
-            ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
-            ...(options.observeToolTerminal
-              ? { observeToolTerminal: options.observeToolTerminal }
-              : {}),
-          }
-        : undefined,
-    beforeExecute: options.beforeExecute,
-    createOpenClawCodingTools: async () => [sourceTool],
+    attemptParams: {
+      // Conversion targets the direct SDK handler; default Tool Search would catalog the tool.
+      config: { tools: { toolSearch: false } },
+      ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
+      ...(options.observeToolTerminal ? { observeToolTerminal: options.observeToolTerminal } : {}),
+    },
+    createOpenClawCodingTools: () => [sourceTool],
     modelId: "gpt-test",
     onToolCompleted: options.onToolCompleted,
   });
   return expectDefined(bridge.promptToolPolicy.apply().tools[0], "Copilot SDK tool");
+}
+
+export function makeInvocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
+  return {
+    arguments: { value: "input" },
+    sessionId: "session-1",
+    toolCallId: "call-1",
+    toolName: "tool-a",
+    ...overrides,
+  };
+}
+
+export function runSdkTool(tool: SdkTool, args: unknown, invocation = makeInvocation()) {
+  if (!tool.handler) {
+    throw new Error(`SDK tool '${tool.name}' has no handler`);
+  }
+  return tool.handler(args, invocation);
 }

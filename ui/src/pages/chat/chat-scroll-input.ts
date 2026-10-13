@@ -30,9 +30,14 @@ export function forwardChatWheelToTranscript(
       continue;
     }
     const style = getComputedStyle(target);
+    const contextCanScroll =
+      event.deltaY < 0
+        ? target.scrollTop > 0
+        : target.scrollTop + target.clientHeight < target.scrollHeight - 1;
     if (
       /^(auto|scroll)$/.test(style.overflowY) &&
-      (target.scrollHeight > target.clientHeight ||
+      ((target.scrollHeight > target.clientHeight &&
+        (!target.closest(".chat-footer__context") || contextCanScroll)) ||
         style.overscrollBehaviorY === "contain" ||
         style.overscrollBehaviorY === "none")
     ) {

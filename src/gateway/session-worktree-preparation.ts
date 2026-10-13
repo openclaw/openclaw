@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,21 +8,43 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
+import { SessionWorktreeSourceChangedError } from "../agents/worktrees/errors.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
-import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
+import {
+  captureWorktreeRegistryReadGuard,
+  readLiveRegistryWorktreeByOwner,
+  readRegistryWorktree,
+  readSessionWorktreeBinding,
+} from "../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
+import { ManagedWorktreeService, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type {
   CreateManagedWorktreeParams,
   WorktreeSourceStage,
 } from "../agents/worktrees/types.js";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  captureSessionEntryMetadataRead,
+  captureSessionEntrySourceAssertion,
+} from "../config/sessions/session-entry-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasInternalHookListeners } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  ProjectCheckoutError,
+  resolveProjectCheckout,
+  resolveProjectDirectory,
+  resolveProjectRegistry,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -30,65 +53,117 @@ import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-cre
 import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
-} from "./session-lifecycle-preparation.js";
+} from "./session-create-service.types.js";
+import { invalidSessionRequest } from "./session-request-error.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
+import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
 
-export function validateSessionWorktreeSelection(
-  params: SessionsCreateParams,
-): ErrorShape | undefined {
-  if (
-    params.worktreeSource === "empty" &&
-    (params.worktree !== true ||
-      params.cwd ||
-      params.projectId ||
-      params.projectGitUrl ||
-      params.repository ||
-      params.catalogId ||
-      params.execNode ||
-      params.worktreeBaseRef)
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeSource=empty requires worktree=true and cannot include another workspace source, catalog, execNode, or worktreeBaseRef",
+/** Resolve registered sources identically for dashboard and native child sessions. */
+export async function resolveSessionProjectRoot(
+  cfg: OpenClawConfig,
+  projectId: string,
+  worktree: boolean,
+): Promise<Result<string, ErrorShape>> {
+  const project = await resolveProjectRegistry(cfg, projectId);
+  if (!project) {
+    return invalidSessionRequest(`unknown project id: ${projectId}`);
+  }
+  try {
+    const checkout = worktree ? await resolveProjectCheckout(project.repoRoot) : undefined;
+    const root = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
+    if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
+      throw new ProjectCheckoutError("project root is no longer a git checkout");
+    }
+    return ok(root);
+  } catch (error) {
+    const detail =
+      error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
+    return err(
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `project ${projectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
+      ),
     );
   }
-  if (normalizeOptionalString(params.execNode) && params.worktree === true) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktree cannot target execNode",
-    );
-  }
-  if (
-    (normalizeOptionalString(params.worktreeBaseRef) ||
-      normalizeOptionalString(params.worktreeName)) &&
-    params.worktree !== true
-  ) {
-    return errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      "sessions.create worktreeBaseRef/worktreeName require worktree=true",
-    );
-  }
-  return undefined;
 }
+
+type AcceptedWorktreeSource = NonNullable<
+  PreparedGatewaySessionLifecycle["pendingWorktree"]
+>["source"];
 
 type SpawnParentWorktreeSource = {
   workspace: string;
+  source?: AcceptedWorktreeSource;
   withCurrent: WorktreeSourceStage;
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
 };
-
-class SessionWorktreeSourceChangedError extends Error {}
 
 async function resolveSpawnParentWorktreeSource(
   parentSessionKey: string,
   agentId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<SpawnParentWorktreeSource | undefined> {
-  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  return withGatewaySessionEntryReadOnly(
+    {
+      cfg: getRuntimeConfig(),
+      key: parentSessionKey,
+      agentId,
+      assertActive: () => options.signal?.throwIfAborted(),
+    },
+    async (parent) => prepareSpawnParentWorktreeSource(parent, agentId, options),
+  );
+}
+
+async function prepareSpawnParentWorktreeSource(
+  parent: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  agentId: string,
+  options: { signal?: AbortSignal },
+): Promise<SpawnParentWorktreeSource | undefined> {
   if (!parent.entry) {
     return undefined;
   }
+  const fields = [
+    "sessionId",
+    "lifecycleRevision",
+    "archivedAt",
+    "projectId",
+    "sessionRoot",
+    "worktree",
+  ] as const;
+  const sourceKind = parent.entry.worktree ? "managed worktree" : "project";
+  const refuse = (): never => {
+    throw new SessionWorktreeSourceChangedError(
+      `Spawn parent ${sourceKind} changed; retry from its current session`,
+    );
+  };
+  const scope = { agentId, sessionKey: parent.canonicalKey, storePath: parent.storePath };
+  const assertRouting = captureSessionMutationRouting(parent.cfg, refuse, [scope]);
+  const assertHostCurrent = () => {
+    options.signal?.throwIfAborted();
+    assertRouting(getRuntimeConfig());
+  };
+  const metadata = captureSessionEntryMetadataRead(scope, assertHostCurrent);
+  const parentSource = captureSessionEntrySourceAssertion({
+    scope,
+    readSource: parent.capturedReadSource,
+    expected: parent.entry,
+    fields,
+    assertCurrent: () => {
+      const current = metadata
+        ? metadata.readCurrent()
+        : loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId }).entry;
+      if (
+        !current ||
+        fields.some((field) => !isDeepStrictEqual(current?.[field], parent.entry?.[field]))
+      ) {
+        refuse();
+      }
+    },
+    assertHostCurrent,
+    refuse,
+  });
   if (!parent.entry.worktree) {
     const projectId = normalizeOptionalString(parent.entry.projectId);
     if (!projectId) {
@@ -103,19 +178,14 @@ async function resolveSpawnParentWorktreeSource(
         "Spawn parent project changed; retry from its current session",
       );
     }
-    const parentSessionId = parent.entry.sessionId;
     const assertParentCurrent = (storedRoot: string | undefined, assertCheckout?: () => void) => {
       assertCheckout?.();
-      const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
       const currentProjectRoot = selection
         ? storedRoot
-        : resolveWorkspaceProject(current.cfg, projectId)?.repoRoot;
+        : resolveWorkspaceProject(getRuntimeConfig(), projectId)?.repoRoot;
       if (
-        current.entry?.sessionId !== parentSessionId ||
-        current.entry.archivedAt !== undefined ||
-        current.entry.projectId !== projectId ||
-        current.entry.sessionRoot !== project.repoRoot ||
-        current.entry.worktree !== undefined ||
+        parent.entry?.archivedAt !== undefined ||
+        parent.entry?.sessionRoot !== project.repoRoot ||
         currentProjectRoot !== project.repoRoot
       ) {
         throw new SessionWorktreeSourceChangedError(
@@ -126,11 +196,14 @@ async function resolveSpawnParentWorktreeSource(
     if (selection) {
       return {
         workspace: project.repoRoot,
+        source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
         withCurrent: async (run) =>
           await selection.withCurrent((current) => {
-            const assertCurrent = () =>
+            const assertCurrent = composeSessionSourceAssertion([parentSource], (assertSources) => {
+              assertSources();
               assertParentCurrent(current.project?.repoRoot, current.assertCurrent);
+            });
             return run({
               assertCurrent,
               assertCheckoutCurrent: current.assertCheckoutCurrent,
@@ -139,16 +212,22 @@ async function resolveSpawnParentWorktreeSource(
           }),
       };
     }
-    const assertCurrent = () => assertParentCurrent(undefined);
+    const assertCurrent = composeSessionSourceAssertion([parentSource], (assertSources) => {
+      assertSources();
+      assertParentCurrent(undefined);
+    });
     assertCurrent();
     return {
       workspace: project.repoRoot,
-      withCurrent: async (run) => {
-        return await run({ assertCurrent, signal: options.signal });
-      },
+      source: { kind: "project", id: projectId },
+      withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
   }
-  const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+  const context = captureWorktreeRunEndContext(process.env);
+  const accept = captureWorktreeRegistryReadGuard(context, "source-owner");
+  const worktree = await readLiveRegistryWorktreeByOwner(context, "session", parent.canonicalKey);
+  const assertWorktreeCurrent = accept(worktree);
+  options.signal?.throwIfAborted();
   if (
     !worktree ||
     worktree.id !== parent.entry.worktree.id ||
@@ -158,30 +237,33 @@ async function resolveSpawnParentWorktreeSource(
       "Spawn parent managed worktree changed; retry from its current session",
     );
   }
-  const parentSessionId = parent.entry.sessionId;
   // Validate the inherited source through the child creation commit. After that,
   // persisted workspace intent belongs to the child and uses its admitted run.
-  const assertCurrent = () => {
-    const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
-    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
-    if (
-      current.entry?.sessionId !== parentSessionId ||
-      current.entry.archivedAt !== undefined ||
-      current.entry.worktree?.id !== worktree.id ||
-      currentWorktree?.id !== worktree.id ||
-      currentWorktree.repoRoot !== worktree.repoRoot ||
-      currentWorktree.path !== worktree.path
-    ) {
-      throw new SessionWorktreeSourceChangedError(
-        "Spawn parent managed worktree changed; retry from its current session",
-      );
-    }
-  };
+  const assertCurrent = composeSessionSourceAssertion([parentSource], (assertSources) => {
+    assertSources();
+    assertWorktreeCurrent();
+  });
+  assertCurrent();
   return {
     workspace: worktree.repoRoot,
-    withCurrent: async (run) => {
-      return await run({ assertCurrent, signal: options.signal });
-    },
+    source: { kind: "worktree", id: worktree.id },
+    withCurrent: async (run) =>
+      await run({
+        assertCurrent,
+        signal: options.signal,
+        workerAuthority: {
+          assertCurrent: parentSource,
+          predicates: [
+            {
+              kind: "source-owner",
+              ownerId: parent.canonicalKey,
+              id: worktree.id,
+              path: worktree.path,
+              repoRoot: worktree.repoRoot,
+            },
+          ],
+        },
+      }),
   };
 }
 
@@ -220,13 +302,28 @@ export async function prepareSessionWorktree(params: {
   signal?: AbortSignal;
   commitGuard?: () => void;
   withSource?: WorktreeSourceStage;
+  acceptedSource?: AcceptedWorktreeSource;
   withRollback?: SpawnParentWorktreeSource["withRollback"];
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  onPromptReady?: (prepared: PreparedGatewaySessionLifecycle) => Promise<void>;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
+  const context = captureWorktreeRunEndContext(process.env);
+  const worktrees = new ManagedWorktreeService({ env: { ...process.env, ...context.environment } });
+  const sandboxRequired =
+    target.sandboxRequired === true ||
+    target.entry?.sandbox === "required" ||
+    resolveSandboxRuntimeStatus({
+      cfg: params.cfg,
+      agentId: target.agentId,
+      sessionKey: target.key,
+      preparedSessionEntry: target.entry ?? null,
+    }).sandboxed;
+  let withSource = params.withSource;
+  let withRollback = params.withRollback;
   const checkSource = async () => {
     commitGuard?.();
-    await params.withSource?.((current) => {
+    await withSource?.((current) => {
       commitGuard?.();
       current.assertCurrent();
     });
@@ -234,9 +331,87 @@ export async function prepareSessionWorktree(params: {
   try {
     await checkSource();
     const workspace = typeof params.workspace === "string" ? params.workspace : undefined;
-    // The empty source contributes no host files; caller-selected sources still
-    // require the inherited workspace containment check.
-    if (target.sandboxRequired && workspace) {
+    if (sandboxRequired && workspace && !withSource && params.acceptedSource?.kind === "worktree") {
+      const accept = captureWorktreeRegistryReadGuard(context, "source-record");
+      const source = await readRegistryWorktree(context, params.acceptedSource.id);
+      const assertSourceCurrent = accept(source);
+      commitGuard?.();
+      const root = fs.realpathSync(workspace);
+      if (!source || source.ownerKind !== "session" || source.repoRoot !== root) {
+        throw new SessionWorktreeSourceChangedError(
+          "Accepted managed source is no longer available",
+        );
+      }
+      const assertHostCurrent = () => {
+        commitGuard?.();
+        if (fs.realpathSync(workspace) !== root) {
+          throw new SessionWorktreeSourceChangedError(
+            "Accepted managed source changed during preparation",
+          );
+        }
+      };
+      const assertCurrent = () => {
+        assertHostCurrent();
+        assertSourceCurrent();
+      };
+      // An archived parent retains this registry/snapshot owner. Its session is
+      // no longer the child's authority once the locked creation accepted intent.
+      withSource = async (run) => {
+        assertCurrent();
+        return await run({
+          assertCurrent,
+          signal: params.signal,
+          workerAuthority: {
+            assertCurrent: assertHostCurrent,
+            predicates: [
+              {
+                kind: "source-record",
+                id: source.id,
+                ownerId: source.ownerId,
+                repoRoot: root,
+                repoFingerprint: source.repoFingerprint,
+              },
+            ],
+          },
+        });
+      };
+    }
+    // Registry custody authorizes source-only preparation, not direct host access.
+    // The resulting session is executed through its private sandbox projection.
+    if (sandboxRequired && workspace && !withSource) {
+      const projectId =
+        target.projectId ??
+        target.entry?.projectId ??
+        (params.acceptedSource?.kind === "project" ? params.acceptedSource.id : undefined);
+      const selected =
+        projectId && !projectId.startsWith("workspace:")
+          ? await selectStoredProjectRegistry(projectId, { signal: params.signal })
+          : undefined;
+      if (selected) {
+        const expectedRoot = fs.realpathSync(workspace);
+        withSource = async (run) =>
+          await selected.withCurrent((current) => {
+            const assertCurrent = () => {
+              commitGuard?.();
+              current.assertCurrent();
+              if (
+                !current.project ||
+                current.project.repoRoot !== expectedRoot ||
+                fs.realpathSync(workspace) !== expectedRoot
+              ) {
+                throw new SessionWorktreeSourceChangedError(
+                  "Selected project changed during guest workspace preparation",
+                );
+              }
+            };
+            assertCurrent();
+            return run({ ...current, assertCurrent });
+          });
+        withRollback = selected.withRollback;
+      }
+    }
+    // Raw paths and workspace aliases retain the selected-agent boundary.
+    if (sandboxRequired && workspace && !withSource) {
       const root = prepareSessionCreateFilesystemRoot({
         cfg: params.cfg,
         enforceSandboxContainment: true,
@@ -250,18 +425,16 @@ export async function prepareSessionWorktree(params: {
         return root;
       }
     }
-    const repository = workspace
-      ? await managedWorktrees.resolveRepositoryPaths(workspace)
-      : undefined;
+    const repository = workspace ? await worktrees.resolveRepositoryPaths(workspace) : undefined;
     await checkSource();
     const boundId = normalizeOptionalString(target.entry?.worktree?.id);
-    let existing = boundId ? managedWorktrees.findLiveById(boundId) : undefined;
+    const existing = await readSessionWorktreeBinding(context, boundId, target.key);
+    commitGuard?.();
     if (existing && (existing.ownerKind !== "session" || existing.ownerId !== target.key)) {
       return err(
         errorShape(ErrorCodes.UNAVAILABLE, "session worktree binding has a different owner"),
       );
     }
-    existing ??= managedWorktrees.findLiveByOwner("session", target.key);
     let existingDirectory = false;
     if (existing) {
       try {
@@ -272,23 +445,15 @@ export async function prepareSessionWorktree(params: {
     }
     if (existing && existingDirectory) {
       if (repository && existing.repoRoot !== repository.canonicalRoot) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session worktree belongs to a different repository",
-          ),
-        );
+        return invalidSessionRequest("session worktree belongs to a different repository");
       }
       // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
       if (
         (params.name && existing.name !== params.name) ||
         (params.baseRef && existing.baseRef !== params.baseRef)
       ) {
-        return err(
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `session is already bound to worktree ${existing.name} (${existing.branch})`,
-          ),
+        return invalidSessionRequest(
+          `session is already bound to worktree ${existing.name} (${existing.branch})`,
         );
       }
     }
@@ -300,21 +465,49 @@ export async function prepareSessionWorktree(params: {
       suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       signal: params.signal,
       commitGuard,
-      withSource: params.withSource,
-      withRollback: params.withRollback,
+      withSource,
+      withRollback,
       onProgress: params.onProgress,
+      // Sandboxes require a published registry owner before creating their projection.
+      // Nested cwd discovery also retains complete checkout as its prompt boundary.
+      ...(params.onPromptReady &&
+      !sandboxRequired &&
+      // Bootstrap hooks can read configured or custom paths outside the prepared files.
+      !hasInternalHookListeners("agent", "bootstrap") &&
+      repository &&
+      workspace === repository.sourceRoot
+        ? {
+            onPromptReady: async (
+              worktree: Parameters<NonNullable<CreateManagedWorktreeParams["onPromptReady"]>>[0],
+            ) => {
+              commitGuard?.();
+              await params.onPromptReady!({
+                spawnedCwd: worktree.path,
+                sessionRoot: worktree.path,
+                worktree: {
+                  id: worktree.id,
+                  branch: worktree.branch,
+                  repoRoot: worktree.repoRoot,
+                  canonicalWorkspaceDir: workspace,
+                },
+              });
+              commitGuard?.();
+            },
+          }
+        : {}),
     };
     const { record: worktree, materialized } = workspace
-      ? await managedWorktrees.createWithOutcome({
+      ? await worktrees.createWithOutcome({
           ...createParams,
           repoRoot: workspace,
           baseRef: params.baseRef,
           checkoutCommit: params.checkoutCommit,
-          runSetupScript: params.runSetupScript,
+          runSetupScript: sandboxRequired ? false : params.runSetupScript,
+          provisionIgnoredFiles: !sandboxRequired,
         })
-      : await managedWorktrees.createEmptyWithOutcome(createParams);
+      : await worktrees.createEmptyWithOutcome(createParams);
     const rollback = materialized
-      ? async () => await managedWorktrees.rollbackPreparation(worktree, params.withRollback)
+      ? async () => await worktrees.rollbackPreparation(worktree, withRollback)
       : undefined;
     const accept = (
       assertSourceCurrent?: () => void,
@@ -342,12 +535,16 @@ export async function prepareSessionWorktree(params: {
           canonicalWorkspaceDir: workspace ?? worktree.repoRoot,
         },
         ...(rollback ? { rollback } : {}),
+        ...(withSource
+          ? {
+              withCommit: async <T>(run: (assertCurrent: SessionSourceAssertion) => Promise<T>) =>
+                await withSource!((current) => run(current.assertCurrent)),
+            }
+          : {}),
       });
     };
     try {
-      return params.withSource
-        ? await params.withSource((current) => accept(current.assertCurrent))
-        : accept();
+      return withSource ? await withSource((current) => accept(current.assertCurrent)) : accept();
     } catch (error) {
       const failures = [error];
       try {
@@ -405,7 +602,7 @@ export async function prepareSessionWorktreeCreation(params: {
   onTitleError: (error: unknown) => void;
   onTitlePersisted: () => void;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
-  const { cfg, target: lifecycleTarget, signal, commitGuard } = params;
+  const { cfg, target: lifecycleTarget, signal, commitGuard, name, baseRef } = params;
   commitGuard();
   const acceptedWorktree = params.inheritParentKey ? lifecycleTarget.entry?.worktree : undefined;
   const acceptedPending = params.inheritParentKey
@@ -414,15 +611,14 @@ export async function prepareSessionWorktreeCreation(params: {
   if (acceptedPending && !acceptedPending.workspace) {
     if (lifecycleTarget.entry?.pendingProjectGitUrl) {
       // The admitted first-turn owner materializes this child's recorded clone intent.
-      return { ok: true, value: {} };
+      return ok({});
     }
-    return {
-      ok: false,
-      error: errorShape(
+    return err(
+      errorShape(
         ErrorCodes.UNAVAILABLE,
         "Saved worktree workspace is invalid; select the repository and retry.",
       ),
-    };
+    );
   }
   const inheritedSource =
     params.inheritParentKey && !acceptedWorktree && !acceptedPending
@@ -446,8 +642,6 @@ export async function prepareSessionWorktreeCreation(params: {
     acceptedPending?.workspace ??
     inheritedSource?.workspace ??
     resolveAgentWorkspaceDir(cfg, lifecycleTarget.agentId);
-  const name = params.name;
-  const baseRef = params.baseRef;
   if (withSource) {
     await withSource((current) => {
       commitGuard();
@@ -456,10 +650,7 @@ export async function prepareSessionWorktreeCreation(params: {
   }
   // Git discovery permits subdirectory workspaces with an ancestor .git entry.
   if (typeof workspace === "string" && !params.projectGitUrl && !insideGitCheckout(workspace)) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent workspace is not a git checkout"),
-    };
+    return invalidSessionRequest("agent workspace is not a git checkout");
   }
   // Reuse validates the binding, not a selected ref that may have since disappeared.
   const resolvedBase =
@@ -488,6 +679,9 @@ export async function prepareSessionWorktreeCreation(params: {
         withCommit,
         pendingWorktree: {
           ...(params.projectGitUrl ? {} : { workspace }),
+          ...(inheritedSource?.source || acceptedPending?.source
+            ? { source: inheritedSource?.source ?? acceptedPending?.source }
+            : {}),
           name,
           baseRef,
           baseCommit,
@@ -496,7 +690,6 @@ export async function prepareSessionWorktreeCreation(params: {
       },
     };
   }
-  const source = params.titleSource;
   // Empty creates have no persisted generation until the lifecycle owner commits.
   const title =
     !name && !params.label && lifecycleTarget.entry && lifecycleTarget.titleModelSelection !== null
@@ -511,7 +704,7 @@ export async function prepareSessionWorktreeCreation(params: {
           sessionKey: lifecycleTarget.key,
           storePath: lifecycleTarget.storePath,
           currentUserMessage: params.currentUserMessage,
-          userMessage: source,
+          userMessage: params.titleSource,
           commitGuard,
           withSource,
           onError: params.onTitleError,
@@ -525,15 +718,12 @@ export async function prepareSessionWorktreeCreation(params: {
     name,
     baseRef,
     checkoutCommit: baseCommit,
-    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry) ?? source,
+    label: params.label ?? title ?? resolveExplicitSessionName(lifecycleTarget.entry),
     runSetupScript: params.runSetupScript,
     signal,
     commitGuard,
     withSource,
     withRollback: inheritedSource?.withRollback,
   });
-  if (prepared.ok) {
-    return { ok: true, value: { ...prepared.value, withCommit } };
-  }
-  return prepared;
+  return prepared.ok ? ok({ ...prepared.value, ...(withCommit ? { withCommit } : {}) }) : prepared;
 }

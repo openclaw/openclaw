@@ -7,6 +7,101 @@ import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
+    @Test(arguments: [
+        "PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647",
+        "UPDATE schema_meta SET schema_version = 2",
+        "UPDATE schema_meta SET role = 'agent'",
+        "DROP TABLE schema_meta",
+        "PRAGMA user_version = 6; UPDATE schema_meta SET schema_version = 6; DROP TABLE config_machine_state",
+        "PRAGMA user_version = 0",
+    ])
+    func `read-only admission rejects incompatible state before returning a handle`(_ mutation: String) throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            try writer.execute(mutation)
+            let original = try Data(contentsOf: url)
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+            }
+
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
+    @Test(arguments: 1...5, [false, true])
+    func `older schemas preserve absent or populated config state`(version: Int, hasTable: Bool) throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA user_version = \(version); UPDATE schema_meta SET schema_version = \(version)")
+            if hasTable {
+                try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            } else {
+                try writer.execute("DROP TABLE config_machine_state")
+            }
+            let original = try Data(contentsOf: url)
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+            let expected: OpenClawNativeStateConfigValue? = hasTable
+                ? .init(value: "retained-pin", updatedAtMilliseconds: 10)
+                : nil
+
+            #expect(try reader.configMachineStateValue(key: "fixture") == expected)
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
+    @Test func `read-only bootstrap admission records that config state is absent`() throws {
+        try self.withDatabaseURL { writer, url in
+            try writer.ensureCanonicalTable(.deviceAuthTokens)
+            let original = try Data(contentsOf: url)
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
+            #expect(try Data(contentsOf: url) == original)
+            #expect(try writer.schemaObjectExists(type: "table", name: "config_machine_state") == false)
+        }
+    }
+
+    @Test func `admitted config reads observe foreign rows without replacing their handle`() throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
+
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'first', 10)")
+            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
+                value: "first",
+                updatedAtMilliseconds: 10))
+            try writer.execute("UPDATE config_machine_state SET value_json = 'second', updated_at_ms = 20")
+            #expect(try reader.configMachineStateValue(key: "fixture") == .init(
+                value: "second",
+                updatedAtMilliseconds: 20))
+            try writer.execute("DELETE FROM config_machine_state")
+            #expect(try reader.configMachineStateValue(key: "fixture") == nil)
+            #expect(throws: OpenClawNativeStateError.self) { try writer.configMachineStateValue(key: "fixture") }
+        }
+    }
+
+    @Test(arguments: ["NULL, 10", "'fixture', 'invalid-timestamp'"])
+    func `admitted config reads still reject malformed row values`(_ row: String) throws {
+        try self.withDatabaseURL { writer, url in
+            try self.createConfigMachineState(writer)
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', \(row))")
+            let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+            #expect(throws: OpenClawNativeStateError.self) { try reader.configMachineStateValue(key: "fixture") }
+        }
+    }
+
+    private func createConfigMachineState(_ database: OpenClawNativeStateSQLite) throws {
+        try database.execute("""
+        PRAGMA user_version = 1;
+        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER);
+        INSERT INTO schema_meta VALUES ('primary', 'global', 1);
+        CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+        """)
+    }
+
     @Test
     func `version zero composes exact canonical tables`() throws {
         try self.withDatabase { database in
@@ -312,9 +407,18 @@ struct OpenClawNativeStateSQLiteTests {
             var permissions: acl_permset_t?
             guard acl_get_permset(entry, &permissions) == 0 else { throw self.aclError() }
             for permission in tag == ACL_EXTENDED_ALLOW
-                ? [ACL_READ_DATA, ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_EXECUTE, ACL_READ_ATTRIBUTES,
-                   ACL_WRITE_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_READ_SECURITY,
-                   ACL_WRITE_SECURITY]
+                ? [
+                    ACL_READ_DATA,
+                    ACL_WRITE_DATA,
+                    ACL_APPEND_DATA,
+                    ACL_EXECUTE,
+                    ACL_READ_ATTRIBUTES,
+                    ACL_WRITE_ATTRIBUTES,
+                    ACL_READ_EXTATTRIBUTES,
+                    ACL_WRITE_EXTATTRIBUTES,
+                    ACL_READ_SECURITY,
+                    ACL_WRITE_SECURITY,
+                ]
                 : [ACL_READ_DATA]
             {
                 guard acl_add_perm(permissions, permission) == 0 else { throw self.aclError() }

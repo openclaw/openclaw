@@ -66,18 +66,27 @@ describe("audit gateway methods", () => {
 
   it("preserves the exact shipped audit.list request and result shape", async () => {
     const respond = await runAuditHandler("audit.list", {
-      agentId: "main",
+      agentId: " main ",
       kind: "agent_run",
+      sessionKey: " agent:main:main ",
+      runId: " run-1 ",
       after: 50,
       before: 150,
       limit: 25,
-      cursor: "11",
+      cursor: " 11 ",
     });
 
     expect(listAuditEvents).toHaveBeenCalledWith({
       limit: 25,
       cursor: 11,
-      filters: { agentId: "main", kind: "agent_run", after: 50, before: 150 },
+      filters: {
+        agentId: "main",
+        kind: "agent_run",
+        sessionKey: "agent:main:main",
+        runId: "run-1",
+        after: 50,
+        before: 150,
+      },
     });
     expect(respond).toHaveBeenCalledWith(true, {
       events: [
@@ -257,38 +266,6 @@ describe("audit gateway methods", () => {
     },
   );
 
-  it.each(["audit.list", "audit.activity.list"] as const)(
-    "trims whitespace around cursor digits for %s",
-    async (method) => {
-      const respond = await runAuditHandler(method, { cursor: "  11  " });
-      expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      expect(listAuditEvents).toHaveBeenCalledWith(expect.objectContaining({ cursor: 11 }));
-    },
-  );
-
-  it.each(["audit.list", "audit.activity.list"] as const)(
-    "trims exact-match filter ids for %s before store lookup",
-    async (method) => {
-      const respond = await runAuditHandler(method, {
-        agentId: " main ",
-        sessionKey: " agent:main:main ",
-        runId: " run-1 ",
-      });
-
-      expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      expect(listAuditEvents).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filters: expect.objectContaining({
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            runId: "run-1",
-            ...(method === "audit.activity.list" ? { includeMessages: true } : {}),
-          }),
-        }),
-      );
-    },
-  );
-
   it("projects bounded run discovery and exact execution selection", async () => {
     await runAuditHandler("audit.run.inspect", {
       runId: "run-1",
@@ -409,110 +386,40 @@ describe("audit gateway methods", () => {
     }
   });
 
-  it.each([
-    {
-      name: "present",
-      identity: {
-        state: "present",
-        context: {
-          schemaVersion: 1,
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
-          createdAt: 1,
-          trustDomain: { kind: "gateway-cell", domainRef: accountRef, state: "present" },
-          invoker: { state: "absent" },
-          ingress: {
-            kind: "gateway-client",
-            boundary: "gateway.ws.authenticated-connect",
-            state: "present",
-          },
-          agentPrincipal: { kind: "agent", domainRef: accountRef, principalRef: "main" },
-          agentDefinition: { definitionRef: "main", state: "present" },
-          runtimeInstance: { runtimeRef: accountRef, kind: "gateway", state: "present" },
-          applicableGrants: [],
-          assurance: [],
-          coverageState: "unattributed",
-          missingEvidence: [],
-        },
-      },
-    },
-    {
-      name: "unavailable",
-      identity: {
-        state: "unsupported",
-        reasonCode: "identity_context_unavailable",
-        missingEvidence: ["identity.context"],
-        remediation: [],
-      },
-    },
-    {
-      name: "ambiguous",
-      identity: {
-        state: "ambiguous",
-        reasonCode: "execution_selection_required",
-        candidates: [],
-        missingEvidence: ["execution.selection"],
-        remediation: [],
-      },
-    },
-  ] as const)("keeps the $name success response safe-only", async ({ identity }) => {
-    inspectExecutionIdentityRun.mockReturnValueOnce({
-      schemaVersion: 1,
-      run: { runId: "run-1", status: "known" },
-      identity,
-      decisions: [],
-      decisionDisplays: [],
-      coverage: { state: "unknown", missingEvidence: [] },
+  it("preserves mirrored numeric cursors for execution paging", async () => {
+    const decisionCursor = "001";
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: decisionCursor,
+      decisionCursor,
+      decisionLimit: 25,
     });
 
-    const respond = await runAuditHandler("audit.run.inspect", { runId: "run-1" });
-    const result = respond.mock.calls[0]?.[1];
-    expect(result).toEqual(
-      expect.objectContaining({ decisionDisplays: [], coverage: expect.any(Object) }),
-    );
-    expect(result).not.toHaveProperty("decisions");
-    expect(JSON.stringify(result)).not.toContain('"decisions"');
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor,
+      decisionLimit: 25,
+    });
   });
 
-  it.each(["1", "001"])(
-    "preserves mirrored numeric cursor %s for execution paging",
-    async (decisionCursor) => {
-      await runAuditHandler("audit.run.inspect", {
-        runId: "run-1",
-        executionCursor: decisionCursor,
-        decisionCursor,
-        decisionLimit: 25,
-      });
+  it("treats mirrored owner decision cursors as decision-only", async () => {
+    const decisionCursor = "a:2000:42";
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: decisionCursor,
+      decisionCursor,
+      decisionLimit: 25,
+    });
 
-      expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-        runId: "run-1",
-        executionOffset: 1,
-        executionLimit: 50,
-        decisionCursor,
-        decisionLimit: 25,
-      });
-    },
-  );
-
-  it.each(["a:2000:42", "m:2000:42", "g:2000:42", "c:2000:42", "t:2000:42", "f:2000:42"])(
-    "treats mirrored owner decision cursor %s as decision-only",
-    async (decisionCursor) => {
-      await runAuditHandler("audit.run.inspect", {
-        runId: "run-1",
-        executionCursor: decisionCursor,
-        decisionCursor,
-        decisionLimit: 25,
-      });
-
-      expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-        runId: "run-1",
-        executionLimit: 50,
-        decisionCursor,
-        decisionLimit: 25,
-      });
-    },
-  );
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionLimit: 50,
+      decisionCursor,
+      decisionLimit: 25,
+    });
+  });
 
   it("rejects malformed run inspection before storage access", async () => {
     expect(

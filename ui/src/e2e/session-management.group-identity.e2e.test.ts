@@ -88,7 +88,7 @@ suite.define(() => {
           await page.locator(".chat-header-session-menu__trigger").click();
         } else {
           await row.hover();
-          await row.getByRole("button", { name: "Open session menu" }).click();
+          await row.click({ button: "right" });
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
         await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));

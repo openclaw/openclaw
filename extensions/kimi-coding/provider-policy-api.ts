@@ -4,8 +4,17 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k"] as const;
+export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3"] as const;
 const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
+
+export const KIMI_K3_THINKING_EFFORTS = {
+  minimal: "low",
+  low: "low",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} as const;
 
 const KIMI_K3_THINKING_LEVELS = [
   { id: "off" },
@@ -32,7 +41,7 @@ export function resolveThinkingProfile({
   if (isKimiK3ModelId(modelId)) {
     return {
       levels: KIMI_K3_THINKING_LEVELS,
-      defaultLevel: "high",
+      defaultLevel: modelId.trim().toLowerCase() === "kimi-k3" ? "off" : "high",
       preserveWhenCatalogReasoningFalse: true,
     };
   }

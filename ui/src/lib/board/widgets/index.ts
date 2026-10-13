@@ -19,7 +19,7 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("sessionProgressCard.widgetLabel");
     },
-    loadModule: () => import("./session-progress.ts"),
+    loadModule: () => import("./session-progress.tsx"),
     previewSafe: false,
   },
   {
@@ -28,7 +28,7 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindReport");
     },
-    loadModule: () => import("./report.ts"),
+    loadModule: () => import("./report.tsx"),
     previewSafe: true,
   },
   {
@@ -37,7 +37,7 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindWebsite");
     },
-    loadModule: () => import("./website.ts"),
+    loadModule: () => import("./website.tsx"),
     previewSafe: false,
   },
   {
@@ -46,7 +46,7 @@ export const CORE_BOARD_WIDGET_ELEMENTS: readonly CoreBoardWidgetElement[] = [
     get label() {
       return t("board.widget.kindBrowserDashboard");
     },
-    loadModule: () => import("./browser.ts"),
+    loadModule: () => import("./browser.tsx"),
     previewSafe: false,
   },
 ];

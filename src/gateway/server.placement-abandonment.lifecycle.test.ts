@@ -142,6 +142,7 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         },
       }));
       vi.doMock("../state/openclaw-state-db.js", () => ({
+        closeOpenClawStateDatabaseAsync: async () => {},
         closeOpenClawStateDatabaseForTest: closeDatabase,
         openOpenClawStateDatabase: vi.fn(),
       }));

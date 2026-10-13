@@ -26,11 +26,13 @@ After an account's quota recovers, model availability reflects the recovered acc
 
 Open **Model Setup** from the page header to inspect detected AI access. When available, it shows the authentication method (API key or account sign-in) and the actual email address reported by the provider or local runtime. API keys and tokens stay hidden.
 
-Use **Test connection** to run a live provider probe and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A probe makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
+Use **Test connection** to run a live provider check and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A check makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
 
 The **Defaults** card manages the primary model, utility model, first fallback, thinking level, and Fast mode from the configured model catalog. Changes save automatically to the existing `agents.defaults` settings. For the utility model, **Auto** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
 
-The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured; selecting **No fallback model** clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
+If model discovery fails, the Defaults card shows the reported error with **Retry**. Your saved model choices remain available while you retry.
+
+The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured. A count below the label shows those additional fallbacks. When there is more than one fallback, **No fallback model** shows how many models it will remove when it clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
 
 ## Plugin-owned provider behavior
 

@@ -120,52 +120,6 @@ describe("foreground reply delivery order", () => {
     resetGlobalHookRunner();
   });
 
-  it("delivers same-target foreground finals once in inbound order", async () => {
-    const deliveries: Delivery[] = [];
-    const olderStarted = createDeferred();
-    const newerStarted = createDeferred();
-    const releaseOlderFinal = createDeferred();
-
-    hoisted.dispatchReplyFromConfigMock.mockImplementation(
-      async (params: DispatchReplyFromConfigParams) => {
-        if (params.ctx.MessageSid === "old-message") {
-          olderStarted.resolve();
-          await releaseOlderFinal.promise;
-          params.dispatcher.sendFinalReply({ text: "old final" });
-          return queuedFinalResult();
-        }
-        if (params.ctx.MessageSid === "new-message") {
-          newerStarted.resolve();
-          params.dispatcher.sendFinalReply({ text: "new final" });
-          return queuedFinalResult();
-        }
-        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
-      },
-    );
-
-    const olderDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "old-message" }),
-      deliveries,
-    );
-    await olderStarted.promise;
-
-    const newerDispatch = dispatchWithDeliveries(
-      buildForegroundCtx({ MessageSid: "new-message" }),
-      deliveries,
-    );
-    await newerStarted.promise;
-
-    releaseOlderFinal.resolve();
-    const [olderResult, newerResult] = await Promise.all([olderDispatch, newerDispatch]);
-
-    expect(newerResult).toEqual(settledFinalResult());
-    expect(olderResult).toEqual(settledFinalResult());
-    expect(deliveries).toEqual([
-      { kind: "final", text: "old final" },
-      { kind: "final", text: "new final" },
-    ]);
-  });
-
   it("retains a waiting successor so a third foreground final cannot overtake", async () => {
     const deliveries: Delivery[] = [];
     const olderBeforeDeliverStarted = createDeferred();
@@ -491,6 +445,64 @@ describe("foreground reply delivery order", () => {
     expect(deliveries).toEqual([
       { kind: "final", text: "second chat final" },
       { kind: "final", text: "first chat final" },
+    ]);
+  });
+
+  it("delivers same-session /status while an earlier foreground turn still holds the fence", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred();
+    const releaseOlderFinal = createDeferred();
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "status-message") {
+          params.dispatcher.sendFinalReply({ text: "🧠 Model: mock | ⚙️ Status: ok" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+    );
+    await olderStarted.promise;
+
+    const statusDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({
+        MessageSid: "status-message",
+        CommandAuthorized: true,
+        CommandSource: "text",
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+        Body: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        BodyForAgent: "/status",
+      }),
+      deliveries,
+    );
+
+    await expect(statusDispatch).resolves.toEqual(settledFinalResult());
+    expect(deliveries).toEqual([{ kind: "final", text: "🧠 Model: mock | ⚙️ Status: ok" }]);
+
+    releaseOlderFinal.resolve();
+    await expect(olderDispatch).resolves.toEqual(settledFinalResult());
+    expect(deliveries).toEqual([
+      { kind: "final", text: "🧠 Model: mock | ⚙️ Status: ok" },
+      { kind: "final", text: "old final" },
     ]);
   });
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   readDeferredPluginMigrations,
@@ -16,14 +16,16 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
 import * as pluginMetadata from "./io.plugin-metadata.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import { readCurrentConfigForPolicyCheckAsync } from "./io.runtime.js";
 import * as snapshotPreparation from "./io.snapshot-preparation.js";
-import { getConfigResolutionFacts } from "./resolution-facts.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { registerManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -32,6 +34,16 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
   loadShellEnvFallback: shell.load,
 }));
+
+const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-load-workers-" });
+const workers = createConfigIoWorkerFixture();
+beforeAll(async () => {
+  await workers.setup(await workerRoots.setup());
+});
+afterAll(async () => {
+  await workers.close();
+  await workerRoots.cleanup();
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -66,32 +78,8 @@ function fixture(raw?: string) {
   return { ...options, io: createConfigIO(options) };
 }
 
-it("strictly loads cold plugin metadata and records health without main-thread SQLite", async () => {
-  const raw = JSON.stringify({
-    gateway: { mode: "local", auth: { mode: "token", token: "${MISSING_FIXTURE_TOKEN}" } },
-    env: { vars: { CONFIG_FIXTURE_VALUE: "accepted" } },
-  });
-  const { io, env, configPath, homedir, logger } = fixture(raw);
-  const mainSql = observeMainThreadSql();
-  try {
-    const config = await withPluginCache(createPluginCache(), () => io.loadConfigAsync());
-    expect(config.gateway?.mode).toBe("local");
-    expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-    expect([...(getConfigResolutionFacts(config) ?? [])]).toContain("gateway.auth.token");
-    expect(env.CONFIG_FIXTURE_VALUE).toBe("accepted");
-    mainSql.expectIdle();
-  } finally {
-    mainSql.restore();
-  }
-  expect(
-    configHealth.readConfigHealthStateFromStore({ env, homedir, logger }).entries?.[configPath]
-      ?.lastKnownGood?.hash,
-  ).toBe(hashConfigRaw(raw));
-  expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-});
-
-it.each(["load", "snapshot"] as const)(
-  "%s reads retained migration inputs without synchronous SQLite work or artifact changes",
+it.each(["load", "snapshot", "host-snapshot", "metadata", "write-snapshot", "policy"] as const)(
+  "%s consumes canonical config without reading pending migrations or changing artifacts",
   async (method) => {
     const raw = JSON.stringify({
       gateway: { mode: "local" },
@@ -105,7 +93,7 @@ it.each(["load", "snapshot"] as const)(
       configPaths: [["session", "store"]],
       validationExcludedPaths: [["session", "store"]],
     };
-    recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+    await recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
     await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveOpenClawStateSqlitePath(options.env);
     const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
@@ -113,7 +101,7 @@ it.each(["load", "snapshot"] as const)(
     const mainSql = observeMainThreadSql();
     const synchronousSnapshot = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
     const unregister =
-      method === "snapshot"
+      method === "host-snapshot"
         ? registerManagedRuntimeConfigWriteOwner(
             options.configPath,
             undefined,
@@ -121,19 +109,30 @@ it.each(["load", "snapshot"] as const)(
           )
         : undefined;
     try {
-      const config = await withArtifactPreservingStateReads(() =>
+      const read = () =>
         withPluginCache(createPluginCache(), async () => {
+          if (method === "policy") {
+            return await readCurrentConfigForPolicyCheckAsync(options);
+          }
           const io = createConfigIO({ ...options, observe: false });
           if (method === "load") {
             return await io.loadConfigAsync();
           }
-          const snapshot = await io.readConfigFileSnapshot();
+          const snapshot =
+            method === "metadata"
+              ? (await io.readConfigFileSnapshotWithPluginMetadata()).snapshot
+              : method === "write-snapshot"
+                ? (await io.readConfigFileSnapshotForWrite()).snapshot
+                : await io.readConfigFileSnapshot();
           expect(snapshot).toMatchObject({ valid: true, raw });
           return snapshot.config;
-        }),
-      );
+        });
+      // Plain loads use their caller's inspection scope; snapshot APIs own theirs.
+      const config = await (method === "load" || method === "policy"
+        ? withArtifactPreservingStateReads(read)
+        : read());
       expect(config.gateway?.mode).toBe("local");
-      expect(config).not.toHaveProperty("session.store");
+      expect(config).toHaveProperty("session.store", "/srv/synthetic-session-state/sessions.json");
       expect(synchronousSnapshot).not.toHaveBeenCalled();
       mainSql.expectIdle();
     } finally {
@@ -145,6 +144,17 @@ it.each(["load", "snapshot"] as const)(
       familyBefore,
     );
     expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
+    if (method === "policy") {
+      await recordDeferredPluginMigrations({
+        env: options.env,
+        pending: [],
+        resolvedPluginIds: [pending.pluginId],
+      });
+      await expect(readCurrentConfigForPolicyCheckAsync(options)).resolves.toHaveProperty(
+        "session.store",
+        "/srv/synthetic-session-state/sessions.json",
+      );
+    }
   },
 );
 
@@ -162,7 +172,9 @@ it("rejects an invalid async load and rolls back its injected config environment
 it.each(["metadata", "handoff"] as const)(
   "refuses snapshot results after its host owner is replaced during %s",
   async (phase) => {
-    const options = fixture(JSON.stringify({ gateway: { mode: "local" } }));
+    const options = fixture(
+      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+    );
     const prepared = createDeferredCore();
     const release = createDeferredCore();
     const resolveMetadata = pluginMetadata.resolveConfigWidePluginMetadataSnapshotAsync;
@@ -262,7 +274,7 @@ it.each(["full", "core-only"] as const)(
 );
 
 it("rechecks the cold reader before observation after delayed metadata preparation", async () => {
-  const raw = JSON.stringify({ gateway: { mode: "local" } });
+  const raw = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
   const { io, env, homedir, configPath, logger } = fixture(raw);
   const started = createDeferredCore();
   const release = createDeferredCore();

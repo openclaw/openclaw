@@ -7,6 +7,7 @@ import {
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -42,21 +43,6 @@ export async function routeAvatarFixtures(page: Page, fixtures: readonly AvatarF
       ),
     ),
   );
-}
-
-export async function avatarLabelCenterDelta(row: Locator) {
-  return row.evaluate((element) => {
-    const avatar = element.querySelector<HTMLElement>("openclaw-session-owner-chip");
-    const label = element.querySelector<HTMLElement>(".session-menu__text");
-    if (!avatar || !label) {
-      throw new Error("expected a complete owner filter row");
-    }
-    const avatarBounds = avatar.getBoundingClientRect();
-    const labelBounds = label.getBoundingClientRect();
-    return Math.abs(
-      avatarBounds.top + avatarBounds.height / 2 - (labelBounds.top + labelBounds.height / 2),
-    );
-  });
 }
 
 export async function captureUiProof(
@@ -109,12 +95,11 @@ export async function captureSessionOwnerPageProof(
 }
 
 export async function openSidebarSortMenu(page: Page) {
-  const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+  const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
-  const menu = page.locator(".sidebar-session-sort-menu");
-  await waitForControlUiProofSurface(menu.locator('[part="menu"]'), [
-    menu.locator("wa-dropdown-item").first(),
+  const menu = await openSidebarMenu(page);
+  await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [
+    menu.getByRole("radio").first(),
   ]);
   return menu;
 }

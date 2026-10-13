@@ -1,4 +1,3 @@
-// Discord plugin module implements message text behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -31,8 +30,7 @@ export function resolveDiscordMessageText(
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
-      .map((text) => normalizeOptionalString(text))
-      .filter(Boolean)
+      .map((text) => text.trim())
       .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
@@ -41,13 +39,7 @@ export function resolveDiscordMessageText(
     return baseText;
   }
   const forwardedText = resolveDiscordForwardedMessagesText(message);
-  if (!forwardedText) {
-    return baseText;
-  }
-  if (!baseText) {
-    return forwardedText;
-  }
-  return `${baseText}\n${forwardedText}`;
+  return [baseText, forwardedText].filter(Boolean).join("\n");
 }
 
 export function resolveDiscordMessageMentionDocuments(message: Message): string[] {
@@ -138,13 +130,10 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   if (!referencedForward) {
     return "";
   }
-  const referencedText = resolveDiscordMessageHistoryText(referencedForward);
-  if (!referencedText) {
-    return "";
-  }
-  const authorLabel = formatDiscordSnapshotAuthor(referencedForward.author);
-  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
-  return `${heading}\n${referencedText}`;
+  return formatDiscordForwardedMessageBlock(
+    resolveDiscordMessageHistoryText(referencedForward),
+    referencedForward.author,
+  );
 }
 
 function resolveDiscordMessageComponents(message: Message): unknown {
@@ -162,10 +151,7 @@ function resolveDiscordMessageComponents(message: Message): unknown {
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
   collectDiscordTextDisplayDocuments(components, parts);
-  return parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => Boolean(part))
-    .join("\n");
+  return parts.map((part) => part.trim()).join("\n");
 }
 
 function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {
@@ -195,27 +181,27 @@ function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): vo
   collectDiscordTextDisplayDocuments(component.component, parts);
 }
 
-function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
-  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
-    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
-    .filter((entry): entry is string => Boolean(entry));
-  if (forwardedBlocks.length === 0) {
-    return "";
-  }
-  return forwardedBlocks.join("\n\n");
+function resolveDiscordForwardedMessagesTextFromSnapshots(
+  snapshots: ReturnType<typeof normalizeDiscordMessageSnapshots>,
+): string {
+  return snapshots
+    .map(({ message }) =>
+      message
+        ? formatDiscordForwardedMessageBlock(resolveDiscordRawMessageText(message), message.author)
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function buildDiscordForwardedMessageBlock(
-  snapshotMessage: DiscordSnapshotMessage | null | undefined,
-): string | null {
-  if (!snapshotMessage) {
-    return null;
-  }
-  const text = resolveDiscordRawMessageText(snapshotMessage);
+function formatDiscordForwardedMessageBlock(
+  text: string,
+  author: DiscordSnapshotMessage["author"],
+): string {
   if (!text) {
-    return null;
+    return "";
   }
-  const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+  const authorLabel = formatDiscordSnapshotAuthor(author);
   const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
   return `${heading}\n${text}`;
 }
@@ -233,6 +219,8 @@ export function resolveDiscordRawMessageText(
     content ||
     resolveDiscordEmbedText(message.embeds) ||
     extractDiscordComponentsV2Text(message.components) ||
-    resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
+    resolveDiscordForwardedMessagesTextFromSnapshots(
+      normalizeDiscordMessageSnapshots(message.message_snapshots),
+    );
   return [text, mediaText].filter(Boolean).join("\n");
 }

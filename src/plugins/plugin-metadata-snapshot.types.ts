@@ -93,6 +93,20 @@ export type PluginMetadataRegistryView = Pick<
 > &
   Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
 
+/** Acquired workspace facts before the fleet publishes one immutable snapshot. */
+export type PluginMetadataSnapshotInput = Pick<
+  PluginMetadataSnapshot,
+  | "policyHash"
+  | "workspaceDir"
+  | "index"
+  | "registryIndex"
+  | "registrySource"
+  | "registryDiagnostics"
+  | "manifestRegistry"
+  | "discovery"
+  | "metrics"
+>;
+
 export type PluginMetadataManifestView = Pick<
   PluginMetadataSnapshot,
   "index" | "plugins" | "byPluginId"

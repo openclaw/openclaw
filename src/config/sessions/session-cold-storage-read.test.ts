@@ -8,50 +8,69 @@ vi.mock("./session-cold-storage.js", () => ({
 }));
 
 const scope = { agentId: "main", sessionId: "retained-transcript" };
-
 beforeEach(() => vi.clearAllMocks());
 
 describe("readRestoredSessionTranscript", () => {
-  it.each([false, true])("restores a cold read once (async=%s)", async (asynchronous) => {
-    const cold = new SessionTranscriptColdError(scope.sessionId);
-    const read = vi
-      .fn<() => string | Promise<string>>()
-      .mockImplementationOnce(() => {
-        if (asynchronous) {
-          return Promise.reject(cold);
-        }
-        throw cold;
-      })
-      .mockReturnValue("retained text");
-
-    await expect(readRestoredSessionTranscript(scope, read)).resolves.toBe("retained text");
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(1, scope, undefined);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(2, scope, undefined);
+  it.each([false, true])("reads a transcript with restoration needed: %s", async (cold) => {
+    const coldRead = { target: scope, readMetadata: vi.fn(async () => undefined) };
+    const text = cold ? "retained text" : "hot text";
+    const read = vi.fn<() => string | Promise<string>>(() => (cold ? Promise.resolve(text) : text));
+    if (cold) {
+      read.mockRejectedValueOnce(new SessionTranscriptColdError(scope.sessionId));
+    }
+    await expect(readRestoredSessionTranscript(scope, read, { coldRead })).resolves.toBe(text);
+    expect(read).toHaveBeenCalledTimes(cold ? 2 : 1);
+    expect(coldRead.readMetadata).not.toHaveBeenCalled();
+    if (cold) {
+      expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(
+        scope,
+        undefined,
+        coldRead,
+      );
+    } else {
+      expect(restoreSessionColdTranscript).not.toHaveBeenCalled();
+    }
   });
 
-  it.each([new Error("read unavailable"), new SessionTranscriptColdError("another-transcript")])(
-    "propagates an unrelated asynchronous read failure: %s",
-    async (failure) => {
-      const read = vi.fn(async () => {
-        throw failure;
-      });
+  it("rechecks authority after restoration before reading again", async () => {
+    const revoked = new Error("reader revoked");
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw revoked;
+      }
+    };
+    vi.mocked(restoreSessionColdTranscript).mockImplementationOnce(async () => {
+      current = false;
+    });
+    const read = vi.fn(() => {
+      throw new SessionTranscriptColdError(scope.sessionId);
+    });
+    await expect(readRestoredSessionTranscript(scope, read, { assertCurrent })).rejects.toBe(
+      revoked,
+    );
+    expect(read).toHaveBeenCalledOnce();
+  });
 
-      await expect(readRestoredSessionTranscript(scope, read)).rejects.toBe(failure);
-      expect(read).toHaveBeenCalledOnce();
-      expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(scope, undefined);
+  it.each([
+    [new Error("read unavailable"), false, 1, 0],
+    [new SessionTranscriptColdError("another-transcript"), false, 1, 0],
+    [new SessionTranscriptColdError(scope.sessionId), true, 1, 0],
+    [new SessionTranscriptColdError(scope.sessionId), false, 3, 2],
+  ] as const)(
+    "propagates %s (readOnly=%s, reads=%i, restorations=%i)",
+    async (failure, readOnly, reads, restorations) => {
+      const read = vi.fn(() => {
+        if (readOnly) {
+          throw failure;
+        }
+        return Promise.reject(failure);
+      });
+      await expect(
+        readRestoredSessionTranscript(scope, read, readOnly ? { readOnly } : undefined),
+      ).rejects.toBe(failure);
+      expect(read).toHaveBeenCalledTimes(reads);
+      expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(restorations);
     },
   );
-
-  it("propagates a second cold rejection without repeating restoration", async () => {
-    const cold = new SessionTranscriptColdError(scope.sessionId);
-    const read = vi.fn(async () => {
-      throw cold;
-    });
-
-    await expect(readRestoredSessionTranscript(scope, read)).rejects.toBe(cold);
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(2);
-  });
 });

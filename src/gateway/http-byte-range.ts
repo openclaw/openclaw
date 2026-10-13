@@ -13,38 +13,9 @@ type ByteSlice = {
   end: number;
 };
 
-type ByteResponsePlan = {
-  etag?: string;
-  lastModified?: string;
-} & (
-  | {
-      kind: "full";
-      statusCode: 200;
-      contentLength: number;
-    }
-  | {
-      kind: "partial";
-      statusCode: 206;
-      contentLength: number;
-      range: ByteSlice;
-      size: number;
-    }
-  | {
-      kind: "unsatisfiable";
-      statusCode: 416;
-      contentLength: 0;
-      size: number;
-    }
-  | {
-      kind: "not-modified";
-      statusCode: 304;
-    }
-);
+type ByteResponsePlan = ReturnType<typeof resolveByteResponse>;
 
-export function createImmutableFileValidators(file: FileIdentity): {
-  etag: string;
-  mtimeMs: number;
-} {
+export function createImmutableFileValidators(file: FileIdentity) {
   // Only owners of write-once representations can use stat metadata as a strong validator.
   const digest = createHash("sha256").update(`${file.size}:${file.mtimeMs}`).digest("base64url");
   return { etag: `"${digest}"`, mtimeMs: file.mtimeMs };
@@ -90,7 +61,7 @@ export function resolveByteResponse(params: {
   nowMs?: number;
   method?: string;
   request?: Pick<IncomingMessage, "headers" | "headersDistinct">;
-}): ByteResponsePlan {
+}) {
   const etag = params.validators?.etag;
   const originatedAtMs = params.nowMs ?? Date.now();
   // Filesystem clocks may lead this host; validators cannot postdate message origination.
@@ -110,7 +81,7 @@ export function resolveByteResponse(params: {
         matchesHttpIfModifiedSince(params.request, lastModifiedMs, originatedAtMs)))
   ) {
     // RFC 9110 evaluates representation validators before Range or If-Range.
-    return { kind: "not-modified", statusCode: 304, etag, lastModified };
+    return { kind: "not-modified", statusCode: 304, etag, lastModified } as const;
   }
   const full = {
     kind: "full",
@@ -145,7 +116,7 @@ export function resolveByteResponse(params: {
       etag,
       lastModified,
       size: params.file.size,
-    };
+    } as const;
   }
   return {
     kind: "partial",
@@ -155,7 +126,7 @@ export function resolveByteResponse(params: {
     lastModified,
     range,
     size: params.file.size,
-  };
+  } as const;
 }
 
 export function writeByteHeaders(res: ServerResponse, plan: ByteResponsePlan): void {
@@ -184,12 +155,14 @@ export function createGatewayByteStream(
   onReadError: () => void,
 ) {
   let stream: ReturnType<FileHandle["createReadStream"]> | undefined;
+  const controller = new AbortController();
   let closed = false;
   const close = async () => {
     if (closed) {
       return;
     }
     closed = true;
+    controller.abort();
     if (stream) {
       stream.destroy();
       return;
@@ -204,9 +177,11 @@ export function createGatewayByteStream(
 
   return {
     close,
-    async pipe(plan: ByteResponsePlan, method: string | undefined) {
-      if (method === "HEAD" || !("contentLength" in plan) || plan.contentLength === 0) {
+    signal: controller.signal,
+    async pipe(plan: ByteResponsePlan, method: string | undefined, beforeSend?: () => void) {
+      if (method === "HEAD" || plan.kind === "not-modified" || plan.contentLength === 0) {
         await close();
+        beforeSend?.();
         res.end();
         return;
       }
@@ -214,6 +189,7 @@ export function createGatewayByteStream(
         await close();
         return;
       }
+      beforeSend?.();
       stream = handle.createReadStream({
         start: plan.kind === "partial" ? plan.range.start : 0,
         end: plan.kind === "partial" ? plan.range.end : plan.contentLength - 1,

@@ -22,7 +22,6 @@ const tempDirs = new Set<string>();
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
-type MirrorTaggedMessage = { __openclaw?: { mirrorIdentity?: string } };
 
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
@@ -89,11 +88,6 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   });
 }
 
-function readMirrorIdentity(message: unknown): string | undefined {
-  const meta = (message as MirrorTaggedMessage | undefined)?.["__openclaw"];
-  return meta?.mirrorIdentity;
-}
-
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
@@ -103,270 +97,104 @@ afterEach(async () => {
 });
 
 describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
-  it("preserves an empty terminal turn for OpenClaw-owned fallback classification", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: { id: TURN_ID, status: "completed", items: [] },
-      }),
-    );
-
-    const result = projector.buildResult(buildToolTelemetry());
-
-    expect(result.assistantTexts).toStrictEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-  });
-
-  it("preserves exact NO_REPLY as assistant text instead of classifying in the adapter", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/agentMessage/delta", {
-        itemId: "msg-1",
-        delta: "NO_REPLY",
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "completed",
-          items: [{ type: "agentMessage", id: "msg-1", text: "NO_REPLY" }],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildToolTelemetry());
-
-    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
-    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-  });
-
-  it.each(["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"] as const)(
-    "preserves typed reasoning-only terminal turns from %s for OpenClaw-owned fallback classification",
-    async (method) => {
-      const projector = await createProjector();
-      await projector.handleNotification(
-        forCurrentTurn(method, {
-          itemId: "reasoning-1",
-          delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("turn/completed", {
-          turn: {
-            id: TURN_ID,
-            status: "completed",
-            items: [
-              {
-                type: "reasoning",
-                id: "reasoning-1",
-                summary:
-                  method === "item/reasoning/summaryTextDelta"
-                    ? [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText]
-                    : [],
-                content:
-                  method === "item/reasoning/textDelta"
-                    ? [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText]
-                    : [],
-              },
-            ],
-          },
-        }),
-      );
-
-      const result = projector.buildResult(buildToolTelemetry());
-
-      expect(result.assistantTexts).toStrictEqual([]);
-      expect(result.lastAssistant).toBeUndefined();
-      expect(readAttemptTerminal(result).promptError).toBeNull();
-      expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
-        "user",
-        "assistant",
-      ]);
-      const reasoningMessage = result.messagesSnapshot[1];
-      if (reasoningMessage?.role !== "assistant") {
-        throw new Error("expected Codex reasoning mirror assistant message");
-      }
-      expect(readMirrorIdentity(reasoningMessage)).toBe(`${TURN_ID}:reasoning`);
-      expect(reasoningMessage.content).toStrictEqual([
-        {
-          type: "thinking",
-          thinking: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
-        },
-      ]);
-      expect(reasoningMessage.api).toBe("openai-chatgpt-responses");
-      expect(reasoningMessage.provider).toBe("codex");
-      expect(reasoningMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
-      expect(reasoningMessage.usage).toStrictEqual({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      });
-      expect(reasoningMessage.stopReason).toBe("stop");
-      expect(typeof reasoningMessage.timestamp).toBe("number");
-      expect(reasoningMessage.timestamp).toBeGreaterThan(0);
-    },
-  );
-
-  it("preserves planning-only terminal turns for OpenClaw-owned fallback classification", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/plan/delta", {
-        itemId: "plan-1",
-        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "completed",
-          items: [
-            {
-              type: "plan",
-              id: "plan-1",
-              text: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
-            },
-          ],
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildToolTelemetry());
-
-    expect(result.assistantTexts).toStrictEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-    expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual(["user"]);
-    expect(result.agentHarnessResultClassification).toBe("planning-only");
-  });
-
-  it("preserves tool side-effect telemetry so fallback can stay disabled", async () => {
-    const projector = await createProjector();
-
-    const result = projector.buildResult(
-      buildToolTelemetry({
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["sent out of band"],
-      }),
-    );
-
-    expect(result.assistantTexts).toStrictEqual([]);
-    expect(result.didSendViaMessagingTool).toBe(true);
-    expect(result.messagingToolSentTexts).toEqual(["sent out of band"]);
-  });
-
   it.each([
     {
       name: "empty",
       classification: "empty",
       expectedCode: "empty_result",
-      build: async () => {
-        const projector = await createProjector();
-        await projector.handleNotification(
-          forCurrentTurn("turn/completed", {
-            turn: { id: TURN_ID, status: "completed", items: [] },
-          }),
-        );
-        return projector.buildResult(buildToolTelemetry());
-      },
+      notification: undefined,
+      items: [],
     },
     {
       name: "reasoning-only",
       classification: "reasoning-only",
       expectedCode: "reasoning_only_result",
-      build: async () => {
-        const projector = await createProjector();
-        await projector.handleNotification(
-          forCurrentTurn("item/reasoning/textDelta", {
-            itemId: "reasoning-1",
-            delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("turn/completed", {
-            turn: {
-              id: TURN_ID,
-              status: "completed",
-              items: [
-                {
-                  type: "reasoning",
-                  id: "reasoning-1",
-                  summary: [],
-                  content: [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText],
-                },
-              ],
-            },
-          }),
-        );
-        return projector.buildResult(buildToolTelemetry());
-      },
+      notification: forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reasoning-1",
+        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
+      }),
+      items: [
+        {
+          type: "reasoning",
+          id: "reasoning-1",
+          summary: [],
+          content: [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText],
+        },
+      ],
     },
     {
       name: "planning-only",
       classification: "planning-only",
       expectedCode: "planning_only_result",
-      build: async () => {
-        const projector = await createProjector();
-        await projector.handleNotification(
-          forCurrentTurn("item/plan/delta", {
-            itemId: "plan-1",
-            delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("turn/completed", {
-            turn: {
-              id: TURN_ID,
-              status: "completed",
-              items: [
-                {
-                  type: "plan",
-                  id: "plan-1",
-                  text: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
-                },
-              ],
-            },
-          }),
-        );
-        return projector.buildResult(buildToolTelemetry());
-      },
+      notification: forCurrentTurn("item/plan/delta", {
+        itemId: "plan-1",
+        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
+      }),
+      items: [
+        { type: "plan", id: "plan-1", text: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText },
+      ],
     },
     {
       name: "structured planning-only",
       classification: "planning-only",
       expectedCode: "planning_only_result",
-      build: async () => {
-        const projector = await createProjector();
-        await projector.handleNotification(
-          forCurrentTurn("turn/plan/updated", {
-            plan: [{ step: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText, status: "pending" }],
-          }),
-        );
-        await projector.handleNotification(
-          forCurrentTurn("turn/completed", {
-            turn: { id: TURN_ID, status: "completed", items: [] },
-          }),
-        );
-        return projector.buildResult(buildToolTelemetry());
-      },
+      notification: forCurrentTurn("turn/plan/updated", {
+        plan: [{ step: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText, status: "pending" }],
+      }),
+      items: [],
     },
   ] as const)(
     "keeps $name terminal turns fallback-ready with adapter-produced classification",
-    async ({ build, classification, expectedCode }) => {
-      const result = await build();
+    async ({ notification, items, classification, expectedCode }) => {
+      const projector = await createProjector();
+      if (notification) {
+        await projector.handleNotification(notification);
+      }
+      await projector.handleNotification(
+        forCurrentTurn("turn/completed", {
+          turn: { id: TURN_ID, status: "completed", items },
+        }),
+      );
+      const result = projector.buildResult(buildToolTelemetry());
 
+      expect(result.assistantTexts).toStrictEqual([]);
+      expect(result.lastAssistant).toBeUndefined();
+      expect(readAttemptTerminal(result).promptError).toBeNull();
+      if (classification === "planning-only") {
+        expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual(["user"]);
+      } else if (classification === "reasoning-only") {
+        expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
+          "user",
+          "assistant",
+        ]);
+        const reasoningMessage = result.messagesSnapshot[1];
+        if (reasoningMessage?.role !== "assistant") {
+          throw new Error("expected Codex reasoning mirror assistant message");
+        }
+        expect(reasoningMessage).toMatchObject({
+          __openclaw: { mirrorIdentity: `${TURN_ID}:reasoning` },
+          api: "openai-chatgpt-responses",
+          provider: "codex",
+          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+          stopReason: "stop",
+        });
+        expect(reasoningMessage.content).toStrictEqual([
+          {
+            type: "thinking",
+            thinking: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
+          },
+        ]);
+        expect(reasoningMessage.usage).toStrictEqual({
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        });
+        expect(typeof reasoningMessage.timestamp).toBe("number");
+        expect(reasoningMessage.timestamp).toBeGreaterThan(0);
+      }
       expect(result.agentHarnessResultClassification).toBe(classification);
       const projected = classifyProjectedAttemptResult(result);
       if (!projected || !("reason" in projected)) {
@@ -397,6 +225,9 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(classifyProjectedAttemptResult(result)).toBeNull();
   });
 
@@ -409,6 +240,9 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       }),
     );
 
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent out of band"]);
     expect(result.agentHarnessResultClassification).toBeUndefined();
     expect(classifyProjectedAttemptResult(result)).toBeNull();
   });

@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -25,21 +26,31 @@ vi.mock("vitest", async (importOriginal) => ({
   afterEach: () => {},
   test: Object.assign(() => {}, { each: () => () => {} }),
 }));
+vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
+  resetPreparedGatewayModelCatalogForTest: async () => {},
+}));
 
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
 // The fixture owns a disposable server, not Gateway business logic. Keep its
 // real port, socket, harness and environment lifetime; fork tests cover RPC boot.
+vi.mock("./server-runtime-state.js", () => ({
+  createGatewayHttpTransport: async (params: { testListener?: import("node:http").Server }) => {
+    if (!params.testListener) {
+      throw new Error("Gateway fixture did not adopt its reserved listener");
+    }
+    return { httpServer: params.testListener };
+  },
+}));
 vi.mock("./server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server.js")>()),
-  resetPreparedModelCatalogForTest: async () => {},
   startGatewayServer: async (port: number) => {
-    const { createServer } = await import("node:net");
-    const listener = createServer();
+    const { createGatewayHttpTransport } = await import("./server-runtime-state.js");
+    // The harness dispatcher injects its bound listener into this transport call.
+    const { httpServer: listener } = await createGatewayHttpTransport({
+      port,
+    } as Parameters<typeof createGatewayHttpTransport>[0]);
     listeners.add(listener);
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(port, "127.0.0.1", resolve);
-    });
     return {
       startupSettled: Promise.resolve(),
       getTailscaleIngressEndpoint: () => undefined,
@@ -57,7 +68,7 @@ vi.mock("./server.js", async (importOriginal) => ({
 const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
 const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
-await import("./server.sessions.create.test.js");
+await import("./server.sessions.create.worktrees.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
@@ -343,17 +354,20 @@ test("a server cleanup error does not skip session directory or environment clea
   const homeBefore = process.env.HOME;
   const failure = new Error("injected server cleanup failure");
   let restoreClose: (() => void) | undefined;
-  const databases: ReturnType<typeof openOpenClawAgentDatabase>[] = [];
+  let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+  let memoryOwner: ReturnType<typeof memorySessionActorOwners.get> | undefined;
   try {
     await setup(fixture);
     const home = process.env.HOME!;
     const { dir } = await fixtureApi.createSessionStoreDir();
-    for (const databasePath of [
-      path.join(dir, "openclaw-agent.sqlite"),
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    ]) {
-      databases.push(openOpenClawAgentDatabase({ agentId: "main", path: databasePath }));
-    }
+    database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(dir, "openclaw-agent.sqlite"),
+    });
+    memoryOwner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
     const server = fixtureApi.getHarness();
     const closeServer = server.close;
     const close = vi.spyOn(server, "close").mockImplementation(async () => {
@@ -362,14 +376,19 @@ test("a server cleanup error does not skip session directory or environment clea
     });
     restoreClose = () => close.mockRestore();
     await expect(cleanup(fixture)).rejects.toBe(failure);
-    expect(databases.map(({ db }) => db.isOpen)).toEqual([false, false]);
+    expect(database.db.isOpen).toBe(false);
+    expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
+    expect(memoryOwner.assertCurrent).toThrow("closed");
     expect(fsSync.existsSync(dir)).toBe(false);
     expect(fsSync.existsSync(home)).toBe(false);
     expect(process.env.HOME).toBe(homeBefore);
   } finally {
     restoreClose?.();
-    for (const database of databases) {
+    if (database) {
       closeOpenClawAgentDatabaseByPath(database.path);
+    }
+    if (memoryOwner) {
+      memorySessionActorOwners.closeDatabase(memoryOwner);
     }
     await emergencyCleanup(fixture);
   }

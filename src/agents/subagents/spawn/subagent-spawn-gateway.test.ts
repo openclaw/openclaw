@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
-import { callNativeSubagentGateway } from "./subagent-spawn-gateway.js";
+import { resolveSubagentRunDurationMs } from "../registry/subagent-run-timeout.js";
+import {
+  callNativeSubagentGateway,
+  resolveSubagentAgentGatewayTimeoutMs,
+} from "./subagent-spawn-gateway.js";
+import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("./subagent-spawn.runtime.js", async () => {
   const dispatch = await import("../../../gateway/server-plugin-in-process-dispatch.js");
@@ -23,14 +27,21 @@ vi.mock("./subagent-spawn.runtime.js", async () => {
 
 vi.mock("../../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 
-afterEach(() => setSubagentSpawnDepsForTest());
+afterEach(() => spawnTesting.setDepsForTest());
 
 describe("native subagent Gateway transport ownership", () => {
+  it("caps Gateway timer delays without shortening semantic run durations", () => {
+    const thirtyDaysSeconds = 30 * 24 * 60 * 60;
+
+    expect(resolveSubagentAgentGatewayTimeoutMs(thirtyDaysSeconds)).toBe(300_000);
+    expect(resolveSubagentRunDurationMs(thirtyDaysSeconds)).toBe(2_592_000_000);
+  });
+
   it.each(["caller", "captured", "scoped"])(
     "rejects a retired %s binding without opening a socket",
     async (binding) => {
       const callGateway = vi.fn<() => void>();
-      setSubagentSpawnDepsForTest({
+      spawnTesting.setDepsForTest({
         callGateway: async <T>() => {
           callGateway();
           return { runId: "wrong-gateway", status: "accepted" } as T;
@@ -71,7 +82,7 @@ describe("native subagent Gateway transport ownership", () => {
         throw new Error("source closed");
       }
     };
-    setSubagentSpawnDepsForTest({
+    spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -90,13 +101,12 @@ describe("native subagent Gateway transport ownership", () => {
       }),
     ).resolves.toMatchObject({
       response: { runId: "accepted-child" },
-      taskRowOwnership: "required",
     });
   });
 
   it("keeps socket dispatch available when no Gateway owner was bound", async () => {
     const callGateway = vi.fn<() => void>();
-    setSubagentSpawnDepsForTest({
+    spawnTesting.setDepsForTest({
       callGateway: async <T>() => {
         callGateway();
         return { runId: "remote-run", status: "accepted" } as T;
@@ -110,7 +120,7 @@ describe("native subagent Gateway transport ownership", () => {
       }),
     ).resolves.toEqual({
       response: { runId: "remote-run", status: "accepted" },
-      taskRowOwnership: "gateway_best_effort",
+      registrationRequired: false,
     });
     expect(callGateway).toHaveBeenCalledOnce();
   });

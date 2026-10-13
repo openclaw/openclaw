@@ -1,8 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
-import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  isUpdateGatewayReadinessPending,
+  isUpdatePostInstallVerificationDeferred,
+} from "../../infra/update-run-step.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   formatUpdateActivationTimeoutGuidance,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
@@ -35,11 +38,20 @@ export function resolveUpdateResultNextAction(params: {
   restart?: boolean;
   serviceRunning?: boolean;
   runningVersion?: string;
+  verifiedServingVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
+  /** Prepared before ledger writes so formatting performs no filesystem discovery. */
+  environment?: { container: boolean; stateDir: string };
 }): string | undefined {
   const { result, env } = params;
-  if (isUpdateGatewayReadinessPending(result)) {
+  if (result.status === "skipped" && result.reason === "gateway-readiness-unverified") {
+    const deferred = result.steps.find(isUpdatePostInstallVerificationDeferred)?.advisory;
+    if (deferred) {
+      return deferred.message;
+    }
+  }
+  if (isUpdateGatewayReadinessPending(result) && result.reason !== "state-migrated-no-rollback") {
     return `The readiness observation ended without confirmation. Leave the Gateway starting and keep recovery backups; check current progress with \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
   }
   if (result.reason === "dirty") {
@@ -53,12 +65,52 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const doctorSettlement = result.steps.findLast(
+      (step) => step.name === "doctor process settlement",
+    );
+    if (doctorSettlement && doctorSettlement.exitCode !== 0) {
+      const detail =
+        doctorSettlement.failureFacts
+          ?.map((fact) => fact.message)
+          .filter(Boolean)
+          .join("; ") || doctorSettlement.stderrTail;
+      return `${detail ?? "Doctor process settlement could not be verified."} Keep the Gateway stopped while Doctor writers may still be running. Preserve the migrated state and recovery snapshots; after the recorded processes have stopped, run \`${formatCliCommand("openclaw update repair", env)}\`.`;
+    }
+    if (
+      result.reason === "state-migrated-no-rollback" &&
+      result.recovery?.serviceRestartSafe === true &&
+      result.recovery.service === "healthy"
+    ) {
+      if (doctorSettlement?.exitCode === 0) {
+        return `Doctor did not finish normally, but all tracked process groups stopped and the candidate Gateway is healthy on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      }
+      if (result.steps.some((step) => step.name === "database rollback" && step.exitCode !== 0)) {
+        const refusal =
+          result.rollbackOutcome?.reason ??
+          result.steps.findLast((step) => step.name === "database rollback")?.stderrTail;
+        return `Rollback refused: ${refusal ?? "restoring the backup would discard later writes"}. The Gateway is running on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      }
+    }
+    if (
+      result.reason === "update-failed" &&
+      !result.recovery &&
+      (result.failedStep?.name === "requested" ||
+        result.failedStep?.name === "installation-inspection")
+    ) {
+      return `Update stopped before staging. Retry the same update command. If the failure persists, run \`${formatCliCommand("openclaw triage", env)}\` to inspect the recorded failure.`;
+    }
     if (result.reason === UPDATE_ACTIVATION_TIMEOUT_REASON) {
       return formatUpdateActivationTimeoutGuidance((command) => formatCliCommand(command, env));
     }
     if (result.reason === "rollback-project-changed") {
       return `Other global packages changed after staging; automatic rollback was refused to preserve them. The new installation was left unchanged. Check \`${formatCliCommand("openclaw gateway status --deep", env)}\` before restarting it. ${resolveUnsafeUpdateRecoveryGuidance(undefined, env)}`;
     }
+    const hostLinkFailure = result.steps.some((step) =>
+      step.failureFacts?.some((fact) => fact.code === "host-owned-plugin-link"),
+    );
+    const retentionGuidance = hostLinkFailure
+      ? `A dependency link reaches OpenClaw-owned files that cannot be safely retained. Keep source files and backups; inspect the link in the local error and follow https://docs.openclaw.ai/cli/update#runtime-retention-failures. Do not skip runtime retention. After repairing the link, retry the update.`
+      : undefined;
     const reason =
       result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
     const failure = truncateUtf16Safe(
@@ -66,13 +118,16 @@ export function resolveUpdateResultNextAction(params: {
       240,
     );
     const runningVersion = truncateUtf16Safe(params.runningVersion ?? "", 120);
-    const state = reason
-      ? params.serviceRunning === true
-        ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
-        : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
-      : "";
+    const servingVersion = truncateUtf16Safe(params.verifiedServingVersion ?? "", 120);
+    const state = servingVersion
+      ? `Your Gateway is still serving ${servingVersion}; nothing to restore.${reason ? ` Restart remains unsafe (${reason}).` : ""}`
+      : reason
+        ? params.serviceRunning === true
+          ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
+          : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
+        : "";
     const configRefusal = result.steps.findLast(
-      (step) => step.name === "config rollback",
+      (step) => step.name === "config-rollback",
     )?.stderrTail;
     const failedStep = result.failedStep;
     const detail =
@@ -88,10 +143,11 @@ export function resolveUpdateResultNextAction(params: {
             (failedStep !== undefined &&
               failedStep.exitCode !== 0 &&
               !failedStep.advisory &&
-              (failedStep.name.startsWith("global update") ||
-                failedStep.name.startsWith("global install")) &&
+              /^package-(?:install|pack|stage|verify|swap|rollback|backup-retention|permissions)(?:-|$)/.test(
+                failedStep.name,
+              ) &&
               /\beacces\b/i.test(failedStep.stderrTail ?? ""))))) &&
-      isContainerEnvironment();
+      (params.environment?.container ?? isContainerEnvironment());
     // Record deployment-specific advice here so CLI output and later reports agree.
     // Keep the recovery constraints: an image change must not roll back migrated state.
     const deployment = containerPackageFailure
@@ -102,7 +158,15 @@ export function resolveUpdateResultNextAction(params: {
       deployment,
       configRefusal,
       state,
-      reason || !detail ? resolveUnsafeUpdateRecoveryGuidance(reason, env) : undefined,
+      retentionGuidance,
+      result.reason === "state-migrated-no-rollback"
+        ? `Keep the new installation and recovery snapshots; do not roll back code alone. Stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` from the installed version to finish config and plugin maintenance.`
+        : servingVersion && !hostLinkFailure
+          ? `Fix ${truncateUtf16Safe(result.reason ?? "the update failure", 240)} then run \`${formatCliCommand("openclaw update", env)}\` again.`
+          : undefined,
+      reason === "state-migration-started" || (!servingVersion && (reason || !detail))
+        ? resolveUnsafeUpdateRecoveryGuidance(reason, env)
+        : undefined,
     ]
       .filter(Boolean)
       .join(" ");
@@ -115,7 +179,7 @@ export function resolveUpdateResultNextAction(params: {
     if (params.restart === false && result.postUpdate?.plugins?.changed) {
       return `Plugins updated; Gateway restart skipped (--no-restart). Run \`${command("openclaw gateway restart")}\` to activate them in the running Gateway.`;
     }
-    return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;
+    return `After confirming the update and your conversations are healthy, preview retained migration originals eligible for permanent cleanup with \`${command("openclaw update cleanup --dry-run")}\` for state \`${params.environment?.stateDir ?? resolveStateDir(env)}\`. Before applying cleanup, stop the Gateway first (\`${command("openclaw gateway stop")}\`). Use the same profile, state, and config settings.`;
   }
   return undefined;
 }

@@ -1,13 +1,130 @@
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { hashWorkerCredential } from "./credential.js";
+import type { WorkerEnvironmentBootstrapReceipt } from "./environment-record.js";
+import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
+import { workerEnvironmentProjections } from "./store-projection.js";
+import { queryWorkerEnvironmentStore, readWorkerEnvironmentFacts } from "./store-row-codec.js";
+import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
+
+// Synchronous fault injection must remain in the transaction or callback under test.
+export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
+  const operations = createPlacementTurnClaimOps({
+    path: database.path,
+    instanceId: randomUUID(),
+    now: Date.now,
+    read: () => database.db,
+    write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
+  });
+  return {
+    ...operations,
+    claimTurn: (input: Parameters<typeof operations.claimTurn>[0]) =>
+      operations.claimTurn(input).claim,
+  };
+}
+
+export async function advancePlacementFixtureToActive(
+  store: WorkerSessionPlacementStore,
+  database: OpenClawStateDatabase,
+  identity: WorkerSessionPlacementDispatchIdentity,
+  {
+    environmentId = "environment-placement-claim-close",
+    ownerEpoch = 7,
+    workerBundleHash = "a".repeat(64),
+    remoteWorkspaceDir = "/workspace/placement-claim-close",
+    workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`,
+    seedEnvironment = "before-activation",
+  }: {
+    environmentId?: string;
+    ownerEpoch?: number;
+    workerBundleHash?: string;
+    remoteWorkspaceDir?: string;
+    workspaceBaseManifestRef?: string;
+    seedEnvironment?: "before-dispatch" | "before-activation" | false;
+  } = {},
+) {
+  const environment = { environmentId, sessionId: identity.sessionId, ownerEpoch };
+  if (seedEnvironment === "before-dispatch") {
+    seedAttachedPlacementEnvironment(database, environment);
+  }
+  let placement = await store.startDispatch(identity);
+  placement = await store.transition({
+    sessionId: identity.sessionId,
+    from: "requested",
+    to: "provisioning",
+    expectedGeneration: placement.generation,
+    patch: { environmentId },
+  });
+  placement = await store.transition({
+    sessionId: identity.sessionId,
+    from: "provisioning",
+    to: "syncing",
+    expectedGeneration: placement.generation,
+    patch: { workerBundleHash },
+  });
+  placement = await store.transition({
+    sessionId: identity.sessionId,
+    from: "syncing",
+    to: "starting",
+    expectedGeneration: placement.generation,
+    patch: { workspaceBaseManifestRef, remoteWorkspaceDir },
+  });
+  if (seedEnvironment === "before-activation") {
+    seedAttachedPlacementEnvironment(database, environment);
+  }
+  const active = await store.transition({
+    sessionId: identity.sessionId,
+    from: "starting",
+    to: "active",
+    expectedGeneration: placement.generation,
+    patch: { activeOwnerEpoch: ownerEpoch },
+  });
+  if (active.state !== "active") {
+    throw new Error("expected active worker placement");
+  }
+  return active;
+}
 
 type PlacementEnvironmentFixture = Pick<
   WorkerEnvironmentRecord,
   "environmentId" | "state" | "ownerEpoch" | "attachedSessionIds"
 > &
   Partial<WorkerEnvironmentRecord>;
+
+export function publishWorkerEnvironmentFixture(db: DatabaseSync, environmentId: string): void {
+  const owner = workerEnvironmentProjections.get(requireOpenClawStateDatabaseIdentity({ db }));
+  if (!owner?.active) {
+    return;
+  }
+  const facts = readWorkerEnvironmentFacts(db, [environmentId]);
+  const revision = owner.nextSequence();
+  if (
+    !stageSqliteTransactionState(db, {
+      stage() {},
+      rollback() {},
+      commit() {
+        if (owner.active) {
+          owner.install(facts, revision, false);
+        }
+      },
+    })
+  ) {
+    throw new Error("Worker environment fixture publication requires its owning transaction");
+  }
+  sessionChanges.emit({ all: true, scope: "worker-environments" }, db);
+}
 
 // Mock providers still publish the durable ownership read by placement activation.
 // Updating a fixture must preserve activation history recorded by the real store.
@@ -53,31 +170,50 @@ export function writePlacementEnvironmentFixture(
     destroy_requested_at_ms: environment.destroyRequestedAtMs ?? null,
     last_error: environment.lastError ?? null,
   };
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(database.db)
-      .insertInto("worker_environments")
-      .values({
-        ...values,
-        created_at_ms: environment.createdAtMs ?? 1_000,
-        last_activated_at_ms: null,
-        preparation_key: null,
-        preparation_demand_at_ms: null,
-        preparation_expires_at_ms: null,
-        preparation_consumed_at_ms: null,
-      })
-      .onConflict((oc) =>
-        oc.column("environment_id").doUpdateSet({
-          state: environment.state,
-          owner_epoch: environment.ownerEpoch,
-          attached_session_ids_json: JSON.stringify(environment.attachedSessionIds),
-          ...(environment.providerId !== undefined ? { provider_id: environment.providerId } : {}),
-          ...(environment.profileId !== undefined ? { profile_id: environment.profileId } : {}),
-          ...(environment.nodeDeviceId !== undefined
-            ? { node_device_id: environment.nodeDeviceId }
-            : {}),
-        }),
-      ),
+  runOpenClawStateWriteTransaction(
+    () => {
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(database.db)
+          .insertInto("worker_environments")
+          .values({
+            ...values,
+            created_at_ms: environment.createdAtMs ?? 1_000,
+            last_activated_at_ms: null,
+            preparation_key: null,
+            preparation_demand_at_ms: null,
+            preparation_expires_at_ms: null,
+            preparation_consumed_at_ms: null,
+          })
+          .onConflict((oc) =>
+            oc.column("environment_id").doUpdateSet({
+              state: environment.state,
+              owner_epoch: environment.ownerEpoch,
+              attached_session_ids_json: JSON.stringify(environment.attachedSessionIds),
+              ...(environment.providerId !== undefined
+                ? { provider_id: environment.providerId }
+                : {}),
+              ...(environment.profileId !== undefined ? { profile_id: environment.profileId } : {}),
+              ...(environment.nodeDeviceId !== undefined
+                ? { node_device_id: environment.nodeDeviceId }
+                : {}),
+              ...(environment.leaseId !== undefined ? { lease_id: values.lease_id } : {}),
+              ...(environment.sharedHost !== undefined ? { shared_host: values.shared_host } : {}),
+              ...(environment.sshEndpoint !== undefined
+                ? {
+                    ssh_host: values.ssh_host,
+                    ssh_port: values.ssh_port,
+                    ssh_user: values.ssh_user,
+                    ssh_host_key: values.ssh_host_key,
+                    ssh_key_ref_json: values.ssh_key_ref_json,
+                  }
+                : {}),
+            }),
+          ),
+      );
+      publishWorkerEnvironmentFixture(database.db, environment.environmentId);
+    },
+    { database },
   );
 }
 
@@ -97,4 +233,101 @@ export function seedAttachedPlacementEnvironment(
     state: "attached",
     attachedSessionIds: [params.sessionId],
   });
+}
+
+export function createEnvironmentStoreFixture({
+  getStore,
+  getDatabase,
+  now,
+}: {
+  getStore: () => WorkerEnvironmentStore;
+  getDatabase: () => OpenClawStateDatabase;
+  now: () => number;
+}) {
+  const hostKey = ["ssh-ed25519", "AAAA"].join(" ");
+  const sshEndpoint: WorkerSshEndpoint = {
+    host: "worker.example.test",
+    port: 2222,
+    fallbackPorts: [22, 2200],
+    user: "openclaw",
+    hostKey,
+    keyRef: {
+      source: "file",
+      provider: "worker-keys",
+      id: "/static-development-key",
+    },
+  };
+  const bootstrapReceipt: WorkerEnvironmentBootstrapReceipt = {
+    bundleHash: "a".repeat(64),
+    openclawVersion: "2026.7.1",
+    protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
+  };
+  const credential = ["worker", "credential", "fixture"].join("-");
+
+  function createIntent(
+    environmentId = "worker-1",
+    profileSnapshot: WorkerProfile = {
+      settings: { region: "test" },
+      lifetime: { idleMinutes: 10 },
+    },
+  ) {
+    return getStore().createIntent({
+      environmentId,
+      providerId: "fake-provider",
+      profileId: "test-profile",
+      profileSnapshot,
+      provisionOperationId: `provision:${environmentId}`,
+    });
+  }
+
+  return {
+    hostKey,
+    sshEndpoint,
+    bootstrapReceipt,
+    credential,
+    createIntent,
+    fallbackPortRows: (environmentId: string) => {
+      const { db } = getDatabase();
+      return executeSqliteQuerySync(
+        db,
+        queryWorkerEnvironmentStore(db)
+          .selectFrom("worker_environment_ssh_fallback_ports")
+          .select(["position", "port"])
+          .where("environment_id", "=", environmentId)
+          .orderBy("position", "asc"),
+      ).rows;
+    },
+    seedBootstrapping: async (environmentId: string, leaseId: string) => {
+      await createIntent(environmentId);
+      await getStore().transition({ environmentId, from: "requested", to: "provisioning" });
+      return getStore().transition({
+        environmentId,
+        from: "provisioning",
+        to: "bootstrapping",
+        patch: { leaseId, sshEndpoint },
+      });
+    },
+    readyPatch: (receipt = bootstrapReceipt) => {
+      return {
+        bootstrapReceipt: receipt,
+        credential: {
+          credentialHash: hashWorkerCredential(credential),
+          sessionId: null,
+          rpcSetVersion: 1,
+          expiresAtMs: now() + 10_000,
+        },
+      };
+    },
+    attachedPatch: (sessionId: string, suffix: string) => {
+      return {
+        attachedSessionIds: [sessionId],
+        credential: {
+          credentialHash: hashWorkerCredential([credential, suffix].join("-")),
+          sessionId,
+          rpcSetVersion: 1,
+          expiresAtMs: now() + 10_000,
+        },
+      };
+    },
+  };
 }

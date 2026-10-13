@@ -40,7 +40,7 @@ struct TerminalHubScreenTests {
             url: #require(URL(string: "wss://gateway.example.com:8443/openclaw/")),
             token: "secret-token")
 
-        let url = TerminalHubScreen.terminalURL(config: config)
+        let url = ControlUIHubPage.terminal.url(config: config)
 
         #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/focus/terminal")
         // Credentials must never ride in the page URL; they travel via the
@@ -51,7 +51,7 @@ struct TerminalHubScreenTests {
     @Test func `terminal URL uses plain HTTP for insecure endpoints`() throws {
         let config = try Self.makeConfig(url: #require(URL(string: "ws://192.168.1.10:18789")))
 
-        let url = TerminalHubScreen.terminalURL(config: config)
+        let url = ControlUIHubPage.terminal.url(config: config)
 
         #expect(url?.absoluteString == "http://192.168.1.10:18789/focus/terminal")
     }
@@ -62,7 +62,9 @@ struct TerminalHubScreenTests {
             token: " secret-token ",
             password: "fallback-password")
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") == true)
         // JSONSerialization escapes forward slashes, hence the `\/` literals.
@@ -77,7 +79,9 @@ struct TerminalHubScreenTests {
             url: #require(URL(string: "wss://gateway.example.com:443")),
             token: "secret-token")
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("\"https:\\/\\/gateway.example.com\"") == true)
         #expect(script?.contains("\"https:\\/\\/gateway.example.com:443\"") == false)
@@ -89,7 +93,7 @@ struct TerminalHubScreenTests {
             token: nil,
             password: nil)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(
+        let script = ControlUIHubPage.terminal.authUserScript(
             config: config,
             storedOperatorToken: " stored-token ")
 
@@ -117,7 +121,9 @@ struct TerminalHubScreenTests {
             password: "configured-password",
             deviceAuthGatewayID: gatewayID)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("openclaw-device-identity-v1") == true)
         #expect(script?.contains("openclaw.device.auth.v1:${scope}") == true)
@@ -150,7 +156,9 @@ struct TerminalHubScreenTests {
             password: "configured-password",
             deviceAuthGatewayID: gatewayID)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("empty-scope-token") == true)
         #expect(script?.contains("configured-token") == true)
@@ -177,7 +185,9 @@ struct TerminalHubScreenTests {
             allowStoredDeviceAuth: false,
             deviceAuthGatewayID: gatewayID)
 
-        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+        let script = ControlUIHubPage.terminal.authUserScript(
+            config: config,
+            storedOperatorToken: AuthenticatedControlUI.storedOperatorToken(config: config))
 
         #expect(script?.contains("stale-terminal-token") == false)
         #expect(script?.contains("const deviceAuthSeed = null;") == true)
@@ -188,8 +198,8 @@ struct TerminalHubScreenTests {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")))
 
         #expect(
-            TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
-                TerminalHubScreen.webContentIdentity(config: config, storedOperatorToken: "token-b"))
+            ControlUIHubPage.terminal.webContentIdentity(config: config, storedOperatorToken: "token-a") !=
+                ControlUIHubPage.terminal.webContentIdentity(config: config, storedOperatorToken: "token-b"))
     }
 
     @Test func `web content identity changes with the accepted TLS pin`() throws {
@@ -210,8 +220,8 @@ struct TerminalHubScreenTests {
                 storeKey: "gateway"))
 
         #expect(
-            TerminalHubScreen.webContentIdentity(config: first, storedOperatorToken: nil) !=
-                TerminalHubScreen.webContentIdentity(config: second, storedOperatorToken: nil))
+            ControlUIHubPage.terminal.webContentIdentity(config: first, storedOperatorToken: nil) !=
+                ControlUIHubPage.terminal.webContentIdentity(config: second, storedOperatorToken: nil))
     }
 
     @Test func `authenticated Control UI origin rejects authority changes`() throws {
@@ -250,11 +260,11 @@ struct TerminalHubScreenTests {
             url: controlURL,
             tls: nil)
 
-        #expect(coordinator.allowsNavigation(to: sameOriginURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternateHostURL, isMainFrame: true))
-        #expect(!coordinator.allowsNavigation(to: alternatePortURL, isMainFrame: true))
-        #expect(coordinator.allowsNavigation(to: embeddedURL, isMainFrame: false))
-        #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
+        #expect(coordinator.navigationDecision(to: sameOriginURL, isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(to: alternateHostURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: alternatePortURL, isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(to: embeddedURL, isMainFrame: false) == .allow)
+        #expect(coordinator.navigationDecision(to: unknownFrameURL, isMainFrame: nil) == .cancel)
     }
 
     @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {
@@ -317,9 +327,9 @@ struct TerminalHubScreenTests {
         let config = try Self.makeConfig(url: #require(URL(string: "wss://gateway.example.com")), token: "   ")
 
         #expect(
-            TerminalHubScreen.terminalAuthUserScript(config: config, storedOperatorToken: nil) == nil)
+            ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: nil) == nil)
         #expect(
-            TerminalHubScreen.terminalAuthUserScript(config: nil, storedOperatorToken: nil) == nil)
+            ControlUIHubPage.terminal.authUserScript(config: nil, storedOperatorToken: nil) == nil)
     }
 
     @Test func `authenticated Control UI follows the resolved app appearance`() async throws {

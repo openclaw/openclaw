@@ -301,7 +301,7 @@ it.each([
           resume: async () => {},
         });
         const captures = manifestCaptures.slice(firstCapture);
-        expect(captures).toHaveLength(5);
+        expect(captures).toHaveLength(4);
         expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
         expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
         return captures;

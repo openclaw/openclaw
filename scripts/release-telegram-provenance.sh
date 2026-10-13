@@ -39,6 +39,15 @@ gh_with_retry() {
   return "$status"
 }
 
+select_exact_merge_prs() {
+  jq -c \
+    --arg repo "$GITHUB_REPOSITORY" \
+    --arg sha "$candidate_sha" \
+    '[.[] |
+      select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and
+        .mergeCommit.oid == $sha)]'
+}
+
 candidate_root="${CANDIDATE_ROOT:?}"
 candidate_git_dir="${CANDIDATE_GIT_DIR:-}"
 remote_git_dir="${candidate_git_dir:-.}"
@@ -214,8 +223,11 @@ if [[ "$trusted_reason" != "main-ancestor" ]]; then
       echo "Unsigned or GitHub web-flow candidates require canonical release branch provenance." >&2
       exit 1
     fi
-    merge_pr_candidates="$(jq -c '.data.repository.object.associatedPullRequests.nodes' <<<"$candidate_metadata_json")"
-    if [[ "$(jq 'length' <<<"$merge_pr_candidates")" == "0" ]]; then
+    matching_merge_prs="$(
+      jq -c '.data.repository.object.associatedPullRequests.nodes' <<<"$candidate_metadata_json" |
+        select_exact_merge_prs
+    )"
+    if [[ "$(jq 'length' <<<"$matching_merge_prs")" == "0" ]]; then
       # GitHub can omit a squash merge from its commit-to-PR association index.
       # The subject supplies only a lookup hint: the direct PR record must still
       # satisfy the exact merge/repository checks below and live actor permission.
@@ -231,18 +243,12 @@ if [[ "$trusted_reason" != "main-ancestor" ]]; then
             -f name="$repository_name" \
             -F number="$merge_pr_number"
         )"
-        merge_pr_candidates="$(jq -c '[.data.repository.pullRequest | select(. != null)]' <<<"$direct_pr_json")"
+        matching_merge_prs="$(
+          jq -c '[.data.repository.pullRequest | select(. != null)]' <<<"$direct_pr_json" |
+            select_exact_merge_prs
+        )"
       fi
     fi
-    matching_merge_prs="$(
-      jq -c \
-        --arg repo "$GITHUB_REPOSITORY" \
-        --arg sha "$candidate_sha" \
-        '[.[] |
-          select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and
-            .mergeCommit.oid == $sha)]' \
-        <<<"$merge_pr_candidates"
-    )"
     if [[ "$(jq 'length' <<<"$matching_merge_prs")" != "1" ]]; then
       echo "Unsigned or GitHub web-flow candidate ${candidate_sha} requires one exact merged same-repository PR." >&2
       exit 1

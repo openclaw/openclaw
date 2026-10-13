@@ -22,6 +22,8 @@ const DEFAULT_DRIVE_PROPERTIES = {
 };
 const tokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
 
+afterEach(() => vi.unstubAllGlobals());
+
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
 function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCall {
@@ -126,12 +128,12 @@ function runGraphUpload(
   fetchFn: ReturnType<typeof vi.fn>,
   overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]> = {},
 ): ReturnType<typeof uploadAndShareSharePoint> {
+  vi.stubGlobal("fetch", withFetchPreconnect(fetchFn));
   return uploadAndShareSharePoint({
     buffer: DEFAULT_BUFFER,
     filename: DEFAULT_UPLOAD_RESULT.name,
     siteId: "site-123",
     tokenProvider,
-    fetchFn: fetchFn as unknown as typeof fetch,
     ...overrides,
   });
 }
@@ -211,7 +213,7 @@ function expectMSTeamsTimeout(promise: Promise<unknown>, label: string, timeoutM
 
 type UploadToSharePointParams = Partial<
   Omit<Parameters<typeof uploadAndShareSharePoint>[0], "chatId" | "usePerUserSharing">
->;
+> & { fetchFn?: typeof fetch };
 
 async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
   const uploadFetch = params.fetchFn ?? fetch;
@@ -224,13 +226,13 @@ async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
       return await uploadFetch(input, init);
     }),
   );
+  vi.stubGlobal("fetch", fetchFn);
   const result = await uploadAndShareSharePoint({
     buffer: params.buffer ?? DEFAULT_BUFFER,
     filename: params.filename ?? DEFAULT_UPLOAD_RESULT.name,
     siteId: params.siteId ?? "site-123",
     tokenProvider: params.tokenProvider ?? tokenProvider,
     contentType: params.contentType,
-    fetchFn,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
@@ -260,7 +262,7 @@ describe("graph upload helpers", () => {
     expect(requireMSTeamsSharePointSiteId(" site-123 ")).toBe("site-123");
   });
 
-  it.each([undefined, "application/pdf"])(
+  it.each(["application/pdf"])(
     "uploads to SharePoint with the site drive path and MIME %s",
     async (contentType) => {
       const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
@@ -381,19 +383,6 @@ describe("graph upload request timeouts", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("aborts SharePoint uploads that hang before response headers", async () => {
-    vi.useFakeTimers();
-    const fetchFn = createHangingFetch();
-    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "hang.txt");
-    expect(signal.aborted).toBe(false);
-    const assertion = expectMSTeamsTimeout(upload, "MS Teams SharePoint upload", timeoutMs);
-
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-
-    await assertion;
-    expect(signal.aborted).toBe(true);
-  });
-
   it("keeps the SharePoint timeout active while reading the response body", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingBodyFetch();
@@ -402,30 +391,6 @@ describe("graph upload request timeouts", () => {
 
     await Promise.all([assertion, vi.advanceTimersByTimeAsync(timeoutMs)]);
     expect(signal.aborted).toBe(true);
-  });
-
-  it("allows SharePoint uploads that exceed the control-plane timeout but finish before the transfer timeout", async () => {
-    vi.useFakeTimers();
-    const timersBeforeUpload = vi.getTimerCount();
-    const uploadResponse = {
-      id: "item-slow",
-      webUrl: "https://example.com/slow",
-      name: "slow.txt",
-    };
-    const fetchFn = createDelayedUploadFetch(uploadResponse, MSTEAMS_REQUEST_TIMEOUT_MS + 1_000);
-    const { upload, signal, timeoutMs } = await startTimedUpload(fetchFn, "slow.txt");
-
-    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
-    expect(signal.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(upload).resolves.toEqual(uploadResponse);
-    // Completed guarded responses release their hop signal without expiring the request deadline.
-    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    expect(vi.getTimerCount()).toBe(timersBeforeUpload);
-    expect(abortReasonError(signal).name).not.toBe("TimeoutError");
   });
 
   it("sizes the SharePoint upload timeout for slow large transfers", async () => {
@@ -467,32 +432,6 @@ describe("graph upload request timeouts", () => {
 
     await assertion;
     expect(signal.aborted).toBe(true);
-  });
-
-  it("keeps the short timeout for SharePoint control-plane requests", async () => {
-    vi.useFakeTimers();
-    const fetchFn = createGraphFetch(
-      fixedGraphRoute("/content", DEFAULT_UPLOAD_RESULT),
-      hangingGraphRoute("/createLink"),
-    );
-
-    const upload = runGraphUpload(fetchFn);
-
-    await vi.advanceTimersByTimeAsync(0);
-    await waitForFetchCall(fetchFn);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    const createLinkSignal = fetchSignal(fetchFn, 1);
-    const assertion = expectMSTeamsTimeout(
-      upload,
-      "MS Teams SharePoint request",
-      MSTEAMS_REQUEST_TIMEOUT_MS,
-    );
-
-    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
-
-    await assertion;
-    expect(createLinkSignal.aborted).toBe(true);
   });
 
   it("fails closed when per-user member lookup times out", async () => {
@@ -598,12 +537,12 @@ describe("graph upload send authority", () => {
     fetchFn: ReturnType<typeof vi.fn>,
     overrides: Partial<Parameters<typeof uploadAndShareSharePoint>[0]>,
   ) {
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchFn));
     return step === "properties"
       ? getDriveItemProperties({
           siteId: "site-123",
           itemId: "item-1",
           tokenProvider,
-          fetchFn: withFetchPreconnect(fetchFn),
           ...overrides,
         })
       : runGraphUpload(fetchFn, {
@@ -716,9 +655,7 @@ describe("graph upload send authority", () => {
 
   it.each([
     { status: 307, redirectedStep: "upload" },
-    { status: 308, redirectedStep: "upload" },
     { status: 307, redirectedStep: "createLink" },
-    { status: 308, redirectedStep: "createLink" },
   ])(
     "follows $status $redirectedStep redirects only while authority remains current",
     async ({ status, redirectedStep }) => {

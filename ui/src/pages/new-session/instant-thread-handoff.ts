@@ -1,9 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { CreationComposer } from "./creation-composer.ts";
 import { beginInstantThreadNavigation } from "./instant-thread-navigation.ts";
 import {
   retainInstantThreadRestore,
@@ -22,6 +24,7 @@ export function prepareInstantThreadHandoff(options: {
   agentId: string;
   retainDraft: (() => RetainedNewSessionDraft | undefined) | undefined;
   message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"];
+  composer?: CreationComposer;
 }): (() => InstantThreadHandoff | undefined) | undefined {
   const { context, params, agentId, retainDraft } = options;
   if (!options.enabled || !context.gateway.snapshot.hello?.auth?.recoveryScope || !retainDraft) {
@@ -36,7 +39,7 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message)
+      ? new InstantThreadHandoff(context, key, agentId, draft, options.message, options.composer)
       : undefined;
   };
 }
@@ -52,6 +55,7 @@ export class InstantThreadHandoff {
   private readonly hello;
   private readonly gatewayUrl;
   private readonly recoveryScope;
+  private readonly presentationScope;
   private readonly previousSessionKey: ApplicationContext["gateway"]["snapshot"]["sessionKey"];
   private readonly previousAgentId: ApplicationContext["agentSelection"]["state"]["selectedId"];
   private readonly returnLocation: RouteLocation;
@@ -69,12 +73,14 @@ export class InstantThreadHandoff {
     agentId: string,
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
+    composer?: CreationComposer,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
     this.hello = context.gateway.snapshot.hello;
     this.gatewayUrl = context.gateway.connection.gatewayUrl;
     this.recoveryScope = this.hello?.auth?.recoveryScope;
+    this.presentationScope = gatewayPresentationScope(context.gateway);
     const previous = active.get(context);
     this.previousSessionKey = context.gateway.snapshot.sessionKey;
     this.previousAgentId = context.agentSelection.state.selectedId;
@@ -97,15 +103,18 @@ export class InstantThreadHandoff {
     const target = { pathname: options.pathname, search: "", hash: "" };
     // The route renders the provisional key, but saved/global selection stays
     // on the last admitted session until StartedSessionNavigation adopts it.
-    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    // A cached preview can notify the shell synchronously on reconnect. Publish
+    // its admission owner first so that navigation cannot select an unadmitted key.
     this.clearPendingCreate = context.chatSubmissions.beginCreate({
       creation: this.creation,
       message,
+      composer,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
     });
-    this.transition.signal.addEventListener("abort", this.onLeave, { once: true });
+    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (
@@ -140,6 +149,14 @@ export class InstantThreadHandoff {
 
   private canDisplay() {
     return (
+      gatewayPresentationScope(this.context.gateway) === this.presentationScope &&
+      this.context.gateway.connection.gatewayUrl === this.gatewayUrl &&
+      (this.context.gateway.snapshot.phase !== "connected" || this.sameIdentity())
+    );
+  }
+
+  private liveConnection() {
+    return (
       this.sameIdentity() &&
       this.context.gateway.snapshot.client === this.client &&
       this.context.gateway.snapshot.hello === this.hello
@@ -155,10 +172,6 @@ export class InstantThreadHandoff {
     );
   }
 
-  private readonly onLeave = () => {
-    this.dispose();
-  };
-
   async waitForReady() {
     // A preview load failure is not a newer navigation. The create can still
     // succeed and must be handed to the confirmed-session navigation owner.
@@ -172,7 +185,7 @@ export class InstantThreadHandoff {
       !this.rollingBack &&
       active.get(this.context) === this &&
       this.transition.isActive() &&
-      this.canDisplay() &&
+      this.liveConnection() &&
       this.ownsSelection()
     );
   }
@@ -241,7 +254,12 @@ export class InstantThreadHandoff {
 
   /** Stop navigation tracking before committing the confirmed key. */
   commit() {
-    if (this.disposed || this.rollingBack || !this.transition.isActive() || !this.canDisplay()) {
+    if (
+      this.disposed ||
+      this.rollingBack ||
+      !this.transition.isActive() ||
+      !this.liveConnection()
+    ) {
       return false;
     }
     this.transition.dispose();

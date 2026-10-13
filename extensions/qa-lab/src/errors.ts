@@ -1,4 +1,3 @@
-// Qa Lab plugin module defines shared suite errors.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export function toQaError(value: unknown): Error {

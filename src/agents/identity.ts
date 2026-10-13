@@ -1,8 +1,3 @@
-/**
- * Agent identity and message-prefix resolution.
- * Applies account, channel, global, and per-agent precedence for reactions,
- * prefixes, and human-delay settings.
- */
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -26,37 +21,11 @@ export function resolveAckReaction(
   agentId: string,
   opts?: { channel?: string; accountId?: string },
 ): string {
-  // L1: Channel account level
-  if (opts?.channel && opts?.accountId) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = resolveChannelAccountEntry(
-      accounts,
-      opts.accountId,
-      opts.channel,
-      (id) => id,
-    )?.ackReaction as string | undefined;
-    if (accountReaction !== undefined) {
-      return accountReaction.trim();
-    }
-  }
-
-  // L2: Channel level
-  if (opts?.channel) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
-    if (channelReaction !== undefined) {
-      return channelReaction.trim();
-    }
-  }
-
-  // L3: Global messages level
-  const configured = cfg.messages?.ackReaction;
+  const configured = resolveChannelMessageSetting(cfg, "ackReaction", opts);
   if (configured !== undefined) {
     return configured.trim();
   }
 
-  // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
@@ -73,26 +42,6 @@ export function resolveIdentityNamePrefix(
   return `[${name}]`;
 }
 
-/** Resolve the outbound message prefix, preserving explicit empty prefixes. */
-function resolveMessagePrefix(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
-): string {
-  const configured = opts?.configured;
-  if (configured !== undefined) {
-    return configured;
-  }
-
-  const hasAllowFrom = opts?.hasAllowFrom === true;
-  if (hasAllowFrom) {
-    return "";
-  }
-
-  return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
-}
-
-/** Helper to extract a channel config value by dynamic key. */
 function getChannelConfig(
   cfg: OpenClawConfig,
   channel: string,
@@ -104,52 +53,43 @@ function getChannelConfig(
     : undefined;
 }
 
+/** Preserve explicit empty settings through account, channel, and global precedence. */
+function resolveChannelMessageSetting(
+  cfg: OpenClawConfig,
+  key: "ackReaction" | "responsePrefix",
+  opts?: { channel?: string; accountId?: string },
+): string | undefined {
+  if (opts?.channel) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    if (opts.accountId) {
+      const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+      const accountValue = resolveChannelAccountEntry(
+        accounts,
+        opts.accountId,
+        opts.channel,
+        (id) => id,
+      )?.[key] as string | undefined;
+      if (accountValue !== undefined) {
+        return accountValue;
+      }
+    }
+    const channelValue = channelCfg?.[key] as string | undefined;
+    if (channelValue !== undefined) {
+      return channelValue;
+    }
+  }
+  // Implicit and custom channels may have no block to migrate.
+  return cfg.messages?.[key];
+}
+
 /** Resolve the optional response prefix, expanding `auto` to the identity name prefix. */
 export function resolveResponsePrefix(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { channel?: string; accountId?: string },
 ): string | undefined {
-  // L1: Channel account level
-  if (opts?.channel && opts?.accountId) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountPrefix = resolveChannelAccountEntry(
-      accounts,
-      opts.accountId,
-      opts.channel,
-      (id) => id,
-    )?.responsePrefix as string | undefined;
-    if (accountPrefix !== undefined) {
-      if (accountPrefix === "auto") {
-        return resolveIdentityNamePrefix(cfg, agentId);
-      }
-      return accountPrefix;
-    }
-  }
-
-  // L2: Channel level
-  if (opts?.channel) {
-    const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelPrefix = channelCfg?.responsePrefix as string | undefined;
-    if (channelPrefix !== undefined) {
-      if (channelPrefix === "auto") {
-        return resolveIdentityNamePrefix(cfg, agentId);
-      }
-      return channelPrefix;
-    }
-  }
-
-  // L3: Retained fallback for implicit and custom channels that have no block to migrate.
-  const configured = cfg.messages?.responsePrefix;
-  if (configured !== undefined) {
-    if (configured === "auto") {
-      return resolveIdentityNamePrefix(cfg, agentId);
-    }
-    return configured;
-  }
-
-  return undefined;
+  const configured = resolveChannelMessageSetting(cfg, "responsePrefix", opts);
+  return configured === "auto" ? resolveIdentityNamePrefix(cfg, agentId) : configured;
 }
 
 /** Resolve message and response prefix values together for channel delivery. */
@@ -164,14 +104,11 @@ export function resolveEffectiveMessagesConfig(
   },
 ): { messagePrefix: string; responsePrefix?: string } {
   return {
-    messagePrefix: resolveMessagePrefix(cfg, agentId, {
-      hasAllowFrom: opts?.hasAllowFrom,
-      fallback: opts?.fallbackMessagePrefix,
-    }),
-    responsePrefix: resolveResponsePrefix(cfg, agentId, {
-      channel: opts?.channel,
-      accountId: opts?.accountId,
-    }),
+    messagePrefix:
+      opts?.hasAllowFrom === true
+        ? ""
+        : (resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallbackMessagePrefix ?? "[openclaw]"),
+    responsePrefix: resolveResponsePrefix(cfg, agentId, opts),
   };
 }
 

@@ -9,6 +9,10 @@ import {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function envRef(id: string) {
+  return { source: "env", provider: "default", id } as const;
+}
+
 describe("secrets runtime snapshot channel inactive variants", () => {
   it("treats IRC account nickserv password refs as inactive when nickserv is disabled", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -20,11 +24,7 @@ describe("secrets runtime snapshot channel inactive variants", () => {
                 enabled: true,
                 nickserv: {
                   enabled: false,
-                  password: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_IRC_WORK_NICKSERV_PASSWORD",
-                  },
+                  password: envRef("MISSING_IRC_WORK_NICKSERV_PASSWORD"),
                 },
               },
             },
@@ -36,11 +36,9 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.irc?.accounts?.work?.nickserv?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_IRC_WORK_NICKSERV_PASSWORD",
-    });
+    expect(snapshot.config.channels?.irc?.accounts?.work?.nickserv?.password).toEqual(
+      envRef("MISSING_IRC_WORK_NICKSERV_PASSWORD"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.irc.accounts.work.nickserv.password",
     );
@@ -53,11 +51,7 @@ describe("secrets runtime snapshot channel inactive variants", () => {
           irc: {
             nickserv: {
               enabled: false,
-              password: {
-                source: "env",
-                provider: "default",
-                id: "MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD",
-              },
+              password: envRef("MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD"),
             },
           },
         },
@@ -67,11 +61,9 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.irc?.nickserv?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD",
-    });
+    expect(snapshot.config.channels?.irc?.nickserv?.password).toEqual(
+      envRef("MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.irc.nickserv.password",
     );
@@ -83,11 +75,7 @@ describe("secrets runtime snapshot channel inactive variants", () => {
         channels: {
           slack: {
             mode: "socket",
-            signingSecret: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_SLACK_SIGNING_SECRET",
-            },
+            signingSecret: envRef("MISSING_SLACK_SIGNING_SECRET"),
             accounts: {
               work: {
                 enabled: true,
@@ -102,11 +90,9 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.slack?.signingSecret).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_SLACK_SIGNING_SECRET",
-    });
+    expect(snapshot.config.channels?.slack?.signingSecret).toEqual(
+      envRef("MISSING_SLACK_SIGNING_SECRET"),
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.slack.signingSecret",
     );
@@ -118,20 +104,12 @@ describe("secrets runtime snapshot channel inactive variants", () => {
         channels: {
           slack: {
             mode: "http",
-            appToken: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_SLACK_APP_TOKEN",
-            },
+            appToken: envRef("MISSING_SLACK_APP_TOKEN"),
             accounts: {
               work: {
                 enabled: true,
                 mode: "http",
-                appToken: {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_SLACK_WORK_APP_TOKEN",
-                },
+                appToken: envRef("MISSING_SLACK_WORK_APP_TOKEN"),
               },
             },
           },
@@ -142,16 +120,10 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.slack?.appToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_SLACK_APP_TOKEN",
-    });
-    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_SLACK_WORK_APP_TOKEN",
-    });
+    expect(snapshot.config.channels?.slack?.appToken).toEqual(envRef("MISSING_SLACK_APP_TOKEN"));
+    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual(
+      envRef("MISSING_SLACK_WORK_APP_TOKEN"),
+    );
     const warningPaths = snapshot.warnings.map((warning) => warning.path);
     expect(warningPaths).toContain("channels.slack.appToken");
     expect(warningPaths).toContain("channels.slack.accounts.work.appToken");
@@ -162,19 +134,11 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       config: asConfig({
         channels: {
           googlechat: {
-            serviceAccount: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT",
-            },
+            serviceAccount: envRef("MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT"),
             accounts: {
               work: {
                 enabled: true,
-                serviceAccount: {
-                  source: "env",
-                  provider: "default",
-                  id: "GOOGLECHAT_WORK_SERVICE_ACCOUNT",
-                },
+                serviceAccount: envRef("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
               },
             },
           },
@@ -187,11 +151,9 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.googlechat?.serviceAccount).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT",
-    });
+    expect(snapshot.config.channels?.googlechat?.serviceAccount).toEqual(
+      envRef("MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT"),
+    );
     expect(snapshot.config.channels?.googlechat?.accounts?.work?.serviceAccount).toBe(
       "work-service-account-json",
     );

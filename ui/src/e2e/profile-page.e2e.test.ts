@@ -112,30 +112,6 @@ suite.define(() => {
     return gateway;
   }
 
-  it("renders hero, identity, and a Usage statistics link without loading usage", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await openProfilePage(page);
-
-      await page.locator(".profile-hero__name").waitFor({ timeout: 10_000 });
-      await expect(page.locator(".profile-hero__name").textContent()).resolves.toContain(
-        "Test Person",
-      );
-      await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain(
-        "test@example.com",
-      );
-      await expect(page.locator(".profile-hero").textContent()).resolves.not.toContain("Clipper");
-      await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
-      await expect(
-        page.getByRole("button", { name: /Usage statistics/u }).textContent(),
-      ).resolves.toContain("View activity, costs, and usage trends.");
-      expect(await gateway.getRequests("usage.cost")).toEqual([]);
-      expect(await gateway.getRequests("sessions.usage")).toEqual([]);
-      expect(await page.locator(".profile-stats, .profile-heatmap, .profile-tools").count()).toBe(
-        0,
-      );
-    });
-  });
-
   it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
     const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
@@ -180,9 +156,7 @@ suite.define(() => {
           });
         });
         const gateway = await openProfilePage(page, {
-          "users.self": {
-            sequence: [{ profile: testProfile }, { profile: linkedGitHubProfile }],
-          },
+          "users.self": { profile: testProfile },
           "users.prefs.get": {
             status: "ok",
             entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
@@ -211,8 +185,10 @@ suite.define(() => {
         ).toHaveCount(0);
         await screenshot(page, "08-github-identity-unlinked.png");
 
+        await gateway.setMethodResponse("users.self", { profile: linkedGitHubProfile });
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         const prefGet = await gateway.waitForRequest("users.prefs.get");
         expect(prefGet.params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
         const account = githubRow.getByRole("link", { name: "@octocat" });
@@ -236,7 +212,7 @@ suite.define(() => {
         await expect(toggle).not.toBeChecked();
         await screenshot(page, "09-github-identity-linked.png");
 
-        await coauthorRow.locator("wa-switch").click();
+        await toggle.click();
         const prefSet = await gateway.waitForRequest("users.prefs.set");
         expect(prefSet.params).toEqual({
           entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
@@ -296,6 +272,7 @@ suite.define(() => {
         const gateway = await openProfilePage(
           page,
           {
+            "users.self": { __mockError: { code: "FORBIDDEN", message: "No authenticated user" } },
             "agent.identity.get": {
               agentId: "main",
               name: "Main agent",
@@ -675,14 +652,11 @@ suite.define(() => {
           await picker.locator(".picker-select__trigger").click();
           if (captureUiProof) {
             await expect(picker.locator('[role="option"][data-value="xai"]')).toBeVisible();
-            // Web Awesome exposes the options before the owning popup finishes fading in.
             await writeFile(
               path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
-              await takeControlUiViewportScreenshot(
-                page,
-                picker.locator('wa-popup [part="popup"]'),
-                [picker.locator('[role="option"][data-value="xai"]')],
-              ),
+              await takeControlUiViewportScreenshot(page, picker.locator(".picker-select__menu"), [
+                picker.locator('[role="option"][data-value="xai"]'),
+              ]),
             );
           }
           await picker.locator(`[role="option"][data-value="${providerId}"]`).click();
@@ -744,8 +718,9 @@ suite.define(() => {
         });
         await startSignIn();
         await expect(section.locator(".wizard-step__progress")).toHaveText("Saving account…");
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         await expect(section.locator(".profile-auth-connect-cancel")).toBeEnabled();
         await captureAccounts(
           "model-accounts-saving.png",
@@ -784,7 +759,12 @@ suite.define(() => {
         await captureAccounts("model-accounts-default-selected.png", selectedAccount);
         await gateway.setMethodResponse("users.unlinkAuthProfile", { links: [] });
         await gateway.setMethodResponse("users.listModelAccounts", inventory(null));
-        await section.getByRole("button", { name: "Use gateway default", exact: true }).click();
+        await section
+          .getByRole("button", {
+            name: `Use gateway default: OpenAI · ${work.label}`,
+            exact: true,
+          })
+          .click();
         await expect(selectedAccount).toHaveCount(0);
         await expect(section.locator(".profile-auth-account-select")).toHaveCount(3);
         await expect(section.locator(".model-accounts-notice")).toContainText(

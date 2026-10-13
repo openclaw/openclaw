@@ -1,51 +1,32 @@
-import type { TalkVoiceSelection } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { renderPicker } from "../../../components/select-picker.ts";
 import { t } from "../../../i18n/index.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+
+const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
 type ChatRealtimeTalkConversationProps = {
   assistantName: string;
   userName?: string | null;
+  messages: readonly unknown[];
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
 };
 
-export function renderRealtimeVoicePicker(params: {
-  selection?: TalkVoiceSelection | null;
-  changing?: boolean;
-  disabled?: boolean;
-  onChange?: (voice: string) => void;
-}) {
-  const { selection } = params;
-  if (!selection || !params.onChange) {
-    return nothing;
-  }
-  const options = selection.voices.map((value) => ({ value, label: value }));
-  return html`<span class="chat-talk-voice-picker" aria-busy=${String(Boolean(params.changing))}>
-    ${renderPicker({
-      label: t("talkPage.voice.title"),
-      value: selection.voice ?? "",
-      options: [
-        ...(!selection.voice
-          ? [{ value: "", label: t("talkPage.voice.default"), disabled: true }]
-          : []),
-        ...options,
-        ...(selection.voice && !selection.voices.includes(selection.voice)
-          ? [{ value: selection.voice, label: selection.voice, disabled: true }]
-          : []),
-      ],
-      disabled: params.disabled || params.changing || !selection.canChange,
-      title: params.changing ? t("chat.voice.preparing") : t("talkPage.voice.title"),
-      placement: "top",
-      searchable: true,
-      onChange: params.onChange,
-    })}
-  </span>`;
-}
-
 export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversationProps) {
-  const entries = props.realtimeTalkConversation ?? [];
+  // Voice captions reconcile against unfiltered immutable history, not the
+  // current search or streaming projection.
+  const entries = (props.realtimeTalkConversation ?? []).filter((entry) => {
+    if (!entry.transcriptId) {
+      return true;
+    }
+    return !persistedMessageIds(
+      props.messages,
+      [],
+      () => new Set(props.messages.map(persistedMessageEntryId)),
+    ).has(entry.transcriptId);
+  });
   if (entries.length === 0) {
     return nothing;
   }

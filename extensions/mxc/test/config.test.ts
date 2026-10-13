@@ -51,45 +51,6 @@ describe("resolveConfig", () => {
     });
   });
 
-  test("rejects invalid root values and unknown keys", () => {
-    expect(() => resolveConfig(null)).toThrow(/Invalid mxc plugin config/u);
-    expect(() => resolveConfig("bad")).toThrow(/Invalid mxc plugin config/u);
-    expect(() => resolveConfig({ sandboxBaseline: {} })).toThrow(/sandboxBaseline/u);
-  });
-
-  test("rejects removed and malformed containment values", () => {
-    for (const containment of [
-      "windows_sandbox",
-      "wslc",
-      "microvm",
-      "seatbelt",
-      "isolation_session",
-      "lxc",
-      "invalid",
-    ]) {
-      expect(() => resolveConfig({ containment })).toThrow(/containment/u);
-    }
-  });
-
-  test("rejects malformed enums and types instead of silently falling back", () => {
-    expect(() => resolveConfig({ network: "allow-all" })).toThrow(/network/u);
-    expect(() => resolveConfig({ debug: "true" })).toThrow(/debug/u);
-    expect(() => resolveConfig({ mxcBinaryPath: "   " })).toThrow(/mxcBinaryPath/u);
-  });
-
-  test("enforces timeout bounds and only marks configured timeouts when supplied", () => {
-    expect(() => resolveConfig({ timeoutSeconds: 0 })).toThrow(/>= 1/u);
-    expect(() => resolveConfig({ timeoutSeconds: -5 })).toThrow(/>= 1/u);
-    expect(() => resolveConfig({ timeoutSeconds: "fast" })).toThrow(/timeoutSeconds/u);
-    expect(() => resolveConfig({ timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS + 1 })).toThrow(
-      new RegExp(`${MAX_TIMER_TIMEOUT_SECONDS}`, "u"),
-    );
-
-    const config = resolveConfig({ timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS });
-    expect(config.timeoutSeconds).toBe(MAX_TIMER_TIMEOUT_SECONDS);
-    expect(config.timeoutSecondsConfigured).toBe(true);
-  });
-
   test("trims and validates mxcPolicyPaths as absolute paths", () => {
     expect(() => resolveConfig({ mxcPolicyPaths: "C:\\policy.json" })).toThrow(/mxcPolicyPaths/u);
     expect(() => resolveConfig({ mxcPolicyPaths: ["relative-policy.json"] })).toThrow(

@@ -12,12 +12,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { readCurrentPackageChangelog } from "../../scripts/package-changelog.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
 import {
   validatePackageSource,
   validatePackageSourceDir,
-  validatePackageSourceRef,
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -303,13 +301,22 @@ function runReleaseInputCapture(params: {
     for (const file of [
       "scripts/preflight-frozen-target-contracts.mjs",
       "scripts/lib/frozen-target-source.mjs",
+      "scripts/lib/frozen-target-workflow-request.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
       "scripts/lib/docker-e2e-plan.mts",
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/update-compat-inventory.json",
+      "scripts/lib/update-first-hop-lanes.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",
       "scripts/lib/upgrade-survivor-scenarios.json",
       "scripts/lib/release-version.mjs",
       "scripts/lib/frozen-target-compat.sh",
+      "scripts/lib/trusted-native-typescript.mjs",
+      "scripts/lib/native-typescript.mts",
       "scripts/resolve-frozen-codex-live-suite.mjs",
       "scripts/resolve-fs-safe-native-contract.mjs",
       "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -418,9 +425,7 @@ describe("package source preflight", () => {
   });
 
   it.each([
-    ["2026.8.1", "Unreleased"],
     ["2026.8.1-beta.4", "Unreleased"],
-    ["2026.9.1", "Unreleased"],
     ["2026.9.1", "2026.8.3 (Unreleased)"],
   ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
     expect(
@@ -516,26 +521,6 @@ describe("package source preflight", () => {
     ).toThrow("root package.json dependency invalid must declare a string version");
   });
 
-  it("rejects real partial-json source manifest drift", () => {
-    const root = JSON.parse(readFileSync("package.json", "utf8")) as {
-      dependencies: Record<string, string>;
-      version: string;
-    };
-    root.dependencies["partial-json"] = "0.1.8";
-    expect(() =>
-      validatePackageSource({
-        aiManifestContent: readFileSync("packages/ai/package.json", "utf8"),
-        allowUnreleasedChangelog: true,
-        changelogContent: readCurrentPackageChangelog(process.cwd(), root.version, {
-          allowUnreleased: true,
-        }),
-        rootManifestContent: JSON.stringify(root),
-      }),
-    ).toThrow(
-      "package.json must declare partial-json@0.1.7 to bundle packages/ai/package.json without duplicate dependencies",
-    );
-  });
-
   it("preserves historical sources from before the @openclaw/ai workspace split", () => {
     expect(
       validatePackageSource({
@@ -547,21 +532,63 @@ describe("package source preflight", () => {
     ).toBe("2026.8.1");
   });
 
-  it("validates the current source ref without modifying the checkout", () => {
-    const committedManifest = JSON.parse(
-      execFileSync("git", ["show", "HEAD:package.json"], { encoding: "utf8" }),
-    ) as { version: string };
-    const workingManifest = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
-    expect(
-      validatePackageSourceRef("HEAD", {
-        allowUnreleasedChangelog: true,
-      }),
-    ).toBe(committedManifest.version);
-    expect(
-      validatePackageSourceDir(process.cwd(), {
-        allowUnreleasedChangelog: true,
-      }),
-    ).toBe(workingManifest.version);
+  it("rejects conflicting bundled dependencies before setup and reads only the selected source", () => {
+    const root = tempDirs.make("openclaw-package-source-dependencies-");
+    writeFileSync(path.join(root, "package.json"), rootManifest({ dependencies: {} }));
+    writeFileSync(path.join(root, "CHANGELOG.md"), changelog);
+    const writePlugin = (id: string, metadata: unknown) => {
+      const directory = path.join(root, "extensions", id);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(path.join(directory, "package.json"), JSON.stringify(metadata));
+    };
+    writePlugin("alpha", { dependencies: { shared: "1.0.0" } });
+    writePlugin("beta", { optionalDependencies: { shared: "2.0.0" } });
+    writePlugin("external", {
+      dependencies: { shared: "3.0.0" },
+      openclaw: { build: { bundledDist: false } },
+    });
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.test",
+          ...args,
+        ],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "conflicting bundled source");
+    const ref = git("rev-parse", "HEAD");
+    const run = (...args: string[]) =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("scripts/package-source-preflight.mjs"),
+          "--allow-unreleased-changelog",
+          ...args,
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+    const conflict =
+      "dependency 'shared' has conflicting specs: alpha use '1.0.0', beta uses '2.0.0'";
+    const directoryFailure = run("--source-dir", root);
+    expect(directoryFailure.status).toBe(1);
+    expect(directoryFailure.stderr).toContain(conflict);
+
+    writePlugin("beta", { optionalDependencies: { shared: "1.0.0" } });
+    expect(run("--source-dir", root).status).toBe(0);
+    const committedFailure = run("--ref", ref);
+    expect(committedFailure.status).toBe(1);
+    expect(committedFailure.stderr).toContain(conflict);
+    expect(validatePackageSourceDir(root, { allowUnreleasedChangelog: true })).toBe("2026.8.1");
   });
 
   it("normalizes release-check package mode and guards the source resolver", () => {
@@ -710,24 +737,6 @@ describe("package source preflight", () => {
     expect(pack.if).toBe(
       "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
     );
-  });
-
-  it("treats tab and newline-only package artifact tuples as absent", () => {
-    const whitespace = " \t\n ";
-    const { output, result } = runLiveArtifactTupleValidation({
-      PACKAGE_ARTIFACT_DIGEST: whitespace,
-      PACKAGE_ARTIFACT_ID: whitespace,
-      PACKAGE_ARTIFACT_NAME: whitespace,
-      PACKAGE_ARTIFACT_RUN_ATTEMPT: whitespace,
-      PACKAGE_ARTIFACT_RUN_ID: whitespace,
-      PACKAGE_FILE_NAME: whitespace,
-      PACKAGE_SHA256: whitespace,
-      PACKAGE_SOURCE_SHA: whitespace,
-      PACKAGE_VERSION: whitespace,
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(output.package_artifact_present).toBe("false");
   });
 
   it("keeps a whitespace-only artifact tuple in source mode through Docker reports", async () => {

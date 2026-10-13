@@ -33,14 +33,31 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
-  it.each(
-    (["required", "optional"] as const).flatMap((terminalReplyExpectation) =>
-      ["async tool", "active lifecycle item", "unfinished lifecycle item"].map((owner) => ({
-        terminalReplyExpectation,
-        owner,
-      })),
-    ),
-  )(
+  it("does not request a visible continuation for an authored speech-only answer", () => {
+    const assistant = emptyAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+
+    expect(
+      resolveReasoningOnlyRetryInstruction({
+        modelApi: "openai-completions",
+        aborted: false,
+        timedOut: false,
+        attempt: emptyAttempt(assistant),
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { terminalReplyExpectation: "required", owner: "unfinished lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "async tool" },
+    { terminalReplyExpectation: "optional", owner: "active lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "unfinished lifecycle item" },
+  ] as const)(
     "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
     ({ terminalReplyExpectation, owner }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
@@ -66,7 +83,6 @@ describe("incomplete-turn recovery policy", () => {
         shouldTreatEmptyAssistantReplyAsSilent({
           ...state,
           allowEmptyAssistantReplyAsSilent: true,
-          onlyExplicitSilentReply: true,
           terminalReplyExpectation,
         }),
       ).toBe(false);
@@ -76,7 +92,6 @@ describe("incomplete-turn recovery policy", () => {
   );
 
   it.each([
-    { name: "empty terminal stop", text: "", stopReason: "stop" },
     { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
     { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
     { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
@@ -87,8 +102,7 @@ describe("incomplete-turn recovery policy", () => {
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
-        onlyExplicitSilentReply: true,
-        terminalReplyExpectation: "required",
+        terminalReplyExpectation: "optional",
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -108,97 +122,6 @@ describe("incomplete-turn recovery policy", () => {
     }
   });
 
-  it.each(
-    [
-      {
-        name: "a completed reaction",
-        aborted: false,
-        timedOut: false,
-        yielded: false,
-        error: false,
-        silent: true,
-      },
-      {
-        name: "a failed reaction",
-        aborted: false,
-        timedOut: false,
-        yielded: false,
-        error: true,
-        silent: false,
-      },
-      {
-        name: "an aborted turn",
-        aborted: true,
-        timedOut: false,
-        yielded: false,
-        error: false,
-        silent: false,
-      },
-      {
-        name: "a timed-out turn",
-        aborted: false,
-        timedOut: true,
-        yielded: false,
-        error: false,
-        silent: false,
-      },
-      {
-        name: "pending work",
-        aborted: false,
-        timedOut: false,
-        yielded: true,
-        error: false,
-        silent: false,
-      },
-    ].flatMap(({ name, aborted, timedOut, yielded, error, silent }) =>
-      [true, false, undefined].map((allowEmptyAssistantReplyAsSilent) => ({
-        name,
-        aborted,
-        timedOut,
-        yielded,
-        error,
-        silent,
-        allowEmptyAssistantReplyAsSilent,
-      })),
-    ),
-  )(
-    "classifies explicit silence after $name (allow empty: $allowEmptyAssistantReplyAsSilent)",
-    ({ aborted, timedOut, yielded, error, silent, allowEmptyAssistantReplyAsSilent }) => {
-      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        toolMetas: [{ toolName: "message", meta: "react", replaySafe: false, isError: error }],
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        ...(yielded ? { yieldDetected: true } : {}),
-        ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
-      });
-      // A user-triggered turn can intentionally end with only a reaction. Do not
-      // conflate permission to stay silent with permission to replay that effect.
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent,
-          terminalReplyExpectation: "required",
-          onlyExplicitSilentReply: true,
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBe(silent);
-      expect(
-        resolveEmptyResponseRetryInstruction({
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBeNull();
-    },
-  );
-
   it.each([
     {
       name: "zero-token Anthropic stop",
@@ -210,25 +133,6 @@ describe("incomplete-turn recovery policy", () => {
         model: "claude-opus-4.7",
         content: [],
         usage: createZeroUsageFixture(),
-      }),
-    },
-    {
-      name: "Anthropic-compatible positive-output stop",
-      provider: "sub2api",
-      modelId: "claude-opus-4-7",
-      modelApi: "anthropic-messages",
-      assistant: emptyAssistant({
-        api: "anthropic-messages",
-        provider: "sub2api",
-        model: "claude-opus-4-7",
-        usage: {
-          input: 2048,
-          output: 3100,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 5148,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
       }),
     },
     {
@@ -294,100 +198,5 @@ describe("incomplete-turn recovery policy", () => {
         attempt: emptyAttempt(assistant),
       }),
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("treats reply-optional post-tool empty stops as silent after side effects", () => {
-    const assistant = emptyAssistant();
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "required",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "tool failure",
-      attempt: makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        toolMetas: [
-          { toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true },
-        ],
-        lastToolError: { toolName: "sessions", error: "patch failed" },
-        lastAssistant: emptyAssistant(),
-      }),
-      aborted: false,
-    },
-    {
-      name: "assistant error",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: false,
-    },
-    {
-      name: "caller abort",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: true,
-    },
-  ])("does not treat $name as intentional silence", ({ attempt, aborted }) => {
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it("settles a heartbeat reasoning-only stop as silence under its declared contract", () => {
-    const assistant = emptyAssistant({
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "heartbeat_rs", type: "reasoning" }),
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
   });
 });

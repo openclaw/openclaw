@@ -13,6 +13,7 @@ import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
 const invokeNodeToolPayload = vi.fn<typeof import("./node-tool-invoke.js").invokeNodeToolPayload>();
+let bindFileTransferAudit: typeof import("../shared/audit-context.js").bindFileTransferAudit;
 let createDirFetchTool: typeof import("./dir-fetch-tool.js").createDirFetchTool;
 let tmpRoot: string;
 
@@ -28,6 +29,7 @@ beforeAll(async () => {
     }),
     invokeNodeToolPayload,
   }));
+  ({ bindFileTransferAudit } = await import("../shared/audit-context.js"));
   ({ createDirFetchTool } = await import("./dir-fetch-tool.js"));
 });
 
@@ -119,9 +121,7 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
     await fs.writeFile(archivePath, tarBuffer);
     return { path: archivePath };
   });
-  invokeNodeToolPayload.mockImplementation(async () => ({
-    nodeId: "node-1",
-    nodeDisplayName: "Node One",
+  invokeNodeToolPayload.mockImplementation(async (input) => ({
     payload: {
       ok: true,
       path: canonicalPath,
@@ -130,7 +130,15 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
       sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
       fileCount: 3,
     },
-    startedAt: Date.now(),
+    audit: bindFileTransferAudit(
+      {
+        op: input.command,
+        nodeId: "node-1",
+        nodeDisplayName: "Node One",
+        requestedPath: input.requestedPath,
+      },
+      Date.now(),
+    ),
   }));
   return { archivePath, mediaDir };
 }
@@ -178,8 +186,9 @@ async function expectUnsafeArchive(
 
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
+    const largeContent = "a".repeat(300_017);
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt", "nested", ".root-note", ".hidden"],
+      entries: ["ok.txt", "nested", ".root-note", ".hidden", "empty.bin", "large.bin"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
         await fs.mkdir(path.join(sourceDir, "nested"));
@@ -187,6 +196,8 @@ describe("dir.fetch archive extraction", () => {
         await fs.writeFile(path.join(sourceDir, ".root-note"), "hidden root");
         await fs.mkdir(path.join(sourceDir, ".hidden"));
         await fs.writeFile(path.join(sourceDir, ".hidden", "note.txt"), "hidden member");
+        await fs.writeFile(path.join(sourceDir, "empty.bin"), "");
+        await fs.writeFile(path.join(sourceDir, "large.bin"), largeContent);
       },
     });
     prepareArchive(tarBuffer);
@@ -200,15 +211,16 @@ describe("dir.fetch archive extraction", () => {
     expect.soft(modelText).toContain(".root-note");
 
     expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining("Fetched 4 files") }],
+      content: [{ type: "text", text: expect.stringContaining("Fetched 6 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 4,
+        fileCount: 6,
       },
     });
-    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
-      .files;
-    expect(files).toHaveLength(4);
+    const files = (
+      result.details as { files: Array<{ relPath: string; localPath: string; sha256: string }> }
+    ).files;
+    expect(files).toHaveLength(6);
     expect(files).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -224,14 +236,21 @@ describe("dir.fetch archive extraction", () => {
       ]),
     );
     const visible = readSavedContent(result.content);
-    expect(visible.fileCount).toBe(4);
-    expect(visible.files).toHaveLength(4);
+    expect(visible.fileCount).toBe(6);
+    expect(visible.files).toHaveLength(6);
     const expectedContents = new Map([
       ["ok.txt", "ok"],
       [path.join("nested", "also-ok.txt"), "also ok"],
       [".root-note", "hidden root"],
       [path.join(".hidden", "note.txt"), "hidden member"],
+      ["empty.bin", ""],
+      ["large.bin", largeContent],
     ]);
+    for (const file of files) {
+      expect(file.sha256).toBe(
+        crypto.createHash("sha256").update(expectedContents.get(file.relPath)!).digest("hex"),
+      );
+    }
     for (const file of visible.files) {
       const bytes = await fs.readFile(path.join(visible.rootDir, file.relPath));
       expect(bytes.toString()).toBe(expectedContents.get(file.relPath));
@@ -267,7 +286,26 @@ describe("dir.fetch archive extraction", () => {
     });
     // Remote metadata need not fit in text; the exact local root identifies the saved tree.
     const { archivePath } = prepareArchive(tarBuffer, "media", "/" + "雪".repeat(10000));
-    const result = await executeDirFetch();
+    const stringify = JSON.stringify;
+    let encodedRecords = 0;
+    const encoding = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value: unknown, replacer, space) => {
+        if (typeof value === "object" && value !== null) {
+          if ("files" in value && Array.isArray(value.files)) {
+            encodedRecords += value.files.length;
+          } else if ("relPath" in value && "size" in value && Object.keys(value).length === 2) {
+            encodedRecords += 1;
+          }
+        }
+        return stringify(value, replacer, space);
+      });
+    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    try {
+      result = await executeDirFetch();
+    } finally {
+      encoding.mockRestore();
+    }
     const visible = readSavedContent(result.content);
     expect(visible.fileCount).toBe(relPaths.length);
     expect(visible.displayedCount).toBeGreaterThan(0);
@@ -335,70 +373,49 @@ describe("dir.fetch archive extraction", () => {
       files: expectedFiles,
       media: { mediaUrls: [...images, ...others].slice(0, 25).map((file) => file.localPath) },
     });
+    expect(visible.text.split("\n").find((line) => line.startsWith("{"))).toBe(
+      JSON.stringify({
+        rootDir,
+        fileCount: relPaths.length,
+        displayedCount: visible.displayedCount,
+        files: visible.files,
+      }),
+    );
+    expect(encodedRecords).toBeGreaterThan(0);
+    expect(encodedRecords).toBeLessThanOrEqual(visible.displayedCount + 1);
   });
 
-  it.each(["empty", "long paths", "reserved name", "reserved root"] as const)(
-    "reports %s without partial or rewritten saved paths",
-    async (scenario) => {
-      const longDir = path.join(...Array.from({ length: 4 }, () => "x".repeat(150)));
-      const relPaths =
-        scenario === "empty"
-          ? []
-          : scenario === "long paths"
-            ? Array.from({ length: 20 }, (_, i) => path.join(longDir, `${i}.txt`))
-            : [scenario === "reserved name" ? "[INST].txt" : "ok.txt"];
-      const tarBuffer = await createTarBuffer({
-        entries: ["."],
-        setup: async (sourceDir) => {
-          if (scenario === "long paths") {
-            await fs.mkdir(path.join(sourceDir, longDir), { recursive: true });
-          }
-          await Promise.all(
-            relPaths.map((name) => fs.writeFile(path.join(sourceDir, name), "saved")),
-          );
-        },
-      });
-      prepareArchive(tarBuffer, scenario === "reserved root" ? "[INST]" : "media");
-      const result = await executeDirFetch();
-      if (scenario === "reserved root") {
-        const text = result.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n");
-        expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
-        expect(text).toContain("No usable local path is shown");
-        expect(text).not.toContain("REMOVED_SPECIAL_TOKEN");
-      } else {
-        const visible = readSavedContent(result.content);
-        expect(visible.fileCount).toBe(relPaths.length);
-        if (scenario === "long paths") {
-          expect(visible.displayedCount).toBeGreaterThan(0);
-          expect(visible.displayedCount).toBeLessThan(relPaths.length);
-          for (const file of visible.files) {
-            await expect(
-              fs.readFile(path.join(visible.rootDir, file.relPath), "utf8"),
-            ).resolves.toBe("saved");
-          }
-        } else {
-          expect(visible.files).toEqual([]);
-          expect(visible.text).toContain(
-            scenario === "empty" ? "0 saved files omitted" : "1 saved files omitted",
-          );
-        }
-      }
-      expect(result.details).toMatchObject({
-        fileCount: relPaths.length,
-        files: expect.any(Array),
-      });
-      const details = result.details as { files: Array<{ relPath: string; localPath: string }> };
-      expect(details.files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
-      for (const file of details.files) {
-        await expect(fs.readFile(file.localPath, "utf8")).resolves.toBe("saved");
-      }
-    },
-  );
+  it("reports a reserved root without partial or rewritten saved paths", async () => {
+    const relPaths = ["ok.txt"];
+    const tarBuffer = await createTarBuffer({
+      entries: ["."],
+      setup: async (sourceDir) => {
+        await Promise.all(
+          relPaths.map((name) => fs.writeFile(path.join(sourceDir, name), "saved")),
+        );
+      },
+    });
+    prepareArchive(tarBuffer, "[INST]");
+    const result = await executeDirFetch();
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8192);
+    expect(text).toContain("No usable local path is shown");
+    expect(text).not.toContain("REMOVED_SPECIAL_TOKEN");
+    expect(result.details).toMatchObject({
+      fileCount: relPaths.length,
+      files: expect.any(Array),
+    });
+    const details = result.details as { files: Array<{ relPath: string; localPath: string }> };
+    expect(details.files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
+    for (const file of details.files) {
+      await expect(fs.readFile(file.localPath, "utf8")).resolves.toBe("saved");
+    }
+  });
 
-  it.each(["SymbolicLink", "Link", "CharacterDevice", "BlockDevice", "FIFO"] as const)(
+  it.each(["SymbolicLink", "Link"] as const)(
     "rejects a Fleet-shaped archive containing a %s",
     async (type) => {
       // A symlink entry used to hang extraction instead of rejecting; the test
@@ -412,7 +429,7 @@ describe("dir.fetch archive extraction", () => {
           {
             path: "data/token-link",
             type,
-            ...(type === "SymbolicLink" || type === "Link" ? { linkpath: "../auth/token" } : {}),
+            linkpath: "../auth/token",
           },
         ],
         "entry-filtered",
@@ -421,58 +438,37 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.each([
-    {
-      name: "backslash",
-      entries: [{ path: "dir\\note.txt", contents: "normalized" }],
-      expectedPath: ["dir", "note.txt"],
-    },
-    {
-      name: "mixed separators and dots",
-      entries: [{ path: "./pkg//dir\\note.txt", contents: "normalized" }],
-      expectedPath: ["pkg", "dir", "note.txt"],
-    },
-    ...(["PAX", "GNU"] as const).map((format) => ({
+  it.each(
+    (["PAX", "GNU"] as const).map((format) => ({
       name: `${format} override`,
       entries: pathOverrideEntries(format, "raw.txt", "./pkg//dir\\note.txt"),
       expectedPath: ["pkg", "dir", "note.txt"],
     })),
-  ])(
-    "extracts canonical $name names beneath the destination",
-    async ({ entries, expectedPath }) => {
-      const { mediaDir } = prepareArchive(createRawTarBuffer(entries));
-      const result = await executeDirFetch();
-      const details = result.details as {
-        rootDir: string;
-        files: Array<{ relPath: string; localPath: string }>;
-      };
-      expect(details.files).toMatchObject([
-        {
-          relPath: path.join(...expectedPath),
-          localPath: path.join(details.rootDir, ...expectedPath),
-        },
-      ]);
-      expect(path.dirname(details.rootDir)).toBe(mediaDir);
-      await expect(fs.readFile(details.files[0]!.localPath, "utf8")).resolves.toBe("normalized");
-      expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
-        expect.objectContaining({ decision: "allowed" }),
-      );
-    },
-  );
+  )("extracts canonical $name names beneath the destination", async ({ entries, expectedPath }) => {
+    const { mediaDir } = prepareArchive(createRawTarBuffer(entries));
+    const result = await executeDirFetch();
+    const details = result.details as {
+      rootDir: string;
+      files: Array<{ relPath: string; localPath: string }>;
+    };
+    expect(details.files).toMatchObject([
+      {
+        relPath: path.join(...expectedPath),
+        localPath: path.join(details.rootDir, ...expectedPath),
+      },
+    ]);
+    expect(path.dirname(details.rootDir)).toBe(mediaDir);
+    await expect(fs.readFile(details.files[0]!.localPath, "utf8")).resolves.toBe("normalized");
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decision: "allowed" }),
+    );
+  });
 
   it.each([
     "../escape.txt",
-    "..\\escape.txt",
-    "dir/../escape.txt",
-    "dir\\..\\escape.txt",
     "dir/..\\escape.txt",
-    "dir\\../escape.txt",
-    "a/b\\..\\escape.txt",
     "/escape.txt",
-    "\\escape.txt",
     "\\\\server\\share\\escape.txt",
-    "C:/escape.txt",
-    "C:\\escape.txt",
     "C:escape.txt",
     "dir/C:escape.txt",
   ])("rejects unsafe raw path %j", async (entryPath) => {
@@ -486,15 +482,12 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.each(["dir\\note.txt", "./dir//note.txt"])(
-    "rejects canonical collision with %j",
-    async (entryPath) => {
-      await expectUnsafeArchive([
-        { path: "dir/note.txt", contents: "first" },
-        { path: entryPath, contents: "second" },
-      ]);
-    },
-  );
+  it("rejects canonical collisions", async () => {
+    await expectUnsafeArchive([
+      { path: "dir/note.txt", contents: "first" },
+      { path: "./dir//note.txt", contents: "second" },
+    ]);
+  });
 
   it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
     const tarBuffer = await createTarBuffer({

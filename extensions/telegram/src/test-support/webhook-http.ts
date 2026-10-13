@@ -1,8 +1,4 @@
-import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
-import { setTimeout as sleep } from "node:timers/promises";
-
-const WEBHOOK_DRAIN_GUARD_MS = 5;
 
 export async function yieldWebhookTask(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -10,7 +6,7 @@ export async function yieldWebhookTask(): Promise<void> {
   });
 }
 
-export function collectResponseBody(
+function collectResponseBody(
   res: IncomingMessage,
   onDone: (payload: { statusCode: number; body: string }) => void,
 ): void {
@@ -55,7 +51,7 @@ function createSingleSettlement<T>(params: {
   };
 }
 
-export async function fetchWithTimeout(
+async function fetchWithTimeout(
   input: string,
   init: Omit<RequestInit, "signal">,
   timeoutMs: number,
@@ -143,6 +139,42 @@ export async function postWebhookHeadersOnly(params: {
   });
 }
 
+export async function postWebhookWithDeclaredLength(params: {
+  port: number;
+  path: string;
+  secret: string;
+  declaredLength: number;
+  body: string;
+}): Promise<
+  | { kind: "response"; statusCode: number; body: string }
+  | { kind: "error"; code: string | undefined }
+> {
+  return await new Promise((resolve) => {
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: params.path,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(params.declaredLength),
+          "x-telegram-bot-api-secret-token": params.secret,
+        },
+      },
+      (res) => {
+        collectResponseBody(res, (payload) => {
+          resolve({ kind: "response", ...payload });
+        });
+      },
+    );
+    req.on("error", (error: NodeJS.ErrnoException) => {
+      resolve({ kind: "error", code: error.code });
+    });
+    req.end(params.body);
+  });
+}
+
 function createDeterministicRng(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -212,17 +244,21 @@ export async function postWebhookPayloadWithChunkPlan(params: {
         const remaining = payloadBuffer.length - offset;
         const nextSize = Math.max(1, Math.min(remaining, 1 + Math.floor(rng() * 8_192)));
         const chunk = payloadBuffer.subarray(offset, offset + nextSize);
-        const canContinue = req.write(chunk);
+        const written = new Promise<void>((resolveWrite, rejectWrite) => {
+          req.write(chunk, (error) => {
+            if (error) {
+              rejectWrite(error);
+            } else {
+              resolveWrite();
+            }
+          });
+        });
         offset += nextSize;
         bytesQueued = offset;
         chunksQueued += 1;
+        await written;
         if (chunksQueued % 10 === 0) {
           await yieldWebhookTask();
-        }
-        if (!canContinue) {
-          // Windows CI occasionally stalls on waiting for drain indefinitely.
-          // Bound the wait, then continue queuing this small (~1MB) payload.
-          await Promise.race([once(req, "drain"), sleep(WEBHOOK_DRAIN_GUARD_MS)]);
         }
       }
       phase = "awaiting-response";

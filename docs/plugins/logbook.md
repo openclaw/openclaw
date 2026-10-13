@@ -46,7 +46,7 @@ openclaw plugins enable codex
 openclaw plugins enable logbook
 ```
 
-Configure an explicit vision model for deterministic startup:
+Configure an explicit vision model to make startup predictable:
 
 ```json5
 {

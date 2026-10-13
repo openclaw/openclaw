@@ -11,7 +11,6 @@ export type OpenClawExecPolicyForCodexAppServer = {
   ask: OpenClawExecAsk;
   touched: boolean;
 };
-export type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
 
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";

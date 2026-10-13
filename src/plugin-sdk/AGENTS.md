@@ -1,7 +1,6 @@
 # Plugin SDK Boundary
 
-This directory is the public contract between plugins and core. Changes here
-can affect bundled plugins and third-party plugins.
+Public contract between plugins/core; changes can affect bundled + third-party plugins.
 
 ## Source Of Truth
 
@@ -22,81 +21,59 @@ can affect bundled plugins and third-party plugins.
 
 ## Boundary Rules
 
-- Host loads plugins; plugins should not reach through the SDK into arbitrary
-  host internals.
-- Prefer a small versioned host/kernel seam plus narrow documented SDK
-  entrypoints over broad convenience barrels.
-- Prefer narrow, purpose-built subpaths over broad convenience re-exports.
-- Do not expose implementation convenience from `src/channels/**`,
-  `src/agents/**`, `src/plugins/**`, or other internals unless you are
-  intentionally promoting a supported public contract.
-- Keep public SDK entrypoints cheap at module load. If a helper is only needed
-  on async paths such as send, monitor, probe, directory-live, login, or setup,
-  prefer a narrow `*.runtime` subpath over re-exporting it through a broad SDK
-  barrel that hot channel entrypoints import on startup.
-- Keep SDK facades acyclic. Do not add back-edge re-exports that route a
-  lightweight contract file back through heavier policy or runtime modules.
-- Do not mix static and dynamic imports for the same runtime surface when
-  shaping SDK seams. If a surface must stay lazy, keep the eager side on a
-  light contract file and the deferred side on a dedicated runtime subpath.
-- Prefer `api.runtime` or a focused SDK facade over telling extensions to reach
-  into host internals directly.
-- When core or tests need bundled plugin helpers, prefer the plugin package
-  `api.ts` or `runtime-api.ts` plus generic SDK capabilities. Do not add a
-  provider-named `src/plugin-sdk/<id>.ts` seam just to make core aware of a
-  bundled channel's private helpers.
-- Resolver/facade loader tests are the exception to broad source API coverage:
-  use generated tiny plugin fixtures for `api.js` / `runtime-api.js` fallback
-  behavior. Do not point those tests at real bundled plugin source APIs.
-- For provider work, prefer family-level seams over provider-specific seams.
-  Shared helpers should describe a reusable behavior such as replay policy,
-  tool-schema compat, payload normalization, stream-wrapper composition, or
-  transport decoration. Avoid adding a new SDK export that only wraps one
-  provider's local implementation unless there is already a second consumer.
-- Prefer named helpers over raw options objects when the options encode a
-  stable contract. Example: export a helper for "OpenAI-style Anthropic tool
-  payload compat" instead of making every plugin pass the same mode flags.
-- Keep transport/runtime policy and plugin-facing helpers aligned. If the same
-  behavior is used in plugin registration and in core runtime paths, expose one
-  shared helper instead of letting the two paths drift.
-- SDK subpaths should help callers resolve one capability or runtime need at a
-  time. Do not grow new surfaces that require broad runtime registry access as
-  the default path.
-- If a proposed SDK export mainly exists to let setup/config/control-plane code
-  execute plugin runtime, that is usually a boundary smell. Prefer metadata or
-  descriptor-driven control-plane seams first.
+- Host loads plugins; plugins must not reach through SDK into arbitrary host internals.
+- Follow [plugin value boundary](../../docs/plugins/sdk-runtime.md#plugin-value-boundary): admit plugins at load/registration; all loaded plugins pass values by reference. Plugins must not mutate values after handing them to host. Keep invocation scope/lifecycle ownership; no per-value copying/deep validation.
+- Prefer small versioned host/kernel seam + narrow documented SDK entrypoints over broad convenience barrels.
+- Prefer narrow purpose-built subpaths over broad convenience re-exports.
+- Never expose implementation convenience from `src/channels/**`, `src/agents/**`, `src/plugins/**`, or other internals unless intentionally promoting supported public contract.
+- Public SDK entrypoints: cheap module load. Async-only helper (send, monitor, probe, directory-live, login, setup): prefer narrow `*.runtime` subpath, not broad SDK barrel re-export imported by hot channel entrypoints at startup.
+- SDK facades: acyclic. No back-edge re-exports routing lightweight contract file through heavier policy/runtime modules.
+- Never mix static/dynamic imports for same runtime surface when shaping SDK seams. Lazy surface: eager side on light contract file, deferred side on dedicated runtime subpath.
+- Prefer `api.runtime`/focused SDK facade over extensions reaching directly into host internals.
+- Core/tests needing bundled plugin helpers: plugin package `api.ts` / `runtime-api.ts` + generic SDK capabilities. No provider-named `src/plugin-sdk/<id>.ts` seam merely to expose bundled channel's private helpers to core.
+- Resolver/facade loader tests = broad source API coverage exception. Generated tiny plugin fixtures for `api.js` / `runtime-api.js` fallback behavior; never real bundled plugin source APIs.
+- Provider work: family-level over provider-specific seams. Shared helpers describe reusable replay policy, tool-schema compat, payload normalization, stream-wrapper composition, transport decoration. No new SDK export wrapping only one provider's local implementation unless second consumer already exists.
+- Stable contract encoded by options: prefer named helpers over raw options objects. Example: "OpenAI-style Anthropic tool payload compat" helper, not same mode flags passed by every plugin.
+- Align transport/runtime policy + plugin-facing helpers. Same behavior in plugin registration/core runtime: one shared helper, never two drifting paths.
+- SDK subpaths: resolve one capability/runtime need at a time. No new surfaces requiring broad runtime registry access by default.
+- SDK export mainly letting setup/config/control-plane execute plugin runtime = usually boundary smell. Metadata/descriptor-driven control-plane seams first.
 
 ## Versioned Required Capabilities
 
-- Always: when a shipped Plugin SDK parameter contract gains required host authority, introduce a versioned type that requires it. Keep the legacy type source-compatible for its documented deprecation window, and migrate every bundled/internal caller in the same change.
-- Always: keep host capabilities generic and closure-bound. Bind every exposed tool, preparer, callback, approval operation, and native-action surface; retained copies must fail after owner or capability closure, including closure during awaited policy work.
-- Never: treat legacy optionality as a capability-free runtime path, reconstruct host authority inside a plugin, or add provider-specific authority to the generic contract.
-- Never: hand-edit generated SDK baselines, declarations, hashes, or budgets. Regenerate them canonically.
-- Ask first: obtain SDK and security owner acceptance before shortening a compatibility window, making a shipped type source-incompatible, or widening a capability’s trust, authority, or persistence boundary.
+- Always: shipped Plugin SDK parameter contract gains required host authority → versioned type requiring it. Legacy type source-compatible for documented deprecation window; migrate every bundled/internal caller in same change.
+- Always: generic closure-bound host capabilities. Bind every exposed tool, preparer, callback, approval operation, native-action surface. Retained copies must fail after owner/capability closure, including closure during awaited policy work.
+- Never: legacy optionality as capability-free runtime path, reconstructed host authority inside plugin, provider-specific authority in generic contract.
+- Never: hand-edit generated SDK baselines, declarations, hashes, budgets. Regenerate canonically.
+- Ask first: SDK + security owner acceptance before shortening compatibility window, making shipped type source-incompatible, or widening capability's trust, authority, persistence boundary.
 
 ## Verification
 
-- If you touch SDK seams that affect lazy loading, hot channel entrypoints, or
-  bundled plugin import topology, run `pnpm build`.
-- If the change can alter bundled channel startup cost, also run the isolated
-  entrypoint profiler for the affected plugin:
+- SDK seams affecting lazy loading, hot channel entrypoints, bundled plugin import topology: `pnpm build`.
+- Changes that can alter bundled channel startup cost: also run isolated affected-plugin entrypoint profiler:
   `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`
 
 ## Expanding The Boundary
 
-- SDK surface is too large. Do not add compat barrels, aliases, or fallback exports for convenience. Replace old entrypoints when cleaner.
-- Public third-party API is the only compat exception: document/version breaks, migrate ALL bundled/internal plugins first, then aggressively deprecate unused exports.
-- When adding or changing a public subpath, keep these aligned:
+- SDK surface too large. No convenience compat barrels, aliases, fallback exports. Replace old entrypoints when cleaner.
+- Public third-party API = only compat exception: document/version breaks, migrate ALL bundled/internal plugins first, then aggressively deprecate unused exports.
+- Adding/changing public subpath: align:
   - docs in `docs/plugins/*`
   - `scripts/lib/plugin-sdk-entrypoints.json`
   - `scripts/lib/plugin-sdk-entries.mts`
   - `package.json` exports
-  - API diff and export checks
-- If a bundled channel/helper need crosses package boundaries, first ask
-  whether the need is truly generic. If yes, add a narrow generic subpath. If
-  not, keep it plugin-local through `api.ts` / `runtime-api.ts`.
-- When expanding provider-facing seams, update or add the matching narrow tests
-  that lock the contract: Plugin SDK diff/export checks for public subpaths
-  and the most direct provider/plugin tests for the behavior you are
-  centralizing.
-- Breaking removals or renames are major-version work, not drive-by cleanup.
+  - API diff + export checks
+- Bundled channel/helper crossing package boundaries: first ask whether truly generic. Yes → narrow generic subpath. No → plugin-local `api.ts` / `runtime-api.ts`.
+- Expanding provider-facing seams: update/add matching narrow contract tests — Plugin SDK diff/export checks for public subpaths + most direct provider/plugin tests for centralized behavior.
+- Breaking removals/renames = major-version work, never drive-by cleanup.
+
+## Choose The Capability Surface
+
+New capability: first path expressing actual requirement:
+
+1. Extend existing owner or use existing command, skill, plugin, supported integration.
+2. Use existing plugin contract. Prefer bundle plugins for skills, MCP servers, configuration; code plugins for runtime hooks, providers, channels, tools. Vendor behavior → vendor plugin; feature behavior → feature owner.
+3. Missing contract → narrow generic core/SDK capability; move existing bundled implementations + callers together. Repeated independent requests for same capability → contract review, never another parallel manager/hook.
+4. Universal core surface only for fundamental need existing extension points cannot express. Explain gap + ongoing cost; new hook needs concrete consumer.
+
+- Example: new channel action → shared message action contract first.
+- Setup screen needing plugin metadata → manifest/lightweight artifact, never plugin execution runtime.

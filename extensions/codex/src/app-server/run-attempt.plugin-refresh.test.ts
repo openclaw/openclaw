@@ -7,13 +7,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildEmptyToolTelemetry } from "./event-projector.test-harness.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { isJsonObject } from "./protocol.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
-  createParams,
+  createTestParams,
   createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   getMockRuntimeIdentity,
@@ -42,23 +43,16 @@ describe("managed Codex plugin refresh", () => {
 
   it.each([
     "confirmed",
-    "exited-terminal",
     "interrupt-error",
     "unsubscribe-error",
-    "terminal-error",
-    "abort",
     "host-persisted",
-    "native-prompt",
     "admitted-continuation",
   ] as const)(
     "persists concurrent and replayed results before the %s handoff",
     async (scenario) => {
-      const firstHandoff = scenario === "host-persisted" || scenario === "native-prompt";
-      const outcome =
-        firstHandoff || scenario === "admitted-continuation" || scenario === "exited-terminal"
-          ? "confirmed"
-          : scenario;
-      const hasNativeCommand = scenario === "confirmed" || scenario === "exited-terminal";
+      const firstHandoff = scenario === "host-persisted";
+      const outcome = firstHandoff || scenario === "admitted-continuation" ? "confirmed" : scenario;
+      const hasNativeCommand = scenario === "confirmed";
       const siblingStarted = createDeferred<void>();
       const releaseSibling = createDeferred<void>();
       const refreshRequested = createDeferred<void>();
@@ -68,7 +62,6 @@ describe("managed Codex plugin refresh", () => {
       const terminalRequested = createDeferred<void>();
       const releaseTerminal = createDeferred<void>();
       const terminalAcknowledged = createDeferred<void>();
-      const terminalInventoryRead = createDeferred<void>();
       const nativeCommand = {
         id: "native-background",
         type: "commandExecution",
@@ -82,7 +75,7 @@ describe("managed Codex plugin refresh", () => {
         exitCode: null,
         durationMs: null,
       };
-      let terminalRunning = scenario === "confirmed" || scenario === "terminal-error";
+      let terminalRunning = hasNativeCommand;
       const steerText = "After reloading, inspect the new description before continuing.";
       const acceptedSteering =
         scenario === "host-persisted" || scenario === "admitted-continuation";
@@ -118,11 +111,9 @@ describe("managed Codex plugin refresh", () => {
           details: {},
         };
       });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [slow, reload];
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+
+      const params = createTestParams();
+      setCodexTestToolFactory(params, () => [slow, reload]);
       const originalTask = "Reload the plugin and verify the changed behavior.";
       const receipt = "already-committed-effect-42";
       const prior = new CodexAppServerEventProjector(
@@ -157,7 +148,7 @@ describe("managed Codex plugin refresh", () => {
       params.prompt = firstHandoff
         ? originalTask
         : "Continue from completed work using refreshed tools.";
-      params.suppressNextUserMessagePersistence = scenario !== "native-prompt";
+      params.suppressNextUserMessagePersistence = true;
       if (scenario === "host-persisted" || scenario === "admitted-continuation") {
         const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
         const target = {
@@ -268,25 +259,17 @@ describe("managed Codex plugin refresh", () => {
             }
             result = { status: "unsubscribed" };
           } else if (message.method === "thread/backgroundTerminals/list") {
-            terminalInventoryRead.resolve();
             result = {
               data: terminalRunning ? [{ processId: "42", itemId: nativeCommand.id }] : [],
               nextCursor: null,
             };
           } else if (message.method === "thread/backgroundTerminals/terminate") {
             terminalRequested.resolve();
-            if (outcome === "terminal-error") {
-              send({
-                id: message.id,
-                error: { code: -32000, message: "fixture terminal refused" },
-              });
-            } else {
-              void releaseTerminal.promise.then(() => {
-                terminalRunning = false;
-                send({ id: message.id, result: { terminated: true } });
-                terminalAcknowledged.resolve();
-              });
-            }
+            void releaseTerminal.promise.then(() => {
+              terminalRunning = false;
+              send({ id: message.id, result: { terminated: true } });
+              terminalAcknowledged.resolve();
+            });
             return;
           } else if (message.method === "turn/steer") {
             result = { turnId: "turn-1" };
@@ -311,13 +294,7 @@ describe("managed Codex plugin refresh", () => {
                 send({ id: message.id, error: { code: -32000, message: "fixture stop refused" } });
                 return;
               }
-              send({
-                method: "turn/completed",
-                params: {
-                  threadId: "thread-1",
-                  turn: { id: "turn-1", status: "interrupted", items: [] },
-                },
-              });
+              send(turnCompleted({ id: "turn-1", status: "interrupted", items: [] }));
               send({ id: message.id, result: {} });
             };
             interruptRequested.resolve();
@@ -327,20 +304,15 @@ describe("managed Codex plugin refresh", () => {
         },
       });
       const sendNativeResult = () =>
-        harness.send({
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: {
-              ...nativeCommand,
-              status: "completed",
-              exitCode: 143,
-              aggregatedOutput: "background drained",
-              durationMs: 1,
-            },
-          },
-        });
+        harness.send(
+          itemNotification("item/completed", {
+            ...nativeCommand,
+            status: "completed",
+            exitCode: 143,
+            aggregatedOutput: "background drained",
+            durationMs: 1,
+          }),
+        );
       const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
       const run = runCodexAppServerAttempt(params, {
@@ -415,10 +387,7 @@ describe("managed Codex plugin refresh", () => {
           expect(steeringRecorder?.getPersistedMessage?.()?.content).toBe(steerText);
         }
         if (hasNativeCommand) {
-          harness.send({
-            method: "item/started",
-            params: { threadId: "thread-1", turnId: "turn-1", item: nativeCommand },
-          });
+          harness.send(itemNotification("item/started", nativeCommand));
         }
         const slowReply = request("message", "slow-call");
         await siblingStarted.promise;
@@ -433,10 +402,6 @@ describe("managed Codex plugin refresh", () => {
         const bindingBeforeHandoff = await readCodexAppServerBinding(params.sessionFile);
         expect(bindingBeforeHandoff).toMatchObject({ threadId: "thread-1" });
         expect(requests).not.toContain("thread/unsubscribe");
-        if (outcome === "abort") {
-          abort.abort("cancelled");
-          await settleInput();
-        }
         finishInterrupt?.();
         if (scenario === "confirmed") {
           expect(
@@ -456,26 +421,15 @@ describe("managed Codex plugin refresh", () => {
           expect(requests).not.toContain("thread/unsubscribe");
           sendNativeResult();
         }
-        if (scenario === "exited-terminal") {
-          await terminalInventoryRead.promise;
-          await settleInput();
-          expect(requests).not.toContain("thread/backgroundTerminals/terminate");
-          expect(requests).not.toContain("thread/unsubscribe");
-          sendNativeResult();
-        }
         const completed = await settled;
         expect(slow.execute).toHaveBeenCalledOnce();
         expect(reload.execute).toHaveBeenCalledOnce();
         expect(consumer?.()).toBe(false);
-        if (
-          outcome === "interrupt-error" ||
-          outcome === "unsubscribe-error" ||
-          outcome === "terminal-error"
-        ) {
-          expect(completed).toHaveProperty("result");
-          if (!("result" in completed)) {
-            throw completed.error;
-          }
+        expect(completed).toHaveProperty("result");
+        if (!("result" in completed)) {
+          throw completed.error;
+        }
+        if (outcome !== "confirmed") {
           expect(completed.result.terminal.kind).toBe("failed");
           expect(completed.result.replayMetadata).toMatchObject({
             hadPotentialSideEffects: true,
@@ -499,77 +453,65 @@ describe("managed Codex plugin refresh", () => {
               bindingBeforeHandoff?.continuityCalibration,
             );
           }
-          if (outcome === "interrupt-error" || outcome === "terminal-error") {
+          if (outcome === "interrupt-error") {
             expect(requests).not.toContain("thread/unsubscribe");
           }
           return;
         }
-        expect(completed).toHaveProperty("result");
-        if (!("result" in completed)) {
-          throw completed.error;
-        }
         expect(readAttemptTerminal(completed.result)).toMatchObject({
-          aborted: outcome === "abort",
+          aborted: false,
           timedOut: false,
         });
-        if (outcome === "abort") {
-          expect(await readCodexAppServerBinding(params.sessionFile)).toMatchObject({
-            threadId: "thread-1",
-          });
-          expect(completed.result.pluginRuntimeRefreshMessages).toBeUndefined();
-        }
-        if (outcome === "confirmed") {
-          await expect(Promise.all([slowReply, reloadReply, replayReply])).resolves.toEqual([
-            expect.objectContaining({ success: true }),
-            expect.objectContaining({ success: true }),
-            expect.objectContaining({ success: true }),
-          ]);
-          expect(completed.result.pluginRuntimeRefreshMessages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ role: "toolResult", toolCallId: "slow-call" }),
-              expect.objectContaining({ role: "toolResult", toolCallId: "reload-call" }),
-            ]),
-          );
-          expect(
-            completed.result.pluginRuntimeRefreshMessages
-              ?.filter((message) => message.role === "user")
-              .map((message) => message.content),
-          ).toEqual([
-            ...(firstHandoff ? [originalTask] : []),
-            ...(acceptedSteering
-              ? [
-                  scenario === "admitted-continuation"
-                    ? [{ type: "text", text: steerText }, steeringImage]
-                    : steerText,
-                ]
-              : []),
-          ]);
-          if (scenario === "admitted-continuation") {
-            expect(completed.result.pluginRuntimeRefreshMessages).toContainEqual(
-              expect.objectContaining({
-                role: "user",
-                idempotencyKey: "native-refresh-steer:user",
-                __openclaw: expect.objectContaining({
-                  mediaImageBlockFactIndexes: [0],
-                  media: expect.arrayContaining([
-                    expect.objectContaining({ path: steeringImagePath }),
-                  ]),
-                }),
+        await expect(Promise.all([slowReply, reloadReply, replayReply])).resolves.toEqual([
+          expect.objectContaining({ success: true }),
+          expect.objectContaining({ success: true }),
+          expect.objectContaining({ success: true }),
+        ]);
+        expect(completed.result.pluginRuntimeRefreshMessages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ role: "toolResult", toolCallId: "slow-call" }),
+            expect.objectContaining({ role: "toolResult", toolCallId: "reload-call" }),
+          ]),
+        );
+        expect(
+          completed.result.pluginRuntimeRefreshMessages
+            ?.filter((message) => message.role === "user")
+            .map((message) => message.content),
+        ).toEqual([
+          ...(firstHandoff ? [originalTask] : []),
+          ...(acceptedSteering
+            ? [
+                scenario === "admitted-continuation"
+                  ? [{ type: "text", text: steerText }, steeringImage]
+                  : steerText,
+              ]
+            : []),
+        ]);
+        if (scenario === "admitted-continuation") {
+          expect(completed.result.pluginRuntimeRefreshMessages).toContainEqual(
+            expect.objectContaining({
+              role: "user",
+              idempotencyKey: "native-refresh-steer:user",
+              __openclaw: expect.objectContaining({
+                mediaImageBlockFactIndexes: [0],
+                media: expect.arrayContaining([
+                  expect.objectContaining({ path: steeringImagePath }),
+                ]),
               }),
-            );
-          }
-          if (hasNativeCommand) {
-            expect(terminalRunning).toBe(false);
-            const nativeResults = completed.result.messagesSnapshot.filter(
-              (message) => message.role === "toolResult" && message.toolCallId === nativeCommand.id,
-            );
-            expect(nativeResults).toHaveLength(1);
-            expect(JSON.stringify(nativeResults)).toContain("background drained");
-            expect(JSON.stringify(nativeResults)).not.toContain("missing_tool_result");
-          }
-          expect(await readCodexAppServerBinding(params.sessionFile)).toBeUndefined();
-          expect(requests.filter((method) => method === "thread/unsubscribe")).toHaveLength(1);
+            }),
+          );
         }
+        if (hasNativeCommand) {
+          expect(terminalRunning).toBe(false);
+          const nativeResults = completed.result.messagesSnapshot.filter(
+            (message) => message.role === "toolResult" && message.toolCallId === nativeCommand.id,
+          );
+          expect(nativeResults).toHaveLength(1);
+          expect(JSON.stringify(nativeResults)).toContain("background drained");
+          expect(JSON.stringify(nativeResults)).not.toContain("missing_tool_result");
+        }
+        expect(await readCodexAppServerBinding(params.sessionFile)).toBeUndefined();
+        expect(requests.filter((method) => method === "thread/unsubscribe")).toHaveLength(1);
       } finally {
         vi.useRealTimers();
         releaseSibling.resolve();

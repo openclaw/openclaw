@@ -46,6 +46,7 @@ let remoteCliPathKey = "openclaw.remoteCliPath"
 let canvasEnabledKey = "openclaw.canvasEnabled"
 let quickChatEnabledKey = "openclaw.quickChatEnabled"
 let cameraEnabledKey = "openclaw.cameraEnabled"
+let desktopSharingEnabledKey = "openclaw.desktopSharingEnabled"
 let computerControlEnabledKey = "openclaw.computerControlEnabled"
 let computerControlProviderKey = "openclaw.computerControlProvider"
 let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
@@ -83,3 +84,5 @@ let debugPaneEnabledKey = "openclaw.debugPaneEnabled"
 let debugFileLogEnabledKey = "openclaw.debug.fileLogEnabled"
 let appLogLevelKey = "openclaw.debug.appLogLevel"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+
+let nativeConversationForcedKey = "openclaw.chat.useNativeConversation"

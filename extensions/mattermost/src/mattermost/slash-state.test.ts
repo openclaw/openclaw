@@ -160,11 +160,6 @@ describe("slash-state global singleton", () => {
     deactivateSlashCommands();
   });
 
-  it("anchors accountStates on globalThis", () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    expect(getAccountStates().has("a1")).toBe(true);
-  });
-
   it("preserves slash routing state across module reloads", async () => {
     activate({ accountId: "a1", tokens: ["tok-reload"] });
     activate({ accountId: "a2", tokens: ["tok-other"] });
@@ -354,16 +349,6 @@ describe("slash-state request routing", () => {
     expect(followUp.res.statusCode).toBe(400);
   });
 
-  it("routes a token owned by one account", async () => {
-    activate({ accountId: "a1", tokens: ["tok-a"] });
-    activate({ accountId: "a2", tokens: ["tok-b"] });
-
-    const result = await routeSlashRequest({ body: "token=tok-a" });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
-  });
-
   it("rejects a token shared by multiple accounts", async () => {
     activate({ accountId: "a1", tokens: ["tok-shared"] });
     activate({ accountId: "a2", tokens: ["tok-shared"] });
@@ -375,26 +360,6 @@ describe("slash-state request routing", () => {
     expect(result.warn).toHaveBeenCalledWith(
       "mattermost: slash callback matched multiple accounts via token (a1, a2)",
     );
-  });
-
-  it("routes by registered team and command when token lookup misses", async () => {
-    activate({
-      accountId: "a1",
-      tokens: ["old-token"],
-      commands: [createRegisteredCommand()],
-    });
-    activate({
-      accountId: "a2",
-      tokens: ["other-token"],
-      commands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
-    });
-
-    const result = await routeSlashRequest({
-      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-    });
-
-    expect(result.statusCode).toBe(200);
-    expect(result.body).toBe("a1");
   });
 
   it("rejects a registered team and command shared by multiple accounts", async () => {

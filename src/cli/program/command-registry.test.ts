@@ -39,8 +39,6 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
-    const tasks = program.command("tasks");
-    tasks.command("show");
   },
 }));
 
@@ -77,15 +75,6 @@ describe("command-registry", () => {
     }
   };
 
-  it("includes both agent and agents in core CLI command names", () => {
-    const names = getCoreCliCommandNamesCore();
-    expect(names).toContain("setup");
-    expect(names).toContain("crestodian"); // hidden alias
-    expect(names).toContain("mcp");
-    expect(names).toContain("agent");
-    expect(names).toContain("agents");
-  });
-
   it("only exposes Claws after an explicit process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     expect(getCoreCliCommandNamesCore()).not.toContain("claws");
@@ -96,20 +85,6 @@ describe("command-registry", () => {
     expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 
     vi.unstubAllEnvs();
-  });
-
-  it("returns only commands that support subcommands", () => {
-    const names = getCoreCliCommandsWithSubcommands();
-    expect(names).toContain("config");
-    expect(names).toContain("agents");
-    expect(names).toContain("backup");
-    expect(names).toContain("mcp");
-    expect(names).toContain("sessions");
-    expect(names).toContain("tasks");
-    expect(names).toContain("agent");
-    expect(names).not.toContain("setup");
-    expect(names).not.toContain("status");
-    expect(names).not.toContain("doctor");
   });
 
   it("registerCoreCliByName resolves agent and agents separately", async () => {
@@ -125,48 +100,11 @@ describe("command-registry", () => {
     expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
   });
 
-  it("registerCoreCliByName returns false for unknown commands", async () => {
+  it.each(["tasks"])("registerCoreCliByName returns false for %s", async (name) => {
     const program = createProgram();
-    const found = await registerCoreCliByName(program, testProgramContext, "nonexistent");
+    const found = await registerCoreCliByName(program, testProgramContext, name);
     expect(found).toBe(false);
-  });
-
-  it("registers doctor placeholder for doctor primary command", () => {
-    const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
-
-    expect(namesOf(program)).toEqual(["doctor"]);
-  });
-
-  it("narrows to the primary command when command help is requested", () => {
-    const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
-
-    expect(namesOf(program)).toEqual(["doctor"]);
-  });
-
-  it("keeps all placeholders for root help", () => {
-    const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "--help"]);
-
-    const names = namesOf(program);
-    expect(names).toContain("doctor");
-    expect(names).toContain("triage");
-    expect(names).toContain("status");
-    expect(names.length).toBeGreaterThan(1);
-  });
-
-  it("treats maintenance commands as top-level builtins", async () => {
-    const program = createProgram();
-
-    expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
-
-    const names = getCoreCliCommandNamesCore();
-    expect(names).toContain("doctor");
-    expect(names).toContain("dashboard");
-    expect(names).toContain("reset");
-    expect(names).toContain("uninstall");
-    expect(names).not.toContain("maintenance");
+    expect(namesOf(program)).toEqual([]);
   });
 
   it("registers grouped core entry placeholders without duplicate command errors", async () => {
@@ -181,20 +119,7 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
-    expect(names).toContain("tasks");
-  });
-
-  it("can eagerly register the status/session command group repeatedly for completion", async () => {
-    const program = createProgram();
-
-    for (const name of ["status", "health", "sessions", "tasks"]) {
-      await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
-    }
-
-    const names = namesOf(program);
-    const countName = (target: string) =>
-      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
-    expect(countName("tasks")).toBe(1);
+    expect(names).not.toContain("tasks");
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

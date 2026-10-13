@@ -1,6 +1,3 @@
-/**
- * Gateway startup orchestration tests.
- */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -35,101 +32,22 @@ describe("gateway startup model runtime publication", () => {
     refreshPreparedModelRuntimeSnapshotsMock.mockClear();
   });
 
-  it("publishes an explicit configured primary model", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("hydrates configured external CLI auth before prepared owner publication", async () => {
-    const cfg = {} as OpenClawConfig;
-    const hydrate = vi.fn();
-
-    await hydrateConfiguredExternalCliAuth({
-      getConfig: () => cfg,
-      log: { warn: vi.fn() },
-      deps: {
-        listAgentIds: () => ["main", "secondary"],
-        resolveAgentDir: (_config, agentId) => `/tmp/${agentId}`,
-        collectConfiguredRefs: (_config, agentId) => [
-          { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
-        ],
-        hydrate,
-      },
-    });
-
-    expect(hydrate).toHaveBeenCalledTimes(2);
-    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/main", ["openai"]);
-    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/secondary", ["anthropic"]);
-    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-  });
-
-  it("publishes the default catalog when no explicit primary model is configured", async () => {
-    const cfg = {} as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("publishes lifecycle owners for configured CLI backends", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "codex-cli/gpt-5.5",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({ cfg });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-    });
-  });
-
-  it("preserves the explicit startup workspace in the published default owner", async () => {
-    const cfg = {} as OpenClawConfig;
-    await publishConfiguredModelRuntimeSnapshots({
-      cfg,
-      workspaceDir: "/tmp/explicit-workspace",
-    });
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
-      allowGatewaySubagentBinding: true,
-      gatewayLifecycle: true,
-      startup: true,
-      catalogMode: "static",
-      defaultWorkspaceDir: "/tmp/explicit-workspace",
-    });
-  });
+  it.each([undefined, "/tmp/explicit-workspace"])(
+    "publishes startup lifecycle owners with workspace %s",
+    async (workspaceDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+      await publishConfiguredModelRuntimeSnapshots({ cfg, workspaceDir });
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(cfg, {
+        allowGatewaySubagentBinding: true,
+        gatewayLifecycle: true,
+        startup: true,
+        catalogMode: "static",
+        ...(workspaceDir ? { defaultWorkspaceDir: workspaceDir } : {}),
+      });
+    },
+  );
 
   it("propagates lifecycle catalog preparation failure", async () => {
     const error = new Error("models write failed");
@@ -170,13 +88,11 @@ describe("gateway startup model runtime publication", () => {
     const initialConfig = { ui: { theme: "light" } } as never;
     const nextConfig = { ui: { theme: "dark" } } as never;
     let currentConfig = initialConfig;
-    const depsReady = createDeferred<{
-      listAgentIds: () => string[];
-      resolveAgentDir: () => string;
-      collectConfiguredRefs: ReturnType<typeof vi.fn>;
-      hydrate: ReturnType<typeof vi.fn>;
-    }>();
-    const collectConfiguredRefs = vi.fn(() => [{ value: "openai/gpt-5.4" }]);
+    const depsReady =
+      createDeferred<NonNullable<Parameters<typeof hydrateConfiguredExternalCliAuth>[0]["deps"]>>();
+    const collectConfiguredRefs = vi.fn((_config: OpenClawConfig, agentId: string) => [
+      { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
+    ]);
     const hydrate = vi.fn();
 
     const hydration = hydrateConfiguredExternalCliAuth({
@@ -186,15 +102,22 @@ describe("gateway startup model runtime publication", () => {
     } as never);
     currentConfig = nextConfig;
     depsReady.resolve({
-      listAgentIds: () => ["default"],
-      resolveAgentDir: () => "/tmp/default-agent",
+      listAgentIds: () => ["main", "secondary"],
+      resolveAgentDir: (_config, agentId) => `/tmp/${agentId}`,
       collectConfiguredRefs,
       hydrate,
     });
 
     await expect(hydration).resolves.toBe(nextConfig);
-    expect(collectConfiguredRefs).toHaveBeenCalledWith(nextConfig, "default");
-    expect(hydrate).toHaveBeenCalledWith(nextConfig, "/tmp/default-agent", ["openai"]);
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    for (const [agentId, provider] of [
+      ["main", "openai"],
+      ["secondary", "anthropic"],
+    ]) {
+      expect(collectConfiguredRefs).toHaveBeenCalledWith(nextConfig, agentId);
+      expect(hydrate).toHaveBeenCalledWith(nextConfig, `/tmp/${agentId}`, [provider]);
+    }
+    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
   });
 
   it("drops a stale plugin generation after loading the prepared runtime", async () => {

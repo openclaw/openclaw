@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,10 @@ const targetText = "Selected target transcript 741";
 const timestamp = Date.parse("2026-09-15T12:00:00.000Z");
 
 async function primaryKeys(page: Page) {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: ApplicationContext };
-    };
-    return app.runtime?.context.sessions.state.result?.sessions.map((row) => row.key) ?? null;
-  });
+  return evaluateControlUiContext(
+    page,
+    (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
+  );
 }
 async function capture(page: Page, name: string) {
   if (captureProof) {
@@ -112,12 +110,12 @@ suite.define(() => {
           methodResponses: {
             "sessions.list": {
               cases: [
-                { match: { limit: 200, includeUnknown: false }, response: result(searched) },
                 { match: { limit: 50 }, response: result(scenario.source ? searched : primary) },
                 { response: result(primary) },
               ],
             },
             "sessions.search": {
+              sessions: [target],
               results: [
                 {
                   messageId: "target-message",
@@ -174,7 +172,9 @@ suite.define(() => {
         expect(searchRequests).toHaveLength(scenario.source ? 0 : 1);
         if (!scenario.source) {
           expect(searchRequests[0]?.params).toMatchObject({
-            sessionKeys: expect.arrayContaining([targetKey]),
+            query: "Selected target transcript",
+            limit: 25,
+            scope: { agentId: "main" },
           });
         }
         await capture(page, "before-click.png");

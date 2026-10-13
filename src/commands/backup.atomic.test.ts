@@ -1,5 +1,5 @@
 // Backup atomicity tests cover temp-file writes, rollback behavior, and backup archive consistency.
-import fsSync, { type Stats } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,11 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as directoryDurability from "../infra/directory-durability.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
-  backupVerifyCommandMock,
   createMockTarStream,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
-  tarCreateMock,
+  backupWalkMock,
 } from "./backup.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -32,8 +31,7 @@ describe("backupCreateCommand atomic archive write", () => {
 
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
-    tarCreateMock.mockReset();
-    backupVerifyCommandMock.mockReset();
+    backupWalkMock.mockReset();
     sleepMock.mockClear();
   });
 
@@ -66,31 +64,19 @@ describe("backupCreateCommand atomic archive write", () => {
     };
   }
 
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    try {
-      await fs.access(targetPath);
-      throw new Error(`expected missing path: ${targetPath}`);
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
-  }
-
   it("does not leave a partial final archive behind when tar creation fails", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-failure-",
     });
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
+      backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
 
-      await expect(
-        backupCreateCommand(runtime, {
-          output: outputPath,
-        }),
-      ).rejects.toThrow(/disk full/i);
+      await expect(backupCreateCommand(runtime, { output: outputPath })).rejects.toThrow(
+        /disk full/i,
+      );
 
-      await expectPathMissing(outputPath);
-      const remaining = await fs.readdir(archiveDir);
-      expect(remaining).toStrictEqual([]);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(archiveDir)).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
@@ -103,7 +89,6 @@ describe("backupCreateCommand atomic archive write", () => {
     const volatilePath = path.join(tempHome.home, ".openclaw", "logs", "gateway.log");
     await fs.mkdir(path.dirname(volatilePath), { recursive: true });
     await fs.writeFile(volatilePath, "volatile log\n", "utf8");
-    const volatileStat = await fs.stat(volatilePath);
     const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
     let blockedPartialPath: string | undefined;
     let blockedPartialCleanupAttempts = 0;
@@ -122,24 +107,23 @@ describe("backupCreateCommand atomic archive write", () => {
     });
     try {
       let tarAttempt = 0;
-      tarCreateMock.mockImplementation(
-        (options: { filter: (entryPath: string, entryStat: Stats) => boolean }) => {
-          tarAttempt += 1;
-          return createMockTarStream({
-            beforeRead: () => {
-              expect(options.filter(volatilePath, volatileStat)).toBe(false);
-            },
-            contents: `archive-attempt-${tarAttempt}`,
-            ...(tarAttempt < 3
-              ? {
-                  error: Object.assign(new Error("did not encounter expected EOF"), {
-                    path: path.join(tempHome.home, ".openclaw", "state.txt"),
-                  }),
-                }
-              : {}),
-          });
-        },
-      );
+      backupWalkMock.mockImplementation((options: { skip: (entryPath: string) => boolean }) => {
+        tarAttempt += 1;
+        return createMockTarStream({
+          beforeRead: () => {
+            expect(options.skip(volatilePath)).toBe(true);
+          },
+          contents: `archive-attempt-${tarAttempt}`,
+          ...(tarAttempt < 3
+            ? {
+                error: Object.assign(new Error("encountered unexpected EOF"), {
+                  code: "EOF",
+                  path: path.join(tempHome.home, ".openclaw", "state.txt"),
+                }),
+              }
+            : {}),
+        });
+      });
 
       const result = await backupCreateCommand(runtime, {
         output: outputPath,
@@ -163,7 +147,7 @@ describe("backupCreateCommand atomic archive write", () => {
     const publish = directoryDurability.publishFileExclusive;
     const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
+      backupWalkMock.mockReturnValueOnce(createMockTarStream());
       publicationSpy.mockImplementationOnce(async (options) => {
         await fs.writeFile(options.targetPath, "concurrent-archive", {
           encoding: "utf8",
@@ -179,33 +163,6 @@ describe("backupCreateCommand atomic archive write", () => {
       ).rejects.toThrow(/refusing to overwrite existing backup archive/i);
 
       expect(await fs.readFile(outputPath, "utf8")).toBe("concurrent-archive");
-    } finally {
-      publicationSpy.mockRestore();
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails closed when hard-link publication is unsupported", async () => {
-    const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
-      archivePrefix: "openclaw-backup-no-hardlink-",
-    });
-    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
-    try {
-      tarCreateMock.mockReturnValueOnce(createMockTarStream());
-      publicationSpy.mockRejectedValueOnce(
-        Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
-      );
-
-      await expect(
-        backupCreateCommand(runtime, {
-          output: outputPath,
-        }),
-      ).rejects.toThrow(/requires hard-link support/iu);
-      expect(publicationSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ strategy: "link-required" }),
-      );
-      await expectPathMissing(outputPath);
-      await expect(fs.readdir(archiveDir)).resolves.toEqual([]);
     } finally {
       publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });

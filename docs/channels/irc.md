@@ -240,7 +240,7 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 Notes:
 
 - `toolsBySender` keys should use explicit prefixes (`channel:`, `id:`, `e164:`, `username:`, `name:`). For IRC use `id:` with the sender identity value: `id:alice` or `id:alice!~alice@203.0.113.7` for stronger matching.
-- Legacy unprefixed keys are still accepted, matched as `id:` only, and emit a deprecation warning.
+- Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).

@@ -2,16 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../api/types.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
-import {
-  createSidebarAttentionStore,
-  type SidebarAttentionStore,
-} from "../app/sidebar-attention-store.ts";
+import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
-import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { createStore } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 
 let store: SidebarAttentionStore | undefined;
@@ -55,22 +51,7 @@ function setup(expiresInMs?: number) {
       : Promise.resolve({ jobs: [], enabled: true, hasMore: false }),
   );
   const harness = createGatewayHarness(client);
-  store = createSidebarAttentionStore({
-    gateway: harness.gateway,
-    agentSelection: {
-      state: { selectedId: "main", scopeId: null },
-      subscribe: () => () => {},
-    } as unknown as ApplicationContext["agentSelection"],
-    agents: {
-      state: { agentsList: null },
-      subscribe: () => () => {},
-    } as unknown as ApplicationContext["agents"],
-    overlays: {
-      snapshot: { approvalQueue: [] },
-      subscribe: () => () => {},
-    } as unknown as ApplicationContext["overlays"],
-    scopeUpgrade: hiddenScopeUpgradeCapability,
-  });
+  store = createStore(harness.gateway);
   store.activate(SidebarAttentionStoreController);
   return {
     authRequest,

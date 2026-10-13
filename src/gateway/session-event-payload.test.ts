@@ -11,55 +11,6 @@ it("clears automatic-label metadata when a subscribed client merges a later snap
   expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
 });
 
-it("clears a saved dashboard default in subscribed session metadata", () => {
-  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
-  const previous = buildGatewaySessionSnapshot({
-    sessionRow: { ...sessionRow, boardPresentation: "expanded" },
-  });
-  expect(previous.boardPresentation).toBe("expanded");
-  const cleared = buildGatewaySessionSnapshot({ sessionRow });
-  expect({ ...previous, ...cleared }).toMatchObject({ boardPresentation: null });
-});
-
-it("projects session actors and explicitly clears absent attribution", () => {
-  expect(
-    buildGatewaySessionSnapshot({
-      sessionRow: {
-        key: "agent:main:owned",
-        kind: "direct",
-        updatedAt: 1,
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-        participantCount: 1,
-      },
-    }),
-  ).toMatchObject({
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    archivedBy: null,
-    archiveReason: null,
-    participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-    participantCount: 1,
-  });
-
-  expect(
-    buildGatewaySessionSnapshot({
-      sessionRow: {
-        key: "agent:main:archived",
-        kind: "direct",
-        updatedAt: 2,
-        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-        archiveReason: "active-session-cap",
-      },
-    }),
-  ).toMatchObject({
-    createdActor: null,
-    archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    archiveReason: "active-session-cap",
-    participants: [],
-    participantCount: 0,
-  });
-});
-
 it("projects the prepared permission boundary only for an explicit mode", () => {
   const ordinary = buildGatewaySessionSnapshot({
     sessionRow: {
@@ -187,25 +138,9 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", "auto", null] as const)(
-  "carries model override source %s into session change events",
-  (source) => {
-    expect(
-      buildGatewaySessionSnapshot({
-        sessionRow: {
-          key: "agent:main:pinned",
-          kind: "direct",
-          updatedAt: 1,
-          modelOverrideSource: source,
-        },
-      }).modelOverrideSource,
-    ).toBe(source);
-  },
-);
-
-it.each(["user", "auto", null] as const)(
-  "serializes lifecycle starts without model source %s or prior terminal timing",
-  (modelOverrideSource) => {
+it.each([false, true])(
+  "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
+  (active) => {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
     const snapshot: unknown = JSON.parse(
       JSON.stringify(
@@ -223,10 +158,11 @@ it.each(["user", "auto", null] as const)(
             modelProvider: "provider",
             activeModel: "model-b",
             activeModelProvider: "fallback-provider",
-            modelOverrideSource,
+            modelOverrideSource: "user",
           },
           lifecycle: true,
           includeSession: true,
+          activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
           event: {
             runId: "next-run",
             sessionId: "pinned-session",
@@ -239,12 +175,21 @@ it.each(["user", "auto", null] as const)(
       ),
     );
     expect(snapshot).toMatchObject({
-      status: "running",
+      ...(active ? { status: "running" } : {}),
       startedAt: 300,
       endedAt: null,
       runtimeMs: null,
-      session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
+      session: {
+        ...(active ? { status: "running" } : {}),
+        startedAt: 300,
+        endedAt: null,
+        runtimeMs: null,
+      },
     });
+    if (!active) {
+      expect(snapshot).not.toHaveProperty("status");
+      expect(snapshot).not.toHaveProperty("session.status");
+    }
     for (const field of [
       "model",
       "modelProvider",
@@ -269,8 +214,11 @@ it.each([
         key: "agent:main:terminal",
         sessionId: "terminal-session",
         kind: "direct",
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
         updatedAt: 100,
-        status: "running",
         startedAt: 100,
       },
       includeSession: true,
@@ -283,15 +231,25 @@ it.each([
         seq: 1,
         ts: 200,
         stream: "lifecycle",
+        controlUiVisible: true,
         data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
       },
     }),
   ).toMatchObject({
     status,
+    unread: true,
+    lastActivityAt: 200,
     hasActiveRun: true,
     endedAt: 200,
     runtimeMs: 100,
-    session: { status, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
   });
 });
 

@@ -235,7 +235,7 @@ suite.define(() => {
     }
   });
 
-  it("moves a managed document batch from skeletons directly to final cards", async () => {
+  it("keeps managed document cards stable while their downloads become available", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
@@ -313,73 +313,70 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const checkingCards = page.locator(".chat-assistant-attachment-card--checking");
-      await checkingCards.first().waitFor({ state: "visible", timeout: 10_000 });
-      expect(await checkingCards.count()).toBe(4);
-      const skeletons = checkingCards.locator(
-        ".chat-assistant-attachment-card__status-meta.skeleton",
-      );
-      expect(await skeletons.count()).toBe(4);
-      expect(await skeletons.first().getAttribute("aria-hidden")).toBe("true");
+      const cards = page.locator(".chat-assistant-attachment-card--compact");
+      await cards.first().waitFor({ state: "visible", timeout: 10_000 });
+      expect(await cards.count()).toBe(4);
+      const downloads = cards.locator("a[download]");
+      expect(await downloads.count()).toBe(4);
       expect(
-        await skeletons
-          .first()
-          .evaluate((element) => getComputedStyle(element, "::after").animationName),
-      ).toBe("shimmer");
-      const metadataSize = await skeletons.first().evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return { height: rect.height, width: rect.width };
-      });
-      expect(metadataSize.height).toBeCloseTo(14, 3);
-      expect(metadataSize.width).toBeGreaterThanOrEqual(112);
-      expect(metadataSize.width).toBeLessThanOrEqual(144);
-      const actionSkeletons = checkingCards.locator(
-        ".chat-assistant-attachment-card__action-skeleton.skeleton",
-      );
-      expect(await actionSkeletons.count()).toBe(4);
+        await downloads.evaluateAll((elements) =>
+          elements.every(
+            (element) =>
+              !element.hasAttribute("href") &&
+              element.getAttribute("aria-disabled") === "true" &&
+              element.getAttribute("tabindex") === "0",
+          ),
+        ),
+      ).toBe(true);
+      expect(await cards.locator(".skeleton").count()).toBe(0);
+      const pendingDownload = await downloads.first().elementHandle();
+      expect(pendingDownload).not.toBeNull();
+      await downloads.first().focus();
       // Ancestor entrance animations must settle before comparing viewport rectangles.
-      await waitForControlUiProofSurface(checkingCards.first(), [actionSkeletons.first()]);
-      const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
+      const openButtons = cards.locator(".chat-assistant-attachment-card__expand");
+      await waitForControlUiProofSurface(cards.first(), [openButtons.first()]);
+      const pendingOpenSize = await openButtons.first().evaluate((element) => {
         const rect = element.getBoundingClientRect();
         return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
       });
-      expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
-      expect(
-        await actionSkeletons
-          .first()
-          .evaluate((element) => getComputedStyle(element, "::after").animationName),
-      ).toBe("shimmer");
-      const pendingActionWidths = await checkingCards
-        .locator(".chat-assistant-attachment-card__actions--loading")
+      expect(pendingOpenSize.height).toBeCloseTo(30, 3);
+      const pendingActionWidths = await cards
+        .locator(".chat-assistant-attachment-card__actions")
         .evaluateAll((elements) =>
           elements.map((element) => element.getBoundingClientRect().width),
         );
       expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
       expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "media-batch-skeletons.png") });
+        await page.screenshot({ path: path.join(proofDir, "media-batch-pending.png") });
       }
 
+      await gateway.waitForRequest("artifacts.download", { after: attachments.length - 1 });
       await gateway.resolveDeferred("artifacts.download");
-      await expect
-        .poll(() => page.locator(".chat-assistant-attachment-card--compact").count())
-        .toBe(4);
-      expect(await checkingCards.count()).toBe(0);
-      expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
-      const openButtonSize = await page
-        .locator(".chat-assistant-attachment-card__expand")
-        .first()
-        .evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
-        });
+      await expect.poll(() => cards.locator("a[download][href]").count()).toBe(4);
+      expect(
+        await downloads.evaluateAll((elements) =>
+          elements.every((element) => !element.hasAttribute("aria-disabled")),
+        ),
+      ).toBe(true);
+      expect(
+        await downloads
+          .first()
+          .evaluate((element, pending) => element === pending, pendingDownload),
+      ).toBe(true);
+      expect(
+        await downloads.first().evaluate((element) => document.activeElement === element),
+      ).toBe(true);
+      expect(await cards.locator(".skeleton").count()).toBe(0);
+      const openButtonSize = await openButtons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
+      });
       for (const axis of ["x", "y", "width", "height"] as const) {
-        expect(Math.abs(actionSkeletonSize[axis] - openButtonSize[axis])).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(pendingOpenSize[axis] - openButtonSize[axis])).toBeLessThanOrEqual(0.5);
       }
-      const finalActionWidths = await page
-        .locator(
-          ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
-        )
+      const finalActionWidths = await cards
+        .locator(".chat-assistant-attachment-card__actions")
         .evaluateAll((elements) =>
           elements.map((element) => element.getBoundingClientRect().width),
         );
@@ -610,6 +607,11 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
+      const frames = page.locator(".chat-image-frame");
+      await expect.poll(() => frames.count()).toBe(64);
+      for (const frame of await frames.all()) {
+        await frame.scrollIntoViewIfNeeded();
+      }
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(64);
       await expect
         .poll(() =>

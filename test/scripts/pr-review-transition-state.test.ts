@@ -13,7 +13,7 @@ function git(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
-function mergedFixture() {
+function conflictFixture() {
   const root = tempDirs.make("pr-committed-resolve-undo-");
   git(root, "init", "--initial-branch=main");
   git(root, "config", "user.name", "OpenClaw Test");
@@ -29,6 +29,11 @@ function mergedFixture() {
   git(root, "checkout", "side");
   writeFileSync(join(root, "conflict.txt"), "side\n");
   git(root, "commit", "-am", "side");
+  return { root, target };
+}
+
+function mergedFixture() {
+  const { root, target } = conflictFixture();
   const merge = spawnSync("git", ["merge", "--no-edit", "main"], {
     cwd: root,
     encoding: "utf8",
@@ -40,6 +45,36 @@ function mergedFixture() {
   git(root, "commit", "--no-edit");
   expect(git(root, "ls-files", "--resolve-undo").split("\n")).toHaveLength(3);
   return { root, target };
+}
+
+function rebasedFixture() {
+  const { root, target } = conflictFixture();
+  const original = git(root, "rev-parse", "HEAD");
+  const rebase = spawnSync("git", ["rebase", "main"], { cwd: root, encoding: "utf8" });
+  expect(rebase.status, rebase.stdout + rebase.stderr).toBe(1);
+  expect(git(root, "ls-files", "--unmerged").split("\n")).toHaveLength(3);
+  writeFileSync(join(root, "conflict.txt"), "resolved\n");
+  git(root, "add", "conflict.txt");
+  const continued = spawnSync("git", ["rebase", "--continue"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, GIT_EDITOR: "true" },
+  });
+  expect(continued.status, continued.stdout + continued.stderr).toBe(0);
+  expect(git(root, "ls-files", "--resolve-undo").split("\n")).toHaveLength(3);
+  expect(git(root, "rev-parse", "ORIG_HEAD")).toBe(original);
+  return { root, target };
+}
+
+function injectForeignUndo(root: string) {
+  const oid = git(root, "rev-parse", "HEAD:conflict.txt");
+  const result = spawnSync("git", ["update-index", "--index-info"], {
+    cwd: root,
+    encoding: "utf8",
+    input: `0 ${"0".repeat(40)}\tconflict.txt\n100644 ${oid} 1\tconflict.txt\n100644 ${oid} 2\tconflict.txt\n100644 ${oid} 3\tconflict.txt\n`,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  git(root, "add", "conflict.txt");
 }
 
 function validate(root: string, target: string) {
@@ -68,19 +103,42 @@ describe("native transition of committed conflict resolutions", () => {
     },
   );
 
+  it.each([false, true])(
+    "accepts committed rebase undo without changing the index (followup=%s)",
+    (followup) => {
+      const { root, target } = rebasedFixture();
+      if (followup) {
+        writeFileSync(join(root, "repair.txt"), "subsequent compile repair\n");
+        git(root, "add", "repair.txt");
+        git(root, "commit", "-m", "followup");
+      }
+      const result = validate(root, target);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
+
+  it.each(["foreign undo", "moved ORIG_HEAD"])(
+    "refuses unbound committed rebase undo (%s)",
+    (kind) => {
+      const { root, target } = rebasedFixture();
+      if (kind === "foreign undo") {
+        injectForeignUndo(root);
+      } else {
+        git(root, "update-ref", "ORIG_HEAD", target);
+      }
+      const result = validate(root, target);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Unowned transition resolve-undo entry "conflict.txt"');
+      expect(readFileSync(join(root, "conflict.txt"), "utf8")).toBe("resolved\n");
+    },
+  );
+
   it.each(["working tree", "staged", "assume unchanged", "foreign undo"])(
     "refuses and preserves uncommitted %s state beside a committed merge",
     (kind) => {
       const { root, target } = mergedFixture();
       if (kind === "foreign undo") {
-        const oid = git(root, "rev-parse", "HEAD:conflict.txt");
-        const result = spawnSync("git", ["update-index", "--index-info"], {
-          cwd: root,
-          encoding: "utf8",
-          input: `0 ${"0".repeat(40)}\tconflict.txt\n100644 ${oid} 1\tconflict.txt\n100644 ${oid} 2\tconflict.txt\n100644 ${oid} 3\tconflict.txt\n`,
-        });
-        expect(result.status, result.stderr).toBe(0);
-        git(root, "add", "conflict.txt");
+        injectForeignUndo(root);
       } else {
         writeFileSync(join(root, "conflict.txt"), "uncommitted user work\n");
         if (kind === "staged") {

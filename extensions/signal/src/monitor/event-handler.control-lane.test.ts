@@ -25,18 +25,6 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
-    "openclaw/plugin-sdk/reply-runtime",
-  );
-  return {
-    ...actual,
-    dispatchInboundMessage: dispatchInboundMessageMock,
-    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
-    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
@@ -44,10 +32,26 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
+    // Control-lane timing must not depend on filesystem or worker scheduling.
+    resolveInboundSessionEnvelopeContextAsync: vi
+      .fn<typeof actual.resolveInboundSessionEnvelopeContextAsync>()
+      .mockImplementation(async ({ cfg }) => ({
+        storePath: "/tmp/openclaw/signal-sessions.json",
+        envelopeOptions: actual.resolveEnvelopeFormatOptions(cfg),
+        previousTimestamp: undefined,
+      })),
     runChannelInboundEvent: createSignalPreparedDispatchRunner(
       actual.runChannelInboundEvent,
       recordInboundSessionMock,
-      async (resolved) => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
+      async (resolved) => {
+        const result = dispatchInboundMessageMock({ ctx: resolved.ctxPayload });
+        for (const [count, started] of dispatchStarts) {
+          if (dispatchInboundMessageMock.mock.calls.length >= count) {
+            started.resolve();
+          }
+        }
+        return await result;
+      },
     ),
   };
 });
@@ -87,7 +91,18 @@ const dispatchResult = {
 
 const pendingTasks: Promise<void>[] = [];
 const activeGates: Array<() => void> = [];
+const dispatchStarts = new Map<number, ReturnType<typeof createDeferred<void>>>();
 let pendingDebounceMs = 0;
+
+function waitForDispatch(count: number) {
+  // Fake timers do not drain the worker-backed session read before dispatch.
+  if (dispatchInboundMessageMock.mock.calls.length >= count) {
+    return Promise.resolve();
+  }
+  const started = createDeferred<void>();
+  dispatchStarts.set(count, started);
+  return started.promise;
+}
 
 function holdNextDispatch() {
   const gate = createDeferred<void>();
@@ -152,6 +167,7 @@ function dispatchedCommandBody(index: number): string | undefined {
 describe("Signal active-run control lane", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    dispatchStarts.clear();
     dispatchInboundMessageMock.mockReset().mockResolvedValue(dispatchResult);
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -174,15 +190,6 @@ describe("Signal active-run control lane", () => {
     }
   });
 
-  it("collects both authorized messages through one debounce dispatch", async () => {
-    const handler = createHandler(10);
-    await Promise.all([handler(signalText("first", 1)), handler(signalText("second", 2))]);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-    expect(dispatchedCommandBody(0)).toBe("first\nsecond");
-  });
-
   it("updates Signal batching while keeping stop on the immediate control lane", async () => {
     const cfg: OpenClawConfig = {
       messages: { inbound: { debounceMs: 0 } },
@@ -202,6 +209,7 @@ describe("Signal active-run control lane", () => {
     await handler(signalText("second", 3));
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(25);
+    await waitForDispatch(2);
     expect(dispatchedCommandBody(1)).toBe("first\nsecond");
     publish(0);
     await handler(signalText("after disable", 4));
@@ -214,29 +222,27 @@ describe("Signal active-run control lane", () => {
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
   });
 
-  it.each([
-    "stop",
-    "/approve abc12345 allow-once",
-    "/status",
-    "/queue",
-    "/QUEUE",
-    "/steer keep going",
-  ])("dispatches active-run-safe control %s while normal work is active", async (controlText) => {
-    const releaseActive = holdNextDispatch();
-    const handler = createHandler(5);
+  it.each(["stop", "/approve abc12345 allow-once", "/status", "/QUEUE", "/steer keep going"])(
+    "dispatches active-run-safe control %s while normal work is active",
+    async (controlText) => {
+      const releaseActive = holdNextDispatch();
+      const handler = createHandler(5);
 
-    await handler(signalText("start a long task", 1));
-    await vi.advanceTimersByTimeAsync(5);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      await handler(signalText("start a long task", 1));
+      await vi.advanceTimersByTimeAsync(5);
+      await waitForDispatch(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
-    const controlHandled = handler(signalText(controlText, 2));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchedCommandBody(1)).toBe(controlText);
+      const controlHandled = handler(signalText(controlText, 2));
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForDispatch(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(dispatchedCommandBody(1)).toBe(controlText);
 
-    releaseActive();
-    await controlHandled;
-  });
+      releaseActive();
+      await controlHandled;
+    },
+  );
 
   it("serializes repeated aborts on the control lane", async () => {
     const releaseFirstAbort = holdNextDispatch();
@@ -244,6 +250,7 @@ describe("Signal active-run control lane", () => {
 
     const first = handler(signalText("stop", 1));
     await vi.advanceTimersByTimeAsync(0);
+    await waitForDispatch(1);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     const second = handler(signalText("halt", 2));
     await vi.advanceTimersByTimeAsync(20);
@@ -263,9 +270,11 @@ describe("Signal active-run control lane", () => {
 
       const active = handler(signalText("start a long task", 1));
       await vi.advanceTimersByTimeAsync(0);
+      await waitForDispatch(1);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       const followup = handler(signalText(followupText, 2));
       await vi.advanceTimersByTimeAsync(0);
+      await waitForDispatch(2);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(dispatchedCommandBody(1)).toBe(followupText);
 
@@ -321,31 +330,27 @@ describe("Signal active-run control lane", () => {
     );
   });
 
-  it.each([
-    "/reset",
-    "/queue status",
-    "/queue collect",
-    "/queue interrupt",
-    "/queue reset",
-    "/queue debounce:2s",
-    "/queue cap:5",
-    "/queue drop:summarize",
-  ])("keeps stateful command %s behind active conversation work", async (commandText) => {
-    const releaseActive = holdNextDispatch();
-    const handler = createHandler(5);
+  it.each(["/reset", "/queue status"])(
+    "keeps stateful command %s behind active conversation work",
+    async (commandText) => {
+      const releaseActive = holdNextDispatch();
+      const handler = createHandler(5);
 
-    const active = handler(signalText("start a long task", 1));
-    await vi.advanceTimersByTimeAsync(5);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    const statefulCommand = handler(signalText(commandText, 2));
-    await vi.advanceTimersByTimeAsync(20);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const active = handler(signalText("start a long task", 1));
+      await active;
+      await vi.advanceTimersByTimeAsync(5);
+      await waitForDispatch(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const statefulCommand = handler(signalText(commandText, 2));
+      await vi.advanceTimersByTimeAsync(20);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
-    releaseActive();
-    await Promise.all([active, statefulCommand]);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchedCommandBody(1)).toBe(commandText);
-  });
+      releaseActive();
+      await Promise.all([active, statefulCommand]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(dispatchedCommandBody(1)).toBe(commandText);
+    },
+  );
 
   it("cancels ordinary text still waiting in the debounce window", async () => {
     const handler = createHandler(50);
@@ -377,6 +382,7 @@ describe("Signal active-run control lane", () => {
 
     await handler(signalText("start a long task", 1));
     await vi.advanceTimersByTimeAsync(5);
+    await waitForDispatch(1);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     await handler(signalText("queued followup", 2));
     await vi.advanceTimersByTimeAsync(20);

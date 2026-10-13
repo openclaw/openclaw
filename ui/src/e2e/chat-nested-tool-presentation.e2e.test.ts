@@ -123,9 +123,11 @@ suite.define(() => {
         await summary.waitFor();
         await page.screenshot({ path: path.join(artifactDir, "01-collapsed.png") });
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
-        expect(await summary.textContent()).toContain("Exec");
-        expect(await summary.textContent()).toContain("(failed)");
-        expect(await summary.textContent()).toContain("Read from /workspace/README.md");
+        expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
+          "1 command · 1 read",
+        );
+        expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
+        expect(await summary.textContent()).not.toContain("/workspace/README.md");
         const failure = summary.getByText("1 failed", { exact: true });
         expect(await failure.isVisible()).toBe(true);
         expect(await work.textContent()).not.toContain("gh: command not found");
@@ -160,9 +162,11 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         await summary.waitFor();
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
-        expect(await summary.textContent()).toContain("Exec");
-        expect(await summary.textContent()).toContain("(failed)");
-        expect(await summary.textContent()).toContain("Read from /workspace/README.md");
+        expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
+          "1 command · 1 read",
+        );
+        expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
+        expect(await summary.textContent()).not.toContain("/workspace/README.md");
         expect(await failure.isVisible()).toBe(true);
         expect(await work.textContent()).not.toContain("gh: command not found");
         await page.screenshot({ path: path.join(artifactDir, "03-reloaded.png") });

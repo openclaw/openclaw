@@ -1,4 +1,3 @@
-// Voyage plugin module implements embedding batch behavior.
 import {
   buildBatchHeaders,
   buildEmbeddingBatchGroupOptions,
@@ -12,6 +11,7 @@ import {
   type EmbeddingBatchExecutionParams,
   type EmbeddingBatchStatus,
   type ProviderBatchOutputLine,
+  type RemoteEmbeddingClient,
   uploadBatchJsonlFile,
   waitForEmbeddingBatch,
   withRemoteHttpResponse,
@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
 /**
  * Voyage Batch API Input Line format.
@@ -38,10 +37,6 @@ type VoyageBatchRequest = {
   };
 };
 
-type VoyageBatchStatus = EmbeddingBatchStatus;
-type VoyageBatchOutputLine = ProviderBatchOutputLine;
-
-const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 // Successful status/error-file responses are untrusted external bodies. Cap
@@ -49,7 +44,7 @@ const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 const VOYAGE_BATCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function buildVoyageBatchRequest<T>(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   path: string;
   signal?: AbortSignal;
   onResponse: (res: Response) => Promise<T>;
@@ -66,24 +61,23 @@ function buildVoyageBatchRequest<T>(params: {
 }
 
 async function submitVoyageBatch(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
-}): Promise<VoyageBatchStatus> {
+}): Promise<EmbeddingBatchStatus> {
   const inputFileId = await uploadBatchJsonlFile({
     client: params.client,
     requests: params.requests,
     errorPrefix: "voyage batch file upload failed",
   });
 
-  // 2. Create batch job using Voyage Batches API
-  return await postJsonWithRetry<VoyageBatchStatus>({
+  return await postJsonWithRetry<EmbeddingBatchStatus>({
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl, "batches"),
     headers: buildBatchHeaders(params.client, { json: true }),
     ssrfPolicy: params.client.ssrfPolicy,
     body: {
       input_file_id: inputFileId,
-      endpoint: VOYAGE_BATCH_ENDPOINT,
+      endpoint: EMBEDDING_BATCH_ENDPOINT,
       completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
       request_params: {
         model: params.client.model,
@@ -99,10 +93,10 @@ async function submitVoyageBatch(params: {
 }
 
 async function fetchVoyageBatchStatus(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   batchId: string;
   signal?: AbortSignal;
-}): Promise<VoyageBatchStatus> {
+}): Promise<EmbeddingBatchStatus> {
   return await withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
@@ -110,7 +104,7 @@ async function fetchVoyageBatchStatus(params: {
       signal: params.signal,
       onResponse: async (res) => {
         await assertOkOrThrowProviderError(res, "voyage.batch-status");
-        return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
+        return await readProviderJsonResponse<EmbeddingBatchStatus>(res, "voyage-batch-status", {
           maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES,
         });
       },
@@ -119,7 +113,7 @@ async function fetchVoyageBatchStatus(params: {
 }
 
 async function readVoyageBatchError(params: {
-  client: VoyageEmbeddingClient;
+  client: RemoteEmbeddingClient;
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
@@ -138,7 +132,7 @@ async function readVoyageBatchError(params: {
             return undefined;
           }
           const lines = normalizeStringEntries(text.split("\n")).map(
-            (line) => JSON.parse(line) as VoyageBatchOutputLine,
+            (line) => JSON.parse(line) as ProviderBatchOutputLine,
           );
           return formatBatchErrorDetail(extractBatchErrorMessage(lines));
         },
@@ -151,7 +145,7 @@ async function readVoyageBatchError(params: {
 
 export async function runVoyageEmbeddingBatches(
   params: {
-    client: VoyageEmbeddingClient;
+    client: RemoteEmbeddingClient;
     agentId: string;
     requests: VoyageBatchRequest[];
   } & EmbeddingBatchExecutionParams,

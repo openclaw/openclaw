@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
-import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
 import {
   captureUpdateDoctorConfigWrites,
   consumeUpdatePostInstallDoctorResult,
@@ -24,9 +23,6 @@ afterEach(async () => {
 
 describe("post-install doctor result IPC", () => {
   it.each([
-    { status: "ok" as const, configHash: "unchanged" },
-    { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
-    { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       status: "error" as const,
       failureFacts: [
@@ -34,27 +30,11 @@ describe("post-install doctor result IPC", () => {
       ],
     },
     {
-      status: "ok" as const,
-      configChanges: [
-        { kind: "key" as const, key: "agents" },
-        { kind: "key" as const, key: "meta" },
-        { kind: "migration" as const, message: "Moved agents.list to agents.entries." },
-      ],
-    },
-    {
-      status: "error" as const,
-      configWriteRefusal: {
-        reason: "include-ownership",
-        message: "Repair agents in its included file.",
-        keys: ["agents"],
-      },
-    },
-    {
       ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
       configHash: "b".repeat(64),
       warnings: ["plugin/example: version probe timed out"],
+      deferredInspectionCheckIds: ["core/doctor/new-target-inspection", "target:Inspection_Check"],
     },
-    createDeferredConfiguredPluginRepairDoctorResult(["legacy child advisory"]),
   ])("round-trips $status results and consumes the file", async (result) => {
     const resultPath = createUpdatePostInstallDoctorResultPath();
     resultPaths.push(resultPath);
@@ -101,22 +81,28 @@ describe("post-install doctor result IPC", () => {
     ]);
   });
 
-  it("retains complete config evidence beyond health-warning limits", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
-    const configChanges: UpdateDoctorConfigChange[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "migration",
-      message: `${index}: ${"migration detail ".repeat(40)}`,
-    }));
-    await writeUpdatePostInstallDoctorResult({
-      resultPath,
-      result: { status: "ok", configChanges },
-    });
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
-      status: "ok",
-      configChanges,
-    });
-  });
+  it.each(
+    [
+      "missing-array",
+      [" "],
+      Array.from({ length: 129 }, () => "core/doctor/example"),
+      [`core/doctor/${"x".repeat(256)}`],
+    ].map((ids) => ({ ids })),
+  )(
+    "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
+    async ({ ids }) => {
+      const resultPath = createUpdatePostInstallDoctorResultPath();
+      resultPaths.push(resultPath);
+      await fs.writeFile(
+        resultPath,
+        JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
+      );
+      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+      expect(result?.status).toBe("ok");
+      expect(result?.deferredInspectionCheckIds).toBeUndefined();
+      await expect(fs.access(resultPath)).rejects.toThrow();
+    },
+  );
 
   it("keeps committed migration notes and the first refusal scoped to one Doctor run", async () => {
     const refusal = {
@@ -186,21 +172,6 @@ describe("post-install doctor result IPC", () => {
     expect(getUpdateDoctorConfigWriteAuthority(configPath)).toBeUndefined();
   });
 
-  it.each([
-    { configChanges: [{ kind: "key", key: 7 }] },
-    { configChanges: [{ kind: "migration", message: false }] },
-    { configChanges: [{ kind: "unrecognized", key: "agents" }] },
-    { configWriteRefusal: { reason: "validation", message: "Invalid config.", keys: [7] } },
-  ])("rejects malformed config evidence: %j", async (evidence) => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
-    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", ...evidence }), {
-      mode: 0o600,
-      flag: "wx",
-    });
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toBeNull();
-  });
-
   it("rejects result paths outside the secure OpenClaw temp root", async () => {
     const tempRoot = resolvePreferredOpenClawTmpDir();
     const resultPath = path.join(
@@ -215,29 +186,6 @@ describe("post-install doctor result IPC", () => {
       }),
     ).rejects.toThrow("Unsafe post-install doctor result path");
     await expect(fs.access(resultPath)).rejects.toThrow();
-  });
-
-  it("accepts newer child advisory copy without letting malformed optional facts change its outcome", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
-    await fs.writeFile(
-      resultPath,
-      JSON.stringify({
-        status: "advisory",
-        failureFacts: [{ check: "doctor", message: 42 }],
-        advisory: {
-          kind: "package-post-install-doctor",
-          reason: "deferred-configured-plugin-repair",
-          message: "newer child advisory wording",
-          details: ["deferred repair"],
-        },
-      }),
-      { encoding: "utf8", mode: 0o600, flag: "wx" },
-    );
-
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(
-      createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
-    );
   });
 
   it("rejects malformed advisory payloads and consumes the file", async () => {

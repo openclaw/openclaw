@@ -1,16 +1,19 @@
+import "../../../../src/test-utils/prepare-compiled-subprocesses.js";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/api.js";
+import { buildQaGatewayConfig } from "../../../../extensions/qa-lab/test-api.js";
 import type {
   SkillsLibraryActivateResult,
   SkillsLibraryListResult,
   SkillsLibraryReceipt,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -19,7 +22,7 @@ import {
   wireMessageText,
   type PublishedWireWorkspace,
 } from "./paired-node-worker-wire-fixture.js";
-import { startSkillLibraryNodeProcess } from "./skill-library-node-process.js";
+import { prepareSkillLibraryNodeProcess } from "./skill-library-node-process.js";
 import {
   createSkillLibraryWireInstance,
   decodedSkillLibraryFiles,
@@ -71,10 +74,11 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
   it(
     "pins the creator's bundle across ordinary collaborator authoring, edits, turn boundaries, removal and worker replacement",
     { timeout: 600_000 },
-    async () => {
+    async ({ signal }) => {
       const instance = await createSkillLibraryWireInstance();
       let provider: Awaited<ReturnType<typeof startSkillLibraryWireProvider>> | undefined;
-      let node: Awaited<ReturnType<typeof startSkillLibraryNodeProcess>> | undefined;
+      let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
+      let nodeStartup: ReturnType<typeof prepareSkillLibraryNodeProcess> | undefined;
       let published: PublishedWireWorkspace | undefined;
       const clients: SkillLibraryWireClient[] = [];
       await runQaGatewayFixture(
@@ -112,7 +116,22 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             clients.push(connected.client);
             return connected;
           };
-          const { client: admin, hello } = await connect();
+          let onSessionChanged: ((key: string) => void) | undefined;
+          const { client: admin, hello } = await connect({
+            onEvent: (event) => {
+              if (event.event === "sessions.changed") {
+                const payload = event.payload as {
+                  sessionKey?: string;
+                  session?: { key?: string };
+                };
+                const key = payload.sessionKey ?? payload.session?.key;
+                if (key) {
+                  onSessionChanged?.(key);
+                }
+              }
+            },
+          });
+          await admin.request("sessions.subscribe", {});
           const { client: aliceAdmin } = await connect({
             email: SKILL_LIBRARY_ALICE,
             scopes: ["operator.admin", "operator.read", "operator.write"],
@@ -126,6 +145,14 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             email: SKILL_LIBRARY_BOB,
             buildId: hello.server.buildId,
           });
+          // Pairing and bundle prewarming are independent of local skill-library turns.
+          nodeStartup = (async () => {
+            console.info("[skill-library-wire] pairing real node");
+            node = await prepareSkillLibraryNodeProcess(instance);
+            await node.start(admin);
+            return node;
+          })();
+          void nodeStartup.catch(() => undefined);
           const original = executableSkillLibraryBundle();
           console.info("[skill-library-wire] publishing Alice/Bob private bundles");
           const saved = await alice.request<SkillsLibraryReceipt>("skills.library.save", original);
@@ -181,6 +208,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
                 PROOF_TIMEOUT_MS + 5_000,
               ),
             ).resolves.toMatchObject({ status: "ok" });
+            await waitForWorkerSettlement(key);
             await vi.waitFor(
               async () => {
                 const history = await client.request<{ messages: unknown[] }>("chat.history", {
@@ -211,10 +239,45 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const turn = async (client: SkillLibraryWireClient, key: string, marker: string) =>
             finishTurn(client, key, marker, await startTurn(client, key, marker, saved.entry.name));
           const describeSession = (key: string) =>
-            admin.request<{ session: { execCwd?: string; spawnedCwd?: string } }>(
-              "sessions.describe",
-              { key },
-            );
+            admin.request<{
+              session: {
+                execCwd?: string;
+                spawnedCwd?: string;
+                placement?: { state: string; workspaceResultReconciling?: boolean };
+              };
+            }>("sessions.describe", { key });
+          const waitForWorkerSettlement = async (key: string) => {
+            if (key !== remoteKey) {
+              return;
+            }
+            const settled = createDeferred();
+            const check = () => {
+              void describeSession(key)
+                .then(({ session }) => {
+                  process.stderr.write(
+                    `[skill-library-wire] settlement ${JSON.stringify({ key, state: session.placement?.state, reconciling: session.placement?.workspaceResultReconciling })}\n`,
+                  );
+                  if (
+                    session.placement?.state === "active" &&
+                    !session.placement.workspaceResultReconciling
+                  ) {
+                    settled.resolve();
+                  }
+                })
+                .catch(settled.reject);
+            };
+            onSessionChanged = (changedKey) => {
+              if (changedKey === key) {
+                check();
+              }
+            };
+            try {
+              check();
+              await withinTest(settled.promise, signal);
+            } finally {
+              onSessionChanged = undefined;
+            }
+          };
           const localDescription = await describeSession(localKey);
           const remoteDescription = await describeSession(remoteKey);
           const localCwd = localDescription.session.execCwd ?? localDescription.session.spawnedCwd;
@@ -235,8 +298,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             helper: "bundled-helper-v1",
           });
           expect(outside(localFirst.directory, localCwd)).toBe(true);
-          console.info("[skill-library-wire] pairing real node");
-          node = await startSkillLibraryNodeProcess(instance, admin);
+          node = await nodeStartup;
           console.info("[skill-library-wire] dispatching managed session to node");
           const dispatched = await admin.request<{
             placement: { state: string; remoteWorkspaceDir: string; workerBundleHash: string };
@@ -324,7 +386,13 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const workerSkillDir = workerFirst.directory;
           expect(outside(workerSkillDir, await fs.realpath(instance.stateDir))).toBe(true);
           expect(outside(workerSkillDir, remoteCwd)).toBe(true);
-          expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(false);
+          // Scoped turn inputs live in the secure scratch root, separate from node credentials.
+          const materializationDir = path.dirname(workerSkillDir);
+          expect(path.dirname(materializationDir)).toBe(
+            await fs.realpath(resolvePreferredOpenClawTmpDir()),
+          );
+          expect(path.basename(materializationDir)).toMatch(/^skill-resources-[a-f0-9]{16}$/u);
+          expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(true);
           expect(workerSkillDir).not.toBe(await fs.realpath(localFirst.directory));
 
           // Authoring belongs to the authenticated invoker, even when the session pins Alice's A.
@@ -354,7 +422,9 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               PROOF_TIMEOUT_MS + 5_000,
             ),
           ).resolves.toMatchObject({ status: "ok" });
+          await waitForWorkerSettlement(remoteKey);
           const authorOutput = provider.authorOutputs.get("bob-worker");
+          expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
           if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
             throw new Error("Worker did not return real Workshop create, read and update results");
           }
@@ -450,9 +520,9 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           expect((await turn(alice, localKey, "local-still-pinned")).reference).toBe(
             "ALICE-RESOURCE-1\n",
           );
-          expect((await turn(bob, remoteKey, "bob-still-pinned")).reference).toBe(
-            "ALICE-RESOURCE-1\n",
-          );
+          const workerStillPinned = await turn(bob, remoteKey, "bob-still-pinned");
+          expect(workerStillPinned.reference).toBe("ALICE-RESOURCE-1\n");
+          expect(workerStillPinned.directory).toBe(workerSkillDir);
           const newKey = await createSession("new-default");
           expect((await turn(alice, newKey, "new-default")).reference).toBe("ALICE-RESOURCE-2\n");
 
@@ -564,6 +634,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           expect(await workspaceStatus(localCwd)).toBe(localBefore);
           expect(await workspaceStatus(gatewayWorkerCwd)).toBe(workerBefore);
         },
+        () => nodeStartup,
         () => provider?.stop(),
         () => node?.stop(),
         async () => {

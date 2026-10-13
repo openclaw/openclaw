@@ -12,11 +12,6 @@ enum SettingsRoute: Hashable {
     case about
 }
 
-enum SettingsLayout {
-    static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
-    static let rowHeight: CGFloat = 58
-}
-
 /// Canonical label/value list row for Settings and Talk surfaces. Keep every
 /// detail row on this view so row typography cannot drift between sections;
 /// plain `LabeledContent(String, value:)` renders unbranded system fonts.
@@ -133,7 +128,7 @@ struct SettingsBuildMetadataStrip: View {
                     Divider()
                         .frame(height: 30)
                 }
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
                     .frame(minWidth: 72, maxWidth: .infinity)
                     .padding(.horizontal, 4)
             }
@@ -144,13 +139,13 @@ struct SettingsBuildMetadataStrip: View {
     private var metadataColumn: some View {
         VStack(alignment: .center, spacing: 8) {
             ForEach(self.fields) { field in
-                self.metadataField(field, alignment: .center)
+                self.metadataField(field)
             }
         }
     }
 
-    private func metadataField(_ field: Field, alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 1) {
+    private func metadataField(_ field: Field) -> some View {
+        VStack(alignment: .center, spacing: 1) {
             Text(field.title)
                 .font(OpenClawType.caption2SemiBold)
                 .textCase(.uppercase)
@@ -348,181 +343,4 @@ enum SettingsDiagnostics {
         if !notificationsAllowed { issues.append(.notificationsUnavailable) }
         return issues
     }
-
-    static func issueCount(
-        gatewayConnected: Bool,
-        discoveredGatewayCount: Int,
-        talkConfigLoaded: Bool,
-        notificationsAllowed: Bool) -> Int
-    {
-        self.issues(
-            gatewayConnected: gatewayConnected,
-            discoveredGatewayCount: discoveredGatewayCount,
-            talkConfigLoaded: talkConfigLoaded,
-            notificationsAllowed: notificationsAllowed).count
-    }
-
-    static func timestamp(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
-    }
 }
-
-#if DEBUG
-#Preview("Gateway settings states") {
-    SettingsGatewayStatesPreview()
-}
-
-private struct SettingsGatewayStatesPreview: View {
-    var body: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    self.stateSection("Connected") {
-                        self.gatewayStatusCard(
-                            title: "Gateway online",
-                            detail: "Connected to openclaw-gateway.tailnet.ts.net.",
-                            value: "online",
-                            color: OpenClawBrand.ok)
-                        self.gatewayFactsCard(
-                            address: "100.88.41.20:18789",
-                            server: "openclaw-gateway",
-                            discovered: "3",
-                            agent: "Aiden")
-                    }
-
-                    self.stateSection("Loading") {
-                        self.gatewayStatusCard(
-                            title: "Checking gateway",
-                            detail: "Refreshing connection, discovery, and device trust state.",
-                            value: "loading",
-                            color: OpenClawBrand.accent)
-                        self.gatewayActionsCard(isBusy: true)
-                    }
-
-                    self.stateSection("Empty") {
-                        self.gatewayStatusCard(
-                            title: "No gateway configured",
-                            detail: "Scan a setup QR code, paste a setup code, or choose a discovered gateway.",
-                            value: "setup",
-                            color: .secondary)
-                        self.setupActionsCard
-                    }
-
-                    self.stateSection("Error") {
-                        self.gatewayStatusCard(
-                            title: "Tailscale warning",
-                            detail: "Check the gateway and your Tailscale connection, then try again.",
-                            value: "network",
-                            color: OpenClawBrand.warn)
-                    }
-                }
-                .padding(.horizontal, OpenClawProMetric.pagePadding)
-                .padding(.vertical, 18)
-            }
-        }
-    }
-
-    private func stateSection(
-        _ title: String,
-        @ViewBuilder content: () -> some View) -> some View
-    {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(.secondary)
-            content()
-        }
-    }
-
-    private func gatewayStatusCard(
-        title: String,
-        detail: String,
-        value: String,
-        color: Color) -> some View
-    {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            ProStatusRow(
-                icon: value == "online" ? "antenna.radiowaves.left.and.right" : "wifi.slash",
-                title: .localized(title),
-                detail: .localized(detail),
-                value: value,
-                color: color,
-                actionTitle: value == "setup" ? "Scan QR" : nil,
-                action: value == "setup" ? {} : nil)
-        }
-    }
-
-    private func gatewayFactsCard(
-        address: String,
-        server: String,
-        discovered: String,
-        agent: String) -> some View
-    {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.factRow("Address", value: address)
-                Divider()
-                self.factRow("Server", value: server)
-                Divider()
-                self.factRow("Discovered", value: discovered)
-                Divider()
-                self.factRow("Default Agent", value: agent)
-            }
-        }
-    }
-
-    private func factRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(OpenClawType.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(OpenClawType.captionMedium)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .frame(height: SettingsLayout.rowHeight)
-    }
-
-    private func gatewayActionsCard(isBusy: Bool) -> some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            HStack(spacing: 10) {
-                self.previewButton("Reconnect", systemImage: "arrow.triangle.2.circlepath", isBusy: isBusy)
-                self.previewButton("Diagnose", systemImage: "cross.case", isBusy: isBusy)
-            }
-        }
-    }
-
-    private var setupActionsCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    self.previewButton("Scan QR", systemImage: "qrcode.viewfinder", isBusy: false)
-                    self.previewButton("Connect", systemImage: "link", isBusy: false)
-                }
-                Text("Discovered gateways and manual setup live here when the gateway has not connected yet.")
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func previewButton(
-        _ title: String,
-        systemImage: String,
-        isBusy: Bool) -> some View
-    {
-        Button {} label: {
-            Label(title, systemImage: systemImage)
-                .font(OpenClawType.captionSemiBold)
-                .frame(maxWidth: .infinity)
-        }
-        .font(OpenClawType.captionSemiBold)
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .disabled(isBusy)
-    }
-}
-#endif

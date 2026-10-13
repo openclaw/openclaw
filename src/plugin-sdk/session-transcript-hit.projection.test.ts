@@ -1,9 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
-import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadCombinedSessionStoreForGateway } from "./session-transcript-hit.js";
+import { loadCombinedSessionStoreForGatewayAsync } from "./session-transcript-hit.js";
 
 it.each([
   {
@@ -22,9 +30,12 @@ it.each([
     expectedKeys: ["agent:main:visible", "agent:research:visible"],
   },
 ])("returns complete non-incognito entries for $name", async ({ options, expectedKeys }) => {
-  await withOpenClawTestState({ label: "plugin-transcript-projection" }, async () => {
+  await withOpenClawTestState({ label: "plugin-transcript-projection" }, async (state) => {
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, research: {} } },
+      agents: {
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, research: {} },
+      },
     };
     const skillsSnapshot = {
       prompt: "Saved plugin skill instructions",
@@ -53,24 +64,49 @@ it.each([
       agentId: "main",
       sessionKey: "agent:main:dashboard:incognito-private",
     };
-    replaceSessionEntrySync(incognitoScope, {
-      sessionId: "private-session",
-      updatedAt: 9,
-      incognito: true,
-      skillsSnapshot: { prompt: "Private plugin instructions", skills: [] },
-      systemPromptReport,
-    });
-    expect(loadSessionEntry(incognitoScope)).toMatchObject({
-      sessionId: "private-session",
-      incognito: true,
-    });
+    try {
+      await replaceSessionEntry(incognitoScope, {
+        sessionId: "private-session",
+        updatedAt: 9,
+        incognito: true,
+        skillsSnapshot: { prompt: "Private plugin instructions", skills: [] },
+        systemPromptReport,
+      });
+      expect(loadSessionEntry(incognitoScope)).toMatchObject({
+        sessionId: "private-session",
+        incognito: true,
+      });
 
-    const { store } = loadCombinedSessionStoreForGateway(cfg, options);
-
-    expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
-    for (const entry of Object.values(store)) {
-      expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
-      expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+      const invocation = new AsyncLocalStorage<boolean>();
+      const queries: string[] = [];
+      // Ambient WAL maintenance has its own context and is not work caused by this SDK read.
+      const sql = observeHostDataSql((query) => {
+        if (invocation.getStore()) {
+          queries.push(query);
+        }
+      });
+      try {
+        const { store } = await invocation.run(true, () =>
+          loadCombinedSessionStoreForGatewayAsync(cfg, options),
+        );
+        expect(queries).toEqual([]);
+        expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
+        for (const entry of Object.values(store)) {
+          expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
+          expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+        }
+      } finally {
+        sql.restore();
+        invocation.disable();
+      }
+    } finally {
+      memorySessionActorOwners.closeDatabase({
+        agentId: incognitoScope.agentId,
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: incognitoScope.agentId,
+          env: state.env,
+        }),
+      });
     }
   });
 });

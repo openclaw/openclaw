@@ -3,24 +3,17 @@ import { codexAppIdentityKey } from "./app-identity.js";
 import {
   serializeCodexAppInventoryError,
   type CodexAppInventoryCache,
-  type CodexAppInventoryRequest,
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
 import {
-  resolveOwnedAppApprovalOverrideKeys,
+  createCodexAppInventoryRequest,
   type CodexPluginInventory,
-  type CodexPluginInventoryRecord,
   type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import {
-  type CodexAppServerRequestResult,
-  isJsonObject,
-  type JsonObject,
-  type v2,
-} from "./protocol.js";
+import { isJsonObject, type JsonObject, type v2 } from "./protocol.js";
 
 export type CodexPluginThreadAppAdmissionDiagnostic = {
   code: "account_app_inventory_unavailable" | "account_app_config_unavailable";
@@ -50,18 +43,6 @@ export function resolveCodexPluginThreadAppCacheKey(params: {
     : params.appCacheKey;
 }
 
-function createCodexPluginThreadAppInventoryRequest(
-  params: CodexPluginThreadAppAdmissionParams,
-): CodexAppInventoryRequest {
-  return async (method, requestParams) =>
-    (await params.request(
-      method,
-      (method === "app/installed" || method === "app/read") && params.threadId
-        ? { ...requestParams, threadId: params.threadId }
-        : requestParams,
-    )) as CodexAppServerRequestResult<typeof method>;
-}
-
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
@@ -70,7 +51,7 @@ export async function refreshCodexPluginAppInventory(
   if (!params.appCacheKey) {
     return undefined;
   }
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   try {
     return await appCache.refreshNow({
       key: resolveCodexPluginThreadAppCacheKey(params),
@@ -141,12 +122,11 @@ export async function readCodexThreadAdmissibleAccountApps(
   appCache: CodexAppInventoryCache,
 ): Promise<{
   apps: CodexAppInventorySnapshot["apps"];
-  installedApps: CodexAppInventorySnapshot["installedApps"];
   diagnostic?: CodexPluginThreadAppAdmissionDiagnostic;
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
   // cannot establish which other account apps are authorized for this thread.
-  const request = createCodexPluginThreadAppInventoryRequest(params);
+  const request = createCodexAppInventoryRequest(params);
   const cachedInventory = appCache.read({
     key: resolveCodexPluginThreadAppCacheKey(params),
     request,
@@ -164,7 +144,6 @@ export async function readCodexThreadAdmissibleAccountApps(
   if (!snapshot) {
     return {
       apps: [],
-      installedApps: [],
       diagnostic: {
         code: "account_app_inventory_unavailable",
         message: "Codex account app inventory was unavailable; account apps were not exposed.",
@@ -174,68 +153,31 @@ export async function readCodexThreadAdmissibleAccountApps(
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app]));
   return {
     apps: snapshot.apps
-      .filter(
-        (app) =>
-          resolveCodexInstalledAppThreadAdmission(
-            toCodexPluginOwnedAccountApp(app, installedAppsById.get(app.id)),
-            installedAppsById.get(app.id),
-          ) !== "blocked",
-      )
+      .filter((app) => isCodexInstalledAppThreadAdmissible(installedAppsById.get(app.id)))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
-    installedApps: snapshot.installedApps,
   };
 }
 
-export function toCodexPluginOwnedAccountApp(
-  app: CodexAppInventorySnapshot["apps"][number],
-  installedApp: v2.InstalledApp | undefined,
-): CodexPluginOwnedApp {
-  return {
-    id: app.id,
-    name: app.name,
-    accessible: true,
-    enabled: installedApp?.enabled ?? false,
-    needsAuth: false,
-    ...resolveOwnedAppApprovalOverrideKeys(app),
-  };
-}
-
-export function resolveCodexThreadConfigAppsForRecord(params: {
-  record: CodexPluginInventoryRecord;
-  inventory: CodexPluginInventory;
-}): CodexPluginOwnedApp[] {
-  return params.inventory.appInventory?.state === "missing" ? [] : params.record.apps;
-}
-
-type CodexPluginAppThreadAdmission = "ready" | "provisional" | "blocked";
-
-export function resolveCodexPluginAppThreadAdmission(
+export function isCodexPluginAppThreadAdmissible(
   app: CodexPluginOwnedApp,
   inventory: CodexPluginInventory,
-): CodexPluginAppThreadAdmission {
+): boolean {
   const snapshot = inventory.appInventory?.snapshot;
-  if (!snapshot) {
-    return "blocked";
+  if (!app.accessible || !snapshot) {
+    return false;
   }
-  return resolveCodexInstalledAppThreadAdmission(
-    app,
+  return isCodexInstalledAppThreadAdmissible(
     snapshot.installedApps.find((candidate) => candidate.id === app.id),
   );
 }
 
-function resolveCodexInstalledAppThreadAdmission(
-  app: Pick<CodexPluginOwnedApp, "accessible" | "needsAuth">,
-  installed: v2.InstalledApp | undefined,
-): CodexPluginAppThreadAdmission {
-  if (!app.accessible || app.needsAuth || !installed) {
-    return "blocked";
-  }
-  if (installed.enabled && installed.callable) {
-    return "ready";
-  }
+function isCodexInstalledAppThreadAdmissible(installed: v2.InstalledApp | undefined): boolean {
   // Explicit plugin and account-wide policy can both override deny-by-default.
   // An enabled app with no callable tools cannot be repaired by thread policy.
-  return !installed.enabled && !installed.callable ? "provisional" : "blocked";
+  return Boolean(
+    installed &&
+    ((installed.enabled && installed.callable) || (!installed.enabled && !installed.callable)),
+  );
 }
 
 export async function readCodexConfigForAppAdmission(

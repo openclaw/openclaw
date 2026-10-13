@@ -1,5 +1,10 @@
 {
   "extends": "../tsconfig.json",
+  // This editor/lint graph includes tests; retain their ambient augmentations.
+  "files": [
+    "../src/config/sessions/session-entry.test-compat.d.ts",
+    "../test/types/vitest-codex-attempt-runtime.d.ts"
+  ],
   "include": [
     "../src/**/*.d.ts",
     "../ui/**/*.d.ts",

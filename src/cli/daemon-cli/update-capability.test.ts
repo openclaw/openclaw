@@ -42,8 +42,14 @@ describe("early service capability routing", () => {
       child.stdin.end();
       expect(await closed, stderr).toEqual([0, null]);
       expect(stdout).toBe(
-        JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }) +
-          "\nprobe returned",
+        JSON.stringify({
+          updateExecutor: "root-spawner-v1",
+          targetRootBinding: true,
+          definitionBackup: true,
+          retainedOwnerBinding: true,
+          originalDefinitionBinding: true,
+          originalRuntimePinBinding: true,
+        }) + "\nprobe returned",
       );
     } finally {
       child.kill("SIGKILL");

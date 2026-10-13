@@ -1,26 +1,62 @@
 import type { ReactiveController } from "lit";
 import { t } from "../i18n/index.ts";
+import { projectPresencePayload } from "../lib/presence-users.ts";
 import { showToast } from "../lib/toast.ts";
+import { createPresenceActivityController } from "../lit/presence-activity-controller.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { PersonActivityDataController } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
+
+export type SidebarPeopleStatusFilter = "all" | "running";
+export type SidebarPeopleSortMode = "presence" | "running" | "open" | "name";
 
 const EVENTS = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"] as const;
 
 /** One lazy interaction owner per sidebar; the data stays in SessionDataController. */
 export class SidebarPeopleController implements ReactiveController {
+  statusFilter: SidebarPeopleStatusFilter = "all";
+  sortMode: SidebarPeopleSortMode = "presence";
+
+  setStatusFilter(value: SidebarPeopleStatusFilter): void {
+    this.statusFilter = value;
+    this.host.requestUpdate();
+  }
+
+  setSortMode(value: SidebarPeopleSortMode): void {
+    this.sortMode = value;
+    this.host.requestUpdate();
+  }
+
+  resetView(): void {
+    this.statusFilter = "all";
+    this.sortMode = "presence";
+    this.host.requestUpdate();
+  }
+
   private runtime: SidebarPeopleRuntime | null = null;
+  private readonly activityExpiry: ReturnType<typeof createPresenceActivityController>;
   private loading: Promise<typeof import("./sidebar-people.runtime.ts")> | null = null;
   private generation = 0;
   private pendingTarget: HTMLElement | null = null;
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
     host.addController(this);
+    this.activityExpiry = createPresenceActivityController(host, () =>
+      host.connected ? projectPresencePayload(host.sessionData.presencePayload).users : [],
+    );
+    host.addController(
+      new PersonActivityDataController(host, () => host.sessionDataContext, host.sessionData),
+    );
   }
 
   hostConnected(): void {
     for (const event of EVENTS) {
       this.host.addEventListener(event, this.handleEvent);
     }
+  }
+
+  hostUpdate(): void {
+    this.activityExpiry.sync();
   }
 
   hostUpdated(): void {

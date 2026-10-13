@@ -1,98 +1,151 @@
-import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
+import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
+import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
   type WorkerPlacementDiskSpaceReader,
   type WorkerPlacementRunnerAvailabilityReader,
+  type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
+import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
+import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
-  workerEnvironmentService?: Parameters<typeof readWorkerPlacementIdentity>[1];
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
+  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
 };
 
-/** Acquire cold facts only for this dirty physical row; presentation reads live memory. */
+/** Acquire row facts once; selected rows refresh placement facts after owner publications. */
 export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
   context?: PlacementReadContext;
-  placementFactsReader?: Pick<WorkerSessionPlacementStore, "getProjectionFacts">;
+  placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
+  databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry } = params;
-  // The board callback shares a closure context with present; never capture a resident row.
-  const { key, agentId, storeTarget } = params.target;
+  const { cfg, entry, placementFactsReader, activitySummaryEnabled } = params;
+  const { key, agentId } = params.target;
   const context = params.context ?? {};
-  const {
-    placement,
-    move,
-    workspaceResultReconciling = false,
-  } = params.placementFactsReader?.getProjectionFacts(entry.sessionId) ?? {};
-  const environment = placement?.environmentId
-    ? context.workerEnvironmentService?.get(placement.environmentId)
-    : undefined;
-  const identity = placement
-    ? readWorkerPlacementIdentity(placement, context.workerEnvironmentService)
-    : undefined;
-  const failedRecoveryAction =
-    placement?.state === "failed"
-      ? isFailedWorkerPlacementEnvironmentGone({
-          environmentService: context.workerEnvironmentService,
+  let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
+  const readPlacementFacts = () => {
+    const {
+      placement,
+      move,
+      environment,
+      workspaceResultReconciling = false,
+      workspaceRecoveryPending = false,
+    } = placementSource ?? {};
+    const identity = placement
+      ? readWorkerPlacementIdentity(
           placement,
-        })
-        ? "restart"
-        : "stop-first"
+          context.workerEnvironmentService,
+          environment ?? null,
+        )
       : undefined;
-  const activitySummary = projectSessionActivitySummary({
-    key,
-    agentId,
-    storeTarget,
-    cfg,
-    entry,
-    enabled: params.activitySummaryEnabled,
-  });
-  return {
-    hasBoard: readSessionRowHasBoard({ key, storeTarget }),
-    present: () => ({
-      ...(placement
-        ? {
-            placement: projectWorkerSessionPlacement(
-              placement,
-              context.workerPlacementDiskSpaceReader?.read(placement),
-              context.workerPlacementRunnerAvailabilityReader?.read(placement, environment ?? null),
-              identity,
-              failedRecoveryAction,
-              workspaceResultReconciling,
-            ),
-          }
-        : {}),
-      ...(move ? { placementMove: projectWorkerPlacementMove(move) } : {}),
-      permissionModePending: isSessionPermissionChangePending(entry.sessionId),
-      activitySummary: activitySummary ? { ...activitySummary } : undefined,
-    }),
+    const failedRecoveryAction: "restart" | "stop-first" | undefined =
+      placement?.state === "failed"
+        ? isFailedWorkerPlacementEnvironmentGone({
+            environmentService: context.workerEnvironmentService
+              ? { get: () => environment }
+              : undefined,
+            placement,
+          })
+          ? "restart"
+          : "stop-first"
+        : undefined;
+    const retryOnSend =
+      placement?.state === "failed" &&
+      !move &&
+      !workspaceRecoveryPending &&
+      canRedispatchFailedWorkerPlacement(placement, environment);
+    return {
+      placement,
+      move,
+      workspaceResultReconciling,
+      environment,
+      identity,
+      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
+      failedRecoveryAction,
+      retryOnSend,
+    };
   };
-}
-
-/** Selection can check board membership without materializing placement or display fields. */
-export function readSessionRowHasBoard(target: {
-  key: string;
-  storeTarget: GatewayStoredSessionTarget["storeTarget"];
-}) {
-  const { key, storeTarget } = target;
-  const board = withOpenClawAgentDatabaseReadOnly(
-    (database) => readBoardSessionKeys(database, key).length > 0,
-    { agentId: storeTarget.agentId, path: storeTarget.storePath },
-  );
-  return board.found && board.value;
+  let placementFacts = readPlacementFacts();
+  let activitySummaryFacts = params.databaseFacts;
+  const readActivitySummary = () =>
+    projectSessionActivitySummary({
+      key,
+      agentId,
+      cfg,
+      entry,
+      enabled: activitySummaryEnabled,
+      watermark: activitySummaryFacts.activitySummaryWatermark,
+    });
+  let activitySummary = readActivitySummary();
+  return {
+    hasBoard: params.databaseFacts.hasBoard,
+    refreshActivitySummary(databaseFacts = activitySummaryFacts) {
+      activitySummaryFacts = databaseFacts;
+      activitySummary = readActivitySummary();
+    },
+    present: () => {
+      const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
+      if (currentSource !== placementSource) {
+        placementSource = currentSource;
+        placementFacts = readPlacementFacts();
+      }
+      const {
+        placement,
+        move,
+        workspaceResultReconciling,
+        environment,
+        identity,
+        sessionModelRevision: revision,
+        failedRecoveryAction,
+        retryOnSend,
+      } = placementFacts;
+      return {
+        sessionModelRevision: revision,
+        ...(placement
+          ? {
+              placement: projectWorkerSessionPlacement(
+                placement,
+                context.workerPlacementDiskSpaceReader?.read(placement),
+                context.workerPlacementRunnerAvailabilityReader?.read(
+                  placement,
+                  environment ?? null,
+                ),
+                identity,
+                failedRecoveryAction,
+                workspaceResultReconciling,
+                retryOnSend,
+                {
+                  startStatus: placement.environmentId
+                    ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
+                    : undefined,
+                  workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
+                    placement,
+                    environment ?? null,
+                  ),
+                },
+              ),
+            }
+          : {}),
+        ...(move ? { placementMove: projectWorkerPlacementMove(move) } : {}),
+        permissionModePending: isSessionPermissionChangePending(entry.sessionId),
+        activitySummary: activitySummary ? { ...activitySummary } : undefined,
+      };
+    },
+  };
 }

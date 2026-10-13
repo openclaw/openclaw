@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -52,7 +53,7 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(String(error)));
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": {
+            "cron.list": cronListResponseFixture({
               jobs: [alpha, beta],
               snapshotRevision: "run-feedback-fixture",
               total: 2,
@@ -60,7 +61,7 @@ suite.define(() => {
               limit: 50,
               hasMore: false,
               nextOffset: null,
-            },
+            }),
             "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
             "cron.status": { enabled: true, jobs: 2, triggersEnabled: true },
           },
@@ -72,7 +73,7 @@ suite.define(() => {
           await gateway.deferNext("cron.run", { id: alpha.id, mode });
           if (mode === "due") {
             await alphaRow.locator(".cron-job-menu__trigger").click();
-            await alphaRow.locator('wa-dropdown-item[value="run-if-due"]').click();
+            await alphaRow.locator('[data-value="run-if-due"]').click();
           } else {
             await page.locator(`[data-test-id="cron-row-run-${alpha.id}"]`).click();
           }

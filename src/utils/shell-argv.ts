@@ -1,4 +1,3 @@
-// Shell argv helpers quote and parse shell-style argument strings.
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
 
 // POSIX double quotes only consume the backslash before a small escape set;
@@ -79,8 +78,7 @@ function splitQuotedArgs(
   const backslashEscapes = syntax === "shell";
   const tokens: string[] = [];
   let buf = "";
-  let inSingle = false;
-  let inDouble = false;
+  let quote: "'" | '"' | undefined;
   let escaped = false;
 
   const pushToken = () => {
@@ -97,39 +95,27 @@ function splitQuotedArgs(
       escaped = false;
       continue;
     }
-    if (backslashEscapes && !inSingle && !inDouble && ch === "\\") {
+    if (backslashEscapes && !quote && ch === "\\") {
       escaped = true;
       continue;
     }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (inDouble) {
+    if (quote) {
       const next = raw[i + 1];
       // Inside double quotes, only POSIX-recognized escapes consume the backslash.
-      if (backslashEscapes && ch === "\\" && isDoubleQuoteEscape(next)) {
+      if (quote === '"' && backslashEscapes && ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += next;
         i += 1;
         continue;
       }
-      if (ch === '"') {
-        inDouble = false;
+      if (ch === quote) {
+        quote = undefined;
       } else {
         buf += ch;
       }
       continue;
     }
-    if (ch === "'") {
-      inSingle = true;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
+    if (ch === "'" || ch === '"') {
+      quote = ch;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
@@ -144,7 +130,7 @@ function splitQuotedArgs(
     buf += ch;
   }
 
-  if (escaped || (!allowUnclosedQuotes && (inSingle || inDouble))) {
+  if (escaped || (!allowUnclosedQuotes && quote)) {
     return null;
   }
   pushToken();

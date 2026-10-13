@@ -37,6 +37,8 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
     Telegram distinguishes voice notes from audio files. Default: audio-file behavior; tag `[[audio_as_voice]]` in the agent reply to force a voice-note send. Inbound voice-note transcripts are framed as machine-generated, untrusted text in agent context, but mention detection still uses the raw transcript so mention-gated voice messages keep working.
 
+    When `ffprobe` is installed, OpenClaw includes the duration for OGG/Opus, MP3, and M4A uploads so Telegram can display it correctly. If duration probing fails, the upload still proceeds without duration metadata.
+
 ```json5
 {
   action: "send",

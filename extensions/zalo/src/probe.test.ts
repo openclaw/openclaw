@@ -8,13 +8,18 @@ describe("probeZalo", () => {
     const fetcher = vi.fn<ZaloFetch>(async () =>
       Response.json({
         ok: true,
-        result: { account_name: "test-bot", account_type: "BASIC", id: "bot-1" },
+        result: {
+          account_name: "test-bot",
+          account_type: "BASIC",
+          id: "bot-1",
+          can_join_groups: false,
+        },
       }),
     );
 
     await expect(probeZalo(" token ", 5000, fetcher)).resolves.toMatchObject({
       ok: true,
-      bot: { account_name: "test-bot", id: "bot-1" },
+      bot: { account_name: "test-bot", account_type: "BASIC", id: "bot-1", can_join_groups: false },
       elapsedMs: expect.any(Number),
     });
     expect(fetcher.mock.calls[0]?.[0]).toContain("/bottoken/getMe");

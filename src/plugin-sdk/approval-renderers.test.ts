@@ -11,6 +11,29 @@ import {
   buildTypedPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
 
+const buttonLabels = {
+  "allow-once": { label: "Allow Once", style: "success" },
+  "allow-always": { label: "Allow Always", style: "primary" },
+  deny: { label: "Deny", style: "danger" },
+};
+
+function pluginPresentation(
+  approvalId: string,
+  decisions: Array<keyof typeof buttonLabels> = ["allow-once", "allow-always", "deny"],
+) {
+  return {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: decisions.map((decision) => ({
+          ...buttonLabels[decision],
+          action: { type: "approval", approvalId, approvalKind: "plugin", decision },
+        })),
+      },
+    ],
+  };
+}
+
 describe("plugin-sdk/approval-renderers", () => {
   it("preserves command controls when shipped approvalKind metadata is supplied", () => {
     expect(
@@ -96,45 +119,7 @@ describe("plugin-sdk/approval-renderers", () => {
         text: "Approval required @everyone",
       }),
       textExpected: (text: string) => expect(text).toContain("@everyone"),
-      presentationExpected: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow Once",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin:approval-123",
-                  approvalKind: "plugin",
-                  decision: "allow-once",
-                },
-                style: "success",
-              },
-              {
-                label: "Allow Always",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin:approval-123",
-                  approvalKind: "plugin",
-                  decision: "allow-always",
-                },
-                style: "primary",
-              },
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin:approval-123",
-                  approvalKind: "plugin",
-                  decision: "deny",
-                },
-                style: "danger",
-              },
-            ],
-          },
-        ],
-      },
+      presentationExpected: pluginPresentation("plugin:approval-123"),
       channelDataExpected: undefined,
     },
     {
@@ -158,45 +143,7 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       }),
       textExpected: (text: string) => expect(text).toContain("Plugin approval required"),
-      presentationExpected: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow Once",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-approval-123",
-                  approvalKind: "plugin",
-                  decision: "allow-once",
-                },
-                style: "success",
-              },
-              {
-                label: "Allow Always",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-approval-123",
-                  approvalKind: "plugin",
-                  decision: "allow-always",
-                },
-                style: "primary",
-              },
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-approval-123",
-                  approvalKind: "plugin",
-                  decision: "deny",
-                },
-                style: "danger",
-              },
-            ],
-          },
-        ],
-      },
+      presentationExpected: pluginPresentation("plugin-approval-123"),
       channelDataExpected: {
         execApproval: {
           agentId: undefined,
@@ -232,35 +179,7 @@ describe("plugin-sdk/approval-renderers", () => {
         expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once");
         expect(text).not.toContain("allow-once|deny");
       },
-      presentationExpected: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow Once",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-approval-123",
-                  approvalKind: "plugin",
-                  decision: "allow-once",
-                },
-                style: "success",
-              },
-              {
-                label: "Deny",
-                action: {
-                  type: "approval",
-                  approvalId: "plugin-approval-123",
-                  approvalKind: "plugin",
-                  decision: "deny",
-                },
-                style: "danger",
-              },
-            ],
-          },
-        ],
-      },
+      presentationExpected: pluginPresentation("plugin-approval-123", ["allow-once", "deny"]),
       channelDataExpected: {
         execApproval: {
           agentId: undefined,

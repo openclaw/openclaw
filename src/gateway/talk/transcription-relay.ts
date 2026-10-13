@@ -1,10 +1,6 @@
-// Gateway Talk transcription relay.
-// Bridges browser audio to realtime STT providers and emits Talk events.
 import { randomUUID } from "node:crypto";
-import {
-  parseFiniteNumber as readFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseFiniteNumber as readFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
@@ -15,41 +11,36 @@ import {
   createTalkSessionController,
 } from "../../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
-import { formatError } from "../server-utils.js";
+import {
+  createTalkFileTranscriptionSession,
+  type TalkFileTranscriptionConfig,
+} from "./file-transcription.js";
 import { decodeTalkRelayAudioBase64 } from "./relay-audio-base64.js";
 import {
+  assertTalkRelaySessionCapacity,
   closeExpiredTalkRelaySessions,
   closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "./relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession, registerTalkConnectionCleanup } from "./session-registry.js";
 
-/**
- * Gateway-owned relay for streaming speech-to-text providers used by Talk.
- *
- * The relay accepts browser audio on one WebSocket connection, forwards it to a
- * realtime transcription provider, and mirrors provider callbacks into Talk
- * events for the same connection.
- */
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 // Realtime transcription websocket owners retain provider sockets for this
 // bounded interval so a graceful close can still deliver its final transcript.
 const TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS = 5_000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
-const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
-const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
 const TRANSCRIPTION_EVENT = "talk.event";
 const RELAY_INPUT_ENCODING = "g711_ulaw";
 const RELAY_INPUT_SAMPLE_RATE_HZ = 8000;
 
 type TalkTranscriptionRelayEventPayload =
-  | { transcriptionSessionId: string; type: "ready" }
-  | { transcriptionSessionId: string; type: "inputAudio"; byteLength: number }
-  | { transcriptionSessionId: string; type: "partial"; text: string }
-  | { transcriptionSessionId: string; type: "transcript"; text: string; final: true }
-  | { transcriptionSessionId: string; type: "speechStart" }
-  | { transcriptionSessionId: string; type: "error"; message: string }
-  | { transcriptionSessionId: string; type: "close"; reason: "completed" | "error" };
+  | { type: "ready" }
+  | { type: "inputAudio"; byteLength: number }
+  | { type: "partial"; text: string }
+  | { type: "transcript"; text: string; final: true }
+  | { type: "speechStart" }
+  | { type: "error"; message: string }
+  | { type: "close"; reason: "completed" | "error" };
 
 type TalkTranscriptionRelayEvent = TalkTranscriptionRelayEventPayload & {
   talkEvent?: TalkEvent;
@@ -59,92 +50,47 @@ type TranscriptionRelaySession = {
   id: string;
   connId: string;
   context: GatewayRequestContext;
-  provider: RealtimeTranscriptionProviderPlugin;
-  sttSession: ReturnType<RealtimeTranscriptionProviderPlugin["createSession"]>;
+  sttSession:
+    | ReturnType<RealtimeTranscriptionProviderPlugin["createSession"]>
+    | ReturnType<typeof createTalkFileTranscriptionSession>;
   talk: TalkSessionController;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   receivedAudio: boolean;
   draining: boolean;
-  closed: boolean;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
-type TalkTranscriptionRelaySessionResult = {
-  provider: string;
-  mode: "transcription";
-  transport: "gateway-relay";
-  transcriptionSessionId: string;
-  audio: {
-    inputEncoding: "g711_ulaw";
-    inputSampleRateHz: 8000;
-  };
-  expiresAt: number;
-};
+} & (
+  | {
+      provider: RealtimeTranscriptionProviderPlugin;
+      providerConfig: RealtimeTranscriptionProviderConfig;
+    }
+  | { file: TalkFileTranscriptionConfig; assertCurrent: () => void }
+);
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
-
-/** Normalizes common provider audio-format aliases into the relay contract. */
-function normalizeRelayInputEncoding(
-  value: unknown,
-): "g711_ulaw" | "g711_alaw" | "pcm16" | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "mulaw" ||
-    normalized === "ulaw" ||
-    normalized === "g711_ulaw" ||
-    normalized === "g711-mulaw" ||
-    normalized === "pcm_mulaw" ||
-    normalized === "audio/pcmu" ||
-    normalized === "ulaw_8000"
-  ) {
-    return "g711_ulaw";
-  }
-  if (
-    normalized === "alaw" ||
-    normalized === "g711_alaw" ||
-    normalized === "g711-alaw" ||
-    normalized === "pcm_alaw"
-  ) {
-    return "g711_alaw";
-  }
-  if (
-    normalized === "pcm" ||
-    normalized === "pcm16" ||
-    normalized === "linear16" ||
-    normalized === "pcm_s16le"
-  ) {
-    return "pcm16";
-  }
-  return undefined;
-}
-
-function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const match = value.match(/_(\d+)$/);
-  return match ? readFiniteNumber(match[1]) : undefined;
-}
 
 /** Verifies provider config matches the audio format the browser relay emits. */
 function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
   const encodingValue =
     providerConfig.encoding ?? providerConfig.audioFormat ?? providerConfig.audio_format;
-  const encoding = normalizeRelayInputEncoding(encodingValue);
-  if (encoding && encoding !== RELAY_INPUT_ENCODING) {
+  // Unknown provider aliases remain provider-owned; reject only known incompatible formats.
+  const encoding = typeof encodingValue === "string" ? encodingValue.trim().toLowerCase() : "";
+  if (
+    [
+      "alaw",
+      "g711_alaw",
+      "g711-alaw",
+      "pcm_alaw",
+      "pcm",
+      "pcm16",
+      "linear16",
+      "pcm_s16le",
+    ].includes(encoding)
+  ) {
     throw new Error(
       `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
     );
@@ -152,7 +98,9 @@ function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProvid
 
   const sampleRate =
     readFiniteNumber(providerConfig.sampleRate ?? providerConfig.sample_rate) ??
-    inferSampleRateFromAudioFormat(encodingValue);
+    (typeof encodingValue === "string"
+      ? readFiniteNumber(encodingValue.match(/_(\d+)$/)?.[1])
+      : undefined);
   if (sampleRate && sampleRate !== RELAY_INPUT_SAMPLE_RATE_HZ) {
     throw new Error(
       `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
@@ -161,20 +109,26 @@ function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProvid
 }
 
 function broadcastToOwner(
-  context: GatewayRequestContext,
-  connId: string,
+  session: Pick<TranscriptionRelaySession, "id" | "context" | "connId" | "talk">,
   event: TalkTranscriptionRelayEvent,
+  talkEvent?: TalkEventInput,
 ): void {
-  context.broadcastToConnIds(TRANSCRIPTION_EVENT, event, new Set([connId]), {
-    dropIfSlow: event.type === "inputAudio" || event.type === "partial",
-  });
+  session.context.broadcastToConnIds(
+    TRANSCRIPTION_EVENT,
+    {
+      transcriptionSessionId: session.id,
+      ...event,
+      ...(talkEvent ? { talkEvent: session.talk.emit(talkEvent) } : {}),
+    },
+    new Set([session.connId]),
+    { dropIfSlow: event.type === "inputAudio" || event.type === "partial" },
+  );
 }
 
 function ensureTranscriptionTurn(session: TranscriptionRelaySession): string {
   const turn = session.talk.ensureTurn();
   if (turn.event) {
-    broadcastToOwner(session.context, session.connId, {
-      transcriptionSessionId: session.id,
+    broadcastToOwner(session, {
       type: "speechStart",
       talkEvent: turn.event,
     });
@@ -186,22 +140,20 @@ function closeTranscriptionSession(
   session: TranscriptionRelaySession,
   reason: "completed" | "error",
 ): void {
-  if (session.closed) {
+  if (transcriptionSessions.get(session.id) !== session) {
     return;
   }
-  session.closed = true;
   transcriptionSessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   try {
-    if (!session.draining) {
+    if (!session.draining || "finish" in session.sttSession) {
       session.sttSession.close();
     }
   } finally {
     // Provider teardown may throw, but the owner-visible terminal event must
     // still complete so disconnect cleanup cannot leave ambiguous state.
-    broadcastToOwner(session.context, session.connId, {
-      transcriptionSessionId: session.id,
+    broadcastToOwner(session, {
       type: "close",
       reason,
       talkEvent: session.talk.emit({
@@ -211,6 +163,18 @@ function closeTranscriptionSession(
       }),
     });
   }
+}
+
+function failTranscriptionSession(session: TranscriptionRelaySession, message: string): void {
+  if (transcriptionSessions.get(session.id) !== session) {
+    return;
+  }
+  broadcastToOwner(
+    session,
+    { type: "error", message },
+    { type: "session.error", payload: { message }, final: true },
+  );
+  closeTranscriptionSession(session, "error");
 }
 
 /** Releases every transcription relay owned by a disconnected gateway connection. */
@@ -227,69 +191,73 @@ function closeTalkTranscriptionRelaySessionsForConnection(connId: string): Promi
   });
 }
 
-function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
+function enforceTranscriptionSessionLimits(connId: string): void {
   closeExpiredTalkRelaySessions({
     sessions: transcriptionSessions.values(),
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
-    nowMs,
   });
-}
-
-function countTranscriptionSessionsForConn(connId: string): number {
-  let count = 0;
-  for (const session of transcriptionSessions.values()) {
-    if (session.connId === connId) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function enforceTranscriptionSessionLimits(connId: string): void {
-  pruneExpiredTranscriptionSessions();
-  if (transcriptionSessions.size >= MAX_TRANSCRIPTION_SESSIONS_GLOBAL) {
-    throw new Error("Too many active transcription Talk sessions");
-  }
-  if (countTranscriptionSessionsForConn(connId) >= MAX_TRANSCRIPTION_SESSIONS_PER_CONN) {
-    throw new Error("Too many active transcription Talk sessions for this connection");
-  }
+  assertTalkRelaySessionCapacity([...transcriptionSessions.values()], connId, "transcription Talk");
 }
 
 /** Creates a transcription relay session and returns its browser audio contract. */
 export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
-): TalkTranscriptionRelaySessionResult {
+) {
   enforceTranscriptionSessionLimits(params.connId);
-  assertRelayInputAudioConfig(params.providerConfig);
-  const transcriptionSessionId = randomUUID();
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TRANSCRIPTION_SESSION_TTL_MS);
-  if (expiresAtMs === undefined) {
-    throw new Error("Transcription relay session expiry is outside the supported Date range");
+  if ("providerConfig" in params) {
+    assertRelayInputAudioConfig(params.providerConfig);
   }
+  const providerId = "provider" in params ? params.provider.id : params.file.provider;
+  const transcriptionSessionId = randomUUID();
+  const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
   const talk = createTalkSessionController(
     {
       sessionId: transcriptionSessionId,
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",
-      provider: params.provider.id,
+      provider: providerId,
     },
     { onEvent: recordTalkObservabilityEvent },
   );
-  const emit = (event: TalkTranscriptionRelayEventPayload, talkEvent?: TalkEventInput): void => {
-    broadcastToOwner(params.context, params.connId, {
-      ...event,
-      ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
-    });
+  const eventOwner = {
+    id: transcriptionSessionId,
+    context: params.context,
+    connId: params.connId,
+    talk,
   };
+  const emit = (event: TalkTranscriptionRelayEvent, talkEvent?: TalkEventInput) =>
+    broadcastToOwner(eventOwner, event, talkEvent);
   const relayRef: { current?: TranscriptionRelaySession } = {};
   const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
     return relay && transcriptionSessions.get(relay.id) === relay ? relay : undefined;
   };
-  const sttSession = params.provider.createSession({
-    cfg: params.context.getRuntimeConfig(),
-    providerConfig: params.providerConfig,
+  const onTranscript = (text: string, final: boolean) => {
+    const relay = getActiveRelay();
+    if (!relay) {
+      return;
+    }
+    const turnId = ensureTranscriptionTurn(relay);
+    emit(final ? { type: "transcript", text, final: true } : { type: "partial", text }, {
+      type: final ? "transcript.done" : "transcript.delta",
+      turnId,
+      payload: { text },
+      ...(final ? { final: true } : {}),
+    });
+    if (final) {
+      const ended = relay.talk.endTurn({ turnId, payload: {} });
+      if (ended.ok) {
+        emit({
+          type: "transcript",
+          text: "",
+          final: true,
+          talkEvent: ended.event,
+        });
+      }
+    }
+  };
+  const callbacks = {
     onSpeechStart: () => {
       const relay = getActiveRelay();
       if (!relay || relay.draining) {
@@ -297,68 +265,28 @@ export function createTalkTranscriptionRelaySession(
       }
       ensureTranscriptionTurn(relay);
     },
-    onPartial: (text) => {
+    onPartial: (text: string) => onTranscript(text, false),
+    onTranscript: (text: string) => onTranscript(text, true),
+    onError: (error: Error) => {
       const relay = getActiveRelay();
       if (!relay) {
         return;
       }
-      const turnId = ensureTranscriptionTurn(relay);
-      emit(
-        { transcriptionSessionId, type: "partial", text },
-        {
-          type: "transcript.delta",
-          turnId,
-          payload: { text },
-        },
-      );
+      failTranscriptionSession(relay, error.message);
     },
-    onTranscript: (text) => {
-      const relay = getActiveRelay();
-      if (!relay) {
-        return;
-      }
-      const turnId = ensureTranscriptionTurn(relay);
-      emit(
-        { transcriptionSessionId, type: "transcript", text, final: true },
-        {
-          type: "transcript.done",
-          turnId,
-          payload: { text },
-          final: true,
-        },
-      );
-      const ended = relay.talk.endTurn({ turnId, payload: {} });
-      if (ended.ok) {
-        broadcastToOwner(relay.context, relay.connId, {
-          transcriptionSessionId,
-          type: "transcript",
-          text: "",
-          final: true,
-          talkEvent: ended.event,
+  };
+  const sttSession =
+    "file" in params
+      ? createTalkFileTranscriptionSession(params.file, callbacks, params.assertCurrent)
+      : params.provider.createSession({
+          cfg: params.context.getRuntimeConfig(),
+          providerConfig: params.providerConfig,
+          ...callbacks,
         });
-      }
-    },
-    onError: (error) => {
-      const relay = getActiveRelay();
-      if (!relay) {
-        return;
-      }
-      emit(
-        { transcriptionSessionId, type: "error", message: error.message },
-        {
-          type: "session.error",
-          payload: { message: error.message },
-          final: true,
-        },
-      );
-      closeTranscriptionSession(relay, "error");
-    },
-  });
   const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
     context: params.context,
-    provider: params.provider,
     sttSession,
     talk,
     expiresAtMs,
@@ -370,7 +298,6 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS),
     receivedAudio: false,
     draining: false,
-    closed: false,
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -384,37 +311,25 @@ export function createTalkTranscriptionRelaySession(
       if (transcriptionSessions.get(transcriptionSessionId) !== relay || relay.draining) {
         return;
       }
-      emit({ transcriptionSessionId, type: "ready" }, { type: "session.ready", payload: null });
+      emit({ type: "ready" }, { type: "session.ready", payload: null });
     })
     .catch((error: unknown) => {
       const active = transcriptionSessions.get(transcriptionSessionId);
       if (active !== relay) {
         return;
       }
-      emit(
-        {
-          transcriptionSessionId,
-          type: "error",
-          message: error instanceof Error ? error.message : String(error),
-        },
-        {
-          type: "session.error",
-          payload: { message: error instanceof Error ? error.message : String(error) },
-          final: true,
-        },
-      );
-      closeTranscriptionSession(active, "error");
+      failTranscriptionSession(active, error instanceof Error ? error.message : String(error));
     });
 
   return {
-    provider: params.provider.id,
-    mode: "transcription",
-    transport: "gateway-relay",
+    ...(providerId ? { provider: providerId } : {}),
+    mode: "transcription" as const,
+    transport: "gateway-relay" as const,
     transcriptionSessionId,
     audio: {
       inputEncoding: RELAY_INPUT_ENCODING,
       inputSampleRateHz: RELAY_INPUT_SAMPLE_RATE_HZ,
-    },
+    } as const,
     expiresAt: Math.floor(expiresAtMs / 1000),
   };
 }
@@ -422,6 +337,7 @@ export function createTalkTranscriptionRelaySession(
 function getTranscriptionSession(
   transcriptionSessionId: string,
   connId: string,
+  allowDraining = false,
 ): TranscriptionRelaySession {
   const relay = requireActiveTalkRelaySession({
     sessions: transcriptionSessions,
@@ -430,7 +346,7 @@ function getTranscriptionSession(
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
     unknownSessionMessage: "Unknown transcription Talk session",
   });
-  if (relay.draining) {
+  if (relay.draining && !allowDraining) {
     throw new Error("Unknown transcription Talk session");
   }
   return relay;
@@ -448,10 +364,14 @@ export function sendTalkTranscriptionRelayAudio(params: {
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Transcription Talk");
   const turnId = ensureTranscriptionTurn(session);
-  session.sttSession.sendAudio(audio);
+  try {
+    session.sttSession.sendAudio(audio);
+  } catch (error) {
+    failTranscriptionSession(session, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
   session.receivedAudio = true;
-  broadcastToOwner(session.context, session.connId, {
-    transcriptionSessionId: session.id,
+  broadcastToOwner(session, {
     type: "inputAudio",
     byteLength: audio.byteLength,
     talkEvent: session.talk.emit({
@@ -462,20 +382,28 @@ export function sendTalkTranscriptionRelayAudio(params: {
   });
 }
 
-/** Commits the current transcription turn and closes the relay. */
+/** Finalizes captured audio unless the caller explicitly discards it. */
 export function stopTalkTranscriptionRelaySession(params: {
   transcriptionSessionId: string;
   connId: string;
-}): void {
-  const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
+  discard?: boolean;
+}): void | Promise<void> {
+  const session = getTranscriptionSession(
+    params.transcriptionSessionId,
+    params.connId,
+    params.discard,
+  );
+  if (params.discard) {
+    closeTranscriptionSession(session, "completed");
+    return;
+  }
   const turnId = session.talk.activeTurnId;
   if (!turnId && !session.receivedAudio) {
     closeTranscriptionSession(session, "completed");
     return;
   }
   if (turnId) {
-    broadcastToOwner(session.context, session.connId, {
-      transcriptionSessionId: session.id,
+    broadcastToOwner(session, {
       type: "transcript",
       text: "",
       final: true,
@@ -489,6 +417,18 @@ export function stopTalkTranscriptionRelaySession(params: {
   }
   session.draining = true;
   clearTimeout(session.cleanupTimer);
+  if ("finish" in session.sttSession) {
+    return session.sttSession.finish().then(
+      () => closeTranscriptionSession(session, "completed"),
+      (error: unknown) => {
+        if (transcriptionSessions.get(session.id) !== session) {
+          return;
+        }
+        failTranscriptionSession(session, error instanceof Error ? error.message : String(error));
+        throw error;
+      },
+    );
+  }
   session.cleanupTimer = setTimeout(() => {
     if (transcriptionSessions.get(session.id) === session) {
       closeTranscriptionSession(session, "completed");

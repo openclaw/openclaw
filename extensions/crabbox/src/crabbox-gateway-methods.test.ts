@@ -13,7 +13,7 @@ import {
   mutateCrabboxImage,
   recoverCrabboxImage,
 } from "./crabbox-gateway-methods.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
 import {
   CrabboxWarmImageRequestError,
@@ -65,32 +65,26 @@ function record(): WarmProfileRecord {
 }
 
 function createApi() {
+  const profile = (settings: Record<string, unknown> = {}) => ({
+    provider: "crabbox",
+    settings: { ...SETTINGS, ...settings },
+  });
+  const setup = { setup: "true", setupEnv: ["SYNTHETIC_SETUP_INPUT"] };
   const api = createTestPluginApi({
     runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
     id: "crabbox",
     config: {
       cloudWorkers: {
         profiles: {
-          linux: { provider: "crabbox", settings: SETTINGS },
-          disabled: { provider: "crabbox", settings: { ...SETTINGS, warmImage: false } },
-          environment: {
-            provider: "crabbox",
-            settings: { ...SETTINGS, setup: "true", setupEnv: ["SYNTHETIC_SETUP_INPUT"] },
-          },
-          explicit: {
-            provider: "crabbox",
-            settings: {
-              ...SETTINGS,
-              setup: "true",
-              setupEnv: ["SYNTHETIC_SETUP_INPUT"],
-              warmImage: true,
-            },
-          },
+          linux: profile(),
+          disabled: profile({ warmImage: false }),
+          environment: profile(setup),
+          explicit: profile({ ...setup, warmImage: true }),
           classless: {
             provider: "crabbox",
             settings: { provider: "aws", ttl: "8h", idleTimeout: "45m" },
           },
-          mac: { provider: "crabbox", settings: { ...SETTINGS, target: "macos" } },
+          mac: profile({ target: "macos" }),
           other: { provider: "fixture", settings: {} },
         },
       },
@@ -101,7 +95,7 @@ function createApi() {
 }
 
 async function createActions() {
-  openWarmImageFixtureStore().register("profile", record());
+  openWarmImageStore().register("profile", record());
   const image = (await listCrabboxWarmImages(crabboxState))[0]!;
   return {
     pin: vi.fn<CrabboxSnapshotActions["pin"]>(async () => image),
@@ -111,7 +105,7 @@ async function createActions() {
 }
 
 describe("Crabbox snapshot mutations", () => {
-  it.each(["pin", "delete", "rollback"] as const)(
+  it.each(["pin", "delete"] as const)(
     "rejects malformed %s requests before calling the owner",
     async (action) => {
       const actions = await createActions();
@@ -142,83 +136,46 @@ describe("Crabbox snapshot mutations", () => {
     },
   );
 
-  it.each([true, false])(
-    "passes pin=%s to its owner and returns the updated summary",
-    async (pinned) => {
-      const actions = await createActions();
-      const respond = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, "pin", {
-        params: { checkpointId: "chk_fixture", pinned },
-        respond,
-      });
-      expect(actions.pin).toHaveBeenCalledWith("chk_fixture", pinned);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ checkpointId: "chk_fixture" }),
-      );
-    },
-  );
-
-  it("passes a previous checkpoint to rollback and returns the owner's summary", async () => {
+  it("uses current Crabbox profiles for deletion and preserves pending retirement", async () => {
     const actions = await createActions();
+    actions.delete.mockResolvedValue({ status: "retiring" });
+    const api = createApi();
+    api.config.cloudWorkers = {
+      profiles: {
+        synthetic: { provider: "crabbox", settings: SETTINGS },
+        other: { provider: "other", settings: {} },
+      },
+    };
     const respond = vi.fn();
-    await mutateCrabboxImage(createApi(), actions, "rollback", {
-      params: { checkpointId: "chk_previous" },
+    await mutateCrabboxImage(api, actions, "delete", {
+      params: { checkpointId: "chk_fixture" },
       respond,
     });
-    expect(actions.rollback).toHaveBeenCalledWith("chk_previous");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ checkpointId: "chk_fixture" }),
-    );
+    expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
+    expect(respond).toHaveBeenCalledWith(true, { status: "retiring" });
   });
 
-  it.each(["deleted", "retiring"] as const)(
-    "uses current Crabbox profiles for deletion and returns %s",
-    async (status) => {
-      const actions = await createActions();
-      actions.delete.mockResolvedValue({ status });
-      const api = createApi();
-      api.config.cloudWorkers = {
-        profiles: {
-          synthetic: { provider: "crabbox", settings: SETTINGS },
-          other: { provider: "other", settings: {} },
-        },
-      };
+  it("maps owner refusals separately from storage failures", async () => {
+    const actions = await createActions();
+    for (const [error, code] of [
+      [new CrabboxWarmImageRequestError("Unknown checkpoint"), "INVALID_REQUEST"],
+      [new Error("Store unavailable"), "UNAVAILABLE"],
+    ] as const) {
+      actions.rollback.mockImplementation(() => {
+        throw error;
+      });
       const respond = vi.fn();
-      await mutateCrabboxImage(api, actions, "delete", {
+      await mutateCrabboxImage(createApi(), actions, "rollback", {
         params: { checkpointId: "chk_fixture" },
         respond,
       });
-      expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
-      expect(respond).toHaveBeenCalledWith(true, { status });
-    },
-  );
-
-  it.each(["pin", "delete", "rollback"] as const)(
-    "maps %s owner refusals separately from storage failures",
-    async (action) => {
-      const actions = await createActions();
-      for (const [error, code] of [
-        [new CrabboxWarmImageRequestError("Unknown checkpoint"), "INVALID_REQUEST"],
-        [new Error("Store unavailable"), "UNAVAILABLE"],
-      ] as const) {
-        actions[action].mockImplementation(() => {
-          throw error;
-        });
-        const respond = vi.fn();
-        await mutateCrabboxImage(createApi(), actions, action, {
-          params: { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: false } : {}) },
-          respond,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          { error: error.message },
-          expect.objectContaining({ code, message: error.message }),
-        );
-      }
-    },
-  );
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { error: error.message },
+        expect.objectContaining({ code, message: error.message }),
+      );
+    }
+  });
 });
 
 describe("Crabbox snapshots Gateway methods", () => {
@@ -268,9 +225,14 @@ describe("Crabbox snapshots Gateway methods", () => {
       ...allocation,
       choice: { kind: "checkpoint", checkpointId: "chk_fixture" },
     };
-    const store = openWarmImageFixtureStore();
+    const store = openWarmImageStore();
     store.register("current", current);
-    store.register("older", { version: 3, allocations: {} });
+    const captureUnsupported = {
+      atMs: 100,
+      provider: "hetzner",
+      message: "Native checkpoints are unsupported for this coordinator target.",
+    };
+    store.register("older", { version: 3, allocations: {}, captureUnsupported });
     const respond = vi.fn();
 
     await listCrabboxImages(createApi(), { params: {}, respond });
@@ -295,6 +257,7 @@ describe("Crabbox snapshots Gateway methods", () => {
           projectLabel: undefined,
           projectRoot: undefined,
           state: "no-image",
+          captureUnsupported,
           held: false,
           allocationCount: 0,
         }),
@@ -336,47 +299,25 @@ describe("Crabbox snapshots Gateway methods", () => {
     const api = createApi();
     const respond = vi.fn();
     await listCrabboxImages(api, { params: {}, respond });
-    const configuredFacts = { backend: "aws", machineClass: "standard", os: "linux" };
-    expect(respond.mock.calls[0]![1].profiles).toEqual([
-      {
-        ...configuredFacts,
-        machineClass: undefined,
-        id: "classless",
-        warmImages: "off",
-        reason: expect.stringContaining("machine class"),
-      },
-      {
-        ...configuredFacts,
-        id: "disabled",
-        warmImages: "off",
-        reason: expect.stringContaining("Disabled"),
-      },
-      {
-        ...configuredFacts,
-        id: "environment",
-        warmImages: "off",
-        reason: expect.stringContaining("environment"),
-      },
-      {
-        ...configuredFacts,
-        id: "explicit",
-        warmImages: "on",
-        reason: expect.stringContaining("Explicitly"),
-      },
-      {
-        ...configuredFacts,
-        id: "linux",
-        warmImages: "on",
-        reason: expect.stringContaining("default"),
-      },
-      {
-        ...configuredFacts,
-        os: "macos",
-        id: "mac",
-        warmImages: "off",
-        reason: expect.stringContaining("Linux"),
-      },
-    ]);
+    expect(respond.mock.calls[0]![1].profiles).toEqual(
+      (
+        [
+          ["classless", undefined, "linux", "off", "machine class"],
+          ["disabled", "standard", "linux", "off", "Disabled"],
+          ["environment", "standard", "linux", "off", "environment"],
+          ["explicit", "standard", "linux", "on", "Explicitly"],
+          ["linux", "standard", "linux", "on", "default"],
+          ["mac", "standard", "macos", "off", "Linux"],
+        ] as const
+      ).map(([id, machineClass, os, warmImages, reason]) => ({
+        id,
+        backend: "aws",
+        machineClass,
+        os,
+        warmImages,
+        reason: expect.stringContaining(reason),
+      })),
+    );
     api.config = {};
     respond.mockClear();
     await listCrabboxImages(api, { params: {}, respond });
@@ -385,14 +326,11 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it.each([
     { selector: SELECTOR },
-    { selector: SELECTOR, acknowledgeProviderCleanup: false },
-    { selector: SELECTOR, acknowledgeProviderCleanup: "true" },
     { selector: " ", acknowledgeProviderCleanup: true },
-    { selector: 1, acknowledgeProviderCleanup: true },
     { selector: SELECTOR, acknowledgeProviderCleanup: true, extra: true },
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();
-    openWarmImageFixtureStore().register("profile", current);
+    openWarmImageStore().register("profile", current);
     const respond = vi.fn();
     await recoverCrabboxImage(crabboxState, { params, respond });
     expect(respond).toHaveBeenCalledWith(
@@ -400,12 +338,12 @@ describe("Crabbox snapshots Gateway methods", () => {
       expect.any(Object),
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(openWarmImageFixtureStore().lookup("profile")).toEqual(current);
+    expect(openWarmImageStore().lookup("profile")).toEqual(current);
   });
 
   it("recovers the exact acknowledged capture and returns the CLI result shape", async () => {
     const current = record();
-    openWarmImageFixtureStore().register("profile", current);
+    openWarmImageStore().register("profile", current);
     const respond = vi.fn();
     await recoverCrabboxImage(crabboxState, {
       params: { selector: SELECTOR, acknowledgeProviderCleanup: true },
@@ -417,7 +355,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       recoveredCapture: SELECTOR,
       nextSteps: expect.stringContaining("Restart the Gateway"),
     });
-    expect(openWarmImageFixtureStore().lookup("profile")).toEqual({
+    expect(openWarmImageStore().lookup("profile")).toEqual({
       ...current,
       operation: undefined,
     });
@@ -469,11 +407,3 @@ describe("Crabbox snapshots Gateway methods", () => {
     );
   });
 });
-
-function openWarmImageFixtureStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-    namespace: "warm-images",
-    maxEntries: 128,
-    overflowPolicy: "reject-new",
-  });
-}

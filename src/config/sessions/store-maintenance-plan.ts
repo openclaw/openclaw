@@ -23,7 +23,6 @@ type EntryMaintenanceConfig = Pick<
 
 /** Mutate working images only; callers own warn mode, protected keys, reads, and persistence. */
 export function planSessionEntryMaintenance(params: {
-  profile: "write" | "legacy-read";
   maintenance: EntryMaintenanceConfig;
   initialUnarchivedCount: number;
   forceMaintenance?: boolean;
@@ -36,7 +35,6 @@ export function planSessionEntryMaintenance(params: {
   onArchived?: (candidate: MaintenanceCandidate, phase: ArchivePhase) => void;
   onRemoved?: (candidate: MaintenanceCandidate, reason: RemovalReason) => void;
 }) {
-  // Legacy reads archive dashboards first but freeze probe pressure before that archive.
   const runModelRunPrune = shouldRunModelRunPrune({
     maintenance: params.maintenance,
     entryCount: params.initialUnarchivedCount,
@@ -74,15 +72,6 @@ export function planSessionEntryMaintenance(params: {
     }
     params.onArchived?.(candidate, phase);
   };
-  const archiveDashboards = () =>
-    archiveStaleDashboardEntries(store, params.maintenance.archiveDashboardAfterMs, {
-      ...ageOptions,
-      onArchived: (candidate) => recordArchive(candidate, "dashboard"),
-    });
-
-  if (params.profile === "legacy-read") {
-    archiveDashboards();
-  }
   if (runModelRunPrune) {
     counts.modelRunPruned = pruneStaleModelRunEntries(
       store,
@@ -90,36 +79,35 @@ export function planSessionEntryMaintenance(params: {
       { ...ageOptions, onPruned: (candidate) => recordRemoval(candidate, "model-run-pruned") },
     );
   }
-  if (params.profile === "write") {
-    archiveDashboards();
-  }
-  if (params.profile === "write" || remainingUnarchivedCount > params.maintenance.maxEntries) {
-    counts.pruned = pruneStaleEntries(store, params.maintenance.pruneAfterMs, {
-      ...ageOptions,
-      onPruned: (candidate) => recordRemoval(candidate, "pruned"),
-      onArchived: (candidate) => recordArchive(candidate, "age"),
-    });
-    if (
-      shouldRunSessionEntryMaintenance({
-        entryCount: remainingUnarchivedCount,
-        maxEntries: params.maintenance.maxEntries,
-        force: params.forceMaintenance,
-      })
-    ) {
-      const cap = params.readCapCandidates(remainingUnarchivedCount);
-      if (cap && Object.keys(cap.store).length > 0) {
-        counts.capped = capEntryCount(cap.store, cap.maxEntries, {
-          ...readProtectedOptions(),
-          onArchived: (candidate) => {
-            // Indexed cap candidates may be absent from the age-candidate working image.
-            if (cap.store !== store) {
-              store[candidate.key] = candidate.entry;
-            }
-            recordArchive(candidate, "cap");
-          },
-          onRemoved: (candidate) => recordRemoval(candidate, "capped"),
-        });
-      }
+  archiveStaleDashboardEntries(store, params.maintenance.archiveDashboardAfterMs, {
+    ...ageOptions,
+    onArchived: (candidate) => recordArchive(candidate, "dashboard"),
+  });
+  counts.pruned = pruneStaleEntries(store, params.maintenance.pruneAfterMs, {
+    ...ageOptions,
+    onPruned: (candidate) => recordRemoval(candidate, "pruned"),
+    onArchived: (candidate) => recordArchive(candidate, "age"),
+  });
+  if (
+    shouldRunSessionEntryMaintenance({
+      entryCount: remainingUnarchivedCount,
+      maxEntries: params.maintenance.maxEntries,
+      force: params.forceMaintenance,
+    })
+  ) {
+    const cap = params.readCapCandidates(remainingUnarchivedCount);
+    if (cap && Object.keys(cap.store).length > 0) {
+      counts.capped = capEntryCount(cap.store, cap.maxEntries, {
+        ...readProtectedOptions(),
+        onArchived: (candidate) => {
+          // Indexed cap candidates may be absent from the age-candidate working image.
+          if (cap.store !== store) {
+            store[candidate.key] = candidate.entry;
+          }
+          recordArchive(candidate, "cap");
+        },
+        onRemoved: (candidate) => recordRemoval(candidate, "capped"),
+      });
     }
   }
   return { store, ...counts };

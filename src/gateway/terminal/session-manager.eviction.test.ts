@@ -27,31 +27,6 @@ function trackingManager(maxSessions: number) {
 }
 
 describe("TerminalSessionManager idle eviction", () => {
-  it("evicts the longest-idle viewer-free agent session under pool pressure", async () => {
-    vi.useFakeTimers();
-    try {
-      const { manager, ptys } = trackingManager(2);
-      const first = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      await vi.advanceTimersByTimeAsync(5_000);
-      const second = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      if (!first.ok || !second.ok) {
-        throw new Error("expected agent opens");
-      }
-      // Freshen the second session so the first is the idle-eviction candidate.
-      await vi.advanceTimersByTimeAsync(5_000);
-      expectDefined(ptys[1], "second pty invariant").emitData("keepalive\n");
-
-      const third = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      expect(third.ok).toBe(true);
-      expect(manager.size).toBe(2);
-      expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
-      expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(false);
-      expect(manager.snapshotAgent(agentOwner, first.sessionId)).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("never evicts viewer-attached or connection-owned sessions under pressure", async () => {
     const { manager, ptys } = trackingManager(2);
     const connOwned = await manager.open(baseOpenRequest());

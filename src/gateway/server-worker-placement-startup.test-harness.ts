@@ -25,17 +25,23 @@ const moveDestinationMocks = vi.hoisted(() => ({
     storeKeys: ["agent:main:move-source"],
     storePath: "/tmp/openclaw-worker-placement-session.sqlite",
   })),
+  prepareGatewaySessionTarget:
+    vi.fn<
+      typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
+    >(),
   resolveSessionRuntime: vi.fn(() => "codex"),
   resolveSessionTarget: vi.fn(
-    (
+    async (
       _params: Parameters<
         typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
       >[0],
     ): ReturnType<
       typeof import("./server-worker-placement-session-target.js").resolveWorkerPlacementSessionTarget
     > => ({
+      assertCurrent: () => {},
+      assertBindingCurrent: () => {},
       config: {},
-      entry: {},
+      entry: { sessionId: "session-recovery", updatedAt: 0 },
       target: {
         agentId: "main",
         canonicalKey: "agent:main:move-source",
@@ -45,6 +51,7 @@ const moveDestinationMocks = vi.hoisted(() => ({
       },
       worktree: { id: "worktree-recovery", path: "/gateway/workspace" },
       workspace: { kind: "local", path: "/gateway/workspace" },
+      [Symbol.dispose]: () => {},
     }),
   ),
 }));
@@ -73,12 +80,41 @@ vi.mock("./worker-environments/placement-session-runtime.js", async (importOrigi
   };
 });
 
+vi.mock(
+  "./worker-environments/placement-session-runtime-preparation.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("./worker-environments/placement-session-runtime-preparation.js")
+      >();
+    return {
+      ...actual,
+      prepareWorkerPlacementSessionRuntime: async () => ({
+        read: moveDestinationMocks.resolveSessionRuntime,
+        [Symbol.dispose]: () => {},
+      }),
+    };
+  },
+);
+
 vi.mock("./session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-utils.js")>();
   return {
     ...actual,
     resolveCanonicalSessionEntryFromStoreKeys: moveDestinationMocks.resolveCanonicalSession,
-    resolveGatewaySessionStoreTargetWithStore: moveDestinationMocks.resolveGatewaySessionTarget,
+  };
+});
+
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-utils-store-worker.js")>();
+  return {
+    ...actual,
+    resolveGatewaySessionStoreTargetInWorker: async (
+      params: Parameters<typeof actual.resolveGatewaySessionStoreTargetInWorker>[0],
+    ) =>
+      moveDestinationMocks.prepareGatewaySessionTarget.getMockImplementation()
+        ? moveDestinationMocks.prepareGatewaySessionTarget(params)
+        : moveDestinationMocks.resolveGatewaySessionTarget(),
   };
 });
 

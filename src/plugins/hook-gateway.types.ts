@@ -6,6 +6,8 @@ export type PluginHookGatewayContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   getCron?: () => PluginHookGatewayCronService | undefined;
+  /** In gateway_start, aborts at drain to stop producers; gateway_stop owns resource disposal. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookCronReconciledContext = PluginHookGatewayContext & {

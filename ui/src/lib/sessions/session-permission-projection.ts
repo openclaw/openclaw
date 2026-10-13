@@ -1,7 +1,8 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
+import { mapSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
 import type { SessionGateway } from "./session-capability.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
+import type { createSessionRosterObservations } from "./session-roster-observations.ts";
 
 type PermissionFields = Pick<GatewaySessionRow, "sessionId" | "permissionMode" | "updatedAt">;
 export type SessionPermissionClaim = {
@@ -11,11 +12,22 @@ export type SessionPermissionClaim = {
 
 type PermissionProjectionRoster = {
   readonly requestRevision: number;
-  inheritRow: (row: GatewaySessionRow, source: GatewaySessionRow) => GatewaySessionRow;
-  publishedRow: (
-    matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
-  ) => GatewaySessionRow | undefined;
+  observations: Pick<
+    ReturnType<typeof createSessionRosterObservations>,
+    "rowRevision" | "inheritRow" | "publishedRow"
+  >;
 };
+
+function withPermissionMode(
+  row: GatewaySessionRow,
+  permissionMode: PermissionFields["permissionMode"],
+) {
+  const next = { ...row, permissionMode };
+  if (permissionMode === undefined) {
+    delete next.permissionMode;
+  }
+  return next;
+}
 
 // Claims and confirmed fields share one conversation owner. A row event may
 // supersede its permission choice, but never owns an unrelated roster load.
@@ -50,13 +62,20 @@ export function createSessionPermissionProjection(
   ): SessionPermissionClaim => {
     const identity = permissionIdentity(key, agentId);
     const expectedId = expectedSessionId?.trim() || undefined;
-    const sessionId =
-      expectedId ??
-      getRoster().publishedRow(
-        (row, ownerAgentId) =>
-          permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
-      )?.sessionId;
+    const roster = getRoster();
+    const published = roster.observations.publishedRow(
+      (row, ownerAgentId) => permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
+    );
+    const sessionId = expectedId ?? published?.sessionId;
     const projection = createProjection(identity, sessionId);
+    if (!projection.fact && published && published.sessionId === sessionId) {
+      // An unchanged read during the write must not look like a competing permission edit.
+      projection.fact = {
+        permissionMode: published.permissionMode,
+        updatedAt: published.updatedAt,
+        revision: roster.observations.rowRevision(published),
+      };
+    }
     const initialFact = projection.fact;
     const ownsClaim = () => permissionProjections.get(identity) === projection;
     let confirmed = false;
@@ -145,13 +164,8 @@ export function createSessionPermissionProjection(
     if (row.permissionMode === fact.permissionMode) {
       return row;
     }
-    const next = { ...row };
-    if (fact.permissionMode === undefined) {
-      delete next.permissionMode;
-    } else {
-      next.permissionMode = fact.permissionMode;
-    }
-    return getRoster().inheritRow(next, row);
+    const next = withPermissionMode(row, fact.permissionMode);
+    return getRoster().observations.inheritRow(next, row);
   };
   const projectPermissionList = (
     result: SessionsListResult | null,
@@ -162,9 +176,8 @@ export function createSessionPermissionProjection(
     if (!result || permissionProjections.size === 0) {
       return result;
     }
-    return projectSessionResultRows(
-      result,
-      result.sessions.map((row) => projectPermissionRow(row, readRevision, agentId, observe)),
+    return mapSessionResultRows(result, (row) =>
+      projectPermissionRow(row, readRevision, agentId, observe),
     );
   };
   const observeEventRow = (
@@ -189,14 +202,7 @@ export function createSessionPermissionProjection(
       row.updatedAt < projection.fact.updatedAt
     ) {
       // Another held list may have accepted a newer field than this roster has seen.
-      const corrected = {
-        ...row,
-        permissionMode: projection.fact.permissionMode,
-      };
-      if (corrected.permissionMode === undefined) {
-        delete corrected.permissionMode;
-      }
-      return corrected;
+      return withPermissionMode(row, projection.fact.permissionMode);
     }
     if (row.sessionId) {
       // Events supersede confirmed outcomes; a pending local choice still arbitrates its acknowledgment.

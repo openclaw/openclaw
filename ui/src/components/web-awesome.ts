@@ -25,11 +25,7 @@ export function trackDropdownKeyboardDismissal(
 
 export function consumeDropdownKeyboardDismissal(event: Event): boolean {
   const dropdown = event.currentTarget;
-  if (!dropdown || !keyboardDismissedDropdowns.has(dropdown)) {
-    return false;
-  }
-  keyboardDismissedDropdowns.delete(dropdown);
-  return true;
+  return dropdown !== null && keyboardDismissedDropdowns.delete(dropdown);
 }
 
 /** Web Awesome exposes checkbox items only. Preserve its roving-focus item
@@ -55,16 +51,12 @@ function labelDropdownMenu(dropdown: HTMLElement) {
   if (!menu) {
     return;
   }
-  const label = dropdown.getAttribute("aria-label");
+  const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
+  const label =
+    dropdown.getAttribute("aria-label") ||
+    (trigger?.getAttribute("aria-label") ?? trigger?.textContent?.trim());
   if (label) {
     menu.setAttribute("aria-label", label);
-    menu.removeAttribute("aria-labelledby");
-    return;
-  }
-  const trigger = dropdown.querySelector<HTMLElement>('[slot="trigger"]');
-  const triggerLabel = trigger?.getAttribute("aria-label") ?? trigger?.textContent?.trim();
-  if (triggerLabel) {
-    menu.setAttribute("aria-label", triggerLabel);
     menu.removeAttribute("aria-labelledby");
   }
 }
@@ -139,15 +131,13 @@ function startDropdownLabelSync(event: Event) {
   labelDropdownMenu(dropdown);
   labelDropdownSubmenus(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
-  if (typeof MutationObserver === "undefined") {
-    return;
-  }
   const observer = new MutationObserver(() => {
     labelDropdownMenu(dropdown);
     labelDropdownSubmenus(dropdown);
   });
   // Open menus can survive an in-place locale render. Watch only their light
   // DOM so translated labels stay current without observing the whole app.
+  // MutationObserver is part of the supported Control UI browser floor.
   observer.observe(dropdown, {
     attributes: true,
     attributeFilter: ["aria-label"],

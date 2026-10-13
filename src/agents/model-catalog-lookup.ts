@@ -24,6 +24,15 @@ type ModelThinkingCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
+type ModelRunCapabilityEntry = {
+  provider: string;
+  id: string;
+  api?: string;
+  baseUrl?: string;
+  input?: readonly ModelInputType[];
+  compat?: unknown;
+};
+
 export type PreparedModelThinkingCapability = Readonly<{
   provider: string;
   modelId: string;
@@ -56,8 +65,8 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
 
 /** Freezes thinking capability from the selected prepared catalog row. */
 function prepareModelThinkingCapability(params: {
-  entry: ModelCatalogEntry | undefined;
-  route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+  entry: ModelRunCapabilityEntry | undefined;
+  route?: Pick<ModelRunCapabilityEntry, "api" | "baseUrl">;
   agentRuntime: string;
 }): PreparedModelThinkingCapability | undefined {
   const compat = projectModelThinkingCompat(params.entry?.compat);
@@ -125,7 +134,10 @@ export function resolvePreparedModelThinkingCompat(params: {
 
 /** Projects the prepared capabilities needed by one selected run candidate. */
 export function prepareModelRunCapabilities(
-  [catalog, configuredCatalog]: readonly [ModelCatalogEntry[] | undefined, ModelCatalogEntry[]],
+  [catalog, configuredCatalog]: readonly [
+    readonly ModelRunCapabilityEntry[] | undefined,
+    readonly ModelRunCapabilityEntry[],
+  ],
   [provider, modelId, agentRuntime]: readonly [string, string, string],
 ) {
   const entry = findModelInCatalog(catalog ?? [], provider, modelId);
@@ -155,10 +167,20 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   modelId: string,
 ): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const providerCatalog = catalog.filter(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
-  );
-  const literal = providerCatalog.find((entry) => entry.id === modelId.trim());
+  const trimmedModelId = modelId.trim();
+  const providerCatalog: T[] = [];
+  let literal: T | undefined;
+  catalog.some((entry) => {
+    if (normalizeProviderId(entry.provider) !== normalizedProvider) {
+      return false;
+    }
+    if (entry.id === trimmedModelId) {
+      literal = entry;
+      return true;
+    }
+    providerCatalog.push(entry);
+    return false;
+  });
   if (literal) {
     return literal;
   }
@@ -170,7 +192,7 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
       modelId: splitTrailingAuthProfile(id).model,
       surface,
     }) ?? id;
-  const identity = identityOf(modelId.trim());
+  const identity = identityOf(trimmedModelId);
   const exact = providerCatalog.find((entry) => identityOf(entry.id) === identity);
   if (exact) {
     return exact;

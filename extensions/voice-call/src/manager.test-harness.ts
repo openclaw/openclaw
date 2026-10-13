@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -101,7 +101,7 @@ export function createTestStorePath(): string {
 export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("voice-call", options),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
@@ -197,13 +197,6 @@ export async function writeCallsToStore(
   }
 }
 
-export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
-}
-
 export function makePersistedCall(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -212,6 +205,7 @@ export function makePersistedCall(
     providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     provider: "plivo",
     direction: "outbound",
+    agentId: "main",
     state: "answered",
     from: "+15550000000",
     to: "+15550000001",
@@ -233,7 +227,7 @@ export function createEventManagerHarness() {
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
-        openKeyedStore: (options: OpenKeyedStoreOptions) => {
+        openKeyedStore: (options: OpenAsyncKeyedStoreOptions) => {
           if (shouldFail?.()) {
             throw new Error("synthetic SQLite persistence failure");
           }
@@ -287,7 +281,7 @@ export function createEventManagerHarness() {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       processedEventIds: new Set(),
-      rejectedProviderCallIds: new Map(),
+      rejectedProviderCallIds: new Set(),
       provider: null,
       config: VoiceCallConfigSchema.parse({
         enabled: true,

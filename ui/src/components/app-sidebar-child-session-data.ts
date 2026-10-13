@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -52,6 +51,7 @@ export function collectKnownSessionRows(
 
 export async function fetchSessionLineage(params: {
   client: GatewayBrowserClient;
+  sessions: Pick<SessionCapability, "describe">;
   sessionKey: string;
   knownRows: Map<string, GatewaySessionRow>;
   isCurrent: () => boolean;
@@ -97,20 +97,23 @@ export async function fetchSessionLineage(params: {
       }
       if (!row) {
         const reconcile = depth === 0 ? params.captureReconcile() : undefined;
-        const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
-          "sessions.describe",
+        const described = await params.sessions.describe(
           {
             key: currentKey,
             ...(!parseAgentSessionKey(currentKey) && currentAgentId
               ? { agentId: currentAgentId }
               : {}),
           },
+          { client: params.client },
         );
         if (!params.isCurrent()) {
           return null;
         }
         row = described?.session
-          ? { ...described.session, runtimeSampledAt: Date.now() }
+          ? {
+              ...described.session,
+              runtimeSampledAt: described.session.runtimeSampledAt ?? Date.now(),
+            }
           : undefined;
         if (!row) {
           break;
@@ -206,7 +209,7 @@ function mergeRefreshedChildSessionRows(
 
 export function scheduleSidebarChildSessions(
   owner: {
-    readonly context: ApplicationContext<RouteId> | undefined;
+    readonly context: ApplicationContext | undefined;
     readonly childSessionScope: object;
     readonly isSessionDataHostConnected: boolean;
     retireStaleChildSessions(revalidating: ReadonlySet<string>): void;
@@ -297,6 +300,25 @@ export async function hydrateSidebarChildSessions(params: {
       parentKey,
       formatUiError(error),
     );
+  }
+}
+
+export function discardEmptyChildSessionSnapshot(
+  owner: {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    requestSessionDataUpdate(): void;
+  },
+  sessionKey: string,
+): void {
+  if (owner.childSessionRowsByParent[sessionKey]?.length === 0) {
+    const childRows = { ...owner.childSessionRowsByParent };
+    delete childRows[sessionKey];
+    owner.childSessionRowsByParent = childRows;
+    const loadedKeys = new Set(owner.loadedChildSessionKeys);
+    loadedKeys.delete(sessionKey);
+    owner.loadedChildSessionKeys = loadedKeys;
+    owner.requestSessionDataUpdate();
   }
 }
 
@@ -442,37 +464,16 @@ export function publishActiveSessionRow(
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): GatewaySessionRow | null {
-  // Routed descriptors share the capability's freshness and placement owner;
-  // both lineage and child-list completions must publish its accepted row.
   const sessions = owner.context?.sessions;
   if (!isCurrent()) {
     return null;
   }
-  const rowIsCurrent =
-    reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) === true;
-  if (!isCurrent()) {
-    return null;
+  if (reconcile(row, owner.sessionsResult?.defaults, { archivedFilter: "all" }) !== true) {
+    return owner.activeSessionLineageSelectedRow;
   }
-  const currentRow = () =>
-    sessions?.state.result?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, row.key),
-    );
-  if (!rowIsCurrent) {
-    // Primary can lag a newer managed row; use the owner's existing admission checks.
-    const current = [currentRow(), owner.activeSessionLineageSelectedRow].find(
-      (candidate) =>
-        candidate &&
-        isCurrent() &&
-        sessions?.reconcile(candidate, undefined, { archivedFilter: "all" }) === true,
-    );
-    if (!isCurrent()) {
-      return null;
-    }
-    if (!current) {
-      return owner.activeSessionLineageSelectedRow;
-    }
-  }
-  const accepted = currentRow();
+  const accepted = sessions?.state.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, row.key),
+  );
   if (accepted) {
     // A current request can still contain a timestamp-rejected row.
     const previous = owner.activeSessionLineageSelectedRow ?? undefined;
@@ -486,7 +487,6 @@ export function publishActiveSessionLineage(
   owner: SessionLineageOwner,
   sessionKey: string,
   lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
-  sourceCanonicalListRevision: number,
   inheritRow: SessionCapability["inheritRow"],
   isCurrent: () => boolean,
 ): void {
@@ -526,8 +526,6 @@ export function publishActiveSessionLineage(
     rowsByParent,
   );
   owner.activeSessionLineageRoot = topmostRow;
-  // Actual describes keep their issuance receipt; cached lineage still selects
-  // the newest held row before applying its primary-list fence.
   const selectedRow =
     lineage.selectedObservation?.row ??
     [
@@ -549,10 +547,7 @@ export function publishActiveSessionLineage(
     const reconcile: SessionCapability["reconcile"] =
       lineage.selectedObservation?.reconcile ??
       ((row, defaults, options) =>
-        owner.context?.sessions.reconcile(row, defaults, {
-          ...options,
-          sourceCanonicalListRevision,
-        }) ?? false);
+        owner.context?.sessions.reconcile(row, defaults, options) ?? false);
     publishActiveSessionRow(owner, selectedRow, reconcile, inheritRow, isCurrent);
   } else {
     owner.activeSessionLineageSelectedRow = lineage.lookupFailed ? previousSelectedRow : null;

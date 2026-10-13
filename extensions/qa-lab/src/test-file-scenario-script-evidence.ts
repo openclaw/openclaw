@@ -2,19 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveQaArtifactPath, toRepoArtifactPath, toRepoRelativePath } from "./cli-paths.js";
 import {
-  isRepoRootRelativeRef,
-  resolveQaArtifactPath,
-  toRepoArtifactPath,
-  toRepoRelativePath,
-} from "./cli-paths.js";
-import {
+  collectQaEvidenceArtifacts,
   QA_EVIDENCE_FILENAME,
   type projectQaEvidenceScenarioOutcomes,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 
 async function readJsonBytesIfExists(filePath: string) {
   let bytes: Buffer;
@@ -42,26 +39,6 @@ export async function readJsonFileIfExists(filePath: string): Promise<unknown> {
   return (await readJsonBytesIfExists(filePath))?.value;
 }
 
-// Producer artifact paths resolve against their evidence bundle. External
-// artifacts remain absolute so consumers never receive traversal segments.
-function resolveScriptProducerArtifactPath(params: {
-  evidenceDir: string;
-  repoRoot: string;
-  artifactPath: string;
-  explicitBase?: boolean;
-}) {
-  const absolutePath = resolveQaArtifactPath(
-    params.repoRoot,
-    params.evidenceDir,
-    params.artifactPath,
-  );
-  if (params.explicitBase) {
-    return toRepoArtifactPath(params.repoRoot, absolutePath);
-  }
-  const repoRelativePath = toRepoRelativePath(params.repoRoot, absolutePath);
-  return isRepoRootRelativeRef(repoRelativePath) ? repoRelativePath : path.normalize(absolutePath);
-}
-
 function normalizeScriptProducerEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   evidencePath: string;
@@ -69,21 +46,17 @@ function normalizeScriptProducerEvidence(params: {
 }): QaEvidenceSummaryJson {
   const evidenceDir = path.dirname(params.evidencePath);
   const evidence = structuredClone(params.evidence);
-  const artifacts = [
-    ...evidence.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
-    ...(evidence.schemaVersion === 3
-      ? evidence.occurrences.flatMap((occurrence) =>
-          occurrence.receipts.map((receipt) => receipt.artifact),
-        )
-      : []),
-  ];
-  for (const artifact of artifacts) {
-    artifact.path = resolveScriptProducerArtifactPath({
-      artifactPath: artifact.path,
-      evidenceDir,
-      repoRoot: params.repoRoot,
-      explicitBase: evidence.schemaVersion === 3,
-    });
+  for (const artifact of collectQaEvidenceArtifacts(evidence)) {
+    const absolutePath = resolveQaArtifactPath(params.repoRoot, evidenceDir, artifact.path);
+    if (evidence.schemaVersion === 3) {
+      artifact.path = toRepoArtifactPath(params.repoRoot, absolutePath);
+    } else {
+      // External v2 artifacts stay absolute rather than exposing traversal segments.
+      const relativePath = toRepoRelativePath(params.repoRoot, absolutePath);
+      artifact.path = isRepoRootRelativeRef(relativePath)
+        ? relativePath
+        : path.normalize(absolutePath);
+    }
   }
   return validateQaEvidenceSummaryJson(evidence);
 }
@@ -161,17 +134,6 @@ export async function readScriptProducerEvidence(params: {
 }> {
   const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
   const latestRun = await readJsonFileIfExists(path.join(scenarioOutputDir, "latest-run.json"));
-  if (
-    params.requireCurrentRunEvidence === true &&
-    latestRun !== undefined &&
-    (latestRun === null ||
-      typeof latestRun !== "object" ||
-      !("qaEvidence" in latestRun) ||
-      typeof latestRun.qaEvidence !== "string" ||
-      latestRun.qaEvidence.trim().length === 0)
-  ) {
-    throw new Error("latest-run.json does not identify a producer evidence bundle");
-  }
   const latestEvidencePath =
     latestRun !== null &&
     typeof latestRun === "object" &&
@@ -179,6 +141,13 @@ export async function readScriptProducerEvidence(params: {
     typeof latestRun.qaEvidence === "string"
       ? latestRun.qaEvidence
       : undefined;
+  if (
+    params.requireCurrentRunEvidence === true &&
+    latestRun !== undefined &&
+    !latestEvidencePath?.trim()
+  ) {
+    throw new Error("latest-run.json does not identify a producer evidence bundle");
+  }
   const candidates = [
     latestEvidencePath,
     path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),
@@ -212,12 +181,7 @@ export async function readScriptProducerEvidence(params: {
     return {
       producerArtifact: {
         kind: "producer-evidence",
-        path: resolveScriptProducerArtifactPath({
-          evidenceDir: path.dirname(evidencePath),
-          repoRoot: params.repoRoot,
-          artifactPath: path.resolve(evidencePath),
-          explicitBase: true,
-        }),
+        path: toRepoArtifactPath(params.repoRoot, evidencePath),
         source: "script",
         sha256: createHash("sha256").update(captured.bytes).digest("hex"),
       },

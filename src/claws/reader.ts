@@ -1,13 +1,15 @@
-// Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
-import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -36,19 +38,12 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
-async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
-  const fileRoot = await fsSafeRoot(dirname(path));
-  const read = await fileRoot.read(basename(path), {
-    hardlinks: "reject",
-    maxBytes,
-    nonBlockingRead: true,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
+}
+
+function fileFailure(code: string, message: string, path = "$") {
+  return { ok: false as const, diagnostics: [fileDiagnostic(code, message, path)] };
 }
 
 function isContained(root: string, candidate: string): boolean {
@@ -56,39 +51,9 @@ function isContained(root: string, candidate: string): boolean {
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
-function updateSnapshotHash(
-  hash: ReturnType<typeof createHash>,
-  label: string,
-  bytes: Buffer,
-): void {
-  hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
-  hash.update(bytes);
-}
-
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
@@ -111,12 +76,13 @@ async function buildDevelopmentSnapshot(params: {
   const hash = createHash("sha256");
   let byteLength = 0;
   const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
+    hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
+    hash.update(bytes);
     byteLength += bytes.byteLength;
   };
   const snapshotFile = (bytes: Buffer) => ({
     byteLength: bytes.byteLength,
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: digestClawBytes(bytes),
   });
   const manifest = snapshotFile(params.manifestRaw);
   const openClawProfile = params.openClawProfile
@@ -134,10 +100,7 @@ async function buildDevelopmentSnapshot(params: {
   if (params.source.kind === "package") {
     const packageJson = params.source.packageJsonRaw;
     if (!packageJson) {
-      return {
-        ok: false,
-        diagnostics: [fileDiagnostic("package_read_failed", "Could not snapshot package.json.")],
-      };
+      return fileFailure("package_read_failed", "Could not snapshot package.json.");
     }
     add("package.json", packageJson);
   }
@@ -149,23 +112,17 @@ async function buildDevelopmentSnapshot(params: {
       const read = await sourceRoot.read("BOOTSTRAP.md", {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        nonBlockingRead: true,
         symlinks: "reject",
       });
       const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
       if (text.trim().length === 0) {
-        return {
-          ok: false,
-          diagnostics: [
-            fileDiagnostic(
-              "package_bootstrap_empty",
-              "Package-root BOOTSTRAP.md must contain first-run instructions.",
-              "$.bootstrap",
-            ),
-          ],
-        };
+        return fileFailure(
+          "package_bootstrap_empty",
+          "Package-root BOOTSTRAP.md must contain first-run instructions.",
+          "$.bootstrap",
+        );
       }
-      const digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+      const digest = digestClawBytes(read.buffer);
       add("bootstrap:BOOTSTRAP.md", read.buffer);
       packageBootstrap = {
         sourcePath: "BOOTSTRAP.md",
@@ -175,18 +132,13 @@ async function buildDevelopmentSnapshot(params: {
       };
     } catch (error) {
       const tooLarge = error instanceof FsSafeError && error.code === "too-large";
-      return {
-        ok: false,
-        diagnostics: [
-          fileDiagnostic(
-            tooLarge ? "package_bootstrap_too_large" : "package_bootstrap_invalid",
-            tooLarge
-              ? `Package-root BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
-              : `Package-root BOOTSTRAP.md must be a safe UTF-8 regular file: ${(error as Error).message}`,
-            "$.bootstrap",
-          ),
-        ],
-      };
+      return fileFailure(
+        tooLarge ? "package_bootstrap_too_large" : "package_bootstrap_invalid",
+        tooLarge
+          ? `Package-root BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
+          : `Package-root BOOTSTRAP.md must be a safe UTF-8 regular file: ${(error as Error).message}`,
+        "$.bootstrap",
+      );
     }
   }
 
@@ -228,16 +180,11 @@ async function buildDevelopmentSnapshot(params: {
     }
 
     if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
-      return {
-        ok: false,
-        diagnostics: [
-          fileDiagnostic(
-            "workspace_sources_too_large",
-            `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-            "$.workspace",
-          ),
-        ],
-      };
+      return fileFailure(
+        "workspace_sources_too_large",
+        `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+        "$.workspace",
+      );
     }
 
     let readWorkspaceByteLength = 0;
@@ -256,22 +203,16 @@ async function buildDevelopmentSnapshot(params: {
       }
       readWorkspaceByteLength += bytes.byteLength;
       if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
-        return {
-          ok: false,
-          diagnostics: [
-            fileDiagnostic(
-              "workspace_sources_too_large",
-              `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-              "$.workspace",
-            ),
-          ],
-        };
+        return fileFailure(
+          "workspace_sources_too_large",
+          `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+          "$.workspace",
+        );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
-      const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      const digest = digestClawBytes(bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,
@@ -293,15 +234,15 @@ async function buildDevelopmentSnapshot(params: {
 }
 
 function parsePackageJson(value: unknown): PackageJson | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const openclaw = record.openclaw;
-  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+  if (!isRecord(openclaw)) {
     return undefined;
   }
-  const claw = (openclaw as Record<string, unknown>).claw;
+  const { claw } = openclaw;
   if (
     typeof record.name !== "string" ||
     !isCanonicalClawHubPackageName(record.name) ||
@@ -315,43 +256,6 @@ function parsePackageJson(value: unknown): PackageJson | undefined {
   return { name: record.name, version: record.version, openclaw: { claw } };
 }
 
-async function readJson(
-  path: string,
-  code: string,
-  maxBytes: number,
-): Promise<
-  { ok: true; raw: Buffer; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] }
-> {
-  let raw: Buffer;
-  try {
-    raw = await readBoundedFile(path, maxBytes);
-  } catch (error) {
-    const tooLarge =
-      error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          tooLarge ? `${code}_too_large` : code,
-          tooLarge
-            ? `${path} exceeds ${maxBytes} bytes.`
-            : `Could not read ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, raw, value: JSON.parse(raw.toString("utf8")) };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("invalid_json", `Could not parse ${path}: ${(error as Error).message}`),
-      ],
-    };
-  }
-}
-
 export function parseClawMarkdown(
   raw: Buffer,
   path: string,
@@ -363,15 +267,10 @@ export function parseClawMarkdown(
   const byteText = markdown.toString("latin1");
   const match = byteText.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "missing_claw_frontmatter",
-          `${path} must start with a YAML frontmatter block delimited by --- lines.`,
-        ),
-      ],
-    };
+    return fileFailure(
+      "missing_claw_frontmatter",
+      `${path} must start with a YAML frontmatter block delimited by --- lines.`,
+    );
   }
   const frontmatterBytes = Buffer.from(match[1] ?? "", "latin1");
   const body = markdown.subarray(match[0].length);
@@ -380,12 +279,7 @@ export function parseClawMarkdown(
     frontmatter = new TextDecoder("utf-8", { fatal: true }).decode(frontmatterBytes);
     new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("invalid_claw_markdown_utf8", `${path} must contain valid UTF-8.`),
-      ],
-    };
+    return fileFailure("invalid_claw_markdown_utf8", `${path} must contain valid UTF-8.`);
   }
   const parsed = parseClawYaml(frontmatter, path, "frontmatter");
   return parsed.ok ? { ...parsed, body } : parsed;
@@ -401,18 +295,14 @@ function parseClawManifestDocument(
   try {
     return { ok: true, value: JSON.parse(raw.toString("utf8")) };
   } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("invalid_json", `Could not parse ${path}: ${(error as Error).message}`),
-      ],
-    };
+    return fileFailure("invalid_json", `Could not parse ${path}: ${(error as Error).message}`);
   }
 }
 
 async function readClawDocument(
   path: string,
   code: string,
+  maxBytes: number,
   manifestFormatPath = path,
 ): Promise<
   | { ok: true; raw: Buffer; value: unknown; body?: Buffer }
@@ -420,21 +310,22 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, MAX_CLAW_MANIFEST_BYTES);
+    const fileRoot = await fsSafeRoot(dirname(path));
+    const read = await fileRoot.read(basename(path), {
+      hardlinks: "reject",
+      maxBytes,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          tooLarge ? `${code}_too_large` : code,
-          tooLarge
-            ? `${path} exceeds ${MAX_CLAW_MANIFEST_BYTES} bytes.`
-            : `Could not read ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
+    return fileFailure(
+      tooLarge ? `${code}_too_large` : code,
+      tooLarge
+        ? `${path} exceeds ${maxBytes} bytes.`
+        : `Could not read ${path}: ${(error as Error).message}`,
+    );
   }
   const parsed = parseClawManifestDocument(raw, manifestFormatPath);
   return parsed.ok ? { ...parsed, raw } : parsed;
@@ -447,13 +338,10 @@ async function resolvePackageSource(
 > {
   const packageRootReal = await realpath(packageRoot).catch(() => undefined);
   if (!packageRootReal) {
-    return {
-      ok: false,
-      diagnostics: [fileDiagnostic("package_read_failed", `Could not resolve ${packageRoot}.`)],
-    };
+    return fileFailure("package_read_failed", `Could not resolve ${packageRoot}.`);
   }
   const packageJsonPath = resolve(packageRootReal, "package.json");
-  const packageJsonResult = await readJson(
+  const packageJsonResult = await readClawDocument(
     packageJsonPath,
     "package_read_failed",
     MAX_CLAW_PACKAGE_JSON_BYTES,
@@ -463,36 +351,21 @@ async function resolvePackageSource(
   }
   const packageJson = parsePackageJson(packageJsonResult.value);
   if (!packageJson) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "invalid_package_metadata",
-          "package.json must declare non-empty name, version, and openclaw.claw fields.",
-        ),
-      ],
-    };
+    return fileFailure(
+      "invalid_package_metadata",
+      "package.json must declare non-empty name, version, and openclaw.claw fields.",
+    );
   }
   if (isAbsolute(packageJson.openclaw.claw)) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("manifest_escapes_package", "openclaw.claw must be package-relative."),
-      ],
-    };
+    return fileFailure("manifest_escapes_package", "openclaw.claw must be package-relative.");
   }
   const declaredManifestPath = resolve(packageRootReal, packageJson.openclaw.claw);
   const manifestPath = await realpath(declaredManifestPath).catch(() => undefined);
   if (!manifestPath || !isContained(packageRootReal, manifestPath)) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "manifest_escapes_package",
-          "The declared Claw manifest must resolve inside its package root.",
-        ),
-      ],
-    };
+    return fileFailure(
+      "manifest_escapes_package",
+      "The declared Claw manifest must resolve inside its package root.",
+    );
   }
   return {
     ok: true,
@@ -516,10 +389,7 @@ async function resolveSource(
   const inputPath = resolve(path);
   const inputStat = await stat(inputPath).catch(() => undefined);
   if (!inputStat) {
-    return {
-      ok: false,
-      diagnostics: [fileDiagnostic("read_failed", `Could not resolve Claw source ${inputPath}.`)],
-    };
+    return fileFailure("read_failed", `Could not resolve Claw source ${inputPath}.`);
   }
   if (inputStat.isDirectory()) {
     const sourceRoot = await fsSafeRoot(inputPath);
@@ -532,12 +402,7 @@ async function resolveSource(
     return resolvePackageSource(inputPath);
   }
   if (!inputStat.isFile()) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic("unsupported_source", "Claw source must be a file or directory."),
-      ],
-    };
+    return fileFailure("unsupported_source", "Claw source must be a file or directory.");
   }
 
   const manifestPath = await realpath(inputPath);
@@ -575,6 +440,7 @@ export async function readClawManifestFile(
   const manifestResult = await readClawDocument(
     sourceResult.source.manifestPath,
     "read_failed",
+    MAX_CLAW_MANIFEST_BYTES,
     sourceResult.source.manifestFormatPath,
   );
   if (!manifestResult.ok) {
@@ -587,29 +453,26 @@ export async function readClawManifestFile(
   const hasMarkdownBody =
     manifestResult.body !== undefined && manifestResult.body.toString("utf8").trim().length > 0;
   if (hasMarkdownBody && clawManifestWorkspaceConflictsWithPath(parsed.manifest, "SOUL.md")) {
-    return {
-      ok: false,
-      diagnostics: [
-        fileDiagnostic(
-          "claw_body_soul_conflict",
-          "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
-          "$.workspace",
-        ),
-      ],
-    };
+    return fileFailure(
+      "claw_body_soul_conflict",
+      "CLAW.md body content and an explicit SOUL.md workspace declaration cannot both be present.",
+      "$.workspace",
+    );
   }
+  const resolvedSource = sourceResult.source;
+  const sourceIdentity = {
+    kind: resolvedSource.kind,
+    name: resolvedSource.name,
+    version: resolvedSource.version,
+    packageRoot: resolvedSource.packageRoot,
+    manifestPath: resolvedSource.manifestPath,
+  };
   const allowLegacyDynamicToolProfile =
     options.allowLegacyDynamicToolProfile === true ||
     (options.authorizeLegacyDynamicToolProfile
       ? await options.authorizeLegacyDynamicToolProfile({
           manifest: parsed.manifest,
-          source: {
-            kind: sourceResult.source.kind,
-            name: sourceResult.source.name,
-            version: sourceResult.source.version,
-            packageRoot: sourceResult.source.packageRoot,
-            manifestPath: sourceResult.source.manifestPath,
-          },
+          source: { ...sourceIdentity },
         })
       : false);
   const profile = await readClawOpenClawProfile({
@@ -631,13 +494,8 @@ export async function readClawManifestFile(
   if (!snapshot.ok) {
     return snapshot;
   }
-  const resolvedSource = sourceResult.source;
   const source: ClawSourceIdentity = {
-    kind: resolvedSource.kind,
-    name: resolvedSource.name,
-    version: resolvedSource.version,
-    packageRoot: resolvedSource.packageRoot,
-    manifestPath: resolvedSource.manifestPath,
+    ...sourceIdentity,
     integrityKind: "development-snapshot",
     integrity: snapshot.integrity,
     byteLength: snapshot.byteLength,

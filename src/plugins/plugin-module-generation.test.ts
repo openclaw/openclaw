@@ -35,6 +35,32 @@ function load(rootDir: string, entry: string, standalone = false) {
 }
 
 describe("plugin module generations", () => {
+  it.runIf(Boolean(process.versions.bun))(
+    "keeps Bun-native plugin generations when Node module hooks are available",
+    () => {
+      const root = temp.make("plugin-bun-native-owner-");
+      fs.writeFileSync(path.join(root, "index.ts"), "export const value: number = 42;");
+      fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 42;");
+      const previous = Object.getOwnPropertyDescriptor(Module, "registerHooks");
+      Object.defineProperty(Module, "registerHooks", {
+        configurable: true,
+        value: () => {
+          throw new Error("Bun plugin loading must not install Node module hooks");
+        },
+      });
+      try {
+        expect(load(root, "index.ts").value).toMatchObject({ value: 42 });
+        expect(load(root, "index.cjs").value).toMatchObject({ value: 42 });
+      } finally {
+        if (previous) {
+          Object.defineProperty(Module, "registerHooks", previous);
+        } else {
+          Reflect.deleteProperty(Module, "registerHooks");
+        }
+      }
+    },
+  );
+
   it.each([
     ...["ts", "mts", "mtsx"].flatMap((extension) =>
       ["commonjs", undefined].map((type) => ({ extension, type, importOnly: false })),
@@ -118,9 +144,9 @@ describe("plugin module generations", () => {
       const first = load(root, entry).value as StartupPlugin;
       expect(first).toMatchObject(expected);
       expect(first.resolveThenRequire()).toBe(value);
-      expect(first.requireProperties()).toEqual(
-        process.versions.bun ? [true, true, true, false, true] : [true, true, true, true, true],
-      );
+      // Bun's lookup-path support follows its Jiti require, including native API improvements.
+      const lookupPaths = process.versions.bun ? legacy.requireProperties()[3] : true;
+      expect(first.requireProperties()).toEqual([true, true, true, lookupPaths, true]);
       expect(first.resolve()).toMatch(importOnly ? /import\.mjs$/ : /require\.cjs$/);
       if (importOnly) {
         expect(legacy.alias()).toBe(value);
@@ -191,7 +217,7 @@ describe("plugin module generations", () => {
         const __filename = 'local-file', __dirname = 'local-directory';
         const locals = { module, exports, __filename, __dirname };
         export const read = () => [
-          fileURLToPath(import.meta.url) === import.meta.filename,
+          path.normalize(fileURLToPath(import.meta.url)) === path.normalize(import.meta.filename),
           path.dirname(import.meta.filename) === import.meta.dirname,
           import.meta.resolve('./helper.mjs') === import.meta.resolve('#helper'),
           import.meta.resolve('conditional-dependency').endsWith('/import.mjs'),
@@ -709,6 +735,7 @@ describe("plugin module generations", () => {
     "static",
     "dynamic",
     "explicit",
+    "assert",
     "commonjs",
     "commonjs-dynamic",
     "computed",
@@ -724,7 +751,7 @@ describe("plugin module generations", () => {
       source,
       mode.endsWith("dynamic") || computed
         ? `const name = './data.json'; export const read = async () => (await import(${computed ? "name" : "'./data.json'"})).default.value;`
-        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : ""};
+        : `import data from './data.json' ${mode === "explicit" ? "with { type: 'json' }" : mode === "assert" ? "assert { type: 'json' }" : ""};
              export const read = async () => data.value;`,
     );
     type JsonPlugin = { read(): Promise<string> };
@@ -776,7 +803,7 @@ describe("plugin module generations", () => {
     },
   );
 
-  it("resolves deferred TypeScript without acquiring the compiler until execution", () => {
+  it("resolves deferred TypeScript without acquiring its source transformers until execution", () => {
     const root = temp.make("plugin-resolve-only-typescript-");
     fs.writeFileSync(
       path.join(root, "index.cjs"),
@@ -789,8 +816,8 @@ describe("plugin module generations", () => {
       this: NodeJS.Module,
       id: string,
     ) {
-      if (id === "typescript") {
-        throw new Error("Resolution must not acquire the TypeScript compiler");
+      if (["@babel/parser", "@babel/traverse", "@babel/generator", "esbuild"].includes(id)) {
+        throw new Error("Resolution must not acquire source transformers");
       }
       return originalRequire.call(this, id);
     });
@@ -814,8 +841,8 @@ describe("plugin module generations", () => {
     const plugin = load(root, "index.ts").value as { read(): Promise<unknown> };
     await expect(plugin.read()).rejects.toThrow(
       process.versions.bun
-        ? /ParseError: Unexpected token[\s\S]*broken\.ts:1:20/
-        : /^broken\.ts\(1,21\): error TS1110: Type expected\./,
+        ? /^ParseError: (?:[A-Za-z]:[\\/]: )?Unexpected token[\s\S]*broken\.ts:1:20/
+        : /^Transform failed with 1 error:\nbroken\.ts:1:20: ERROR: Unexpected "="/,
     );
   });
 
@@ -915,14 +942,11 @@ describe("plugin module generations", () => {
     expect(await (load(root, "index.ts").value as typeof first).read()).toEqual([true, 1]);
   });
 
-  // Enable under Bun after oven-sh/bun#35690 ships node:module.registerHooks.
-  it.runIf(!process.versions.bun)(
-    "preserves native custom loader startup without replaying registration",
-    async () => {
-      const root = temp.make("plugin-native-hooks-");
-      fs.writeFileSync(
-        path.join(root, "index.cjs"),
-        `const { registerHooks } = require('node:module');
+  it("preserves native custom loader startup without replaying registration", async () => {
+    const root = temp.make("plugin-native-hooks-");
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      `const { registerHooks } = require('node:module');
        const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
          return specifier === 'fixture:answer'
            ? { url: 'data:text/javascript,export default 42', shortCircuit: true }
@@ -930,18 +954,17 @@ describe("plugin module generations", () => {
        }});
        exports.read = async () => (await import('fixture:answer')).default;
        exports.close = () => hooks.deregister();`,
-      );
-      const { instance, value } = load(root, "index.cjs");
-      const plugin = value as { read(): Promise<number>; close(): void };
-      try {
-        expect(await plugin.read()).toBe(42);
-      } finally {
-        plugin.close();
-        await instance.dispose();
-      }
-      expect(() => plugin.read()).toThrow("reloaded or disabled");
-    },
-  );
+    );
+    const { instance, value } = load(root, "index.cjs");
+    const plugin = value as { read(): Promise<number>; close(): void };
+    try {
+      expect(await plugin.read()).toBe(42);
+    } finally {
+      plugin.close();
+      await instance.dispose();
+    }
+    expect(() => plugin.read()).toThrow("reloaded or disabled");
+  });
 
   it.each(["cjs", "ts"])("does not reevaluate a failing module through a %s entry", (extension) => {
     const root = temp.make("plugin-failed-native-");

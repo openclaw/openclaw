@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
 
 const { createDiffsToolMock } = vi.hoisted(() => ({
@@ -66,6 +70,9 @@ describe("diffs plugin language-pack discovery", () => {
             state: { openBlobStore },
           } as never,
           registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
+            if (typeof tool !== "function" && "contextVersion" in tool) {
+              throw new Error("expected legacy diffs registration");
+            }
             registeredToolFactory = typeof tool === "function" ? tool : () => tool;
           },
         });

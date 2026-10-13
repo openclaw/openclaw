@@ -19,22 +19,19 @@ function isUsableDocsDir(docsDir: string): boolean {
   return fs.existsSync(path.join(docsDir, "docs.json"));
 }
 
-function isGitCheckout(rootDir: string): boolean {
-  return fs.existsSync(path.join(rootDir, ".git"));
-}
-
-/** Resolve a usable local docs directory, preferring the active workspace. */
-async function resolveOpenClawDocsPath(params: {
-  workspaceDir?: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-}): Promise<string | null> {
+/** Resolve docs and source from one package root, preferring workspace docs. */
+export async function resolveOpenClawReferencePaths(
+  params: ResolveOpenClawReferencePathParams,
+): Promise<{
+  docsPath: string | null;
+  sourcePath: string | null;
+}> {
+  let docsPath: string | null = null;
   const workspaceDir = params.workspaceDir?.trim();
   if (workspaceDir) {
     const workspaceDocs = path.join(workspaceDir, "docs");
     if (isUsableDocsDir(workspaceDocs)) {
-      return workspaceDocs;
+      docsPath = workspaceDocs;
     }
   }
 
@@ -43,39 +40,12 @@ async function resolveOpenClawDocsPath(params: {
     argv1: params.argv1,
     moduleUrl: params.moduleUrl,
   });
-  if (!packageRoot) {
-    return null;
+  if (!docsPath && packageRoot) {
+    const packageDocs = path.join(packageRoot, "docs");
+    docsPath = isUsableDocsDir(packageDocs) ? packageDocs : null;
   }
-
-  const packageDocs = path.join(packageRoot, "docs");
-  return isUsableDocsDir(packageDocs) ? packageDocs : null;
-}
-
-/** Resolve the package root only when it is a Git checkout. */
-async function resolveOpenClawSourcePath(
-  params: ResolveOpenClawReferencePathParams,
-): Promise<string | null> {
-  const packageRoot = await resolveOpenClawPackageRoot({
-    cwd: params.cwd,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-  });
-  if (!packageRoot || !isGitCheckout(packageRoot)) {
-    return null;
-  }
-  return packageRoot;
-}
-
-/** Resolve docs and source roots concurrently for prompt/reference injection. */
-export async function resolveOpenClawReferencePaths(
-  params: ResolveOpenClawReferencePathParams,
-): Promise<{
-  docsPath: string | null;
-  sourcePath: string | null;
-}> {
-  const [docsPath, sourcePath] = await Promise.all([
-    resolveOpenClawDocsPath(params),
-    resolveOpenClawSourcePath(params),
-  ]);
-  return { docsPath, sourcePath };
+  return {
+    docsPath,
+    sourcePath: packageRoot && fs.existsSync(path.join(packageRoot, ".git")) ? packageRoot : null,
+  };
 }

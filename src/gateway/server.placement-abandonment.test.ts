@@ -9,11 +9,13 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -99,6 +101,7 @@ it.for(cases)(
         if (!gatewayStopped || !childStopped) {
           throw new Error("Placement abandonment fixture still owns Gateway or child state");
         }
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await state.cleanup();
       });
@@ -237,10 +240,12 @@ it.for(cases)(
       };
       if (!persisted) {
         await start();
+      } else {
+        await captureRuntimeConfigAsyncReader()();
       }
       const { sessionId, sessionKey, agentId } = REQUEST;
       const worktreeId = "abandonment-worktree";
-      insertRegistryWorktree(process.env, {
+      await insertRegistryWorktree(process.env, {
         id: worktreeId,
         name: "abandonment",
         repoFingerprint: "fixture",
@@ -275,9 +280,9 @@ it.for(cases)(
         nodeDeviceId: "offline-device",
       });
       offlineDeviceSeeded = true;
-      const active = seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
+      const active = await seedActivePlacement(placements, { environmentId, ownerEpoch: 1 });
       const source = { generation: active.generation, environmentId, ownerEpoch: 1 };
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId,
         sessionKey,
         agentId,
@@ -285,19 +290,19 @@ it.for(cases)(
         runId: "abandoned-run",
         owner: { kind: "worker", environmentId, ownerEpoch: 1 },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-      placements.markWorkspaceResultPending(claim);
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.markWorkspaceResultPending(claim);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       if (persisted) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId,
           source,
           target: { kind: "gateway" },
           abandonSource: true,
         });
         if (failed) {
-          placements.failWorkspaceResultAndReleaseTurn(
-            placements.listPendingWorkspaceResults()[0]!,
+          await placements.failWorkspaceResultAndReleaseTurn(
+            (await placements.listPendingWorkspaceResultsAsync())[0]!,
             "Earlier workspace recovery failed",
           );
           expect(placements.get(sessionId)).toMatchObject({
@@ -305,6 +310,7 @@ it.for(cases)(
             recoveryError: "Earlier workspace recovery failed",
           });
         }
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         await start();
         database = openOpenClawStateDatabase();
@@ -326,10 +332,10 @@ it.for(cases)(
       }
       signal.throwIfAborted();
       expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
-      const environments = createWorkerEnvironmentStore({ database });
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
+      const environments = await createWorkerEnvironmentStore({ database });
       const retainedCleanup = environments.get(environmentId);
       expect(retainedCleanup).toMatchObject({
         state: "attached",
@@ -376,7 +382,7 @@ it.for(cases)(
       expect(requests).toHaveLength(1);
       expect(requests[0].body).toContain(message);
       expect(requests[0].body).not.toContain(claim.runId);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(sessionId)?.turnClaim).toBeNull();
       const deleted = await client.request<{ deleted: boolean; archived: string[] }>(
         "sessions.delete",
@@ -388,8 +394,8 @@ it.for(cases)(
       expect(readSessionArchiveContentSync(deleted.archived[0]!)).toContain(reply);
       expect(loadGatewaySessionEntryReadOnly(sessionKey).entry).toBeUndefined();
       expect(placements.get(sessionId)).toBeUndefined();
-      expect(placements.getPlacementMove(sessionId)).toBeUndefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
       expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();

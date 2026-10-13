@@ -8,9 +8,11 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   testing,
   getSessionBindingService,
@@ -31,54 +33,28 @@ const tempDirs = createTrackedTempDirs();
 
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "workspace",
-        source: "test",
-        plugin: {
-          id: "workspace",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-          },
-        },
-      },
-      {
-        pluginId: "teamchat",
-        source: "test",
-        plugin: {
-          id: "teamchat",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-          },
-        },
-      },
-      {
-        pluginId: "adapter-chat",
-        source: "test",
-        plugin: {
-          id: "adapter-chat",
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            bindingStore: "adapter",
-          },
-        },
-      },
-      {
-        pluginId: "legacy-adapter-chat",
-        source: "test",
-        plugin: {
+    createTestRegistry(
+      [
+        { id: "workspace", conversationBindings: {} },
+        { id: "teamchat", conversationBindings: {} },
+        { id: "adapter-chat", conversationBindings: { bindingStore: "adapter" as const } },
+        {
           id: "legacy-adapter-chat",
+          conversationBindings: { createManager: () => ({ stop: () => undefined }) },
+        },
+      ].map(({ id, conversationBindings }) => ({
+        pluginId: id,
+        source: "test",
+        plugin: {
+          id,
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
-            createManager: () => ({ stop: () => undefined }),
+            ...conversationBindings,
           },
         },
-      },
-    ]),
+      })),
+    ),
   );
 }
 
@@ -138,24 +114,6 @@ function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg, `${label} input`);
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 async function expectSessionBindingError(promise: Promise<unknown>, code: string) {
   try {
     await promise;
@@ -164,10 +122,6 @@ async function expectSessionBindingError(promise: Promise<unknown>, code: string
     return error;
   }
   throw new Error(`expected ${code} session binding error`);
-}
-
-function expectConversationFields(value: unknown, fields: Record<string, unknown>) {
-  expectRecordFields(requireRecord(value, "conversation"), fields);
 }
 
 describe("session binding service", () => {
@@ -193,35 +147,185 @@ describe("session binding service", () => {
     await tempDirs.cleanup();
   });
 
-  it("normalizes conversation refs and infers current placement", async () => {
-    const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
+  it.each([false, true])(
+    "awaits async touch settlement (rejected: %s) without a legacy mutation",
+    async (rejected) => {
+      const gate = createDeferredCore();
+      const failure = new Error("persistence rejected");
+      const touch = vi.fn(() => {
+        if (rejected) {
+          throw failure;
+        }
+      });
+      const touchAsync = vi.fn(() => gate.promise);
+      registerSessionBindingAdapter({
+        channel: "adapter-chat",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+        touch,
+        touchAsync,
+      });
+      const service = getSessionBindingService();
+      const scope = { channel: "adapter-chat", accountId: "default" };
+      let settled = false;
+      const pending = service.touchAsync("binding-1", 123, scope).then(() => {
+        settled = true;
+      });
+      const rejection = rejected ? expect(pending).rejects.toBe(failure) : undefined;
+      await Promise.resolve();
+      expect(touchAsync).toHaveBeenCalledWith("binding-1", 123);
+      expect(touch).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+      if (rejected) {
+        gate.reject(failure);
+        await rejection;
+        expect(touch).not.toHaveBeenCalled();
+        expect(() => service.touch("binding-1", 1, scope)).toThrow(failure);
+      } else {
+        gate.resolve();
+        await pending;
+        expect(settled).toBe(true);
+        service.touch("binding-1", 456, scope);
+        expect(touch).toHaveBeenCalledWith("binding-1", 456);
+        expect(touchAsync).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it.each(["keep", "remove", "replace"] as const)(
+    "revalidates captured adapters after an earlier touch waits (%s)",
+    async (change) => {
+      const gate = createDeferredCore();
+      const firstTouch = vi.fn(() => gate.promise);
+      const secondTouch = vi.fn(async () => {});
+      const replacementTouch = vi.fn(async () => {});
+      const first: SessionBindingAdapter = {
+        channel: "adapter-chat",
+        accountId: "first",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+        touchAsync: firstTouch,
+      };
+      const second: SessionBindingAdapter = {
+        ...first,
+        accountId: "second",
+        touchAsync: secondTouch,
+      };
+      registerSessionBindingAdapter(first);
+      registerSessionBindingAdapter(second);
+      const pending = getSessionBindingService().touchAsync("binding-1", 123);
+      expect(firstTouch).toHaveBeenCalledWith("binding-1", 123);
+      expect(secondTouch).not.toHaveBeenCalled();
+      if (change !== "keep") {
+        unregisterSessionBindingAdapter({
+          channel: second.channel,
+          accountId: second.accountId,
+          adapter: second,
+        });
+      }
+      if (change === "replace") {
+        registerSessionBindingAdapter({ ...second, touchAsync: replacementTouch });
+      }
+      gate.resolve();
+      await pending;
+      expect(secondTouch).toHaveBeenCalledTimes(change === "keep" ? 1 : 0);
+      expect(replacementTouch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "normalized implicit current",
+      placement: undefined,
+      placements: undefined,
+      targetKind: "subagent",
+      expected: "thread-1",
+    },
+    {
+      name: "explicit child",
+      placement: "child",
+      placements: ["child"],
+      targetKind: "session",
+      expected: "thread-created",
+    },
+    {
+      name: "unsupported child",
+      placement: "child",
+      placements: ["current"],
+      targetKind: "session",
+      error: "BINDING_CAPABILITY_UNSUPPORTED",
+    },
+    {
+      name: "failed bind",
+      placement: undefined,
+      placements: undefined,
+      targetKind: "subagent",
+      error: "BINDING_CREATE_FAILED",
+    },
+  ] satisfies Array<{
+    name: string;
+    placement: SessionBindingBindInput["placement"];
+    placements: NonNullable<SessionBindingAdapter["capabilities"]>["placements"];
+    targetKind: SessionBindingBindInput["targetKind"];
+    expected?: string;
+    error?: string;
+  }>)("handles $name placement", async ({ placement, placements, targetKind, expected, error }) => {
+    const bind = vi.fn(async (input: SessionBindingBindInput) =>
+      error === "BINDING_CREATE_FAILED" ? null : createRecord(input),
+    );
     registerSessionBindingAdapter({
       channel: "demo-binding",
       accountId: "default",
+      capabilities: { placements },
       bind,
       listBySession: () => [],
       resolveByConversation: () => null,
+      unbind: async () => [],
     });
-
-    const result = await getSessionBindingService().bind({
+    const service = getSessionBindingService();
+    expect(service.getCapabilities({ channel: "demo-binding", accountId: "default" })).toEqual({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: placements ?? ["current", "child"],
+    });
+    expect(service.getCapabilities({ channel: "demo-binding", accountId: "other" })).toEqual({
+      adapterAvailable: false,
+      bindSupported: false,
+      unbindSupported: false,
+      placements: [],
+    });
+    const pending = service.bind({
       targetSessionKey: "agent:main:subagent:child-1",
-      targetKind: "subagent",
-      conversation: {
-        channel: "Demo-Binding",
-        accountId: "DEFAULT",
-        conversationId: " thread-1 ",
-      },
+      targetKind,
+      placement,
+      conversation: { channel: "Demo-Binding", accountId: "DEFAULT", conversationId: " thread-1 " },
     });
-
-    expect(result.conversation.channel).toBe("demo-binding");
-    expect(result.conversation.accountId).toBe("default");
-    const bindInput = firstMockArg(bind, "bind");
-    expect(bindInput.placement).toBe("current");
-    expectConversationFields(bindInput.conversation, {
-      channel: "demo-binding",
-      accountId: "default",
-      conversationId: "thread-1",
-    });
+    if (error) {
+      const rejected = await expectSessionBindingError(pending, error);
+      expect(isSessionBindingError(rejected)).toBe(true);
+      if (placement) {
+        expect(rejected).toMatchObject({ details: { placement } });
+      }
+    } else {
+      const result = await pending;
+      expect(result.conversation).toMatchObject({
+        channel: "demo-binding",
+        accountId: "default",
+        conversationId: expected,
+      });
+      expect(bind).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          placement: placement ?? "current",
+          conversation: {
+            channel: "demo-binding",
+            accountId: "default",
+            conversationId: "thread-1",
+          },
+        }),
+      );
+    }
   });
 
   it("keeps colliding adapter ids scoped while session-wide cleanup reaches every owner", async () => {
@@ -325,45 +429,6 @@ describe("session binding service", () => {
     expect(service.resolveByConversation(second.conversation)).toEqual(second);
   });
 
-  it("supports explicit child placement when adapter advertises it", async () => {
-    registerSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      capabilities: { placements: ["child"] },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    });
-
-    const result = await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:1",
-      targetKind: "session",
-      conversation: {
-        channel: "demo-binding",
-        accountId: "default",
-        conversationId: "thread-1",
-      },
-      placement: "child",
-    });
-
-    expect(result.conversation.conversationId).toBe("thread-created");
-  });
-
-  it("returns structured errors when adapter is unavailable", async () => {
-    await expectSessionBindingError(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "demo-binding",
-          accountId: "default",
-          conversationId: "thread-1",
-        },
-      }),
-      "BINDING_ADAPTER_UNAVAILABLE",
-    );
-  });
-
   it.each(["adapter-chat", "legacy-adapter-chat"])(
     "distinguishes an unavailable %s owner from an empty result",
     async (channel) => {
@@ -382,9 +447,11 @@ describe("session binding service", () => {
       });
       const unavailable: ConversationBindingInspection =
         inspectSessionBindingByConversation(conversation);
-      expect(unavailable).toEqual({
+      expect(Object.fromEntries(Object.entries(unavailable))).toEqual({
         status: "unavailable",
       });
+      expect(readSessionBindingInspectionConversation(unavailable)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(unavailable))).toBe(true);
       await expectSessionBindingError(
         service.bind({
           targetSessionKey: "agent:finance:bound",
@@ -400,108 +467,21 @@ describe("session binding service", () => {
         resolveByConversation: () => null,
       };
       registerSessionBindingAdapter(adapter);
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      const empty = inspectSessionBindingByConversation(conversation);
+      expect(Object.fromEntries(Object.entries(empty))).toEqual({
         status: "available",
         binding: null,
       });
+      expect(readSessionBindingInspectionConversation(empty)).toEqual(conversation);
+      expect(Object.isFrozen(readSessionBindingInspectionConversation(empty))).toBe(true);
       unregisterSessionBindingAdapter({ channel, accountId: "default", adapter });
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      expect(
+        Object.fromEntries(Object.entries(inspectSessionBindingByConversation(conversation))),
+      ).toEqual({
         status: "unavailable",
       });
     },
   );
-
-  it("returns structured errors for unsupported placement", async () => {
-    registerSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      capabilities: { placements: ["current"] },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    });
-
-    const rejected = await getSessionBindingService()
-      .bind({
-        targetSessionKey: "agent:codex:acp:1",
-        targetKind: "session",
-        conversation: {
-          channel: "demo-binding",
-          accountId: "default",
-          conversationId: "thread-1",
-        },
-        placement: "child",
-      })
-      .catch((error: unknown) => error);
-
-    expect(isSessionBindingError(rejected)).toBe(true);
-    const rejectedRecord = requireRecord(rejected, "session binding error");
-    expectRecordFields(rejectedRecord, {
-      code: "BINDING_CAPABILITY_UNSUPPORTED",
-    });
-    expectRecordFields(requireRecord(rejectedRecord.details, "session binding details"), {
-      placement: "child",
-    });
-  });
-
-  it("returns structured errors when adapter bind fails", async () => {
-    registerSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      bind: async () => null,
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    });
-
-    await expectSessionBindingError(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "demo-binding",
-          accountId: "default",
-          conversationId: "thread-1",
-        },
-      }),
-      "BINDING_CREATE_FAILED",
-    );
-  });
-
-  it("reports adapter capabilities for command preflight messaging", () => {
-    registerSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      capabilities: {
-        placements: ["current", "child"],
-      },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
-      unbind: async () => [],
-    });
-
-    const known = getSessionBindingService().getCapabilities({
-      channel: "demo-binding",
-      accountId: "default",
-    });
-    const unknown = getSessionBindingService().getCapabilities({
-      channel: "demo-binding",
-      accountId: "other",
-    });
-
-    expect(known).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"],
-    });
-    expect(unknown).toEqual({
-      adapterAvailable: false,
-      bindSupported: false,
-      unbindSupported: false,
-      placements: [],
-    });
-  });
 
   it("falls back to generic current-conversation bindings for registered channels", async () => {
     const service = getSessionBindingService();
@@ -518,6 +498,19 @@ describe("session binding service", () => {
       placements: ["current"],
     });
 
+    const rejected = await expectSessionBindingError(
+      service.bind({
+        targetSessionKey: "agent:codex:acp:workspace-dm",
+        targetKind: "session",
+        conversation: { channel: "workspace", accountId: "default", conversationId: "user:U123" },
+        placement: "child",
+      }),
+      "BINDING_CAPABILITY_UNSUPPORTED",
+    );
+    expect(rejected).toMatchObject({
+      details: { channel: "workspace", accountId: "default", placement: "child" },
+    });
+
     const bound = await service.bind({
       targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
@@ -532,18 +525,18 @@ describe("session binding service", () => {
       ttlMs: 60_000,
     });
 
-    expectRecordFields(requireRecord(bound, "bound record"), {
+    expect(bound).toMatchObject({
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
       status: "active",
     });
-    expectConversationFields(bound.conversation, {
+    expect(bound.conversation).toMatchObject({
       channel: "workspace",
       accountId: "default",
       conversationId: "user:U123",
     });
-    expectRecordFields(requireRecord(bound.metadata, "metadata"), {
+    expect(bound.metadata).toMatchObject({
       label: "workspace-dm",
     });
 
@@ -552,27 +545,17 @@ describe("session binding service", () => {
       accountId: "default",
       conversationId: "user:U123",
     });
-    expectRecordFields(requireRecord(resolved, "resolved binding"), {
+    expect(resolved).toMatchObject({
       bindingId: bound.bindingId,
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
     expect(service.listBySession("agent:codex:acp:workspace-dm")).toEqual([resolved]);
 
     service.touch(bound.bindingId, 1234);
-    expectRecordFields(
-      requireRecord(
-        service.resolveByConversation({
-          channel: "workspace",
-          accountId: "default",
-          conversationId: "user:U123",
-        })?.metadata,
-        "touched metadata",
-      ),
-      {
-        label: "workspace-dm",
-        lastActivityAt: 1234,
-      },
-    );
+    expect(service.resolveByConversation(bound.conversation)?.metadata).toMatchObject({
+      label: "workspace-dm",
+      lastActivityAt: 1234,
+    });
 
     const unbound = await service.unbind({
       targetSessionKey: "agent:codex:acp:workspace-dm",
@@ -589,116 +572,48 @@ describe("session binding service", () => {
     ).toBeNull();
   });
 
-  it("supports registered plugin channels through the generic current-conversation path", async () => {
+  it("hides spawned-worker bindings that own the current conversation but keeps child threads", async () => {
     const service = getSessionBindingService();
-
-    expect(
-      service.getCapabilities({
-        channel: "teamchat",
-        accountId: "default",
-      }),
-    ).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
+    const current = { channel: "workspace", accountId: "default", conversationId: "user:U123" };
+    const workerKey = "agent:main:subagent:legacy-worker";
+    await service.bind({
+      targetSessionKey: workerKey,
+      targetKind: "subagent",
+      conversation: current,
+      metadata: { boundBy: "system" },
     });
 
-    const rejected = await expectSessionBindingError(
-      service.bind({
-        targetSessionKey: "agent:codex:acp:teamchat-room",
-        targetKind: "session",
-        conversation: {
-          channel: "teamchat",
-          accountId: "default",
-          conversationId: "19:chatid@thread.v2",
-        },
-        placement: "child",
-      }),
-      "BINDING_CAPABILITY_UNSUPPORTED",
-    );
-    expectRecordFields(requireRecord(requireRecord(rejected, "rejected").details, "details"), {
-      channel: "teamchat",
-      accountId: "default",
-      placement: "child",
-    });
+    expect(service.resolveByConversation(current)).toBeNull();
+    await expect(service.resolveByConversationAsync(current)).resolves.toBeNull();
+    expect(inspectSessionBindingByConversation(current)).toMatchObject({ binding: null });
+    expect(service.listBySession(workerKey)).toEqual([]);
 
-    const bound = await service.bind({
-      targetSessionKey: "agent:codex:acp:teamchat-room",
+    // A user's explicit bind of the same conversation still owns it.
+    await service.bind({
+      targetSessionKey: "agent:codex:acp:user-owned",
       targetKind: "session",
-      conversation: {
-        channel: "teamchat",
-        accountId: "default",
-        conversationId: "19:chatid@thread.v2",
-      },
+      conversation: current,
+      metadata: { boundBy: "U123" },
     });
-    expectConversationFields(bound.conversation, {
-      channel: "teamchat",
+    expect(service.resolveByConversation(current)?.targetSessionKey).toBe(
+      "agent:codex:acp:user-owned",
+    );
+
+    const childThread = {
+      channel: "adapter-chat",
       accountId: "default",
-      conversationId: "19:chatid@thread.v2",
+      conversationId: "thread-created",
+    };
+    registerSessionBindingAdapter({
+      ...childThread,
+      capabilities: { bindSupported: true, placements: ["current", "child"] },
+      listBySession: () => [],
+      resolveByConversation: (ref) => ({
+        ...createRecord({ targetSessionKey: workerKey, targetKind: "subagent", conversation: ref }),
+        metadata: { boundBy: "system" },
+      }),
     });
-  });
-
-  it("keeps the newest live adapter authoritative until it unregisters", () => {
-    const firstBinding = {
-      bindingId: "first-binding",
-      targetSessionKey: "agent:main",
-      targetKind: "session" as const,
-      conversation: {
-        channel: "demo-binding",
-        accountId: "default",
-        conversationId: "thread-1",
-      },
-      status: "active" as const,
-      boundAt: 1,
-    };
-    const firstAdapter: SessionBindingAdapter = {
-      channel: "demo-binding",
-      accountId: "default",
-      listBySession: (targetSessionKey) =>
-        targetSessionKey === "agent:main" ? [firstBinding] : [],
-      resolveByConversation: () => null,
-    };
-    const secondBinding = {
-      bindingId: "second-binding",
-      targetSessionKey: "agent:main",
-      targetKind: "session" as const,
-      conversation: {
-        channel: "demo-binding",
-        accountId: "default",
-        conversationId: "thread-2",
-      },
-      status: "active" as const,
-      boundAt: 2,
-    };
-    const secondAdapter: SessionBindingAdapter = {
-      channel: "Demo-Binding",
-      accountId: "DEFAULT",
-      listBySession: (targetSessionKey) =>
-        targetSessionKey === "agent:main" ? [secondBinding] : [],
-      resolveByConversation: () => null,
-    };
-
-    registerSessionBindingAdapter(firstAdapter);
-    registerSessionBindingAdapter(secondAdapter);
-
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([secondBinding]);
-
-    unregisterSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      adapter: secondAdapter,
-    });
-
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
-
-    unregisterSessionBindingAdapter({
-      channel: "demo-binding",
-      accountId: "default",
-      adapter: firstAdapter,
-    });
-
-    expect(getSessionBindingService().listBySession("agent:main")).toStrictEqual([]);
+    expect(service.resolveByConversation(childThread)?.targetSessionKey).toBe(workerKey);
   });
 
   it("shares registered adapters across duplicate module instances", async () => {
@@ -706,18 +621,26 @@ describe("session binding service", () => {
     const second = await importSessionBindingServiceModule(`second-${Date.now()}`);
     const firstBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
     const secondBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
+    const binding = (conversationId: string) =>
+      createRecord({
+        targetSessionKey: "agent:main",
+        targetKind: "session",
+        conversation: { channel: "demo-binding", accountId: "default", conversationId },
+      });
+    const firstBinding = binding("thread-1"),
+      secondBinding = binding("thread-2");
     const firstAdapter: SessionBindingAdapter = {
       channel: "demo-binding",
       accountId: "default",
       bind: firstBind,
-      listBySession: () => [],
+      listBySession: (key) => (key === "agent:main" ? [firstBinding] : []),
       resolveByConversation: () => null,
     };
     const secondAdapter: SessionBindingAdapter = {
-      channel: "demo-binding",
-      accountId: "default",
+      channel: "Demo-Binding",
+      accountId: "DEFAULT",
       bind: secondBind,
-      listBySession: () => [],
+      listBySession: (key) => (key === "agent:main" ? [secondBinding] : []),
       resolveByConversation: () => null,
     };
 
@@ -726,6 +649,7 @@ describe("session binding service", () => {
     second.registerSessionBindingAdapter(secondAdapter);
 
     expect(second.testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
+    expect(second.getSessionBindingService().listBySession("agent:main")).toEqual([secondBinding]);
 
     const secondBound = await second.getSessionBindingService().bind({
       targetSessionKey: "agent:main:subagent:child-1",
@@ -736,7 +660,7 @@ describe("session binding service", () => {
         conversationId: "thread-1",
       },
     });
-    expectConversationFields(secondBound.conversation, {
+    expect(secondBound.conversation).toMatchObject({
       channel: "demo-binding",
       accountId: "default",
       conversationId: "thread-1",
@@ -750,6 +674,7 @@ describe("session binding service", () => {
       adapter: secondAdapter,
     });
 
+    expect(second.getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
     const firstBound = await second.getSessionBindingService().bind({
       targetSessionKey: "agent:main:subagent:child-2",
       targetKind: "subagent",
@@ -759,7 +684,7 @@ describe("session binding service", () => {
         conversationId: "thread-2",
       },
     });
-    expectConversationFields(firstBound.conversation, {
+    expect(firstBound.conversation).toMatchObject({
       channel: "demo-binding",
       accountId: "default",
       conversationId: "thread-2",
@@ -773,6 +698,7 @@ describe("session binding service", () => {
       adapter: firstAdapter,
     });
 
+    expect(second.getSessionBindingService().listBySession("agent:main")).toStrictEqual([]);
     await expectSessionBindingError(
       second.getSessionBindingService().bind({
         targetSessionKey: "agent:main:subagent:child-3",

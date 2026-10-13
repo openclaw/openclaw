@@ -28,12 +28,38 @@ type LiveModelCase = {
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
+    case "gpt-6.1-sol":
+      return {
+        modelId,
+        templateId: "gpt-5.6-sol",
+        templateName: "GPT-5.6 Sol",
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
     case "gpt-6-astra":
       return {
         modelId,
         templateId: "gpt-5.6-sol",
         templateName: "GPT-5.6 Sol",
         cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
+    case "gpt-6-sol":
+    case "gpt-6-luna":
+      return {
+        modelId,
+        templateId: "gpt-5.6-sol",
+        templateName: "GPT-5.6 Sol",
+        cost:
+          modelId === "gpt-6-sol"
+            ? { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
+            : { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
         contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,
@@ -208,15 +234,16 @@ describeLive("buildOpenAIProvider live", () => {
         baseURL: normalized?.baseUrl,
       });
 
+      const requiresReasoning = normalized?.thinkingLevelMap?.off === null;
       const response = await client.responses.create({
         model: normalized?.id ?? liveCase.modelId,
         instructions: "Return exactly OK and no other text.",
         input: "Return exactly OK.",
-        max_output_tokens: liveCase.modelId === "gpt-6-astra" ? 256 : 64,
+        max_output_tokens: requiresReasoning ? 256 : 64,
         ...(liveCase.reasoning
           ? {
               reasoning: {
-                effort: liveCase.modelId === "gpt-6-astra" ? ("low" as const) : ("none" as const),
+                effort: requiresReasoning ? ("low" as const) : ("none" as const),
               },
             }
           : {}),

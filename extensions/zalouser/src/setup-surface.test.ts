@@ -1,12 +1,12 @@
 // Zalouser tests cover setup surface plugin behavior.
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
@@ -88,9 +88,6 @@ describe("zalouser setup wizard", () => {
       ...(params?.note ? { note: params.note } : {}),
       confirm: vi.fn(async ({ message }: { message: string }) => {
         params?.seen?.push(message);
-        if (message === "Login via QR code now?") {
-          return false;
-        }
         if (message === "Configure Zalo groups access?") {
           return params?.groupAccess ?? false;
         }
@@ -104,15 +101,7 @@ describe("zalouser setup wizard", () => {
   it("enables the account without forcing QR login", async () => {
     checkZaloAuthenticatedMock.mockClear();
     const prompter = createTestWizardPrompter({
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Login via QR code now?") {
-          return false;
-        }
-        if (message === "Configure Zalo groups access?") {
-          return false;
-        }
-        return false;
-      }),
+      confirm: vi.fn(async () => false),
     });
 
     const result = await runSetup({ prompter });
@@ -195,7 +184,7 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
-    expect(logoutZaloProfileMock).toHaveBeenCalledWith("default");
+    expect(logoutZaloProfileMock).toHaveBeenCalledWith("default", { assertCurrent: undefined });
     expect(startZaloQrLoginMock).not.toHaveBeenCalled();
     expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
       logoutZaloProfileMock.mock.invocationCallOrder[0]!,
@@ -292,15 +281,7 @@ describe("zalouser setup wizard", () => {
   it("resolves setup DM allowlists without persisting refreshed credentials", async () => {
     resolveZaloAllowFromEntriesMock.mockClear();
     const prompter = createTestWizardPrompter({
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Login via QR code now?") {
-          return false;
-        }
-        if (message === "Configure Zalo groups access?") {
-          return false;
-        }
-        return false;
-      }),
+      confirm: vi.fn(async () => false),
       text: vi.fn(async ({ message }: { message: string }) =>
         message === "Zalouser allowFrom (name or user id)" ? "Alice" : "",
       ) as ReturnType<typeof createTestWizardPrompter>["text"],
@@ -315,52 +296,9 @@ describe("zalouser setup wizard", () => {
     });
   });
 
-  it("preserves non-quickstart forceAllowFrom behavior", async () => {
-    const note = vi.fn(async (_message: string, _title?: string) => {});
-    const seen: string[] = [];
-    const prompter = createTestWizardPrompter({
-      note,
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        if (message === "Login via QR code now?") {
-          return false;
-        }
-        if (message === "Configure Zalo groups access?") {
-          return false;
-        }
-        return false;
-      }),
-      text: vi.fn(async ({ message }: { message: string }) => {
-        seen.push(message);
-        if (message === "Zalouser allowFrom (name or user id)") {
-          return "";
-        }
-        return "";
-      }) as ReturnType<typeof createTestWizardPrompter>["text"],
-    });
-
-    const result = await runSetup({ prompter, forceAllowFrom: true });
-
-    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
-    expect(seen).not.toContain("Zalo Personal DM policy");
-    expect(seen).toContain("Zalouser allowFrom (name or user id)");
-    expect(
-      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
-    ).toBe(true);
-  });
-
   it("allowlists the plugin when a plugin allowlist already exists", async () => {
     const prompter = createTestWizardPrompter({
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Login via QR code now?") {
-          return false;
-        }
-        if (message === "Configure Zalo groups access?") {
-          return false;
-        }
-        return false;
-      }),
+      confirm: vi.fn(async () => false),
     });
 
     const result = await runSetup({

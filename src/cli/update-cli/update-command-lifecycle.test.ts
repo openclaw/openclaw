@@ -2,11 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
+import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
   retainCommandProcessCleanup,
@@ -15,9 +20,24 @@ import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
+import {
+  registerAbandonedRepairHistoryTests,
+  registerRepairCustodyTests,
+} from "./update-command-lifecycle-repair.test-support.js";
+import {
+  registerPrivateHandoffBindingTests,
+  validConfigSnapshot,
+  expectLifecycleBoundary,
+  finalizationCleanupCases,
+  prepareFinalizationPackage,
+  successfulPluginUpdate,
+} from "./update-command-lifecycle.test-support.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import * as gatewayVerification from "./update-command-verification.js";
 
 const mocks = vi.hoisted(() => ({
+  verifyGateway: vi.fn<typeof import("./update-command-verification.js").verifyUpdatedGateway>(),
   events: [] as string[],
   leaseActive: false,
   databasePath: "",
@@ -31,35 +51,7 @@ const mocks = vi.hoisted(() => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-const validConfigSnapshot = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  valid: true,
-  parsed: {},
-  config: {},
-  runtimeConfig: {},
-  sourceConfig: {},
-  resolved: {},
-  warnings: [],
-  issues: [],
-  legacyIssues: [],
-};
-
-const successfulPluginUpdate = {
-  status: "ok" as const,
-  changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-  warnings: [],
-};
+vi.mock("../../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
 function record(name: string): void {
   mocks.events.push(`${name}:${mocks.leaseActive}`);
@@ -73,6 +65,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 
 vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: vi.fn(async () => mocks.triage),
+}));
+vi.mock("./update-command-verification.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-verification.js")>()),
+  verifyUpdatedGateway: mocks.verifyGateway,
+}));
+vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: vi.fn(async () => 19101),
 }));
 
 vi.mock("../../commands/doctor-maintenance.js", () => ({
@@ -182,7 +182,8 @@ vi.mock("./update-command-plugins.js", () => ({
 }));
 
 // Process fixtures cover runtime generation with real lifecycle ownership.
-vi.mock("./update-command-runtime.js", () => ({
+vi.mock("./update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-runtime.js")>()),
   completeSourceUpdateRuntime: vi.fn(async () => {
     record("runtime-completion");
     return { changed: false };
@@ -192,17 +193,16 @@ vi.mock("./update-command-runtime.js", () => ({
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
   continuePostCoreUpdateInFreshProcess: vi.fn(),
-  postCoreUpdateParentOwnsCompletion: vi.fn(),
   readPostCorePluginInstallRecordsFile: vi.fn(async () => {
     record("handoff-records");
     return {};
   }),
-  resolvePostCoreUpdateStartedAtMs: vi.fn(async () => 1_000),
   writePostCorePluginUpdateResultFile: vi.fn(async () => undefined),
   writePostCoreUpdateFailureFile: vi.fn(async () => undefined),
 }));
 
 import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "./shared.js";
+import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
@@ -212,25 +212,11 @@ import {
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
-
-function expectLifecycleBoundary(preLeaseEvent: string): void {
-  const preLeaseIndex = mocks.events.indexOf(`${preLeaseEvent}:false`);
-  expect(preLeaseIndex).toBeGreaterThan(-1);
-  expect(mocks.events).not.toContain(`${preLeaseEvent}:true`);
-  const authoritativeReadIndex = mocks.events.findIndex(
-    (event, index) => index > preLeaseIndex && event === "read-config:true",
-  );
-  expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
-    expect(mocks.events).toContain(event);
-  }
-  expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
-}
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 describe("update plugin lifecycle lease boundaries", () => {
   afterEach(() => {
@@ -244,6 +230,12 @@ describe("update plugin lifecycle lease boundaries", () => {
     // shared host path while real recovery admission is running.
     mocks.databasePath = path.join(dirs.make("update-lease-order-"), "state", "openclaw.sqlite");
     vi.clearAllMocks();
+    vi.mocked(updatePluginsAfterCoreUpdate).mockReset();
+    vi.mocked(completePostCorePluginUpdate).mockReset();
+    vi.mocked(continuePostCoreUpdateInFreshProcess).mockReset();
+    mocks.verifyGateway
+      .mockReset()
+      .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(mocks.databasePath)));
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -274,11 +266,172 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
+  registerPrivateHandoffBindingTests();
+  registerAbandonedRepairHistoryTests();
+
+  it.each(["returned", "uncertain", "plugins", "targetConfigConvergence"] as const)(
+    "settles finalizer recovery before reporting a %s failure",
+    async (phase) => {
+      await prepareFinalizationPackage(await resolveUpdateRoot());
+      mocks.verifyGateway.mockResolvedValue({ ok: true, score: 7, summary: "healthy" });
+      const returned = phase === "returned" || phase === "uncertain";
+      const failure = new Error(`finalize:${phase} failed`);
+      const cleanup = new CommandProcessCleanupError();
+      if (returned) {
+        vi.mocked(completePostCorePluginUpdate).mockResolvedValueOnce({
+          configSnapshot: validConfigSnapshot,
+          pluginUpdate: { ...successfulPluginUpdate, status: "error" },
+        });
+      } else if (phase === "plugins") {
+        vi.mocked(updatePluginsAfterCoreUpdate).mockRejectedValueOnce(failure);
+      } else {
+        vi.mocked(completePostCorePluginUpdate).mockRejectedValueOnce(failure);
+      }
+      if (phase === "uncertain") {
+        mocks.verifyGateway.mockRejectedValueOnce(cleanup);
+      }
+      const command = updateFinalizeCommand({
+        json: true,
+        yes: true,
+        timeout: returned ? undefined : "5",
+      });
+      if (phase === "uncertain") {
+        const error = await command.catch((reason: unknown) => reason);
+        expect(hasCommandProcessCleanupError(error)).toBe(true);
+        expect(collectNestedErrorCandidates(error)).toContain(cleanup);
+        expect(listUpdateRuns()[0]?.status).toBe("running");
+        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        expect(mocks.triage).not.toHaveBeenCalled();
+        return;
+      }
+      const recovery = { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
+      if (returned) {
+        await expect(command).rejects.toMatchObject({ code: 1 });
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ status: "error", recovery }),
+        );
+      } else {
+        await expect(command).rejects.toBe(failure);
+      }
+      expect(mocks.verifyGateway).toHaveBeenCalledOnce();
+      expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", verification: { recovery } });
+      expect(mocks.triage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failure: expect.objectContaining({
+            result: expect.objectContaining({
+              recovery: expect.objectContaining({ service: "healthy" }),
+              ...(returned ? { verification: {} } : {}),
+            }),
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(["read", "write", "write-provisional", "read-write"] as const)(
+    "preserves the phase failure when recovery history cannot %s",
+    async (operation) => {
+      await prepareFinalizationPackage(await resolveUpdateRoot());
+      mocks.verifyGateway.mockResolvedValue({ ok: true, score: 7, summary: "healthy" });
+      const failure =
+        operation === "write-provisional"
+          ? new UpdateCommandFailure({
+              status: "error",
+              mode: "npm",
+              reason: "plugin finalization failed",
+              steps: [],
+              durationMs: 0,
+              recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+            })
+          : new Error("plugin finalization failed");
+      let failedPhase = false;
+      vi.mocked(updatePluginsAfterCoreUpdate).mockImplementationOnce(async () => {
+        failedPhase = true;
+        if (operation !== "read") {
+          updateLedger.recordUpdateRunVerification(listUpdateRuns()[0]!.runId, {
+            recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+          });
+        }
+        throw failure;
+      });
+      const unavailable = new Error("recovery database unavailable");
+      if (operation === "read" || operation === "read-write") {
+        const read = updateLedger.getUpdateRun;
+        vi.spyOn(updateLedger, "getUpdateRun").mockImplementation((...args) => {
+          if (failedPhase) {
+            failedPhase = false;
+            throw unavailable;
+          }
+          return read(...args);
+        });
+      }
+      if (operation !== "read") {
+        vi.spyOn(updateLedger, "recordUpdateRunDiagnostics").mockImplementationOnce(
+          (_runId, _diagnostics, warn) => {
+            warn(unavailable.message);
+          },
+        );
+      }
+      const finalization = updateFinalizeCommand({ json: true, yes: true });
+      if (operation === "write-provisional") {
+        await expect(finalization).rejects.toMatchObject({ code: 1 });
+      } else {
+        await expect(finalization).rejects.toBe(failure);
+      }
+      expect(listUpdateRuns()[0]?.status).toBe("failed");
+      if (operation !== "read") {
+        expect(mocks.triage.mock.calls.at(-1)?.[0]).toMatchObject({
+          failure: {
+            result: {
+              recovery:
+                operation === "read-write"
+                  ? undefined
+                  : { serviceRestartSafe: false, reason: "state-migration-started" },
+            },
+          },
+        });
+      }
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining(unavailable.message),
+      );
+    },
+  );
+
   it.each([false, true])(
     "reports the admitted Doctor failure (interactive=%s)",
     async (interactive) => {
       mocks.interactive = interactive;
       vi.mocked(readPackageVersion).mockResolvedValue("2026.9.4");
+      await fs.writeFile(
+        path.join(await resolveUpdateRoot(), "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+      );
+      const maintenance = createDoctorMaintenanceFixture();
+      mocks.maintenance.mockResolvedValueOnce(maintenance);
+      const verification = await vi.importActual<typeof gatewayVerification>(
+        "./update-command-verification.js",
+      );
+      mocks.verifyGateway.mockImplementationOnce(verification.verifyUpdatedGateway);
+      const observation = vi
+        .spyOn(await import("./update-command-readiness.js"), "observeUpdateGatewayReadiness")
+        .mockImplementationOnce(async (params) => {
+          expect(maintenance.finish).toHaveBeenCalledOnce();
+          expect(maintenance.release).toHaveBeenCalledOnce();
+          expect(listUpdateRuns()[0]?.status).toBe("running");
+          return {
+            health: {
+              healthy: true,
+              runtime: { status: "running", pid: 4242 },
+              portUsage: { port: params.gatewayPort, status: "busy", listeners: [], hints: [] },
+              staleGatewayPids: [],
+              gatewayVersion: "2026.9.4",
+              expectedVersion: params.expectedVersion,
+            },
+            readyz: true,
+            http: undefined,
+            launchAgentRecovery: null,
+          };
+        });
       const message =
         "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
       vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
@@ -307,16 +460,23 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(body).toContain("Reason code: doctor-failed");
         expect(body).toContain("Update mode: package");
         expect(body).toContain("Update target: 2026.9.4");
-        expect(body).toContain("Failed phase finalize:doctor: exit 23");
+        expect(body).toContain("Failed phase finalize-doctor: exit 23");
         expect(body).toContain(`Failing check doctor (doctor-failed): ${message}`);
-        expect(body).toContain(
-          "Recovery outcome: package rollback not needed: no package mutation",
-        );
+        expect(body).toContain("Recovery outcome: verified serving 2026.9.4");
         expect(mocks.triage).not.toHaveBeenCalled();
       } else {
         expect(mocks.triage).toHaveBeenCalledOnce();
       }
       expect(listUpdateRuns()).toHaveLength(1);
+      expect(mocks.maintenance).toHaveBeenCalledOnce();
+      expect(observation).toHaveBeenCalledOnce();
+      expect(listUpdateRuns()[0]?.verification).toMatchObject({
+        serviceRunning: true,
+        runningVersion: "2026.9.4",
+        versionMatch: true,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.4" },
+      });
       closeOpenClawStateDatabaseForTest();
       expect(listUpdateRuns()[0]?.steps).toContainEqual(
         expect.objectContaining({ step: "finalize:doctor", status: "failed", exitCode: 23 }),
@@ -415,6 +575,10 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
+        expect(completeSourceUpdateRuntime).toHaveBeenCalledOnce();
+        expect(
+          mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+        ).toBeLessThan(mocks.events.indexOf("plugin-update:true"));
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
@@ -425,6 +589,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       );
     },
   );
+
+  registerConvergenceCompletionTests({ mocks, validConfigSnapshot, successfulPluginUpdate });
 
   it("keeps the plugin and error class when convergence fails", async () => {
     vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
@@ -480,65 +646,55 @@ describe("update plugin lifecycle lease boundaries", () => {
     );
   });
 
-  it.each(["copied", "live"] as const)(
+  it.each(["copied", "live", "unset selectors"] as const)(
     "preserves the %s invocation environment through a failed phase",
     async (source) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/fixture/invocation-state");
+      vi.stubEnv("OPENCLAW_PROFILE", "caller-profile");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
       const failure = new Error("phase failed");
-      let observedStateDir: string | undefined;
+      const env = source === "live" ? process.env : { ...process.env };
+      if (source === "unset selectors") {
+        env.OPENCLAW_PROFILE = undefined;
+        env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = undefined;
+      }
+      let observed: NodeJS.ProcessEnv | undefined;
       try {
         await expect(
-          withOwnedManagedUpdateEnv(
-            source === "live" ? process.env : { ...process.env },
-            async () => {
-              observedStateDir = process.env.OPENCLAW_STATE_DIR;
-              process.env.OPENCLAW_STATE_DIR = "/fixture/phase-state";
-              throw failure;
-            },
-          ),
+          withOwnedManagedUpdateEnv(env, async () => {
+            await Promise.resolve();
+            observed = { ...process.env };
+            process.env.OPENCLAW_STATE_DIR = "/fixture/phase-state";
+            throw failure;
+          }),
         ).rejects.toBe(failure);
-        expect(observedStateDir).toBe("/fixture/invocation-state");
+        expect(observed?.OPENCLAW_STATE_DIR).toBe("/fixture/invocation-state");
         expect(process.env.OPENCLAW_STATE_DIR).toBe("/fixture/invocation-state");
+        if (source === "unset selectors") {
+          expect(observed).not.toHaveProperty("OPENCLAW_PROFILE");
+          expect(observed).not.toHaveProperty("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE");
+          expect(process.env.OPENCLAW_PROFILE).toBe("caller-profile");
+          expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
+        }
       } finally {
         vi.unstubAllEnvs();
       }
     },
   );
 
-  it("keeps explicitly unset candidate selectors absent and restores the caller on failure", async () => {
-    vi.stubEnv("OPENCLAW_PROFILE", "caller-profile");
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
-    const failure = new Error("candidate phase failed");
-    let observed: NodeJS.ProcessEnv | undefined;
-    try {
-      await expect(
-        withOwnedManagedUpdateEnv(
-          {
-            ...process.env,
-            OPENCLAW_PROFILE: undefined,
-            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-          },
-          async () => {
-            await Promise.resolve();
-            observed = { ...process.env };
-            throw failure;
-          },
-        ),
-      ).rejects.toBe(failure);
-      expect(observed).not.toHaveProperty("OPENCLAW_PROFILE");
-      expect(observed).not.toHaveProperty("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE");
-      expect(process.env.OPENCLAW_PROFILE).toBe("caller-profile");
-      expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it.each([undefined, "parent"])(
-    "resumes with completion owner %s before publishing",
-    async (owner) => {
-      vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValueOnce(owner === "parent");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+  it.each([
+    { owner: undefined, sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: false },
+    { owner: "parent", sourceRuntimePrepared: true },
+  ])(
+    "resumes with completion owner $owner before publishing (prepared=$sourceRuntimePrepared)",
+    async ({ owner, sourceRuntimePrepared }) => {
+      const handoff = dirs.make("prepared-source-runtime-");
+      await fs.writeFile(
+        path.join(handoff, "handoff.json"),
+        JSON.stringify({ completionOwner: owner, sourceRuntimePrepared }),
+      );
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
       vi.mocked(writePostCorePluginUpdateResultFile).mockImplementationOnce(async () => {
         record("publish-result");
       });
@@ -549,13 +705,13 @@ describe("update plugin lifecycle lease boundaries", () => {
         timeoutMs: 1_000,
       });
 
-      expectLifecycleBoundary("handoff-records");
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
-        mocks.events.indexOf("lease-enter:false"),
+      expectLifecycleBoundary(mocks.events, "handoff-records");
+      expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceRuntimePrepared }),
       );
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeLessThan(
-        mocks.events.indexOf("prepare-config:true"),
-      );
+      expect(
+        mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+      ).toBeLessThan(mocks.events.indexOf("prepare-config:true"));
       expect(mocks.events.includes("fresh-doctor:false")).toBe(owner === undefined);
       expect(mocks.events).not.toContain("fresh-doctor:true");
       expect(mocks.events).not.toContain("config-snapshot:false");
@@ -586,8 +742,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
-        return {
-          run: <T>(operation: () => T): T => operation(),
+        return createDoctorMaintenanceFixture({
           releaseState: async () => {
             record("release-state");
           },
@@ -595,9 +750,8 @@ describe("update plugin lifecycle lease boundaries", () => {
           release: async () => {
             record("release-custody");
           },
-        };
+        });
       });
-      vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValueOnce(false);
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
       const publish = async () => {
         expect(finish).toHaveBeenCalledOnce();
@@ -642,7 +796,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         timeout,
       });
 
-      expectLifecycleBoundary("fresh-doctor");
+      expectLifecycleBoundary(mocks.events, "fresh-doctor");
       const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
       expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
       expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
@@ -659,14 +813,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
-  it.each([
-    { phase: "preflight", cleanup: "forced", failed: false },
-    { phase: "preflight", cleanup: "uncertain", failed: false },
-    { phase: "completion", cleanup: "forced", failed: false },
-    { phase: "completion", cleanup: "uncertain", failed: false },
-    { phase: "completion", cleanup: "forced", failed: true },
-    { phase: "completion", cleanup: "uncertain", failed: true },
-  ] as const)(
+  it.each(finalizationCleanupCases)(
     "joins finalizer cleanup before publication ($phase, $cleanup, failure=$failed)",
     async ({ phase, cleanup, failed }) => {
       const physicalCleanup = createDeferredCore<"forced" | "uncertain">();
@@ -680,6 +827,16 @@ describe("update plugin lifecycle lease boundaries", () => {
         }
         signal.addEventListener("abort", () => joining.resolve(), { once: true });
       };
+      if (phase === "recovery") {
+        await fs.writeFile(
+          path.join(await resolveUpdateRoot(), "package.json"),
+          JSON.stringify({ name: "openclaw", version: VERSION }),
+        );
+        mocks.verifyGateway.mockImplementationOnce(async () => {
+          retainCleanup();
+          return { ok: true, score: 7, summary: "healthy" };
+        });
+      }
       // Keep the real finalizer, lifecycle, ledger, and process scopes; discovery
       // and the completion subprocess are the only deferred boundaries here.
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementationOnce(async () => {
@@ -739,6 +896,9 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
         expect(mocks.triage).not.toHaveBeenCalled();
         expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
+        if (phase === "recovery") {
+          expect(listUpdateRuns()[0]?.status).toBe("running");
+        }
       } else if (failed) {
         expect(error).toBe(originalError);
         expect(listUpdateRuns()[0]?.status).toBe("failed");
@@ -753,152 +913,49 @@ describe("update plugin lifecycle lease boundaries", () => {
     },
   );
 
-  it.each(
-    (["doctor", "convergence", "restoration"] as const).flatMap((phase) =>
-      (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
-    ),
-  )(
-    "settles repair custody before restoration and publication ($phase, $cleanup)",
-    async ({ phase, cleanup }) => {
-      const physicalCleanup = createDeferredCore<"forced" | "uncertain">();
-      const joining = createDeferredCore();
-      const originalError = new Error("Repair Doctor failed");
-      const retainCleanup = () => {
-        retainCommandProcessCleanup(physicalCleanup.promise);
-        const signal = resolveCommandProcessSignal();
-        if (!signal) {
-          throw new Error("Repair custody lost its command scope");
-        }
-        signal.addEventListener("abort", () => joining.resolve(), { once: true });
-      };
-      type Maintenance = NonNullable<
-        Awaited<
-          ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
-        >
-      >;
-      const finish = vi.fn<Maintenance["finish"]>().mockImplementation(async () => {
-        if (phase === "restoration") {
-          retainCleanup();
-        }
-      });
-      const release = vi.fn<Maintenance["release"]>().mockResolvedValue(undefined);
-      const releaseState = vi.fn<Maintenance["releaseState"]>().mockResolvedValue(undefined);
-      mocks.maintenance.mockResolvedValue({
-        run: <T>(operation: () => T): T => operation(),
-        finish,
-        release,
-        releaseState,
-      });
-      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
-      // Observe reconciliation of the selected old run without inventing a live
-      // recovery record; the finalizer's own invocation still uses the real ledger.
-      const ledger = await import("../../infra/update-run-ledger.js");
-      const reconcile = vi.spyOn(ledger, "reconcileAbandonedUpdateRuns").mockReturnValue([]);
-      const acknowledge = vi
-        .spyOn(ledger, "acknowledgeAbandonedUpdateRun")
-        .mockImplementation(() => {});
-      if (phase === "convergence") {
-        vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async () => {
-          retainCleanup();
-          return { pluginUpdate: successfulPluginUpdate, configSnapshot: validConfigSnapshot };
-        });
-      } else {
-        vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockImplementationOnce(async () => {
-          if (phase === "doctor") {
-            retainCleanup();
-          }
-          throw originalError;
-        });
-      }
-      let finished = false;
-      // The explicit phase budget avoids native database-size inspection.
-      const command = updateFinalizeCommand(
-        { json: true, yes: true, timeout: "5", deferCompletionCache: true },
-        ["synthetic-retained-run"],
-      ).then(
-        () => {
-          finished = true;
-          return { error: undefined };
-        },
-        (error: unknown) => {
-          finished = true;
-          return { error };
-        },
-      );
-      try {
-        await Promise.race([
-          joining.promise,
-          command.then(() => {
-            throw new Error("Repair finalization returned before physical settlement");
+  registerRepairCustodyTests(mocks);
+
+  it.each(["restoration", "doctor"] as const)(
+    "keeps nonfatal %s warnings in terminal JSON without failing finalization",
+    async (source) => {
+      const warning =
+        source === "restoration"
+          ? "Gateway was already stopped before repair; run openclaw gateway start."
+          : "Optional version probe timed out; recheck after restart.";
+      if (source === "restoration") {
+        const warnings: string[] = [];
+        mocks.maintenance.mockResolvedValue(
+          createDoctorMaintenanceFixture({
+            finish: async () => {
+              warnings.push(warning);
+            },
+            warnings,
           }),
-        ]);
-        expect(finished).toBe(false);
-        expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
-        expect(release).not.toHaveBeenCalled();
-        expect(reconcile).not.toHaveBeenCalled();
-        expect(acknowledge).not.toHaveBeenCalled();
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
-        expect(listUpdateRuns()[0]?.status).toBe("running");
-      } finally {
-        physicalCleanup.resolve(cleanup);
-        await command;
-      }
-      const { error } = await command;
-      expect(releaseState).toHaveBeenCalledOnce();
-      if (cleanup === "uncertain") {
-        expect(hasCommandProcessCleanupError(error)).toBe(true);
-        if (phase !== "convergence") {
-          expect(collectNestedErrorCandidates(error)).toContain(originalError);
-        }
-        expect(finish).toHaveBeenCalledTimes(phase === "restoration" ? 1 : 0);
-        expect(release).not.toHaveBeenCalled();
-        expect(reconcile).not.toHaveBeenCalled();
-        expect(acknowledge).not.toHaveBeenCalled();
-        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        expect(mocks.triage).not.toHaveBeenCalled();
-        expect(listUpdateRuns()[0]?.status).not.toBe("succeeded");
+        );
+        vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       } else {
-        expect(finish).toHaveBeenCalledOnce();
-        expect(finish).toHaveBeenCalledWith(validConfigSnapshot.config);
-        if (phase === "convergence") {
-          expect(error).toBeUndefined();
-          expect(release).not.toHaveBeenCalled();
-          expect(reconcile).toHaveBeenCalledWith({
-            explicit: true,
-            runIds: ["synthetic-retained-run"],
-          });
-          expect(acknowledge).toHaveBeenCalledWith("synthetic-retained-run");
-          expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-            expect.objectContaining({ status: "ok", mode: "finalize" }),
-          );
-          expect(listUpdateRuns()[0]?.status).toBe("succeeded");
-        } else {
-          expect(error).toBe(originalError);
-          expect(release).toHaveBeenCalledOnce();
-          expect(reconcile).not.toHaveBeenCalled();
-          expect(acknowledge).not.toHaveBeenCalled();
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-          expect(mocks.triage).toHaveBeenCalledOnce();
-          expect(listUpdateRuns()[0]?.status).toBe("failed");
-        }
+        mocks.doctorWarnings = [warning];
       }
+      await updateFinalizeCommand(
+        {
+          json: true,
+          yes: true,
+          deferCompletionCache: true,
+          timeout: source === "restoration" ? "5" : undefined,
+        },
+        source === "restoration" ? [] : undefined,
+      );
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "warning",
+          restart: false,
+          postUpdate: expect.objectContaining({
+            doctor: { status: "warning", warnings: [warning] },
+          }),
+        }),
+      );
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
-
-  it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
-    mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];
-    await updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true });
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "warning",
-        restart: false,
-        postUpdate: expect.objectContaining({
-          doctor: { status: "warning", warnings: mocks.doctorWarnings },
-        }),
-      }),
-    );
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
 });

@@ -48,6 +48,20 @@ skip can leave the scenario passing when its paired runtime passes, but the
 skipped cell stays labeled `skip`. Unexpected skips and pairs with both runtimes
 skipped still fail the parity gate. Missing captures are labeled `missing`.
 
+Unexpected exits of a ready QA Gateway child report its exit code and signal
+alongside the recent Gateway logs. Intentional shutdown and replacement remain
+separate from runtime failures.
+
+When a flow scenario fails, the failed step's details also list the Gateway log
+sentinel findings recorded during that scenario, such as a channel
+`final reply failed` line behind a wait timeout. Scenario-level details stay
+unchanged, so parity classification never depends on that log text.
+
+Explicit tool-result error flags take precedence over keywords in returned text;
+error result blocks remain failures. Results without an error flag retain text-based
+error detection. A successful file read can therefore contain words such as
+"failed" without losing its successful tool-coverage receipt.
+
 ### Scheduled instances and retained observations
 
 Schema v3 evidence gives each scheduled scenario instance its own identity.
@@ -107,6 +121,8 @@ extensionless files and unknown suffixes; the complete kind label is preserved.
 `qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
 own Markdown table cells, collapsing whitespace for display. The JSON summary
 preserves the annotation values, including internal line breaks.
+
+For JSONL replay lanes, every transcript must report a nonnegative integer user-turn count, with matching numbers of drift entries and results for both runtimes. Missing or mismatched evidence is classified as `unknown`, so both strict confidence modes reject it. Zero-turn transcripts are allowed alongside complete replayed turns; a report with no replayed user turns remains unknown.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

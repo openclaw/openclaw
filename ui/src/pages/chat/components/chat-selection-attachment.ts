@@ -7,11 +7,8 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
-export function createChatSelectionAttachment(
-  annotation: ChatSelectionAnnotation,
-  limits?: ChatAttachmentControlsProps["attachmentLimits"],
-): ChatAttachment | null {
-  const text = [
+export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotation): string {
+  return [
     `Selected text:\n${annotation.text}`,
     ...(annotation.comment.trim() ? [`User comment:\n${annotation.comment}`] : []),
     [
@@ -22,18 +19,29 @@ export function createChatSelectionAttachment(
       `DOM text UTF-16 range: [${annotation.start}, ${annotation.end})`,
     ].join("\n"),
   ].join("\n\n");
-  const file = new File([text], "selection-comment.txt", { type: "text/plain" });
-  if (admitAttachmentFiles([file], limits).length === 0) {
+}
+
+export function createChatSelectionAttachment(
+  annotation: ChatSelectionAnnotation,
+  options: Pick<ChatAttachmentControlsProps, "attachmentLimits" | "selectionContextOnly">,
+  stagedBytes: number,
+): ChatAttachment | null {
+  const attachment = {
+    id: generateAttachmentId(),
+    mimeType: "text/plain",
+    fileName: "selection-comment.txt",
+    selectionAnnotation: { ...annotation },
+  };
+  if (options.selectionContextOnly) {
+    return attachment;
+  }
+  const text = formatChatSelectionAnnotation(annotation);
+  const file = new File([text], attachment.fileName, { type: attachment.mimeType });
+  if (admitAttachmentFiles([file], options.attachmentLimits, stagedBytes).length === 0) {
     return null;
   }
   return registerChatAttachmentPayload({
-    attachment: {
-      id: generateAttachmentId(),
-      mimeType: file.type,
-      fileName: file.name,
-      sizeBytes: file.size,
-      selectionAnnotation: { ...annotation },
-    },
+    attachment: { ...attachment, sizeBytes: file.size },
     dataUrl: encodeTextAsDataUrl(text),
     file,
   });

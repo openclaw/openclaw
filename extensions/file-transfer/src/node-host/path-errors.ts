@@ -1,4 +1,3 @@
-// File Transfer plugin module implements path errors behavior.
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +11,7 @@ type InvalidPathResult = {
 };
 
 const SYMLINK_REJECTED_MESSAGE =
-  "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)";
+  "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the resolved path)";
 
 type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
 
@@ -52,7 +51,7 @@ export function rejectCanonicalPathChange(expected: unknown, actual: string) {
   return {
     ok: false as const,
     code: "CANONICAL_PATH_CHANGED" as const,
-    message: "canonical path differs from the authorized target",
+    message: "resolved path differs from the authorized target",
     canonicalPath: actual,
   };
 }

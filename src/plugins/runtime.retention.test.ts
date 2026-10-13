@@ -14,6 +14,10 @@ import { createPluginRecord } from "./status.test-helpers.js";
 it.each([
   { mode: "loader", name: "releases the predecessor of a live replacement registry" },
   { mode: "registry", name: "releases successors while a retired registry remains reachable" },
+  {
+    mode: "registry-instances",
+    name: "releases successors while disposed instances remain reachable",
+  },
   { mode: "cache", name: "releases callback captures while a retired cache remains reachable" },
   { mode: "formatter", name: "finishes cache retirement when a custom stack formatter throws" },
   {

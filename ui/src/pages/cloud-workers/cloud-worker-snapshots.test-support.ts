@@ -1,4 +1,37 @@
-import type { SnapshotsResult } from "./cloud-worker-snapshot-rows.ts";
+import type { SnapshotsResult } from "./cloud-worker-environment-model.ts";
+
+export function buildEnvironmentFixture(state = "provisioning", error?: string) {
+  return {
+    id: "build-app",
+    type: "worker",
+    status:
+      state === "ready"
+        ? "available"
+        : state === "failed" || state === "orphaned"
+          ? "error"
+          : "starting",
+    preparation: {
+      purpose: "build",
+      key: "build-key",
+      details: {
+        demandAtMs: 1,
+        expiresAtMs: Date.now() + 3_600_000,
+        consumedAtMs: null,
+        project: { label: "github.com/acme/app", baseCommit: "0123456789abcdef" },
+      },
+    },
+    worker: {
+      profileId: "linux-build",
+      providerId: "crabbox",
+      leaseId: "lease-app",
+      state,
+      ageMs: 60_000,
+      attachedSessionIds: [],
+      tunnelStatus: "stopped",
+      ...(error ? { error } : {}),
+    },
+  };
+}
 
 export function snapshotListFixture(): SnapshotsResult {
   const images: SnapshotsResult["images"] = [

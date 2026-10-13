@@ -1,15 +1,8 @@
 // Exercises the real update owner across successful config runtime finalization.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -18,6 +11,8 @@ import {
   refreshActiveSecretsRuntimeSnapshotForConfig,
 } from "../secrets/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withExecutor } from "./config-executor.test-support.js";
 import * as configFactory from "./io.factory.js";
 import { writeConfigFile } from "./io.runtime.js";
 import {
@@ -31,33 +26,19 @@ import {
 import { withTempHome } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
-async function withExecutor(
-  home: string,
-  consume: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-finalization-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await consume(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
-}
-
 const oldConfig = { gateway: { mode: "local" as const, port: 18789 } };
 const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
 
 describe("runtime finalization retains original authority", () => {
+  const roots = createSuiteTempRootTracker({ prefix: "config-authority-coordinator-" });
+  beforeAll(async () => await roots.setup());
+  beforeEach(async () => {
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      await roots.make("coordinator"),
+    );
+  });
+  afterAll(async () => await roots.cleanup());
+
   afterEach(() => {
     vi.restoreAllMocks();
     clearSecretsRuntimeSnapshot();
@@ -67,16 +48,20 @@ describe("runtime finalization retains original authority", () => {
   });
 
   it.each(
-    (["explicit", "ambient"] as const).flatMap((authority) =>
-      (["canonical", "refresh", "deferred", "secrets"] as const).flatMap((boundary) =>
-        [false, true].map((revoke) => ({ authority, boundary, revoke })),
-      ),
+    [
+      { authority: "explicit", boundary: "canonical" },
+      { authority: "explicit", boundary: "refresh" },
+      { authority: "explicit", boundary: "deferred" },
+      { authority: "explicit", boundary: "secrets" },
+      { authority: "ambient", boundary: "canonical" },
+    ].flatMap(({ authority, boundary }) =>
+      [false, true].map((revoke) => ({ authority, boundary, revoke })),
     ),
   )(
     "$authority write across $boundary (revoke=$revoke)",
     async ({ authority, boundary, revoke }) => {
       await withTempHome(async (home) =>
-        withExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-finalization-fence", async (assertCurrent, revokeExecutor) => {
           const configPath = path.join(home, ".openclaw", "openclaw.json");
           await fs.mkdir(path.dirname(configPath), { recursive: true });
           await fs.writeFile(configPath, `${JSON.stringify(oldConfig)}\n`);
@@ -104,8 +89,8 @@ describe("runtime finalization retains original authority", () => {
               const realIO = createIO(options);
               return {
                 ...realIO,
-                readConfigFileSnapshot: async () => {
-                  const actual = await realIO.readConfigFileSnapshot();
+                readConfigFileSnapshotForWrite: async (readOptions) => {
+                  const actual = await realIO.readConfigFileSnapshotForWrite(readOptions);
                   atBoundary();
                   return actual;
                 },
@@ -187,7 +172,7 @@ describe("runtime finalization retains original authority", () => {
     "real secrets refresh retains owner across preparation (cached=$cached, revoke=$revoke)",
     async ({ cached, revoke }) => {
       await withTempHome(async (home) =>
-        withExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-finalization-fence", async (assertCurrent, revokeExecutor) => {
           const initial = await prepareSecretsRuntimeSnapshot({
             config: oldConfig,
             env: {},

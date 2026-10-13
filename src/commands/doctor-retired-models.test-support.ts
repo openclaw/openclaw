@@ -17,13 +17,20 @@ const retirementRules = vi.hoisted(() =>
     "retired-with-successor",
     "retired-without-successor",
     "retired-with-slash",
+    "retired-chain-to-retired",
+    "retired-incompat-chain",
+    "retired-global-parent",
+    "retired-runtime-parent",
+    "retired-route-child",
     "retired-global-without-successor",
     "retired-api-conditioned",
   ].map((model) => ({
     provider: "openai",
     model,
     when:
-      model === "retired-global-without-successor"
+      model === "retired-global-without-successor" ||
+      model === "retired-global-parent" ||
+      model === "retired-runtime-parent"
         ? undefined
         : {
             baseUrlHosts: ["chatgpt.com"],
@@ -34,7 +41,18 @@ const retirementRules = vi.hoisted(() =>
     retirement: model.includes("without-successor")
       ? {}
       : {
-          replacedBy: model === "retired-with-slash" ? "family/current-model" : "current-model",
+          replacedBy:
+            model === "retired-with-slash"
+              ? "family/current-model"
+              : model === "retired-chain-to-retired"
+                ? "retired-without-successor"
+                : model === "retired-incompat-chain"
+                  ? "CHAT-LATEST"
+                  : model === "retired-global-parent"
+                    ? "retired-route-child"
+                    : model === "retired-runtime-parent"
+                      ? "gpt-5.5"
+                      : "current-model",
         },
   })),
 );

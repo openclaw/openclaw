@@ -1,7 +1,13 @@
 import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 
-export async function startCatalogRecoveryMcpServer(label: string) {
+export async function startCatalogRecoveryMcpServer(
+  label: string,
+  options: { holdTermination?: Promise<void> } = {},
+) {
+  const terminationStarted = createDeferred();
+  let terminationCount = 0;
   let sessionGeneration = 0;
   let listCount = 0;
   let maxActiveLists = 0;
@@ -19,7 +25,16 @@ export async function startCatalogRecoveryMcpServer(label: string) {
       return;
     }
     if (request.method === "DELETE") {
-      response.writeHead(204).end();
+      terminationCount += 1;
+      terminationStarted.resolve();
+      if (options.holdTermination) {
+        void options.holdTermination.then(
+          () => response.writeHead(204).end(),
+          () => response.writeHead(500).end(),
+        );
+      } else {
+        response.writeHead(204).end();
+      }
       return;
     }
     if (request.method !== "POST") {
@@ -113,12 +128,23 @@ export async function startCatalogRecoveryMcpServer(label: string) {
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as { port: number };
+  const portClaim = await acquireTestPortBlock({ offsets: [0] });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(portClaim.port, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+  } catch (error) {
+    await portClaim.release();
+    throw error;
+  }
   return {
-    url: `http://127.0.0.1:${address.port}/mcp`,
+    url: `http://127.0.0.1:${portClaim.port}/mcp`,
+    terminationStarted: terminationStarted.promise,
+    terminationCount: () => terminationCount,
     nextCall: () => callReceived.promise,
     recoveryListStarted: recoveryListStarted.promise,
     maxActiveLists: () => maxActiveLists,
@@ -152,9 +178,13 @@ export async function startCatalogRecoveryMcpServer(label: string) {
     },
     close: async () => {
       server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      } finally {
+        await portClaim.release();
+      }
     },
   };
 }

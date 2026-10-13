@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { resolveOpenAIModelRoutes } from "../openai-model-routes.js";
 import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
 
@@ -9,7 +9,7 @@ function resolveAgentHarnessPolicy(
 ): ReturnType<typeof resolveAgentHarnessPolicyBase> {
   return resolveAgentHarnessPolicyBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: createCanonicalAgentConfigFixture(params.config).config,
   });
 }
 
@@ -87,19 +87,6 @@ describe("resolveAgentHarnessPolicy", () => {
     ).toEqual({ runtime, runtimeSource: runtimeSource ?? "implicit" });
   });
 
-  it("keeps explicit runtime policy authoritative", () => {
-    const config = openAIProviderConfig({ agentRuntime: { id: "codex" } });
-    config.agents = { defaults: { params: { temperature: 0.2 } } };
-    expect(
-      resolveAgentHarnessPolicy({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        config,
-        env: {},
-      }),
-    ).toEqual({ runtime: "codex", runtimeSource: "provider" });
-  });
-
   it.each(["default", "auto"] as const)(
     "treats configured %s runtime policy as implicit route selection",
     (runtime) => {
@@ -168,13 +155,13 @@ describe("resolveAgentHarnessPolicy", () => {
     },
     {
       name: "agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: "writer",
       sessionKey: undefined,
     },
     {
       name: "session agent params",
-      agents: { list: [{ id: "writer", params: { temperature: 0.2 } }] },
+      agents: { entries: { writer: { params: { temperature: 0.2 } } } },
       agentId: undefined,
       sessionKey: "agent:writer:main",
     },

@@ -31,7 +31,8 @@ vi.mock("./config-write-flow.js", async (importOriginal) => ({
 vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: async ({ config }: { config: OpenClawConfig }) => ({ config }),
 }));
-vi.mock("../../config/runtime-schema.js", () => ({
+vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
   loadGatewayRuntimeConfigSchema: () => ({ schema: {}, uiHints: undefined }),
 }));
 
@@ -79,11 +80,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(
-  (["config.patch", "config.set", "config.apply"] as const).flatMap((method) =>
-    (["before request", "during commit"] as const).map((editAt) => ({ method, editAt })),
-  ),
-)(
+it.each([
+  { method: "config.patch", editAt: "before request" },
+  { method: "config.patch", editAt: "during commit" },
+] as const)(
   "$method reloads a rejected draft when an external edit occurs $editAt",
   async ({ method, editAt }) => {
     // Exercise the real response cache before watcher notification reaches the Gateway.

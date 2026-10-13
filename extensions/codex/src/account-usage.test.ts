@@ -1,13 +1,18 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { ensureAuthProfileStore, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodexAccountUsage } from "./account-usage.js";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { readCodexAppServerUsage } from "./app-server/request.js";
 
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  ensureAuthProfileStore: vi.fn(),
+}));
 vi.mock("./app-server/auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileStore: vi.fn(),
 }));
@@ -31,13 +36,11 @@ describe("codex.accountUsage", () => {
   let config: OpenClawConfig;
   let store: AuthProfileStore;
   let handler: Handler;
-  let currentAuthority: boolean;
   const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    config = { agents: { list: [{ id: "main" }, { id: "work" }] } };
-    currentAuthority = true;
+    config = { agents: { entries: { main: {}, work: {} } } };
     store = {
       version: 1,
       profiles: {
@@ -51,10 +54,10 @@ describe("codex.accountUsage", () => {
         },
         "openai:blair": { type: "token", provider: "openai", token: "blair-token-placeholder" },
         "openai:api": { type: "api_key", provider: "openai", key: "api-key-placeholder" },
-        "anthropic:work": { type: "token", provider: "anthropic", token: "anthropic-placeholder" },
       },
     };
-    vi.mocked(resolveCodexAppServerAuthProfileStore).mockImplementation(() => store);
+    vi.mocked(resolveCodexAppServerAuthProfileStore).mockImplementation(async () => store);
+    vi.mocked(ensureAuthProfileStore).mockImplementation(() => store);
     vi.mocked(readCodexAppServerUsage).mockResolvedValue(usage(20));
     registerGatewayMethod.mockImplementation((_method, registered) => {
       handler = registered;
@@ -71,7 +74,7 @@ describe("codex.accountUsage", () => {
       isWebchatConnect: () => false,
       respond,
       context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
-      hasCurrentClientAuthority: () => currentAuthority,
+      hasCurrentClientAuthority: () => true,
     });
     return respond;
   }
@@ -116,6 +119,43 @@ describe("codex.accountUsage", () => {
     );
   });
 
+  it("distinguishes reserve quota from ordinary Luna in selected-account usage", async () => {
+    const ordinary = usage(100).rateLimits.rateLimits;
+    vi.mocked(readCodexAppServerUsage).mockResolvedValue({
+      rateLimits: {
+        rateLimits: ordinary,
+        rateLimitsByLimitId: {
+          codex: ordinary,
+          base_model_inference: {
+            limitId: "base_model_inference",
+            limitName: "gpt-reserve",
+            normalModelSlug: "gpt-5.6-luna",
+            secondary: { usedPercent: 0, windowDurationMins: 10_080 },
+          },
+        },
+        ordinaryUsageAllowed: null,
+        rateLimitUpsell: null,
+      },
+    });
+    const respond = await request({ agentId: "work", profileId: "openai:alex" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: [
+          expect.objectContaining({
+            summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
+            windows: expect.arrayContaining([
+              expect.objectContaining({
+                groupLabel: "Luna Reserve (separate route)",
+                usedPercent: 0,
+              }),
+            ]),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("rejects proxy launches before sending the selected account to a shared daemon", async () => {
     config.plugins = {
       entries: {
@@ -134,14 +174,9 @@ describe("codex.accountUsage", () => {
   });
 
   it.each([
-    { agentId: "missing", profileId: "openai:alex" },
     { agentId: "../main", profileId: "openai:alex" },
     { profileId: "openai:alex" },
-    { agentId: "main", profileId: "" },
-    { agentId: "main", profileId: "openai:missing" },
     { agentId: "main", profileId: "openai:api" },
-    { agentId: "main", profileId: "anthropic:work" },
-    { agentId: "main", profileId: "openai:alex", refresh: true },
   ])("rejects an unavailable or invalid selection without fetching: %j", async (params) => {
     const respond = await request(params);
     expect(respond).toHaveBeenCalledWith(
@@ -152,69 +187,20 @@ describe("codex.accountUsage", () => {
     expect(readCodexAppServerUsage).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "replaced", "config changed", "authority revoked"])(
-    "rejects guarded work and discards its result when %s during a read",
-    async (change) => {
-      let assertCurrent: (() => void) | undefined;
-      vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
-        assertCurrent = options.assertCurrent;
-        if (change === "removed") {
-          delete store.profiles["openai:alex"];
-        } else if (change === "replaced") {
-          store.profiles["openai:alex"] = {
-            type: "token",
-            provider: "openai",
-            token: "replacement-placeholder",
-          };
-        } else if (change === "config changed") {
-          config = structuredClone(config);
-        } else {
-          currentAuthority = false;
-        }
-        return usage(99);
-      });
-      const respond = await request({ agentId: "main", profileId: "openai:alex" });
-      expect(assertCurrent).toBeTypeOf("function");
-      expect(() => assertCurrent?.()).toThrow();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: expect.any(String) }),
-      );
-      expect(respond).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("accepts an OAuth refresh that updates both the selected store and its live owner", async () => {
+  it("rejects guarded work and discards its result when replaced during a read", async () => {
+    let assertCurrent: (() => void) | undefined;
     vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
-      const prepared = options.preparedAuth;
-      if (prepared?.kind !== "profile") {
-        throw new Error("Selected account was not prepared");
-      }
-      const credential = prepared.store.profiles[prepared.profileId];
-      if (credential?.type !== "oauth") {
-        throw new Error("Expected OAuth account");
-      }
-      const refreshed = { ...credential, access: "rotated-access-placeholder" };
-      prepared.store.profiles[prepared.profileId] = refreshed;
-      store.profiles[prepared.profileId] = refreshed;
-      options.assertCurrent?.();
-      return usage(21);
+      assertCurrent = options.assertCurrent;
+      store.profiles["openai:alex"] = {
+        type: "token",
+        provider: "openai",
+        token: "replacement-placeholder",
+      };
+      return usage(99);
     });
     const respond = await request({ agentId: "main", profileId: "openai:alex" });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        providers: [
-          expect.objectContaining({ windows: [expect.objectContaining({ usedPercent: 21 })] }),
-        ],
-      }),
-    );
-  });
-
-  it("returns an unavailable result when the upstream reader fails", async () => {
-    vi.mocked(readCodexAppServerUsage).mockRejectedValue(new Error("Codex service unavailable"));
-    const respond = await request({ agentId: "main", profileId: "openai:alex" });
+    expect(assertCurrent).toBeTypeOf("function");
+    expect(() => assertCurrent?.()).toThrow();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,

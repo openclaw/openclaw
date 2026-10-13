@@ -190,7 +190,7 @@ describe("slack exec approvals", () => {
     expect(normalizeSlackApproverId("<@C123CHANNEL>")).toBeUndefined();
   });
 
-  it("applies agent and session filters to request handling", () => {
+  it("applies agent and session filters to request handling", async () => {
     const cfg = buildConfig({
       enabled: true,
       approvers: ["U123"],
@@ -199,7 +199,7 @@ describe("slack exec approvals", () => {
     });
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         request: {
@@ -216,7 +216,7 @@ describe("slack exec approvals", () => {
     ).toBe(true);
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         request: {
@@ -233,7 +233,7 @@ describe("slack exec approvals", () => {
     ).toBe(false);
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         request: {
@@ -250,14 +250,14 @@ describe("slack exec approvals", () => {
     ).toBe(false);
   });
 
-  it("rejects requests bound to another channel or Slack account", () => {
+  it("rejects requests bound to another channel or Slack account", async () => {
     const cfg = buildConfig({
       enabled: true,
       approvers: ["U123"],
     });
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         accountId: "work",
@@ -275,7 +275,7 @@ describe("slack exec approvals", () => {
     ).toBe(false);
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         accountId: "work",
@@ -294,7 +294,7 @@ describe("slack exec approvals", () => {
     ).toBe(false);
 
     expect(
-      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+      await slackApprovalCapability.nativeRuntimeAsync?.availability.shouldHandle({
         approvalKind: "exec",
         cfg,
         accountId: "work",

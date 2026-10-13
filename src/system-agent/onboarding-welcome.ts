@@ -1,7 +1,13 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import {
+  createSetupTranslator,
+  resolveWizardLocale,
+  type SetupTranslator,
+} from "../wizard/i18n/index.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
 import { formatSystemAgentOnboardingWelcome } from "./overview.js";
 
@@ -10,44 +16,43 @@ import { formatSystemAgentOnboardingWelcome } from "./overview.js";
  * engine already understands; the prose welcome always stands alone for
  * text-only clients (macOS app, TUI).
  */
-const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
-  id: "onboarding-next-step",
-  header: "Next step",
-  question: "What would you like to do first?",
-  options: [
-    {
-      label: "Talk to my agent",
-      reply: "talk to agent",
-      recommended: true,
-      description: "Meet your agent right here.",
-    },
-    { label: "Connect WhatsApp", reply: "connect whatsapp" },
-    { label: "Connect Telegram", reply: "connect telegram" },
-    { label: "See all channels", reply: "channels" },
-  ],
-  isOther: true,
-  skipAction: "exit",
-};
+function readyWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
+  return {
+    id: "onboarding-next-step",
+    header: translate("nextStep"),
+    question: translate("firstAction"),
+    options: [
+      {
+        label: translate("talkToAgent"),
+        reply: "talk to agent",
+        recommended: true,
+        description: translate("meetAgent"),
+      },
+      { label: translate("connectWhatsApp"), reply: "connect whatsapp" },
+      { label: translate("connectTelegram"), reply: "connect telegram" },
+      { label: translate("allChannels"), reply: "channels" },
+    ],
+    isOther: true,
+    skipAction: "exit",
+  };
+}
 
-const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {
-  id: "onboarding-apply-setup",
-  header: "Ready when you are",
-  question: "Should I set all of that up now?",
-  options: [
-    { label: "Yes — set it up", reply: "yes", recommended: true },
-    {
-      label: "What will you change?",
-      reply: "what exactly will you set up?",
-      description: "Ask before anything is written.",
-    },
-  ],
-  isOther: true,
-};
-
-type OnboardingWelcome = {
-  text: string;
-  question: SystemAgentChatQuestion;
-};
+function setupWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuestion {
+  return {
+    id: "onboarding-apply-setup",
+    header: translate("readyWhenYouAre"),
+    question: translate("applyQuestion"),
+    options: [
+      { label: translate("applyYes"), reply: "yes", recommended: true },
+      {
+        label: translate("inspectChanges"),
+        reply: "what exactly will you set up?",
+        description: translate("askBeforeWriting"),
+      },
+    ],
+    isOther: true,
+  };
+}
 
 /**
  * The basic bootstrap is conversational: the welcome message carries the plan
@@ -60,25 +65,17 @@ type OnboardingWelcome = {
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-async function loadAuthoredSetupConfig(params: {
-  configExists: boolean;
-  configValid: boolean;
-}): Promise<{
-  authoredConfig?: import("../config/types.openclaw.js").OpenClawConfig;
-  hasAuthoredSetup: boolean;
-}> {
-  const authoredConfig = await (async () => {
-    if (!params.configExists || !params.configValid) {
-      return undefined;
-    }
+async function loadAuthoredSetupConfig(params: { configExists: boolean; configValid: boolean }) {
+  let authoredConfig: OpenClawConfig | undefined;
+  if (params.configExists && params.configValid) {
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
-      return snapshot.sourceConfig ?? snapshot.config ?? {};
+      authoredConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     } catch {
-      return undefined;
+      // An unreadable config must keep onboarding available.
     }
-  })();
+  }
   const auth = authoredConfig?.gateway?.auth;
   const hasAuthMode = normalizeSecretInputString(auth?.mode) !== undefined;
   const hasAuthSecret =
@@ -96,9 +93,14 @@ export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
   agentName?: string;
+  locale?: string;
   /** Only the local terminal can finish the machine-owned Gateway installation. */
   localRecovery?: true;
-}): Promise<OnboardingWelcome> {
+}) {
+  const translate = createSetupTranslator({
+    keyPrefix: "wizard.onboardingWelcome",
+    locale: params.locale === undefined ? undefined : resolveWizardLocale(params.locale),
+  });
   const overview = await params.engine.loadOverview();
   const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
     configExists: overview.config.exists,
@@ -129,9 +131,9 @@ export async function buildOnboardingWelcome(params: {
     setupModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
-    const welcome = formatSystemAgentOnboardingWelcome(overview);
+    const welcome = formatSystemAgentOnboardingWelcome(overview, translate);
     params.engine.noteAssistantMessage(welcome);
-    return { text: welcome, question: READY_WELCOME_QUESTION };
+    return { text: welcome, question: readyWelcomeQuestion(translate) };
   }
   if (!setupModel) {
     throw new Error(
@@ -152,25 +154,19 @@ export async function buildOnboardingWelcome(params: {
     ...(params.agentName ? { agentName: params.agentName } : {}),
   });
   const welcome = [
-    overview.defaultModel
-      ? "## Hi, I'm OpenClaw — let's hatch your agent."
-      : "## Hi, I'm OpenClaw — let's get you set up.",
+    `## ${translate(overview.defaultModel ? "hatchIntro" : "setupIntro")}`,
     "",
-    "No menus here: tell me what you want and I'll do the configuring. I looked around this machine:",
+    translate("machineIntro"),
     "",
-    overview.defaultModel
-      ? `- AI: ${setupModel} — already verified with a real reply; switching later is one sentence.`
-      : `- Setup AI: ${setupModel} — verified with a real reply.`,
-    `- Workspace: ${shortenHomePath(workspace)}`,
-    "- Gateway: runs locally, private to this machine (token auth).",
+    `- ${translate(overview.defaultModel ? "verifiedAi" : "verifiedSetupAi", { model: setupModel })}`,
+    `- ${translate("workspace", { workspace: shortenHomePath(workspace) })}`,
+    `- ${translate("localGateway")}`,
     "",
-    "Say **yes** and I'll set all of that up now.",
+    translate("applyPrompt"),
     "",
-    "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
-    overview.defaultModel
-      ? "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service."
-      : "This model handles setup and utility tasks. Choose a primary model in Model Setup or run `openclaw onboard` before regular agent chat. You can continue setup here and connect channels when ready.",
+    translate("security"),
+    translate(overview.defaultModel ? "afterSetup" : "setupModelNext"),
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
-  return { text: welcome, question: SETUP_WELCOME_QUESTION };
+  return { text: welcome, question: setupWelcomeQuestion(translate) };
 }

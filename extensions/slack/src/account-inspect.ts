@@ -1,4 +1,3 @@
-// Slack plugin module implements account inspect behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -11,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentials } from "./account-configured.js";
-import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
+import {
+  buildSlackAccountSurfaceFields,
+  type SlackAccountSurfaceFields,
+} from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
@@ -42,40 +44,26 @@ export type InspectedSlackAccount = {
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
-function inspectSlackToken(value: unknown): {
+function inspectSlackToken(
+  value: unknown,
+  envToken?: string,
+): {
   token?: string;
-  source: Exclude<SlackTokenSource, "env">;
+  source: SlackTokenSource;
   status: SlackCredentialStatus;
 } {
   const token = normalizeSecretInputString(value);
-  if (token) {
+  if (token || hasConfiguredSecretInput(value)) {
     return {
       token,
       source: "config",
-      status: "available",
+      status: token ? "available" : "configured_unavailable",
     };
   }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      source: "config",
-      status: "configured_unavailable",
-    };
-  }
-  return {
-    source: "none",
-    status: "missing",
-  };
-}
-
-function resolveInspectedSlackToken(
-  configured: ReturnType<typeof inspectSlackToken>,
-  envToken: string | undefined,
-): { token?: string; source: SlackTokenSource; status: SlackCredentialStatus } {
-  // A configured SecretRef remains authoritative while unavailable; read-only
-  // inspection must not make a lower-precedence environment token look active.
-  return configured.status === "missing" && envToken
+  // A configured SecretRef stays authoritative while unavailable.
+  return envToken
     ? { token: envToken, source: "env", status: "available" }
-    : configured;
+    : { source: "none", status: "missing" };
 }
 
 export function inspectSlackAccount(params: {
@@ -96,11 +84,6 @@ export function inspectSlackAccount(params: {
   const isHttpMode = mode === "http";
   const isSocketMode = mode === "socket";
 
-  const configBot = inspectSlackToken(merged.botToken);
-  const configApp = inspectSlackToken(isSocketMode ? merged.appToken : undefined);
-  const configSigningSecret = inspectSlackToken(merged.signingSecret);
-  const configUser = inspectSlackToken(merged.userToken);
-
   const envBot = allowEnv
     ? normalizeSecretInputString(params.envBotToken ?? process.env.SLACK_BOT_TOKEN)
     : undefined;
@@ -112,9 +95,10 @@ export function inspectSlackAccount(params: {
     ? normalizeSecretInputString(params.envUserToken ?? process.env.SLACK_USER_TOKEN)
     : undefined;
 
-  const botCredential = resolveInspectedSlackToken(configBot, envBot);
-  const appCredential = resolveInspectedSlackToken(configApp, envApp);
-  const userCredential = resolveInspectedSlackToken(configUser, envUser);
+  const botCredential = inspectSlackToken(merged.botToken, envBot);
+  const appCredential = inspectSlackToken(isSocketMode ? merged.appToken : undefined, envApp);
+  const configSigningSecret = inspectSlackToken(merged.signingSecret);
+  const userCredential = inspectSlackToken(merged.userToken, envUser);
 
   return {
     accountId,
@@ -141,16 +125,6 @@ export function inspectSlackAccount(params: {
       appTokenConfigured: appCredential.status !== "missing",
     }),
     config: merged,
-    groupPolicy: merged.groupPolicy,
-    textChunkLimit: merged.textChunkLimit,
-    mediaMaxMb: merged.mediaMaxMb,
-    reactionNotifications: merged.reactionNotifications,
-    reactionAllowlist: merged.reactionAllowlist,
-    replyToMode: merged.replyToMode,
-    replyToModeByChatType: merged.replyToModeByChatType,
-    actions: merged.actions,
-    slashCommand: merged.slashCommand,
-    dm: merged.dm,
-    channels: merged.channels,
+    ...buildSlackAccountSurfaceFields(merged),
   };
 }

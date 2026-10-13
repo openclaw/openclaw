@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
+  createAttachments,
+  createUserTurnInputController,
+} from "./chat-send-user-turn.test-support.js";
+import {
+  authenticatedProfileUnavailableError,
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
@@ -73,6 +81,17 @@ describe("gateway client identity", () => {
     expect(gatewayClientSenderFields(client)).toEqual({});
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
   });
+
+  it("reports unavailable profiles without loading the GitHub plugin surface", () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    for (const cause of [undefined, new Error("profile store unavailable")]) {
+      expect(authenticatedProfileUnavailableError(cause)).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Authenticated profile verification is unavailable"),
+        retryAfterMs: 1_000,
+      });
+    }
+  });
 });
 
 describe("chat send command authority", () => {
@@ -109,11 +128,6 @@ describe("chat send command authority", () => {
   it.each([
     { name: "verified human", overrides: {}, allowed: true },
     {
-      name: "verified provider login",
-      overrides: { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true },
-      allowed: true,
-    },
-    {
       name: "fallback owner attribution",
       overrides: { authenticatedUserId: undefined },
       allowed: false,
@@ -149,7 +163,52 @@ describe("chat send command authority", () => {
     expect(context).not.toHaveProperty("SenderId");
   });
 
-  it.each([true, false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
+  it.each(["revoked", "aborted", "rebound", "synthetic"] as const)(
+    "uses live person ingress command authority without a proxy login and rejects %s authority",
+    (change) => {
+      const lifetime = new AbortController();
+      let current = true;
+      const actor = { kind: "operator" as const, profileId: "profile-ada" };
+      const client = createClient({ authenticatedUserId: undefined });
+      const internal: NonNullable<GatewayClient["internal"]> = {
+        operatorRoleActor: actor,
+        remoteIngressPrincipal: {
+          bindingId: "synthetic-command-grant",
+          authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "1" },
+          preparedSessionProfile: {
+            profileId: "profile-ada",
+            role: null,
+            githubLogin: null,
+            aliases: new Set(),
+          },
+          operatorRoleActor: actor,
+          scopes: ["operator.write"],
+          signal: lifetime.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Grant revoked");
+            }
+          },
+        },
+      };
+      client.internal = internal;
+      const context = resolveChatSendCallerContext(client);
+      expect(authorize(context).isAuthorizedSender).toBe(true);
+      expect(authorize(context, "profile-other").isAuthorizedSender).toBe(false);
+      if (change === "revoked") {
+        current = false;
+      } else if (change === "aborted") {
+        lifetime.abort();
+      } else if (change === "rebound") {
+        client.authenticatedUserProfile!.profileId = "profile-other";
+      } else {
+        internal.syntheticClient = true;
+      }
+      expect(authorize(context).isAuthorizedSender).toBe(false);
+    },
+  );
+
+  it.each([false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
     const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
     client.connect.client = {
       id: "cli",
@@ -201,6 +260,79 @@ describe("chat send command authority", () => {
     expect(authorize(context).isAuthorizedSender).toBe(true);
     retire(client, lifetime);
     expect(authorize(context)).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
+  });
+
+  it.each([
+    "profile",
+    "identity",
+    "disconnect",
+    "invalidated",
+    "admission",
+    "synthetic",
+    "owner",
+  ] as const)("retires verified requester context after %s changes", (change) => {
+    const lifetime = new AbortController();
+    const client = createClient({
+      authenticatedUserId: change === "owner" ? undefined : "ada@example.test",
+      internal: change === "owner" ? { authenticatedOperator: true } : undefined,
+      connectionSignal: lifetime.signal,
+    });
+    let current = true;
+    const { controller } = createUserTurnInputController("Change my theme");
+    const { ctx } = prepareChatSendUserTurn({
+      request: {
+        inboundMessage: "Change my theme",
+        clientInfo: client.connect.client,
+        suppressCommandInterpretation: false,
+        systemInputProvenance: undefined,
+        systemProvenanceReceipt: undefined,
+      },
+      session: { agentId: "main", clientRunId: "owner-turn", sessionKey: "agent:main:main" },
+      admission: {
+        originatingRoute: {
+          originatingChannel: "webchat",
+          accountId: "account-1",
+          explicitDeliverRoute: false,
+        },
+        assertWorkAdmissionCurrent: () => {
+          if (!current) {
+            throw new Error("Admission retired");
+          }
+        },
+      },
+      attachments: createAttachments({ parsedMessage: "Change my theme" }),
+      client,
+      logGateway: { warn: vi.fn() } as never,
+      userTurn: controller,
+    });
+    const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
+    expect(render()).toContain("requester_profile");
+    expect(render()).toContain("profile-ada");
+    switch (change) {
+      case "profile":
+        client.authenticatedUserProfile!.profileId = "profile-bob";
+        break;
+      case "identity":
+        client.authenticatedUserId = "bob@example.test";
+        break;
+      case "disconnect":
+        lifetime.abort();
+        break;
+      case "invalidated":
+        client.invalidated = true;
+        break;
+      case "admission":
+        current = false;
+        break;
+      case "synthetic":
+        client.internal = { syntheticClient: true };
+        break;
+      case "owner":
+        client.internal = {};
+        break;
+    }
+    expect(render()).not.toContain("requester_profile");
+    expect(ctx).not.toHaveProperty("SenderId");
   });
 
   it("does not inherit human or application candidates from ambient agent work", async () => {

@@ -1,95 +1,61 @@
 import fs from "node:fs/promises";
 
-function createManagedNativeUpdaterScript(params: {
-  sourceRuntimeImport: string;
-  installRoot: string;
-  runId?: string;
-  statePath: string;
-  updaterScript: string;
-  refuseStop?: boolean;
-  timeoutStop?: boolean;
-  failPreparation?: boolean;
-  failPersistenceAck?: boolean;
-  failCommitAck?: boolean;
-}): string {
-  return `void (async () => {
-    ${params.sourceRuntimeImport}
-    const { prepareRetainedNativeTestPeer } = await import(${JSON.stringify(new URL("./update-managed-service-native-peer.test-support.ts", import.meta.url).href)});
-    const nativeFs = require("node:fs");
-    const statePath = ${JSON.stringify(params.statePath)};
-    const scheduleTimeout = (command, onTimeout, timeoutMs) => {
-      if (!${params.timeoutStop === true} || command !== "stop\\n") {
-        const timer = setTimeout(onTimeout, timeoutMs);
-        return () => clearTimeout(timer);
-      }
-      // Expire only after bootout is held, so host load cannot time out suppression.
-      const timer = setInterval(() => {
-        let state;
-        try { state = JSON.parse(nativeFs.readFileSync(statePath, "utf8")); }
-        catch { return; }
-        if (!state.parked) return;
-        clearInterval(timer);
-        onTimeout();
-        nativeFs.writeFileSync(statePath + ".native-timeout", "expired");
-      }, 5);
-      return () => clearInterval(timer);
-    };
-    const admission = await prepareRetainedNativeTestPeer({ assertCurrent: () => {}, timeoutMs: 30_000, scheduleTimeout });
-    if (${params.failPreparation === true}) throw new Error("startup failed before persistence");
-    const { createRetainedUpdateRecovery } = await import(${JSON.stringify(new URL("./update-retained-recovery.test-support.ts", import.meta.url).href)});
-    const runtime = { root: ${JSON.stringify(params.installRoot)}, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    const persisted = createRetainedUpdateRecovery({ runId: ${JSON.stringify(params.runId)}, from: runtime, to: { ...runtime, version: "2.0.0" } });
-    if (${params.failPersistenceAck === true}) throw new Error("startup persistence acknowledgement lost");
-    const { loadUpdateRecovery } = await import(${JSON.stringify(new URL("./update-run-recovery.ts", import.meta.url).href)});
-    await admission.commit(() => { if (JSON.stringify(loadUpdateRecovery(persisted.runId)) !== JSON.stringify(persisted)) throw new Error("retained fixture changed"); });
-    if (${params.failCommitAck === true}) throw new Error("startup commit acknowledgement lost");
-    const nativeEffect = async (action, effect) => {
-      const record = (phase) => {
-        const state = nativeFs.existsSync(statePath) ? JSON.parse(nativeFs.readFileSync(statePath, "utf8")) : {};
-        state.nativeActions = [...(state.nativeActions || []), action + ":" + phase];
-        nativeFs.writeFileSync(statePath, JSON.stringify(state));
-      };
-      record("intent");
-      if (${params.refuseStop === true} && action === "stop") throw new Error("native stop intent retained");
-      try { await effect(() => {}); }
-      finally {
-        if (${params.timeoutStop === true} && action === "stop")
-          nativeFs.writeFileSync(statePath + ".native-release", nativeFs.readFileSync(statePath));
-      }
-      record("observed");
-    };
-    await admission.activate({
-      suppress: (effect) => nativeEffect("suppress", effect),
-      stop: (effect) => nativeEffect("stop", effect),
-    });
-    ${params.updaterScript}
-  })().catch((error) => { console.error(error); process.exit(18); });`;
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function createManagedServiceActivationScript(params: {
   sourceRuntimeImport: string;
-  installRoot: string;
-  runId?: string;
   statePath: string;
   updaterScript: string;
-  nativePreparation?:
-    | "complete"
-    | "refuse-stop"
-    | "timeout-stop"
-    | "fail-preparation"
-    | "fail-persistence-ack"
-    | "fail-commit-ack";
   runnerFallback?: boolean;
+  selectedDriver?: "2026.9.3";
 }): string {
-  if (params.nativePreparation) {
-    return createManagedNativeUpdaterScript({
-      ...params,
-      refuseStop: params.nativePreparation === "refuse-stop",
-      timeoutStop: params.nativePreparation === "timeout-stop",
-      failPreparation: params.nativePreparation === "fail-preparation",
-      failPersistenceAck: params.nativePreparation === "fail-persistence-ack",
-      failCommitAck: params.nativePreparation === "fail-commit-ack",
-    });
+  if (params.selectedDriver) {
+    // 2026.9.3, update-managed-service-handoff-B3PbeHMk.mjs:2380-2406:
+    // activateManagedServiceUpdateHandoff writes park\n and accepts only parked\n.
+    // Split that shipped request across an explicit gate to exercise partial frames.
+    return `void (async () => {
+      const legacyFs = require("node:fs");
+      const legacyStatePath = ${JSON.stringify(params.statePath)};
+      await new Promise((resolve, reject) => {
+        let buffered = "";
+        const cleanup = () => {
+          clearInterval(release);
+          process.stdin.off("data", onData).off("end", onEnd).off("error", onError);
+          process.stdin.pause();
+        };
+        const onError = (error) => { cleanup(); reject(error); };
+        const onEnd = () => onError(new Error("managed update activation control closed"));
+        const onData = (chunk) => {
+          buffered += chunk.toString();
+          if (!buffered.includes("\\n") && buffered.length < 64) return;
+          cleanup();
+          if (buffered === "parked\\n") resolve();
+          else reject(new Error("managed update activation was not confirmed"));
+        };
+        const release = setInterval(() => {
+          if (!legacyFs.existsSync(legacyStatePath + ".park-tail")) return;
+          clearInterval(release);
+          process.stdout.write("rk\\n", (error) => { if (error) onError(error); });
+        }, 5);
+        process.stdin.on("data", onData).once("end", onEnd).once("error", onError);
+        process.stdout.write("pa", (error) => {
+          if (error) onError(error);
+          else legacyFs.writeFileSync(legacyStatePath + ".park-prefix", "sent");
+        });
+      });
+      const legacyState = JSON.parse(legacyFs.readFileSync(legacyStatePath, "utf8"));
+      legacyState.selectedDriverVersion = "2026.9.3";
+      legacyState.selectedDriverArgs = process.argv.slice(2);
+      legacyFs.writeFileSync(legacyStatePath, JSON.stringify(legacyState));
+      ${params.updaterScript}
+    })().catch((error) => { console.error(error); process.exit(18); });`;
   }
   if (params.runnerFallback) {
     return `void (async () => { ${params.sourceRuntimeImport}
@@ -99,24 +65,8 @@ export function createManagedServiceActivationScript(params: {
   return `process.stdin.once("data", (reply) => { if (reply.toString() !== "parked\\n") process.exit(18); ${params.updaterScript} }); process.stdout.write("park\\n");`;
 }
 
-export async function readNativeState(statePath: string): Promise<Record<string, unknown>> {
-  return {
-    ...(JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as Record<
-      string,
-      unknown
-    >),
-    nativeRelease: JSON.parse(
-      await fs.readFile(statePath + ".native-release", "utf8").catch(() => "{}"),
-    ),
-  };
-}
-
 export async function readSavedFailure(contextPath: string) {
-  const exists = await fs.access(contextPath).then(
-    () => true,
-    () => false,
-  );
-  if (!exists) {
+  if (!(await pathExists(contextPath))) {
     return null;
   }
   return {

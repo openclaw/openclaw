@@ -32,10 +32,15 @@ export type ChannelProgressDraftCompositorParams = {
   entry: StreamingCompatEntry | null | undefined;
   /** Prepared items own display; raw callbacks retain diagnostic bookkeeping only. */
   preparedItems?: boolean;
+  /** Keep one public operation/task status when the rolling tool log is hidden. */
+  showWorkStatus?: boolean;
   mode: StreamingMode;
   active: boolean;
   seed: string;
-  update: (
+  /** Display data only; hydration neither starts publishing nor proves visibility. */
+  initialSnapshot?: ChannelProgressDraftCompositorSnapshot;
+  /** Omit to prepare display data without publication or timers. */
+  update?: (
     text: string,
     options: ChannelProgressDraftUpdateOptions,
   ) => Promise<boolean | void> | boolean | void;
@@ -54,6 +59,8 @@ export type ChannelProgressDraftCompositorParams = {
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   reasoningLinePrefix?: string;
   commentaryLinePrefix?: string;
+  /** Prefix tool rows with their text glyph (`🛠️ Exec`); default plain. */
+  toolIcons?: boolean;
   reasoningGate?: boolean;
   commentaryItalics?: boolean;
   now?: () => number;

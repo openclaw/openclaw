@@ -1,18 +1,46 @@
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import type { Actor } from "./sqlite-worker-broker.types.js";
 import {
   createSqliteWorkerClient,
   runSqliteWorkerClientOperation,
 } from "./sqlite-worker-client.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 type Operations = { write: { input: string; output: string } };
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
+
+function createActor(): Actor {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  custody.post();
+  return {
+    nativeStopped: Promise.resolve(),
+    markNativeStopped() {},
+    id: 1,
+    key: "client-fixture",
+    databasePath: "/fixture/state.sqlite",
+    pathReferences: new Map([["/fixture/state.sqlite", 1]]),
+    moduleUrl: "file:///fixture/sqlite-backend.js",
+    inputHash: "client-fixture",
+    get slot(): never {
+      throw new Error("Client scope must not access the broker's native Worker slot");
+    },
+    references: 1,
+    opened: Promise.resolve(),
+    openDispatch: { custody },
+    initialized: true,
+    backendClosed: false,
+  };
+}
 
 it.each(["missing", "sealed"] as const)(
   "refuses a %s client before entering an operation or dispatching work",
   async (boundary) => {
     const dispatch = vi.fn(async () => "committed");
     const { client, store } = createSqliteWorkerClient<Operations>({
+      actor: createActor(),
       isDraining: () => boundary === "sealed",
       isAvailable: () => true,
       dispatch,
@@ -33,7 +61,6 @@ it.each(["missing", "sealed"] as const)(
         track,
         assertCurrent,
         createAdmission,
-        true,
       ),
     ).rejects.toMatchObject(closedError);
     expect(operation).not.toHaveBeenCalled();
@@ -45,59 +72,50 @@ it.each(["missing", "sealed"] as const)(
   },
 );
 
-it("lets an admitted scope finish through close before releasing its owner", async () => {
-  const resume = createDeferred();
-  const dispatched = createDeferred();
-  const committed = createDeferred<string>();
-  const events: string[] = [];
-  let draining = false;
-  const release = vi.fn(async () => {
-    events.push("released");
-  });
-  const { client, store } = createSqliteWorkerClient<Operations>({
-    isDraining: () => draining,
+it("attributes queued commands without changing wire bytes or exposing private command suffixes", async () => {
+  type DiagnosticOperations = Record<string, { input: { value: string }; output: string }>;
+  const dispatch = vi
+    .fn<Parameters<typeof createSqliteWorkerClient<DiagnosticOperations>>[0]["dispatch"]>()
+    .mockResolvedValue("committed");
+  const { store } = createSqliteWorkerClient<DiagnosticOperations>({
+    actor: createActor(),
+    isDraining: () => false,
     isAvailable: () => true,
-    dispatch: () => {
-      events.push("dispatched");
-      dispatched.resolve();
-      return committed.promise;
-    },
-    release,
+    dispatch,
+    release: async () => {},
   });
-  const accepted = runSqliteWorkerClientOperation<Operations, string>(
-    client,
-    async (scope) => {
-      await resume.promise;
-      const result = await scope.execute({ type: "write", input: "accepted before close" });
-      events.push("completed");
-      return result;
-    },
-    undefined,
-    () => () => {},
-  );
-  draining = true;
-  const closing = store.close();
-  const lateOperation = vi.fn(async () => "must not enter");
+  const cases = [
+    ["audit.writer.process", "audit.writer.process"],
+    ["audit.writer.prune", "audit.writer.prune"],
+    ["database.inspectIdle", "database.inspectIdle"],
+    ["stateLease.renew", "stateLease.renew"],
+    ["capture.recordEventWithPayload", "capture"],
+    ["workerInference.complete", "workerInference"],
+    ["session.entry.read", "session.entry.read"],
+    ["session.actor.acceptInput", "session.actor.acceptInput"],
+    ["session.actor.completeTurn", "session.actor.completeTurn"],
+    ["session.lifecycle.project", "session.lifecycle.project"],
+    ["session.actor.private-customer-123", "sessions"],
+    ["pluginState.get", "plugin_state"],
+    ["audit.private-customer-123", "audit"],
+    ["private-customer-123.execute", "execute"],
+    ["unrecognized", "execute"],
+  ] as const;
   try {
-    await expect(
-      runSqliteWorkerClientOperation(client, lateOperation, undefined, () => () => {}),
-    ).rejects.toMatchObject(closedError);
-    await expect(store.execute({ type: "write", input: "after close" })).rejects.toMatchObject(
-      closedError,
-    );
-    expect(lateOperation).not.toHaveBeenCalled();
-    expect(release).not.toHaveBeenCalled();
-    resume.resolve();
-    await Promise.race([dispatched.promise, accepted]);
-    expect(release).not.toHaveBeenCalled();
-    committed.resolve("committed");
-    await expect(accepted).resolves.toBe("committed");
-    await closing;
-    expect(events).toEqual(["dispatched", "completed", "released"]);
-    expect(release).toHaveBeenCalledOnce();
+    for (const [type, requestClass] of cases) {
+      const command = { type, input: { value: "synthetic-private-payload" } };
+      await expect(store.execute(command)).resolves.toBe("committed");
+      expect(dispatch).toHaveBeenLastCalledWith(
+        serialize(command),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        requestClass,
+      );
+    }
+    expect(dispatch).toHaveBeenCalledTimes(cases.length);
   } finally {
-    resume.resolve();
-    committed.resolve("committed");
-    await Promise.allSettled([accepted, closing]);
+    await store.close();
   }
 });

@@ -6,6 +6,7 @@ import {
   type CiTestTimings,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
+import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
 
 const emptyUiTimings = { fileSeconds: {}, perFileOverheadSeconds: 0 };
 const emptyGroupTimings: Readonly<Record<string, number>> = {};
@@ -41,6 +42,12 @@ export function readUiE2eFileTimings(): {
   readonly perFileOverheadSeconds: number;
 } {
   return readTestTimings()?.uiE2e ?? emptyUiTimings;
+}
+
+export function readToolingFileTimings(
+  profile: "blacksmith" | "github",
+): Readonly<Record<string, number>> {
+  return readTestTimings()?.toolingFileSeconds[profile] ?? emptyGroupTimings;
 }
 
 export function readCompactGroupTimings(
@@ -92,4 +99,27 @@ export function resolveRuntimePlacementSeconds(
     contained = Math.max(contained ?? 0, observation.seconds);
   }
   return contained;
+}
+
+export function readCompleteSplitGenerationSeconds(
+  timings: Readonly<Record<string, number>>,
+  selectorKey: string,
+): number | undefined {
+  const generations = new Map<string, { expected: number; parts: Map<number, number> }>();
+  for (const [key, seconds] of Object.entries(timings)) {
+    const parsed = parseCompactSplitTimingKey(key);
+    if (!parsed || parsed.selectorKey !== selectorKey) {
+      continue;
+    }
+    const current = generations.get(parsed.generationKey) ?? {
+      expected: parsed.expectedParts,
+      parts: new Map(),
+    };
+    current.parts.set(parsed.part, seconds);
+    generations.set(parsed.generationKey, current);
+  }
+  const completeTotals = [...generations.values()]
+    .filter(({ expected, parts }) => parts.size === expected)
+    .map(({ parts }) => [...parts.values()].reduce((total, seconds) => total + seconds, 0));
+  return completeTotals.length > 0 ? Math.max(...completeTotals) : undefined;
 }

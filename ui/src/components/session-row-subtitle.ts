@@ -1,32 +1,68 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { t } from "../i18n/index.ts";
+import { resolveToolDisplayIcon } from "../lib/chat/tool-display-icon.ts";
 import { isCriticalObserverHealth, pickFreshestObserverDigest } from "../lib/observer-digest.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
+import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
+import { icons } from "./icons.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 
 type SidebarSessionSubtitle = {
   subtitle: string | undefined;
   narration: string | undefined;
+  toolName?: string;
 };
+
+export function resolveSidebarSessionRowSubtitle(
+  host: {
+    readonly sidebarAgentsMode?: "chip" | "roster";
+    readonly sessionsShowPreview: boolean;
+    readonly sidebarLiveActivity: boolean;
+    readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
+    readonly sessionProjection: { resolveSubtitle: typeof resolveSidebarSessionSubtitle };
+    readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+    readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  },
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  const toolActivity =
+    host.sidebarAgentsMode !== "roster" &&
+    host.sessionsShowPreview &&
+    session.hasActiveRun &&
+    host.sidebarLiveActivity
+      ? host.sidebarTools.get(session.key)
+      : undefined;
+  return host.sessionProjection.resolveSubtitle({
+    session,
+    hasDisplay: display !== undefined,
+    sidebarLiveActivity: host.sidebarLiveActivity,
+    showPreview: host.sessionsShowPreview,
+    narrationLine: host.sidebarNarrationLines.get(session.key),
+    toolActivity,
+    observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
+  });
+}
 
 /** Resolves the single subtitle slot without displacing visible status. */
 export function resolveSidebarSessionSubtitle(params: {
   session: SidebarRecentSession;
   hasDisplay: boolean;
-  displaySubtitle: string | undefined;
   sidebarLiveActivity: boolean;
   showPreview: boolean;
   narrationLine: string | undefined;
+  toolActivity?: SidebarToolActivity;
   observerDigest?: Pick<
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
-  // Question attention owns the leading hand tooltip; repeating or replacing
-  // it with lower-priority activity here makes the action row needlessly tall.
-  if (session.attention.kind === "question") {
+  // Questions use the leading hand tooltip; failures use the session hovercard.
+  // Neither should grow a second line or fall back to lower-priority activity.
+  if (session.attention.kind === "question" || session.attention.kind === "error") {
     return { subtitle: undefined, narration: undefined };
   }
   const attention = sessionAttentionSubtitle(session.attention);
@@ -52,7 +88,7 @@ export function resolveSidebarSessionSubtitle(params: {
   );
   const observer = running || finalDigestUnread ? projectedDigest?.headline : undefined;
   // Preview off hides ambient text only. Subtitle-owned attention and a critical
-  // observer headline survive the toggle: errors, pending approvals, and the
+  // observer headline survive the toggle: pending approvals and the
   // stuck / waiting-on-user health states still belong beside their session, even
   // when the operator hides routine activity previews.
   if (!params.showPreview) {
@@ -62,20 +98,31 @@ export function resolveSidebarSessionSubtitle(params: {
   // Agent-declared status (sessions tool) outranks live narration: it is an
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;
+  if (
+    running &&
+    params.sidebarLiveActivity &&
+    params.toolActivity?.text &&
+    !attention &&
+    !agentStatus &&
+    !isCriticalObserverHealth(projectedDigest?.health)
+  ) {
+    const { name, text } = params.toolActivity;
+    return { subtitle: text, narration: undefined, toolName: name };
+  }
   const narration =
     attention || agentStatus || observer || !params.sidebarLiveActivity || !running
       ? undefined
       : params.narrationLine;
-  const workSubtitle = params.hasDisplay
-    ? params.displaySubtitle
-    : session.subtitle && session.workSession && session.subtitle !== session.label
+  const workSubtitle =
+    !params.hasDisplay &&
+    session.subtitle &&
+    session.workSession &&
+    session.subtitle !== session.label
       ? session.subtitle
       : undefined;
   const finalReply =
     !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
-  const subtitle = running
-    ? (attention ?? agentStatus ?? observer ?? narration ?? workSubtitle)
-    : (attention ?? agentStatus ?? observer ?? finalReply ?? workSubtitle);
+  const subtitle = attention ?? agentStatus ?? observer ?? narration ?? finalReply ?? workSubtitle;
   return { subtitle, narration };
 }
 
@@ -83,7 +130,15 @@ export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {
   if (!value.subtitle) {
     return nothing;
   }
-  return value.narration
+  const label = value.toolName ? `${t("chat.toolCards.tool")}: ${value.toolName}` : undefined;
+  const icon = value.toolName
+    ? html`<openclaw-tooltip .content=${label} .describe=${false}
+        ><span class="sidebar-session-tool" role="img" aria-label=${label}
+          >${icons[resolveToolDisplayIcon(value.toolName)]}</span
+        ></openclaw-tooltip
+      >`
+    : nothing;
+  const text = value.narration
     ? keyed(
         value.narration,
         html`<span
@@ -92,4 +147,5 @@ export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {
         >`,
       )
     : html`<span class="sidebar-recent-session__subtitle">${value.subtitle}</span>`;
+  return html`${icon}${text}`;
 }

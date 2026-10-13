@@ -1,143 +1,177 @@
-import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/path-resolve.js";
-import { inspectAuthProfileJsonCellReadOnly } from "../agents/auth-profiles/sqlite.js";
+import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import {
-  readNativeHookRelayBridgeSnapshotFromDatabase,
-  listNativeHookRelayBridgeSnapshotsInDatabase,
-} from "../agents/harness/native-hook-relay-store.kernel.js";
-import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
-import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
-import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
-import {
-  patchConfigHealthEntryInDatabase,
-  readConfigHealthSnapshotInDatabase,
-} from "../config/io.health-state.kernel.js";
-import { loadMutableCronStoreInWorker } from "../cron/store/load.worker.js";
-import { executeCronStoreSaveCommand } from "../cron/store/save.worker.js";
-import {
-  readManagedImageRecordInDatabase,
-  listManagedImageRecordEntriesInDatabase,
-  listManagedImageOriginalMediaIdsInDatabase,
-} from "../gateway/managed-image-record-store.kernel.js";
-import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
-import { readDeviceAuthTokensFromDatabase } from "../infra/device-auth-store.kernel.js";
-import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
-import {
-  readApnsRegistrationFromDatabase,
-  readApnsRegistrationsFromDatabase,
-} from "../infra/push-apns-store.js";
-import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
-import { executeWebPushCommand } from "../infra/push-web-store.worker.js";
-import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
-import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
-import {
-  readStableSqliteFileGeneration,
-  sameSqliteFileGeneration,
-} from "../infra/sqlite-file-generation.js";
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
+import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
+import { SQLITE_WORKER_SOURCE_FENCE } from "../infra/sqlite-source-fence-contract.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
-import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
-  countRecentTelemetrySessionsInDatabase,
-  persistTelemetrySuccessInDatabase,
-  readTelemetryStateInWorker,
-} from "../infra/telemetry-store.kernel.js";
-import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
-import { isPluginStateWorkerCommand } from "../plugin-state/plugin-state-worker-contract.js";
-import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.js";
+  SQLITE_WORKER_PREPARE_COMMAND,
+  SQLITE_WORKER_OPERATION_CLEANUP,
+  SQLITE_WORKER_PREPARE_ADMITTED,
+} from "../infra/sqlite-worker-contract.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
-  readPluginBindingApprovalsInDatabase,
-  upsertPluginBindingApprovalInDatabase,
-} from "../plugins/conversation-binding-state.kernel.js";
-import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
-  readHostedCatalogSnapshotInDatabase,
-  writeHostedCatalogSnapshotInDatabase,
-} from "../plugins/official-external-plugin-catalog-snapshot-store.kernel.js";
-import { HostedCatalogSignedFeedMonotonicityError } from "../plugins/official-external-plugin-catalog-source.js";
+  getSqliteWorkerStateContext,
+  withSqliteWorkerExistingDatabase,
+} from "../infra/sqlite-worker-state-context.js";
 import {
-  ensureProjectRegistrySchema,
-  insertProjectRegistryInDatabase,
-  listProjectRegistryInDatabase,
-  removeProjectRegistryInDatabase,
-  resolveProjectCloneRefreshOwnerInDatabase,
-  resolveProjectRegistryInDatabase,
-  resolveRecordedProjectRootInDatabase,
-} from "../projects/project-registry.kernel.js";
-import {
-  pruneSessionStateEventsInDatabase,
-  recordSessionStateEventInDatabase,
-} from "../sessions/session-state-events.kernel.js";
-import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
-import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
-import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
-import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
-import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
-import {
-  listAgentProvenanceInDatabase,
-  readAgentProvenanceBatchInDatabase,
-} from "./agent-provenance.kernel.js";
-import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
-import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
-import { readConfigMachineState } from "./config-machine-state.js";
+  isPluginStateWorkerCommand,
+  pluginStateWorkerOperations,
+} from "../plugin-state/plugin-state-worker-contract.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
-import {
-  withOpenClawStateDatabaseReadOnly,
-  withArtifactPreservingStateReads,
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "./openclaw-state-db-readonly.js";
+import type { ExistingOpenClawStateWriter } from "./openclaw-state-db-existing-write.js";
+import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
+import {
+  acquireOpenClawStateLeaseInWorker,
+  executeOpenClawStateLeaseCommand,
+} from "./openclaw-state-lease-worker.js";
 import type {
+  OpenClawStateWorkerBackend,
+  OpenClawStateWorkerOpenPreparation,
   OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
 } from "./openclaw-state-worker-contract.js";
-import { readUserModelAuthProfile } from "./user-model-accounts.js";
-import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
+import {
+  createWorkerOperationRegistry,
+  type WorkerWriteOperationContext,
+} from "./worker-operation-registry.js";
+
+// Restart handoff must stay cheap when shutdown has already retired every actor.
+const commandRegistry = createWorkerOperationRegistry<
+  WorktreeTemplateWorkerOperations &
+    Pick<
+      OpenClawStateWorkerOperations,
+      | "worktrees.reserveCapacity"
+      | "worktrees.recoverPending"
+      | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
+      | Extract<keyof OpenClawStateWorkerOperations, `restartLifecycle.${string}`>
+    >,
+  WorkerWriteOperationContext
+>({
+  deviceAuth: async () =>
+    (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
+  restartLifecycle: () =>
+    import("../infra/restart-lifecycle.worker.js").then(
+      (loaded) => loaded.restartLifecycleOperations,
+    ),
+  worktrees: async () => {
+    const [templates, reserveCapacity, recoverPending] = await Promise.all([
+      import("../agents/worktrees/template-registry.worker.js").then(
+        (loaded) => loaded.worktreeTemplateOperations,
+      ),
+      import("../agents/worktrees/capacity.worker.js").then(
+        (loaded) => loaded.reserveWorktreeCapacityInWorker,
+      ),
+      import("../agents/worktrees/registry-run-end.worker.js").then(
+        (loaded) => loaded.recoverPendingWorktreesInWorker,
+      ),
+    ]);
+    return {
+      ...templates,
+      "worktrees.reserveCapacity": reserveCapacity,
+      "worktrees.recoverPending": recoverPending,
+    };
+  },
+});
+
+let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") | undefined;
+let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
+let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
+let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
+let publicationSource: typeof import("./github-publication-source.worker.js") | undefined;
+
+function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
+  const context = getSqliteWorkerStateContext();
+  return context.initializationEnvironment ?? context.environment;
+}
 
 export function createSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+  context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
+): OpenClawStateWorkerBackend {
+  if (context.preparation?.type === "deviceIdentity") {
+    loadOrCreateDeviceIdentity({
+      path: context.databasePath,
+      env: stateDatabaseInitializationEnvironment(),
+      identityKey: context.preparation.identityKey,
+    });
+  }
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
-    env: getSqliteWorkerStateContext().environment,
+    env: stateDatabaseInitializationEnvironment(),
+    initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
   });
   return createSharedStateWorkerBackend(context, database);
 }
 
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string },
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
-  return createSharedStateWorkerBackend(context);
+  context: { databasePath: string; existingIdentity: string },
+): OpenClawStateWorkerBackend {
+  const identity = context.existingIdentity;
+  assertExistingDatabaseIdentity(context.databasePath, identity);
+  const backend = createSharedStateWorkerBackend(context, undefined, identity);
+  return {
+    ...backend,
+    execute(command) {
+      return withSqliteWorkerExistingDatabase(context.databasePath, identity, () =>
+        backend.execute(command),
+      );
+    },
+  };
 }
 
 function createSharedStateWorkerBackend(
   context: { databasePath: string },
   initialDatabase?: OpenClawStateDatabase,
-): SqliteWorkerBackend<OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations> {
+  existingIdentity?: string,
+): OpenClawStateWorkerBackend {
   let nativeDatabase = initialDatabase;
+  let updateRunWriter: ExistingOpenClawStateWriter | undefined;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
-  const open = (): OpenClawStateDatabase => {
+  let secretSchemaAdmitted = false;
+  let publicationSourceReader:
+    | ReturnType<NonNullable<typeof publicationSource>["createGitHubPublicationSourceWorker"]>
+    | undefined;
+  const retainCachedDatabase = () => {
+    // Existing-only operations can acquire their first writable handle through a native owner.
+    if (!nativeDatabase) {
+      const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+        context.databasePath,
+      );
+      if (database) {
+        borrow = retainOpenClawStateDatabase(database);
+        nativeDatabase = database;
+      }
+    }
+  };
+  const retainedDatabase = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
+        env: stateDatabaseInitializationEnvironment(),
+        initializationAgentPaths: getSqliteWorkerStateContext().initializationAgentPaths,
       });
       borrow = retainOpenClawStateDatabase(opened);
       nativeDatabase = opened;
     }
+    // The cache lookup also enforces current schema and terminal-failure admission.
     if (
       !nativeDatabase.db.isOpen ||
       openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
@@ -145,412 +179,358 @@ function createSharedStateWorkerBackend(
     ) {
       throw new Error("Shared-state worker lost its retained native database");
     }
-    return openOpenClawStateDatabase({
-      database: nativeDatabase,
+    return nativeDatabase;
+  };
+  const open = (): OpenClawStateDatabase =>
+    openOpenClawStateDatabase({
+      database: retainedDatabase(),
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
     });
+  // The transaction owner validates schema and write authority after BEGIN.
+  const write = <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    transactionOptions?: Parameters<WorkerWriteOperationContext["write"]>[1],
+    database = retainedDatabase(),
+    env: NodeJS.ProcessEnv = getSqliteWorkerStateContext().environment,
+  ): T =>
+    runOpenClawStateWriteTransaction(
+      operation,
+      {
+        database,
+        path: context.databasePath,
+        env,
+      },
+      transactionOptions,
+    );
+  const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (
+    operation,
+    { receipt, transactionEnvironment, ...options } = {},
+  ) => {
+    const openedDatabase = open();
+    return write(
+      (database) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = operation(database);
+        requestSqliteWorkerOperationAdmission({
+          stage: "commit",
+          facts: receipt === "result" ? result : undefined,
+        });
+        if (receipt === "result") {
+          deferSqliteWorkerCommitReceipt(database.db, result);
+        }
+        return result;
+      },
+      options,
+      openedDatabase,
+      transactionEnvironment === "process" ? process.env : undefined,
+    );
   };
   return {
+    [SQLITE_WORKER_PREPARE_ADMITTED](command) {
+      const source =
+        command.type === "githubPublication.sourceFacts" ||
+        command.type === "githubPublications.shared" ||
+        command.type === "githubPublications.insert" ||
+        command.type === "githubPublications.personal" ||
+        command.type === "githubPublications.repository"
+          ? command.input.source
+          : undefined;
+      if (source) {
+        if (!publicationSource) {
+          throw new Error("GitHub publication source runtime is not prepared.");
+        }
+        publicationSourceReader ??= publicationSource.createGitHubPublicationSourceWorker();
+        publicationSourceReader.prepare(source, open().db);
+      }
+    },
+    [SQLITE_WORKER_SOURCE_FENCE](command) {
+      if (
+        command.type === "githubPublications.shared" ||
+        command.type === "githubPublications.insert" ||
+        command.type === "githubPublications.personal" ||
+        command.type === "githubPublications.repository"
+      ) {
+        if (command.input.source) {
+          if (!publicationSourceReader) {
+            throw new Error("GitHub publication source is unavailable.");
+          }
+          return publicationSourceReader.fence(command.input.source);
+        }
+      }
+      return undefined;
+    },
+    [SQLITE_WORKER_OPERATION_CLEANUP]() {
+      publicationSourceReader?.close();
+    },
+    async prepare(command) {
+      if (command.type === "pluginState.executeOperation") {
+        if (!pluginState) {
+          pluginState = await import("../plugin-state/plugin-state.worker.js");
+        }
+        await pluginState.preparePluginStateOperation(command.input);
+      }
+    },
+    [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (
+        commandType === "githubPublication.sourceFacts" ||
+        commandType.startsWith("githubPublications.")
+      ) {
+        return Promise.all([
+          publicationSource
+            ? Promise.resolve()
+            : import("./github-publication-source.worker.js").then((loaded) => {
+                publicationSource = loaded;
+              }),
+          commandType === "githubPublication.sourceFacts"
+            ? Promise.resolve()
+            : import("./openclaw-state-worker-runtime.js").then((loaded) => {
+                runtime = loaded;
+                return runtime.prepareSharedStateCommand(commandType);
+              }),
+        ]).then(() => undefined);
+      }
+      if (
+        commandType.startsWith("deviceAuth.") ||
+        commandType.startsWith("restartLifecycle.") ||
+        commandType.startsWith("worktrees.templates.") ||
+        commandType === "worktrees.reserveCapacity" ||
+        commandType === "worktrees.recoverPending"
+      ) {
+        return commandRegistry.prepare(commandType);
+      }
+      if (commandType.startsWith("capture.")) {
+        if (capture) {
+          return undefined;
+        }
+        return import("../proxy-capture/store.worker.js").then((loaded) => {
+          capture = loaded;
+        });
+      }
+      if (commandType === "agentDatabases.releaseExitedLease") {
+        if (agentCleanup) {
+          return undefined;
+        }
+        return import("./openclaw-agent-execution-cleanup.worker.js").then((loaded) => {
+          agentCleanup = loaded;
+        });
+      }
+      if (Object.hasOwn(pluginStateWorkerOperations, commandType)) {
+        if (pluginState) {
+          return undefined;
+        }
+        return import("../plugin-state/plugin-state.worker.js").then((loaded) => {
+          pluginState = loaded;
+        });
+      }
+      if (
+        commandType === "database.inspectIdle" ||
+        commandType === "database.walMaintenance" ||
+        commandType === "database.publishSchema" ||
+        commandType === "stateLease.acquire" ||
+        commandType === "deviceIdentity.read" ||
+        commandType === "deviceIdentity.load" ||
+        commandType === "stateLease.verify" ||
+        commandType === "stateLease.renew" ||
+        commandType === "stateLease.release"
+      ) {
+        return undefined;
+      }
+      if (runtime) {
+        return runtime.prepareSharedStateCommand(commandType);
+      }
+      return import("./openclaw-state-worker-runtime.js").then((loaded) => {
+        runtime = loaded;
+        return runtime.prepareSharedStateCommand(commandType);
+      });
+    },
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
       }
-      if (
-        command.type === "authProfiles.read" ||
-        command.type === "authProfiles.sharedOwnership" ||
-        command.type === "authProfiles.personal"
-      ) {
-        const read = () => {
-          const options = {
+      if (command.type === "githubPublication.sourceFacts") {
+        if (!publicationSourceReader) {
+          throw new Error("GitHub publication source is unavailable.");
+        }
+        return publicationSourceReader.read(command.input.source);
+      }
+      if (commandRegistry.has(command)) {
+        return commandRegistry.execute(command, {
+          open,
+          write,
+          writeAdmitted,
+          stateOptions: () => ({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
-          };
-          if (command.type === "authProfiles.sharedOwnership") {
-            return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
-          }
-          if (command.type === "authProfiles.personal") {
-            return readUserModelAuthProfile(command.input.profileId, options);
-          }
-          const target = { kind: "shared-state" as const, ...options };
-          return {
-            store: inspectAuthProfileJsonCellReadOnly(target, "store"),
-            state: inspectAuthProfileJsonCellReadOnly(target, "state"),
-          };
-        };
-        return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
-      }
-      if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
-        return executePromotionCommand(
-          command,
-          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-          open,
-        );
-      }
-      if (command.type === "doctor.databaseBloat") {
-        return readSqliteDatabaseBloat({
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        });
-      }
-      if (command.type === "telemetry.readState") {
-        return readTelemetryStateInWorker({
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        });
-      }
-      if (command.type === "telemetry.countRecentSessions") {
-        return (
-          withExistingOpenClawStateDatabaseReadOnly(
-            ({ db }) => countRecentTelemetrySessionsInDatabase(db, command.input.sinceMs),
-            { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-          ) ?? 0
-        );
-      }
-      if (command.type === "webPush.readPersistedVapidKeyPair") {
-        return readPersistedVapidKeyPairInDatabase({
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
+          }),
         });
       }
       if (
-        command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
-        command.type === "webPush.setWebPushSubscriptionPreferences" ||
-        command.type === "webPush.listWebPushSubscriptions" ||
-        command.type === "webPush.hasBoundWebPushSubscriptions" ||
-        command.type === "webPush.listBoundWebPushSubscriptions" ||
-        command.type === "webPush.prepareWebPushApprovalDeliveries" ||
-        command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
-        command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
-        command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
-        command.type === "webPush.upsertWebPushSubscription" ||
-        command.type === "webPush.deleteBoundWebPushSubscription" ||
-        command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
-        command.type === "webPush.insertVapidKeyPairIfAbsent"
+        command.type === "capture.upsertSession" ||
+        command.type === "capture.endSession" ||
+        command.type === "capture.persistPayload" ||
+        command.type === "capture.recordEvent" ||
+        command.type === "capture.recordEventWithPayload" ||
+        command.type === "capture.listSessions" ||
+        command.type === "capture.getSessionEvents" ||
+        command.type === "capture.summarizeSessionCoverage" ||
+        command.type === "capture.readBlob" ||
+        command.type === "capture.queryPreset" ||
+        command.type === "capture.deleteSessions" ||
+        command.type === "capture.purgeAll"
       ) {
-        return executeWebPushCommand(command, open());
+        if (!capture) {
+          throw new Error("Capture worker command runtime is not prepared");
+        }
+        return capture.executeCaptureCommand(command, open());
       }
-      if (command.type === "nativeHookRelay.read") {
-        return withOpenClawStateDatabaseReadOnly(
-          (database) =>
-            readNativeHookRelayBridgeSnapshotFromDatabase({
-              database,
-              relayId: command.input.relayId,
-            })?.record,
-          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-        );
+      if (command.type === "deviceIdentity.read") {
+        return loadDeviceIdentityIfPresent({
+          path: context.databasePath,
+          identityKey: command.input.identityKey,
+          env: getSqliteWorkerStateContext().environment,
+        });
       }
-      if (isTaskRegistryWorkerCommand(command)) {
-        return executeTaskRegistryCommand(
-          command,
-          {
+      if (command.type === "deviceIdentity.load") {
+        try {
+          return loadOrCreateDeviceIdentity({
             path: context.databasePath,
-            env: getSqliteWorkerStateContext().environment,
-          },
-          open,
+            identityKey: command.input.identityKey,
+            env: stateDatabaseInitializationEnvironment(),
+          });
+        } finally {
+          retainCachedDatabase();
+        }
+      }
+      if (command.type === "agentDatabases.releaseExitedLease") {
+        if (!agentCleanup) {
+          throw new Error("Agent database cleanup runtime is not prepared");
+        }
+        return agentCleanup.executeAgentDatabaseCleanupCommand(
+          command,
+          open(),
+          getSqliteWorkerStateContext().environment,
         );
       }
-      if (command.type === "modelCatalog.remote.read") {
-        const read = () =>
-          readRemoteModelCatalog({
+      if (command.type === "stateLease.acquire") {
+        if (command.input.schemaPolicy === "existing" && existingIdentity) {
+          // Existing-schema leases open a separate native connection outside open().
+          assertExistingDatabaseIdentity(context.databasePath, existingIdentity);
+        }
+        return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
+      }
+      if (
+        command.type === "stateLease.verify" ||
+        command.type === "stateLease.renew" ||
+        command.type === "stateLease.release"
+      ) {
+        return executeOpenClawStateLeaseCommand(command, open());
+      }
+      if (command.type === "database.publishSchema") {
+        try {
+          return reconcileOpenClawStateSchemaPublication({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
           });
-        return command.input.artifactPreservingReadOnly
-          ? withArtifactPreservingStateReads(read)
-          : read();
+        } finally {
+          retainCachedDatabase();
+        }
       }
-      if (command.type === "plugins.conversationBindingApprovals.read") {
-        return readPluginBindingApprovalsInDatabase(open().db);
-      }
-      if (command.type === "plugins.conversationBindingApprovals.upsert") {
+      if (command.type === "database.walMaintenance") {
         const database = open();
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => upsertPluginBindingApprovalInDatabase(db, command.input),
-          { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+        const admit = (stage: "transaction" | "commit") => {
+          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+        };
+        return (
+          database.walMaintenance.maintainPeriodic?.(command.input, admit, () =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                admit("transaction");
+                refreshSqlitePlannerStatistics(db);
+                admit("commit");
+              },
+              { database },
+              { busyTimeoutMs: 0, operationLabel: "state.planner-statistics" },
+            ),
+          ) ?? { reclaimedPages: 0 }
         );
       }
-      if (command.type === "plugins.metadata.read") {
-        return readPluginMetadataStateRowSync(
-          command.input.selector,
-          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-          command.input.artifactPreservingReadOnly,
-        );
-      }
-      if (command.type === "plugins.deferredMigrations.read") {
-        return readDeferredPluginMigrations({
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        });
-      }
-      if (command.type === "claws.install-schema-versions") {
-        return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-          ({ db, path: pathname }) => {
-            assertOpenClawStateDatabaseOwner(db, { pathname });
-            return readClawInstallSchemaVersionRows(db);
-          },
-          { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
-        );
-      }
-      if (command.type === "database.generationMatches") {
-        // Unavailable inspection retains the known failure; only a stable mismatch expires it.
-        return sameSqliteFileGeneration(
-          command.input.generation,
-          readStableSqliteFileGeneration(context.databasePath),
-        );
-      }
-      if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
-        return executeUserPreferenceCommand(command, {
-          database: open(),
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        });
+      if (command.type === "database.inspectIdle") {
+        // Idle maintenance must never materialize a connection for an artifact-preserving reader.
+        if (
+          !nativeDatabase?.db.isOpen ||
+          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
+            nativeDatabase
+        ) {
+          if (!nativeDatabase && updateRunWriter) {
+            updateRunWriter.assertSettled();
+            return "healthy";
+          }
+          return "retire";
+        }
+        return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
       }
       if (isPluginStateWorkerCommand(command)) {
-        return executePluginStateCommand(
+        if (!pluginState) {
+          throw new Error("Plugin-state worker command runtime is not prepared");
+        }
+        return pluginState.executePluginStateCommand(
           command,
           {
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
           },
-          open,
+          retainedDatabase,
           nativeDatabase?.db.isOpen === true,
         );
       }
-      if (command.type === "config.health.read") {
-        const read = command.input.artifactPreserving
-          ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly
-          : withExistingOpenClawStateDatabaseReadOnly;
-        return (
-          read(({ db }) => readConfigHealthSnapshotInDatabase(db), {
+      const currentRuntime = runtime;
+      if (!currentRuntime) {
+        throw new Error("Shared-state worker command runtime is not prepared");
+      }
+      if (command.type === "secrets.write" && !secretSchemaAdmitted) {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => ensureSecretStoreSchema(db),
+          { database: open() },
+          {
+            operationLabel: "secrets.store.admit",
+          },
+        );
+        secretSchemaAdmitted = true;
+      }
+      return currentRuntime.executeSharedStateCommand(
+        command,
+        context,
+        open,
+        write,
+        writeAdmitted,
+        () =>
+          (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,
             env: getSqliteWorkerStateContext().environment,
-          }) ?? { state: {}, basis: {} }
-        );
-      }
-      const database = open();
-      if (command.type === "deviceAuth.list") {
-        return readDeviceAuthTokensFromDatabase(database.db, command.input);
-      }
-      switch (command.type) {
-        case "transcripts.sessionEntries":
-        case "transcripts.matches":
-        case "transcripts.session":
-        case "transcripts.entry":
-        case "transcripts.latest":
-        case "transcripts.notes":
-        case "transcripts.libraryEntry":
-        case "transcripts.recentStopped":
-        case "transcripts.summaryRevision":
-        case "transcripts.utterances":
-        case "transcripts.summary": {
-          ensureMeetingTranscriptsSchema({
-            database,
-            path: context.databasePath,
-            env: getSqliteWorkerStateContext().environment,
-            readOnly: command.input.readOnly,
-          });
-          return executeTranscriptRead(database.db, command);
-        }
-        default:
-          break;
-      }
-      if (command.type === "managedImages.read") {
-        return readManagedImageRecordInDatabase(database.db, command.input.attachmentId);
-      }
-      if (command.type === "managedImages.entries") {
-        return listManagedImageRecordEntriesInDatabase(database.db, command.input.sessionKey);
-      }
-      if (command.type === "managedImages.originalMediaIds") {
-        return listManagedImageOriginalMediaIdsInDatabase(database.db);
-      }
-      if (command.type === "apns.registration.read") {
-        return readApnsRegistrationFromDatabase(database.db, command.input);
-      }
-      if (command.type === "apns.registrations.read") {
-        return readApnsRegistrationsFromDatabase(database.db, command.input);
-      }
-      if (command.type === "plugins.catalogSnapshot.read") {
-        return readHostedCatalogSnapshotInDatabase(database.db, command.input.url);
-      }
-      if (command.type === "nativeHookRelay.listSnapshots") {
-        return listNativeHookRelayBridgeSnapshotsInDatabase(database);
-      }
-      if (
-        command.type === "nativeHookRelay.write" ||
-        command.type === "nativeHookRelay.renew" ||
-        command.type === "nativeHookRelay.deleteOwned" ||
-        command.type === "nativeHookRelay.prune"
-      ) {
-        return executeNativeHookRelayMutation(command, {
-          database,
-          path: context.databasePath,
-          env: getSqliteWorkerStateContext().environment,
-        });
-      }
-      if (command.type === "sessionUpstream.listWatched") {
-        return listWatchedSessionUpstreamLinksInDatabase(database.db);
-      }
-      if (command.type === "cron.loadMutable") {
-        return loadMutableCronStoreInWorker(database, command.input.storeKey);
-      }
-      if (command.type === "cron.save" || command.type === "cron.saveChanges") {
-        return executeCronStoreSaveCommand(command, database);
-      }
-      if (command.type === "deliveryQueue.countFailed") {
-        return countFailedDeliveryQueueEntriesInDatabase(database);
-      }
-      if (
-        command.type === "sessionDelivery.enqueue" ||
-        command.type === "sessionDelivery.enqueueClaimed" ||
-        command.type === "sessionDelivery.releaseClaim" ||
-        command.type === "sessionDelivery.defer" ||
-        command.type === "sessionDelivery.advanceAgentRun" ||
-        command.type === "sessionDelivery.mergePreparedMedia" ||
-        command.type === "sessionDelivery.markAttemptStarted" ||
-        command.type === "sessionDelivery.markSettlement" ||
-        command.type === "sessionDelivery.complete" ||
-        command.type === "sessionDelivery.fail" ||
-        command.type === "sessionDelivery.load" ||
-        command.type === "sessionDelivery.list" ||
-        command.type === "sessionDelivery.moveToFailed"
-      ) {
-        return executeSessionDeliveryCommand(command, database);
-      }
-      const writeOptions = {
-        database,
-        path: context.databasePath,
-        env: getSqliteWorkerStateContext().environment,
-      };
-      if (command.type === "agentProvenance.readBatch" || command.type === "agentProvenance.list") {
-        ensureAgentProvenanceSchema(writeOptions);
-        return command.type === "agentProvenance.readBatch"
-          ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
-          : listAgentProvenanceInDatabase(database.db);
-      }
-      if (command.type === "telemetry.persistSuccess") {
-        return runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            persistTelemetrySuccessInDatabase(db, command.input.state, command.input.updatedAtMs),
-          writeOptions,
-          { operationLabel: "config-machine-state.update" },
-        );
-      }
-      if (command.type === "sessionState.recordGoalChange") {
-        return runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            recordSessionStateEventInDatabase(db, command.input.event, command.input.now).notices,
-          writeOptions,
-        );
-      }
-      if (command.type === "sessionState.prune") {
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => pruneSessionStateEventsInDatabase(db, command.input.now),
-          writeOptions,
-        );
-      }
-      if (command.type === "plugins.catalogSnapshot.write") {
-        try {
-          runOpenClawStateWriteTransaction(
-            ({ db }) =>
-              writeHostedCatalogSnapshotInDatabase(db, command.input.snapshot, command.input.now),
-            writeOptions,
-          );
-          return { ok: true };
-        } catch (error) {
-          if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
-            return { ok: false, message: error.message };
-          }
-          throw error;
-        }
-      }
-      if (command.type === "backup.recordOutcome") {
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => recordBackupRunInDatabase(db, command.input),
-          writeOptions,
-        );
-      }
-      if (command.type === "projects.findRoot") {
-        ensureProjectRegistrySchema(writeOptions);
-        return resolveRecordedProjectRootInDatabase(database.db, command.input.repoRoot);
-      }
-      if (command.type === "projects.list") {
-        ensureProjectRegistrySchema(writeOptions);
-        return listProjectRegistryInDatabase(database.db);
-      }
-      if (command.type === "projects.resolve") {
-        ensureProjectRegistrySchema(writeOptions);
-        return resolveProjectRegistryInDatabase(database.db, command.input.id);
-      }
-      if (command.type === "projects.insert") {
-        ensureProjectRegistrySchema(writeOptions);
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            const { project, lease } = command.input;
-            if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-              throw new Error("Project registry mutation requires its checkout lifecycle lease");
-            }
-            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-            return insertProjectRegistryInDatabase(db, project);
-          },
-          writeOptions,
-          { operationLabel: "projects.registry.insert" },
-        );
-      }
-      if (command.type === "projects.resolveRefreshOwner") {
-        ensureProjectRegistrySchema(writeOptions);
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            const { project, lease } = command.input;
-            if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-              throw new Error("Project refresh requires its checkout lifecycle lease");
-            }
-            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-            return resolveProjectCloneRefreshOwnerInDatabase(db, project);
-          },
-          writeOptions,
-          { operationLabel: "projects.registry.refresh-owner.resolve" },
-        );
-      }
-      if (command.type === "projects.remove") {
-        return runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            const { project, lease } = command.input;
-            if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
-              throw new Error("Project registry mutation requires its checkout lifecycle lease");
-            }
-            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
-            return removeProjectRegistryInDatabase(db, project);
-          },
-          writeOptions,
-          { operationLabel: "projects.registry.remove" },
-        );
-      }
-      if (command.type === "config.health.patch") {
-        const { configPath, patch, expected, updatedAtMs } = command.input;
-        return runOpenClawStateWriteTransaction(({ db }) => {
-          return patchConfigHealthEntryInDatabase(db, configPath, patch, expected, updatedAtMs);
-        }, writeOptions);
-      }
-      if (command.type === "diagnostic.register") {
-        const { scope, maxEntries, record } = command.input;
-        return runOpenClawStateWriteTransaction(({ db }) => {
-          createSqliteAuditRecordKernel(db, { scope, maxEntries }).register(record);
-        }, writeOptions);
-      }
-      throw new Error("Unknown shared-state SQLite command");
+          })),
+      );
     },
     assertSettled() {
+      updateRunWriter?.assertSettled();
       if (nativeDatabase) {
         assertTransactionUsable(nativeDatabase.db);
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }
+        if (nativeDatabase.db.isOpen) {
+          assertNoActiveSqliteReaders(nativeDatabase.db, "Shared-state worker");
+        }
       }
     },
-    close() {
+    async close() {
       closed = true;
-      borrow?.release();
+      try {
+        publicationSourceReader?.close();
+        updateRunWriter?.close();
+      } finally {
+        await borrow?.releaseAsync();
+      }
     },
   };
 }

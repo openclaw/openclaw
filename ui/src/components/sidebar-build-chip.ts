@@ -6,7 +6,6 @@ import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
-  formatBuildChipText,
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
   renderSidebarServerDetails,
@@ -18,17 +17,13 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) updateAttentionDismissed = false;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
-  @property({ attribute: false }) variant: "compact" | "identity" | "settings" = "compact";
+  @property({ attribute: false }) variant: "identity" | "settings" = "identity";
 
   override render() {
     const text =
-      this.variant === "settings"
+      this.variant === "settings" || this.updateAttentionDismissed
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
-        : this.variant === "identity"
-          ? this.updateAttentionDismissed
-            ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
-            : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO)
-          : formatBuildChipText(CONTROL_UI_BUILD_INFO);
+        : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
     if (!text && !this.updateAttentionDismissed) {
       return nothing;
     }
@@ -37,6 +32,7 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}
+          role=${this.variant === "identity" ? "menuitem" : nothing}
           aria-label=${
             this.updateAttentionDismissed
               ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`

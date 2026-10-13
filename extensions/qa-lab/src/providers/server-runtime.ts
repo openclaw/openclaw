@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements server runtime behavior.
 import { getQaProvider, type QaMockProviderServer, type QaProviderModeInput } from "./index.js";
 import type { QaMockOpenAiServerOptions } from "./mock-openai/server-options.js";
 

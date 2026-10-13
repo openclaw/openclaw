@@ -1,34 +1,29 @@
 import { formatErrorMessage } from "./errors.js";
 import { inspectUpdateRunAbandonment, staleUpdateRunGuidance } from "./update-run-activity.js";
-import {
-  findActiveUpdateRun,
-  listUpdateRuns,
-  reconcileAbandonedUpdateRuns,
-} from "./update-run-ledger.js";
+import { reconcileAbandonedUpdateRunsAsync } from "./update-run-ledger.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
-import { isAcknowledgedAbandonedUpdateRun } from "./update-run-record.js";
+import { getUpdateRunHistoryStatusAsync } from "./update-run-reader.js";
+import { isAcknowledgedAbandonedUpdateRun, toPublicUpdateRun } from "./update-run-record.js";
 
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
-export function readUpdateRunStatus() {
+export async function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;
   try {
-    reconcileAbandonedUpdateRuns({ legacyOnly: true });
+    await reconcileAbandonedUpdateRunsAsync({ legacyOnly: true });
   } catch (error) {
     runReconciliationError = formatErrorMessage(error);
   }
   try {
-    const activeRun = findActiveUpdateRun();
-    const lastRun = listUpdateRuns({ limit: 1 })[0];
+    const { activeRun, lastRun, expiredRun: expired } = await getUpdateRunHistoryStatusAsync();
     const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
     const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
-    const expired = listUpdateRuns({ limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0];
     return {
       ...(runReconciliationError ? { runReconciliationError } : {}),
-      ...(activeRun ? { activeRun } : {}),
-      ...(lastRun ? { lastRun } : {}),
+      ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
+      ...(lastRun ? { lastRun: toPublicUpdateRun(lastRun) } : {}),
       ...(staleGuidance && activeRun
         ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
         : {}),

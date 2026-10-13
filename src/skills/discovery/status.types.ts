@@ -1,5 +1,5 @@
 import type { RequirementConfigCheck, Requirements } from "../../shared/requirements.js";
-import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/clawhub.js";
+import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/workspace-types.js";
 import type { SkillInstallSpec } from "../types.js";
 
 export type SkillInstallOption = {
@@ -49,4 +49,16 @@ export type SkillStatusReport = {
   agentId?: string;
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
+};
+
+/** Filesystem facts, separate from Gateway policy and execution-host requirements. */
+export type WorkspaceSkillStatusFacts = {
+  workspaceDir: string;
+  managedSkillsDir: string;
+  files: Array<{
+    name: string;
+    filePath: string;
+    clawhub?: ClawHubSkillStatusLink;
+    skillCard?: LocalSkillCardStatus & { content?: string };
+  }>;
 };

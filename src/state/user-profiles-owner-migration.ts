@@ -9,9 +9,13 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { publishUserProfileAliasChange } from "./user-profile-events.js";
+import {
+  publishUserProfileAliasChange,
+  publishUserProfileAuthorityChange,
+  publishUserProfileIdentityChange,
+} from "./user-profile-events.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
-import { userProfilesDb } from "./user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById, userProfilesDb } from "./user-profiles-internal.js";
 import { readGatewayOwnerProfileRows } from "./user-profiles-owner.js";
 
 function ownerRepairRequired(db: DatabaseSync): boolean {
@@ -46,6 +50,9 @@ export function repairMergedGatewayOwnerProfile(
         return unchanged;
       }
       const { owner } = readGatewayOwnerProfileRows(db);
+      const previousOwnerHead = owner?.merged_into
+        ? selectResolvedUserProfileMetadataById(db, owner.id)?.id
+        : undefined;
       const kysely = userProfilesDb(db);
       const now = Date.now();
       if (owner) {
@@ -57,6 +64,13 @@ export function repairMergedGatewayOwnerProfile(
             .where("id", "=", GATEWAY_OWNER_PROFILE_ID),
         );
         if (owner.merged_into) {
+          publishUserProfileIdentityChange(db, GATEWAY_OWNER_PROFILE_ID);
+          publishUserProfileAuthorityChange(
+            db,
+            GATEWAY_OWNER_PROFILE_ID,
+            owner.merged_into,
+            ...(previousOwnerHead ? [previousOwnerHead] : []),
+          );
           deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
         }
       } else {

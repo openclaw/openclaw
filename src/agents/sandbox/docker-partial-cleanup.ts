@@ -4,12 +4,14 @@ import { removeRegistryEntry } from "./registry.js";
 export async function throwAfterPartialSandboxCleanup(params: {
   engine: SandboxContainerEngine;
   containerName: string;
+  containerId: string;
   creationError: unknown;
+  onRemoved?: () => void;
 }): Promise<never> {
   const cleanupErrors: unknown[] = [];
   let removalConfirmed = false;
   try {
-    const removal = await execContainer(params.engine, ["rm", "-f", params.containerName], {
+    const removal = await execContainer(params.engine, ["rm", "-f", params.containerId], {
       allowFailure: true,
     });
     const detail = removal.stderr.trim() || removal.stdout.trim() || `exit ${removal.code}`;
@@ -24,8 +26,9 @@ export async function throwAfterPartialSandboxCleanup(params: {
     cleanupErrors.push(cleanupError);
   }
   if (removalConfirmed) {
+    params.onRemoved?.();
     try {
-      await removeRegistryEntry(params.containerName);
+      await removeRegistryEntry(params.containerName, { preserveRemovalIntent: true });
     } catch (cleanupError) {
       cleanupErrors.push(cleanupError);
     }

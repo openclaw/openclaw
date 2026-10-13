@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,6 +56,7 @@ type ScopeOptions = {
 };
 
 const tempDirs: string[] = [];
+const require = createRequire(import.meta.url);
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -75,7 +77,8 @@ function compileScopeWorkflow(workflowPath: string) {
     "context",
     "core",
     "exec",
-  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+    "require",
+  ]) as (context: unknown, core: unknown, exec: unknown, require: NodeJS.Require) => Promise<void>;
   return { workflow, script, execute };
 }
 
@@ -120,6 +123,7 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
     context,
     { setOutput: (name: string, value: string) => outputs.set(name, value) },
     exec,
+    require,
   );
   return outputs.get("should-scan");
 }
@@ -183,6 +187,18 @@ describe("Periphery scope workflows", () => {
     },
   );
 
+  it("selects shared scans from native protocol generator inputs", async () => {
+    for (const file of [
+      "packages/gateway-protocol/src/schema/protocol-schemas.ts",
+      "scripts/protocol-gen-swift.ts",
+      "scripts/native-protocol-inputs.json",
+    ]) {
+      await expect(
+        runScope(".github/workflows/shared-openclawkit-periphery.yml", { files: [file] }),
+      ).resolves.toBe("true");
+    }
+  });
+
   it("ignores scoped files added only by base-branch drift", async () => {
     const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-scope-");
     git(repoRoot, ["init", "--initial-branch=main"]);
@@ -227,6 +243,7 @@ describe("Periphery scope workflows", () => {
           return { exitCode: result.status ?? 128 };
         },
       },
+      require,
     );
 
     expect(outputs.get("should-scan")).toBe("false");

@@ -1,9 +1,5 @@
 import { getLaneGroup } from "./command-queue.capacity-groups.js";
-import {
-  enqueueCommandInLane,
-  getCommandLaneSnapshot,
-  publishLaneConfiguration,
-} from "./command-queue.js";
+import { enqueueCommandInLane, publishLaneConfiguration } from "./command-queue.js";
 import { getQueueState } from "./command-queue.state.js";
 import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
@@ -32,7 +28,7 @@ export function createBackgroundWorkOwner(params: { owner: string; maxConcurrent
   const lane = `${CommandLane.Background}:${owner}`;
   const register = () => {
     if (getLaneGroup(lane)) {
-      if (getCommandLaneSnapshot(lane).maxConcurrent !== params.maxConcurrent) {
+      if ((getQueueState().lanes.get(lane)?.maxConcurrent ?? 1) !== params.maxConcurrent) {
         throw new Error(
           `Background owner ${owner} is already registered with different concurrency`,
         );

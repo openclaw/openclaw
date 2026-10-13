@@ -1,4 +1,3 @@
-/** Doctor cleanup for rebuildable legacy usage-cost cache sidecars. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,12 +5,18 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
+import { openUsageCostRefreshFailures } from "../infra/session-cost-usage-refresh-health.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { shortenHomePath } from "../utils.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
+const LEGACY_USAGE_COST_TEMP_PATTERNS = [
+  /^\.usage-cost-cache\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/u,
+  /^\.usage-cost-cache(?:\.json)?\.\d+\.tmp$/u,
+  /^\.usage-cost-cache\.json\.lock\.\d+(?:\.\d+)?\.tmp$/u,
+];
 
 async function readFilesystemEntryOrMissing<T>(
   filePath: string,
@@ -29,21 +34,10 @@ async function readFilesystemEntryOrMissing<T>(
   }
 }
 
-function isLegacyUsageCostCacheTempName(name: string): boolean {
-  return (
-    /^\.usage-cost-cache\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/u.test(
-      name,
-    ) ||
-    /^\.usage-cost-cache(?:\.json)?\.\d+\.tmp$/u.test(name) ||
-    /^\.usage-cost-cache\.json\.lock\.\d+(?:\.\d+)?\.tmp$/u.test(name)
-  );
-}
-
-async function detectLegacyUsageCostCacheFiles(params?: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-}): Promise<string[]> {
-  const stateDir = resolveStateDir(params?.env ?? process.env, params?.homedir ?? os.homedir);
+async function detectLegacyUsageCostCacheFiles(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
+  const stateDir = resolveStateDir(env, os.homedir);
   const sessionDirs = [path.join(stateDir, "sessions")];
   const agentsDir = path.join(stateDir, "agents");
   const agentEntries =
@@ -70,7 +64,7 @@ async function detectLegacyUsageCostCacheFiles(params?: {
         files.push(filePath);
         continue;
       }
-      if (isLegacyUsageCostCacheTempName(entry.name)) {
+      if (LEGACY_USAGE_COST_TEMP_PATTERNS.some((pattern) => pattern.test(entry.name))) {
         const stats = await readFilesystemEntryOrMissing(filePath, () => fs.stat(filePath));
         if (stats && Date.now() - stats.mtimeMs >= LEGACY_USAGE_COST_TEMP_GRACE_MS) {
           files.push(filePath);
@@ -84,9 +78,8 @@ async function detectLegacyUsageCostCacheFiles(params?: {
 async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
 }): Promise<void> {
-  const files = await detectLegacyUsageCostCacheFiles(params).catch((error: unknown) => {
+  const files = await detectLegacyUsageCostCacheFiles(params.env).catch((error: unknown) => {
     const command = params.shouldRepair ? "openclaw doctor --fix" : "openclaw doctor";
     const action = params.shouldRepair ? "scan and cleanup" : "scan";
     note(
@@ -99,10 +92,7 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
     );
     return null;
   });
-  if (!files) {
-    return;
-  }
-  if (files.length === 0) {
+  if (!files?.length) {
     return;
   }
   if (!params.shouldRepair) {
@@ -134,12 +124,10 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
 async function maybeRemoveLegacySkillUploadTree(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
 }): Promise<void> {
-  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
+  const stateDir = resolveStateDir(params.env ?? process.env, os.homedir);
   const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
-  const stats = await fs.lstat(uploadRoot).catch(() => null);
-  if (!stats) {
+  if (!(await fs.lstat(uploadRoot).catch(() => null))) {
     return;
   }
   if (!params.shouldRepair) {
@@ -150,12 +138,7 @@ async function maybeRemoveLegacySkillUploadTree(params: {
     return;
   }
   try {
-    // Removing a symlink removes only the fixed legacy entry, never its target.
-    if (stats.isSymbolicLink()) {
-      await fs.unlink(uploadRoot);
-    } else {
-      await fs.rm(uploadRoot, { recursive: true, force: true });
-    }
+    await fs.rm(uploadRoot, { recursive: true, force: true });
   } catch (error) {
     note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
     return;
@@ -166,10 +149,61 @@ async function maybeRemoveLegacySkillUploadTree(params: {
   );
 }
 
+// Installs from 2026.8 kept prior Control UI builds here; reload recovery replaced them.
+async function maybeRemoveObsoleteControlUiAssetCache(params: {
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const cacheRoot = path.join(
+    resolveStateDir(params.env ?? process.env, os.homedir),
+    "cache",
+    "control-ui-assets",
+  );
+  try {
+    await fs.lstat(cacheRoot);
+    if (!params.shouldRepair) {
+      note(
+        `Obsolete Control UI asset cache remains at ${shortenHomePath(cacheRoot)}. Run \`openclaw doctor --fix\` to remove it.`,
+        "Control UI assets",
+      );
+      return [];
+    }
+    await fs.rm(cacheRoot, { recursive: true, force: true });
+    note(
+      `Removed obsolete Control UI asset cache at ${shortenHomePath(cacheRoot)}.`,
+      "Control UI assets",
+    );
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      const warning = `Could not ${params.shouldRepair ? "remove" : "inspect"} obsolete Control UI asset cache at ${shortenHomePath(cacheRoot)}: ${formatErrorMessage(error)}. Resolve the filesystem error and rerun \`openclaw doctor --fix\`.`;
+      note(warning, "Doctor warnings");
+      return [warning];
+    }
+  }
+  return [];
+}
+
 export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<string[]> {
+  const failures = await openUsageCostRefreshFailures(env)
+    .entries()
+    .catch((error: unknown) => {
+      note(
+        `Could not read usage refresh failure history: ${formatErrorMessage(error)}`,
+        "Usage cost cache",
+      );
+      return [];
+    });
+  if (failures.length > 0) {
+    note(
+      failures
+        .map(({ value }) => `- ${value.agentId}: ${value.sessionFile}: ${value.reason}`)
+        .join("\n"),
+      "Usage cost cache",
+    );
+  }
   await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
   if (shouldRepair) {
@@ -184,7 +218,7 @@ export async function maybeRepairLegacyRuntimeFiles(
               env,
               databasePath: entry.path,
               liveKeys: new Set(),
-              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              // Doctor retires old scopes only; current rows are not prune candidates.
               rows: [],
             }),
         });
@@ -192,4 +226,5 @@ export async function maybeRepairLegacyRuntimeFiles(
     }
   }
   await maybeRemoveLegacySkillUploadTree({ shouldRepair, env });
+  return await maybeRemoveObsoleteControlUiAssetCache({ shouldRepair, env });
 }

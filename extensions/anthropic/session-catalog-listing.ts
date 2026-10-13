@@ -6,10 +6,7 @@ import {
   publishSessionCatalogHost,
   type SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
-import {
-  isRecord,
-  normalizeBoundedOptionalString as readBoundedString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
@@ -138,7 +135,7 @@ export async function readLocalClaudeTranscriptPage(
         const segment = chunk.subarray(index + 1, right);
         if (segment.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([segment, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           fragments = [];
           if (item) {
             item.resumeCursor = encodeOffset(position + index + 1 + line.length);
@@ -157,7 +154,7 @@ export async function readLocalClaudeTranscriptPage(
       if (position === 0) {
         if (prefix.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           if (item) {
             item.resumeCursor = encodeOffset(line.length);
             found.push({ item, start: 0 });

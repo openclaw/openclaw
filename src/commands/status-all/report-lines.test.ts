@@ -103,7 +103,7 @@ describe("buildStatusAllReportLines", () => {
         tailscaleMode: "off",
         tailscaleDns: null,
         tailscaleHttpsUrl: null,
-        skillStatus: null,
+        skillReadiness: null,
         pluginCompatibility: [],
         channelsStatus: null,
         channelIssues: [],

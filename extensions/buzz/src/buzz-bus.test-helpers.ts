@@ -9,11 +9,13 @@ export const relayMocks = {
   close: vi.fn(),
   connected: true,
   stallProfileQueryEose: false,
+  stallThreadRootQueryEose: false,
   stallRoomEoseChannelId: undefined as string | undefined,
   membershipEvents: [] as Event[],
   roomMetadataEvents: [] as Event[],
   profileEvents: [] as Event[],
   roomHistoryEvents: [] as Event[],
+  threadRootEvents: [] as Event[],
   beforeRoomHistoryEvent: undefined as ((event: Event) => void) | undefined,
   subscriptions: [] as Array<{
     filter: Filter;
@@ -54,7 +56,14 @@ export function mockBuzzRelay() {
         const filter = filters[0] ?? {};
         const close = vi.fn();
         relayMocks.subscriptions.push({ filter, filters, handlers, close });
-        if (filter.kinds?.includes(39002)) {
+        if (filter.ids) {
+          for (const event of relayMocks.threadRootEvents) {
+            handlers.onevent(event);
+          }
+          if (!relayMocks.stallThreadRootQueryEose) {
+            handlers.oneose?.();
+          }
+        } else if (filter.kinds?.includes(39002)) {
           for (const event of relayMocks.membershipEvents) {
             handlers.onevent(event);
           }

@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as network from "openclaw/plugin-sdk/ssrf-runtime";
@@ -27,8 +28,8 @@ describe("Mantis Crabbox binary admission", () => {
       await fs.writeFile(
         executable,
         process.platform === "win32"
-          ? '@echo off\r\n> "%CRABBOX_PROBE_CWD_FILE%" echo %CD%\r\necho crabbox 0.56.0\r\n'
-          : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 0.56.0\\n"\n',
+          ? '@echo off\r\n> "%CRABBOX_PROBE_CWD_FILE%" echo %CD%\r\necho crabbox 999.0.0\r\n'
+          : '#!/bin/sh\npwd -P > "$CRABBOX_PROBE_CWD_FILE"\nprintf "crabbox 999.0.0\\n"\n',
         { mode: 0o755 },
       );
       const download = vi
@@ -48,9 +49,9 @@ describe("Mantis Crabbox binary admission", () => {
       };
 
       expect(process.cwd()).not.toBe(repoRoot);
-      await expect(
-        resolveCrabboxBin({ env, envName: "OPENCLAW_MANTIS_CRABBOX_BIN", explicit, repoRoot }),
-      ).resolves.toBe(explicit ?? executable);
+      await expect(resolveCrabboxBin({ env, explicit, repoRoot })).resolves.toBe(
+        explicit ?? executable,
+      );
       expect(await fs.realpath((await fs.readFile(cwdFile, "utf8")).trim())).toBe(
         await fs.realpath(repoRoot),
       );

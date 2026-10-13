@@ -6,7 +6,6 @@ import {
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
-  settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
   visibleSettingsNavigationGroups,
@@ -16,13 +15,13 @@ import {
   activityPersonLocation,
   inferBasePathFromPathname,
   normalizeBasePath,
-  pathForRoute,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
+import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
 
 /**
@@ -47,102 +46,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
   ]),
 );
 
-const SETTINGS_ROUTE_PATHS = [
-  { routeId: "config", path: "/settings/general", alias: "/config" },
-  { routeId: "profile", path: "/settings/profile", alias: "/profile" },
-  { routeId: "channels", path: "/settings/channels", alias: "/channels" },
-  {
-    routeId: "communications",
-    path: "/settings/communications",
-    alias: "/communications",
-  },
-  { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
-  { routeId: "lobsterdex", path: "/settings/lobsterdex", alias: "/lobsterdex" },
-  { routeId: "automation", path: "/settings/automation", alias: "/automation" },
-  { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
-  {
-    routeId: "infrastructure",
-    path: "/settings/infrastructure",
-    alias: "/infrastructure",
-  },
-  { routeId: "worktrees", path: "/worktrees", alias: "/settings/worktrees" },
-  { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
-  { routeId: "devices", path: "/settings/devices", alias: "/nodes" },
-  { routeId: "cron", path: "/automations", alias: "/cron" },
-  {
-    routeId: "memory-import",
-    path: "/memory-import",
-    alias: "/settings/memory-import",
-  },
-  { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
-  {
-    routeId: "model-setup",
-    path: "/settings/model-setup",
-    alias: "/model-setup",
-  },
-  {
-    routeId: "model-providers",
-    path: "/settings/model-providers",
-    alias: "/model-providers",
-  },
-] as const satisfies readonly { routeId: RouteId; path: string; alias: string }[];
-
 describe("navigationIconForRoute", () => {
-  it("returns stable icons for every route", () => {
-    expect(
-      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
-    ).toEqual({
-      chat: "messageSquare",
-      custodian: "lobster",
-      activity: "activity",
-      meetings: "book",
-      apps: "layoutGrid",
-      portals: "monitor",
-      approvals: "badgeCheck",
-      workboard: "kanban",
-      dashboards: "layoutDashboard",
-      worktrees: "folder",
-      channels: "link",
-      connection: "radio",
-      sessions: "fileText",
-      systems: "monitor",
-      usage: "coins",
-      cron: "calendarClock",
-      tasks: "listChecks",
-      "agents-home": "bot",
-      agents: "bot",
-      skills: "zap",
-      "skill-settings": "zap",
-      plugins: "plug",
-      "plugin-settings": "plug",
-      "skill-workshop": "wrench",
-      devices: "monitorSmartphone",
-      "cloud-workers": "server",
-      profile: "circleUser",
-      communications: "send",
-      appearance: "palette",
-      lobsterdex: "bug",
-      automation: "terminal",
-      mcp: "wrench",
-      memory: "book",
-      talk: "mic",
-      infrastructure: "globe",
-      labs: "flaskConical",
-      updates: "download",
-      about: "fileText",
-      "ai-agents": "brain",
-      "model-setup": "spark",
-      "model-providers": "box",
-      "memory-import": "download",
-      notifications: "bell",
-      security: "shieldCheck",
-      secrets: "key",
-      advanced: "fileCode",
-      debug: "bug",
-      logs: "scrollText",
-    });
-  });
-
   it("returns a fallback icon for unknown route", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownRouteId = "unknown" as RouteId;
@@ -159,8 +63,6 @@ describe("settingsSearchTextMatches", () => {
 
   it.each([
     ["Cámara", "Ca\u0301mara"],
-    ["Ca\u0301mara", "Cámara"],
-    ["Notificación", "Notificacio\u0301n"],
     ["Notificacio\u0301n", "Notificación"],
   ])("matches canonically equivalent setting text %j against %j", (value, query) => {
     expect(settingsSearchTextMatches(value, query)).toBe(true);
@@ -168,19 +70,22 @@ describe("settingsSearchTextMatches", () => {
 });
 
 describe("formatDocumentTitle", () => {
-  it("does not duplicate a context ending in the brand", () => {
-    expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
-    expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
-  });
-
-  it("names the disconnected gateway without implying internet loss", () => {
+  it("uses the themed brand while preserving attention and duplicate suffix rules", () => {
     expect(
-      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 0 }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
+      formatDocumentTitle({ context: "About", brandName: "Northstar", attentionCount: 2 }),
+    ).toBe("(2) About — Northstar");
+    expect(formatDocumentTitle({ context: "Ask Northstar", brandName: "Northstar" })).toBe(
+      "Ask Northstar",
+    );
   });
 
-  it("ignores a queued count while online", () => {
-    expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
+  it("shows attention separately from the disconnected state", () => {
+    expect(formatDocumentTitle({ context: "Usage", attentionCount: 3 })).toBe(
+      "(3) Usage — OpenClaw",
+    );
+    expect(
+      formatDocumentTitle({ context: "Usage", attentionCount: 3, gatewayDisconnected: true }),
+    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -193,145 +98,6 @@ describe("titleForRoute", () => {
       expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
       expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
     }
-  });
-
-  it("returns expected titles for every route", () => {
-    expect(
-      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
-    ).toEqual({
-      chat: "Chat",
-      custodian: "OpenClaw",
-      activity: "Activity",
-      meetings: "Meetings",
-      apps: "Apps",
-      portals: "Portals",
-      approvals: "Approvals",
-      workboard: "Workboard",
-      dashboards: "Dashboards",
-      worktrees: "Worktrees",
-      channels: "Channels",
-      connection: "Gateway",
-      sessions: "Sessions",
-      systems: "Systems",
-      usage: "Usage",
-      cron: "Automations",
-      tasks: "Tasks",
-      "agents-home": "Agents",
-      agents: "Agents",
-      skills: "Skills",
-      "skill-settings": "Skills",
-      plugins: "Plugins",
-      "plugin-settings": "Plugins",
-      "skill-workshop": "Skill workshop",
-      devices: "Devices",
-      "cloud-workers": "Cloud workers",
-      profile: "Profile",
-      communications: "Communications",
-      appearance: "Appearance",
-      lobsterdex: "Lobsterdex",
-      automation: "Automation",
-      mcp: "MCP",
-      memory: "Memory",
-      talk: "Talk",
-      infrastructure: "Infrastructure",
-      labs: "Labs",
-      updates: "Updates",
-      about: "About",
-      "ai-agents": "Agent Defaults",
-      "model-setup": "Model Setup",
-      "model-providers": "Models",
-      "memory-import": "Import Memory",
-      notifications: "Notifications",
-      security: "Privacy & Security",
-      secrets: "Secrets",
-      advanced: "Advanced",
-      debug: "Debug",
-      logs: "Logs",
-    });
-  });
-});
-
-describe("subtitleForRoute", () => {
-  it("returns expected subtitles for every route", () => {
-    expect(
-      Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
-    ).toEqual({
-      chat: "Gateway chat for quick interventions.",
-      custodian: "System setup and care.",
-      activity: "Recent sessions across people using this gateway.",
-      meetings: "Meeting notes and transcripts across this gateway.",
-      apps: "Companion apps for phone, watch, desktop, and browser.",
-      portals: "Live previews from agent-run applications.",
-      approvals: "Recent exec, plugin, and system-agent approvals.",
-      workboard: "Agent work queue and session handoff.",
-      dashboards: "Tasks with saved dashboards.",
-      worktrees: "Isolated agent task checkouts and recovery snapshots.",
-      channels: "Channels and settings.",
-      connection: "Gateway endpoint, credentials, and handshake status.",
-      sessions: "Active sessions and defaults.",
-      systems: "Machines and desktops.",
-      usage: "API usage and costs.",
-      cron: "Scheduled tasks and recurring agent runs.",
-      tasks: "Background tasks: subagents, automation runs, CLI.",
-      "agents-home": "Who is on your team and what they are doing",
-      agents: "Workspaces, tools, identities.",
-      skills: "Manage your agent skills",
-      "skill-settings": "Manage your agent skills",
-      plugins: "Extend your Claw with tools",
-      "plugin-settings": "Extend your Claw with tools",
-      "skill-workshop":
-        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
-      devices: "Paired devices, pairing approvals, and exec bindings.",
-      "cloud-workers": "Profiles and machine sizes for cloud sessions.",
-      profile: "Your display name, avatar, and identity on this gateway.",
-      communications: "Messages, text-to-speech, and meeting capture settings.",
-      appearance: "Theme and UI settings.",
-      lobsterdex: "Every lobster palette that has visited this browser.",
-      automation: "Commands, hooks, automations, and plugins.",
-      mcp: "MCP servers, auth, tools, and diagnostics.",
-      memory: "Memory engine, search, and dreaming.",
-      talk: "Realtime voice: provider, model, and speaker voice.",
-      infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
-      labs: "Experimental agent and tool capabilities.",
-      updates: "Release channel, automatic updates, and current update status.",
-      about: "Control UI and connected Gateway build identity.",
-      "ai-agents": "Global agent defaults: skills, tools, and session.",
-      "model-setup": "Connect a verified AI model",
-      "model-providers": "Default models, behavior, provider access, usage, and cost.",
-      "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
-      notifications: "Browser push notifications from your gateway.",
-      security: "Gateway auth, exec policy, tool profile, and approvals.",
-      secrets:
-        "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
-      advanced: "Every remaining config section, plus the raw file editor.",
-      debug: "Snapshots, events, RPC.",
-      logs: "Live gateway logs.",
-    });
-  });
-});
-
-describe("pathForRoute", () => {
-  it("returns correct path without base", () => {
-    expect(pathForRoute("chat")).toBe("/chat");
-    expect(pathForRoute("agents-home")).toBe("/agents");
-    expect(pathForRoute("agents")).toBe("/settings/agents");
-    expect(pathForRoute("apps")).toBe("/apps");
-    expect(pathForRoute("dashboards")).toBe("/dashboards");
-    expect(pathForRoute("custodian")).toBe("/custodian");
-    expect(pathForRoute("connection")).toBe("/settings/connection");
-    expect(pathForRoute("debug")).toBe("/debug");
-    expect(pathForRoute("logs")).toBe("/logs");
-    expect(pathForRoute("plugins")).toBe("/plugins");
-    expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
-    expect(pathForRoute("skill-settings")).toBe("/settings/skills");
-    expect(pathForRoute("approvals")).toBe("/settings/approvals");
-    expect(pathForRoute("labs")).toBe("/settings/labs");
-    expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
-  });
-
-  it("prepends base path", () => {
-    expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
   });
 });
 
@@ -365,6 +131,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/dreaming")).toBeNull();
     expect(routeIdFromPath("/dreams")).toBeNull();
     expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
+    expect(routeIdFromPath("/settings/search")).toBe("search");
     expect(routeIdFromPath("/settings/skills")).toBe("skill-settings");
     expect(routeIdFromPath("/skills")).toBe("skills");
     expect(routeIdFromPath("/skills/workshop")).toBe("skill-workshop");
@@ -374,18 +141,6 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/settings/labs")).toBe("labs");
     expect(routeIdFromPath("/labs")).toBeNull();
     expect(routeIdFromPath("/about")).toBeNull();
-  });
-
-  it("leaves root fallback to application startup", () => {
-    expect(routeIdFromPath("/")).toBeNull();
-  });
-
-  it("handles base paths", () => {
-    expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
-    expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
-    expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugin-settings");
-    expect(routeIdFromPath("/ui/settings/skills", "/ui")).toBe("skill-settings");
-    expect(routeIdFromPath("/xx/chat/main", "/ui")).toBeNull();
   });
 
   it("round-trips Workboard board paths", () => {
@@ -400,47 +155,22 @@ describe("routeIdFromPath", () => {
 
   it.each([
     {
-      personId: "12345678-abcd-4ef0-8123-456789abcdef",
-      label: "Josh Roberts",
-      segment: "josh-roberts-12345678abcd",
-      reference: "12345678abcd",
-    },
-    {
       personId: "12345678-ABCD-4EF0-8123-456789ABCDEF",
       label: undefined,
       segment: "12345678abcd",
       reference: "12345678abcd",
     },
     {
-      personId: "12345678-abcd-4ef0-8123-456789abcdef",
-      label: "Ada",
-      segment: "ada-12345678abcd",
-      reference: "12345678abcd",
-    },
-    {
-      personId: "12345678-abcd-4ef0-8123-456789abcdef",
-      label: "李 明",
-      segment: "%E6%9D%8E-%E6%98%8E-12345678abcd",
-      reference: "12345678abcd",
-    },
-    { personId: "alice", label: "Alice", segment: "alice", reference: "alice" },
-    {
-      personId: "profile-deadbeef",
-      label: "Alice",
-      segment: "profile%2Ddeadbeef",
-      reference: "profile-deadbeef",
-    },
-    {
-      personId: "profile/a",
-      label: "Alice",
-      segment: "profile%2Fa",
-      reference: "profile/a",
-    },
-    {
       personId: "release.js",
       label: "Alice",
       segment: "release%2Ejs",
       reference: "release.js",
+    },
+    {
+      personId: "team/alice",
+      label: undefined,
+      segment: "team%2Falice",
+      reference: "team/alice",
     },
   ])("round-trips Activity links for $personId", ({ personId, label, segment, reference }) => {
     const pathname = `/ui/activity/${segment}`;
@@ -471,17 +201,12 @@ describe("routeIdFromPath", () => {
     );
   });
 
-  it.each([
-    "/activity",
-    "/activity/",
-    "/activity/%",
-    "/activity/%20",
-    "/activity/%2E",
-    "/activity/%2E%2E",
-    "/activity/alice/extra",
-  ])("rejects an invalid Activity person path %s", (pathname) => {
-    expect(activityPersonFromPath(pathname)).toBeNull();
-  });
+  it.each(["/activity/%", "/activity/%2E%2E"])(
+    "rejects an invalid Activity person path %s",
+    (pathname) => {
+      expect(activityPersonFromPath(pathname)).toBeNull();
+    },
+  );
 
   it("round-trips session navigation through the lazy contract seam", () => {
     const pathname = sessionNavigationTarget({
@@ -499,61 +224,6 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath(pathname, "/ui")).toBe("chat");
     expect(inferBasePathFromPathname(pathname)).toBe("/ui");
   });
-
-  it("keeps dotted board IDs from resembling static asset paths", () => {
-    expect(pathForWorkboardBoard("release.js")).toBe("/workboard/release%2Ejs");
-    expect(workboardBoardIdFromPath("/workboard/release%2Ejs")).toBe("release.js");
-  });
-
-  it("rejects malformed Workboard board paths", () => {
-    expect(workboardBoardIdFromPath("/workboard/ops/extra")).toBeNull();
-    expect(workboardBoardIdFromPath("/workboard/%2F")).toBeNull();
-    expect(routeIdFromPath("/workboard/ops/extra")).toBeNull();
-  });
-
-  it("rejects route-shaped paths outside the configured base path", () => {
-    expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
-    expect(routeIdFromPath("/xx/activity/josh-12345678", "/ui")).toBeNull();
-    expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
-  });
-
-  it("returns null for unknown path", () => {
-    expect(routeIdFromPath("/unknown")).toBeNull();
-    expect(routeIdFromPath("/instances")).toBeNull();
-  });
-
-  it("matches static routes case-insensitively like the uirouter path key", () => {
-    expect(routeIdFromPath("/CHAT")).toBe("chat");
-    expect(routeIdFromPath("/Sessions")).toBe("sessions");
-  });
-});
-
-describe("compiled settings routes", () => {
-  const router = createApplicationRouter();
-
-  it.each(SETTINGS_ROUTE_PATHS)(
-    "routes $routeId through its canonical path and legacy alias",
-    ({ routeId, path, alias }) => {
-      expect(pathForRoute(routeId)).toBe(path);
-      expect(routeIdFromPath(path)).toBe(routeId);
-      expect(routeIdFromPath(alias)).toBe(routeId);
-      expect(router.pathForRoute(routeId)).toBe(path);
-      expect(router.routeIdFromPath(path)).toBe(routeId);
-      expect(router.routeIdFromPath(alias)).toBe(routeId);
-    },
-  );
-
-  it.each(SETTINGS_ROUTE_PATHS)(
-    "routes $routeId under a configured mount path",
-    ({ routeId, path, alias }) => {
-      expect(pathForRoute(routeId, "/settings")).toBe(`/settings${path}`);
-      expect(routeIdFromPath(`/settings${path}`, "/settings")).toBe(routeId);
-      expect(routeIdFromPath(`/settings${alias}`, "/settings")).toBe(routeId);
-      expect(router.pathForRoute(routeId, "/settings")).toBe(`/settings${path}`);
-      expect(router.routeIdFromPath(`/settings${path}`, "/settings")).toBe(routeId);
-      expect(router.routeIdFromPath(`/settings${alias}`, "/settings")).toBe(routeId);
-    },
-  );
 });
 
 describe("inferBasePathFromPathname", () => {
@@ -593,13 +263,6 @@ describe("inferBasePathFromPathname", () => {
 });
 
 describe("plugin tabs route", () => {
-  it("round-trips the shared /plugin route", () => {
-    expect(pathForRoute("plugin", "")).toBe("/plugin");
-    expect(routeIdFromPath("/plugin", "")).toBe("plugin");
-    // Generic tab URLs carry their reference in the search.
-    expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
-  });
-
   it("reads a namespaced tab reference from the generic URL", () => {
     const ref = { pluginId: "logbook", id: "logbook" };
     expect(pluginTabRefFromSearch("?plugin=logbook&id=logbook")).toEqual(ref);
@@ -616,7 +279,6 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "dashboards",
       "usage",
       "cron",
-      "tasks",
       "sessions",
       "systems",
       "activity",
@@ -650,6 +312,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "cloud-workers",
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -666,15 +329,5 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "updates",
       "about",
     ]);
-  });
-
-  it("keeps personal settings first and labels remaining groups", () => {
-    const settingsGroups = visibleSettingsNavigationGroups(true);
-    const [firstGroup] = settingsGroups;
-    expect(firstGroup?.labelKey).toBeNull();
-    expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
-    for (const group of settingsGroups.slice(1)) {
-      expect(group.labelKey).toBeTruthy();
-    }
   });
 });

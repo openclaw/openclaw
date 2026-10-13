@@ -1,4 +1,4 @@
-// Browser tests cover browser cli debug plugin behavior.
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserProgram,
@@ -6,15 +6,12 @@ import {
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const gatewayMock = mockBrowserGateway();
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserDebugCommands } = await import("./browser-cli-debug.js");
 
@@ -41,7 +38,7 @@ describe("browser debug command timeouts", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
         expect.objectContaining({ path, timeoutMs: Number(timeout) }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );

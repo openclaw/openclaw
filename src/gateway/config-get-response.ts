@@ -43,13 +43,15 @@ export async function readConfigGetResponse(params: {
   loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
-  const getHotReloadStatus = params.getHotReloadStatus;
-  if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
-    return createConfigGetResponse(
+  const readResponse = async () =>
+    createConfigGetResponse(
       await readConfigFileSnapshot(),
       params.loadUiHints(),
       params.revisionProjector,
     );
+  const getHotReloadStatus = params.getHotReloadStatus;
+  if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
+    return readResponse();
   }
   const appliedConfigHash = getRuntimeConfigAppliedHash();
   const pluginRegistryVersion = getActivePluginRegistryVersion();
@@ -64,12 +66,7 @@ export async function readConfigGetResponse(params: {
     return await configGetResponseCache.promise;
   }
 
-  const promise = (async () =>
-    createConfigGetResponse(
-      await readConfigFileSnapshot(),
-      params.loadUiHints(),
-      params.revisionProjector,
-    ))();
+  const promise = readResponse();
   configGetResponseCache = {
     getHotReloadStatus,
     revisionProjector: params.revisionProjector,

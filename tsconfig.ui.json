@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     // Control UI indexed reads must account for missing entries.
     "noUnusedLocals": true,
     "noUnusedParameters": true,

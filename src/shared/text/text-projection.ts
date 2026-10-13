@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions } from "./code-regions.js";
 
-type TextProjection = { text: string; delta: string | null };
+export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
 // Token absence must prove identity; activated syntax stays with the canonical transform.
 export type TextFilter = { transform: (text: string) => string } & (
@@ -10,25 +10,18 @@ export type TextFilter = { transform: (text: string) => string } & (
   | { create: () => TextProjector }
 );
 
-function createActivatedProjector(
-  filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
+/** Preserve append provenance while a probe proves that the canonical transform is identity. */
+export function createConditionalTextProjector(
+  transform: (text: string) => string,
+  shouldTransform: (input: TextProjection) => boolean,
 ): TextProjector {
-  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
-  const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
-  let tail = "";
-  let active = false;
   let previous = "";
   let identity = true;
   return (input) => {
     if (input.delta === "") {
       return identity ? input : { text: previous, delta: "" };
     }
-    if (!active) {
-      const appended = tail + (input.delta ?? input.text);
-      active = activation.test(appended);
-      tail = !active && overlap ? appended.slice(-overlap) : "";
-    }
-    const text = active ? filter.transform(input.text) : input.text;
+    const text = shouldTransform(input) ? transform(input.text) : input.text;
     const nextIdentity = text === input.text;
     const delta =
       input.delta === null
@@ -42,6 +35,23 @@ function createActivatedProjector(
     identity = nextIdentity;
     return nextIdentity && delta === input.delta ? input : { text, delta };
   };
+}
+
+export function createActivatedProjector(
+  filter: Extract<TextFilter, { activationTokens: readonly string[] }>,
+): TextProjector {
+  const activation = new RegExp(filter.activationTokens.map(escapeRegExp).join("|"), "i");
+  const overlap = Math.max(0, ...filter.activationTokens.map((token) => token.length - 1));
+  let tail = "";
+  let active = false;
+  return createConditionalTextProjector(filter.transform, (input) => {
+    if (!active) {
+      const appended = tail + (input.delta ?? input.text);
+      active = activation.test(appended);
+      tail = !active && overlap ? appended.slice(-overlap) : "";
+    }
+    return active;
+  });
 }
 
 export function applyTextFilters(input: string, filters: readonly TextFilter[]): string {
@@ -77,8 +87,10 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     get text() {
       return text;
     },
-    append(delta: string): TextProjection {
-      source += delta;
+    append(delta: string, preparedSource?: string): TextProjection {
+      // A validated cumulative snapshot already owns these bytes; rebuilding its
+      // rope would copy the growing reply again when a consumer reads it.
+      source = preparedSource ?? source + delta;
       const next = project({ text: source, delta });
       // A downstream filter can cancel an intermediate replacement without changing the final prefix.
       if (next.delta === null && next.text.startsWith(text)) {
@@ -97,10 +109,48 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   };
 }
 
-export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
+/** Trim surrounding padding without removing Markdown block indentation. */
+export function trimTextPreservingCode(
+  text: string,
+  mode: "start" | "both" = "both",
+  codeRegions?: ReturnType<typeof findCodeRegions>,
+): string {
+  let trimmed = text.trimStart();
+  if (trimmed && trimmed.length !== text.length) {
+    const contentStart = text.length - trimmed.length;
+    const leadingCode = (codeRegions ?? findCodeRegions(text)).find(
+      (region) =>
+        (region.block || (codeRegions && region.start === 0)) &&
+        region.start <= contentStart &&
+        contentStart < region.end,
+    );
+    if (leadingCode) {
+      trimmed = text.slice(leadingCode.start);
+    }
+  }
+  if (mode === "both") {
+    const contentEnd = text.trimEnd().length;
+    if (codeRegions?.some((region) => region.start <= contentEnd && region.end === text.length)) {
+      return trimmed;
+    }
+    return trimmed.trimEnd();
+  }
+  return trimmed;
+}
+
+export function trimTextFilter(
+  mode: "none" | "start" | "both",
+  options?: { preserveCodeIndentation?: boolean },
+): TextFilter {
   return {
     transform: (text) =>
-      mode === "both" ? text.trim() : mode === "start" ? text.trimStart() : text,
+      mode === "none"
+        ? text
+        : options?.preserveCodeIndentation
+          ? trimTextPreservingCode(text, mode)
+          : mode === "both"
+            ? text.trim()
+            : text.trimStart(),
     create: () => {
       let text = "";
       let leading = true;
@@ -112,7 +162,14 @@ export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
         }
         const appended = input.delta ?? input.text;
         let delta = leading ? appended.trimStart() : appended;
-        removedLeading ||= delta.length !== appended.length;
+        if (leading && options?.preserveCodeIndentation && delta) {
+          // The first visible content classifies any preceding whitespace-only deltas.
+          // Replacements create a fresh projector; later appends retain this decision.
+          delta = trimTextPreservingCode(input.text, "start");
+          removedLeading = delta.length !== input.text.length;
+        } else {
+          removedLeading ||= delta.length !== appended.length;
+        }
         leading &&= !delta;
         if (mode === "both") {
           const content = delta.trimEnd();

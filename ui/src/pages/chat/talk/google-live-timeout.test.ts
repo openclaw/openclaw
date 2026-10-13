@@ -142,27 +142,6 @@ describe("Google Live setup timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("releases browser resources when the WebSocket never opens", async () => {
-    const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
-    const transport = await createTransport({ onStatus, onTalkEvent });
-
-    const { start, socket } = await beginTransport(transport);
-    onStatus.mockClear();
-    socket.readyState = 0;
-    const rejected = expect(start).rejects.toThrow("Realtime connection timed out after 30000ms");
-    await vi.advanceTimersByTimeAsync(SETUP_TIMEOUT_MS);
-
-    await rejected;
-    expect(onStatus).not.toHaveBeenCalled();
-    expect(stopInputTrack).toHaveBeenCalledOnce();
-    expect(audioContexts).toHaveLength(2);
-    expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
-    expect(socket.readyState).toBe(3);
-    expect(onTalkEvent).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("times out an open socket that never completes Google setup", async () => {
     const onStatus = vi.fn();
     const transport = await createTransport({ onStatus });

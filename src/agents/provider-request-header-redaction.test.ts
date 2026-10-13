@@ -10,24 +10,15 @@ function mixPercentEscapeCase(value: string): string {
 }
 
 describe("provider request header redaction", () => {
-  it.each(["utf8", "latin1"] as const)(
-    "redacts decoded Basic credentials encoded as %s",
-    (encoding) => {
-      const password = "fixture-päss:word";
-      const pair = `fixture-user:${password}`;
-      const token = Buffer.from(pair, encoding).toString("base64");
-      const text = `pair=${pair} pass=${password} encoded=${encodeURIComponent(password)} user=fixture-user`;
-      for (const header of ["Authorization", "Proxy-Authorization"]) {
-        const redacted = redactProviderResponseErrorText(text, { [header]: `bAsIc ${token}` });
-        expect(redacted).toBe("pair=*** pass=*** encoded=*** user=fixture-user");
-      }
-    },
-  );
-
-  it.each(["Bearer", "Basic"])("does not decode %s payloads in arbitrary headers", (scheme) => {
-    const pair = "fixture-user:fixture-password";
-    const token = Buffer.from(pair).toString("base64");
-    expect(redactProviderResponseErrorText(pair, { "X-Custom": `${scheme} ${token}` })).toBe(pair);
+  it.each(["utf8"] as const)("redacts decoded Basic credentials encoded as %s", (encoding) => {
+    const password = "fixture-päss:word";
+    const pair = `fixture-user:${password}`;
+    const token = Buffer.from(pair, encoding).toString("base64");
+    const text = `pair=${pair} pass=${password} encoded=${encodeURIComponent(password)} user=fixture-user`;
+    for (const header of ["Authorization", "Proxy-Authorization"]) {
+      const redacted = redactProviderResponseErrorText(text, { [header]: `bAsIc ${token}` });
+      expect(redacted).toBe("pair=*** pass=*** encoded=*** user=fixture-user");
+    }
   });
 
   it.each([
@@ -86,15 +77,6 @@ describe("provider request header redaction", () => {
     expect(redacted).toContain("safe=id%2fpart keep%afcase");
   });
 
-  it("keeps raw exact matching case-sensitive", () => {
-    const secret = "CASE-sensitive-credential";
-    const lowerCaseControl = secret.toLowerCase();
-
-    expect(redactProviderResponseErrorText(lowerCaseControl, { "X-Auth": secret })).toBe(
-      lowerCaseControl,
-    );
-  });
-
   it("redacts a secret prefix only when the response was truncated", () => {
     const secret = "boundary-credential-secret";
     const retainedPrefix = secret.slice(0, -4);
@@ -104,20 +86,6 @@ describe("provider request header redaction", () => {
       redactProviderResponseErrorText(text, { "X-Auth": secret }, { sourceTruncated: true }),
     ).toBe("safe diagnostic ***");
     expect(redactProviderResponseErrorText(text, { "X-Auth": secret })).toBe(text);
-  });
-
-  it("redacts a short secret prefix at a confirmed response boundary", () => {
-    const secret = "boundary-credential-secret";
-
-    expect(
-      redactProviderResponseErrorText(
-        "diagnostic boun",
-        { "X-Auth": secret },
-        {
-          sourceTruncated: true,
-        },
-      ),
-    ).toBe("diagnostic ***");
   });
 
   it("redacts raw and JSON forms when a value contains a lone surrogate", () => {

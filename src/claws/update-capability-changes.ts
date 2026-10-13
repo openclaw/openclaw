@@ -1,13 +1,17 @@
-// Builds field-level capability change summaries for Claw update previews.
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  toAgentEntriesRecord,
+  tryResolveAmbientOwnerAgentId,
+} from "../agents/agent-scope.js";
 import { resolveMemorySearchSourcePolicy } from "../agents/memory-search-source-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { digestClawValue } from "./digest.js";
 import {
   resolveClawProfileCapabilities,
   resolveClawToolProfileSnapshot,
@@ -37,7 +41,7 @@ function capabilityValue(
 ): ClawUpdateCapabilityValue {
   return {
     summary,
-    digest: `sha256:${createHash("sha256").update(stableStringify(digestSource)).digest("hex")}`,
+    digest: digestClawValue(digestSource),
   };
 }
 
@@ -73,22 +77,20 @@ function compareRankedCapability(
 }
 
 function classifyToolSet(
-  current: unknown,
-  desired: unknown,
+  current: unknown[],
+  desired: unknown[],
+  wildcardGrant = true,
 ): ClawUpdateCapabilityChange["classification"] {
-  if (!Array.isArray(current) || !Array.isArray(desired)) {
-    return "neutral";
-  }
   const currentTools = new Set(
     current.filter((value): value is string => typeof value === "string"),
   );
   const desiredTools = new Set(
     desired.filter((value): value is string => typeof value === "string"),
   );
-  if (currentTools.has("*") !== desiredTools.has("*")) {
+  if (wildcardGrant && currentTools.has("*") !== desiredTools.has("*")) {
     return desiredTools.has("*") ? "escalation" : "reduction";
   }
-  if (desiredTools.has("*")) {
+  if (wildcardGrant && desiredTools.has("*")) {
     return "neutral";
   }
   if ([...desiredTools].some((tool) => !currentTools.has(tool))) {
@@ -169,16 +171,13 @@ function classifyAgentCapability(
     return "escalation";
   }
   if (path === "sandbox.workspaceAccess") {
-    const rank = { none: 0, ro: 1, rw: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { none: 0, ro: 1, rw: 2 });
   }
   if (path === "sandbox.mode") {
-    const rank = { all: 0, "non-main": 1, off: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { all: 0, "non-main": 1, off: 2 });
   }
   if (path === "sandbox.scope") {
-    const rank = { session: 0, agent: 1, shared: 2 } as Record<string, number>;
-    return compareRankedCapability(current, desired, rank);
+    return compareRankedCapability(current, desired, { session: 0, agent: 1, shared: 2 });
   }
   if (path === "heartbeat.every") {
     return classifyHeartbeatEvery(current, desired);
@@ -202,7 +201,7 @@ function classifyAgentCapability(
   }
   if (path === "memory.search.sources") {
     if (!Array.isArray(current) || !Array.isArray(desired)) {
-      return desired === undefined ? "reduction" : "escalation";
+      return "escalation";
     }
     const currentSources = new Set(current);
     return desired.some((source) => !currentSources.has(source)) ? "escalation" : "reduction";
@@ -211,18 +210,8 @@ function classifyAgentCapability(
     if (!Array.isArray(current) || !Array.isArray(desired)) {
       return "escalation";
     }
-    const desiredTools = new Set(
-      desired.filter((value): value is string => typeof value === "string"),
-    );
-    if (current.some((value) => typeof value === "string" && !desiredTools.has(value))) {
-      return "escalation";
-    }
-    const currentTools = new Set(
-      current.filter((value): value is string => typeof value === "string"),
-    );
-    return desired.some((value) => typeof value === "string" && !currentTools.has(value))
-      ? "reduction"
-      : "neutral";
+    // Removing a denial grants capability; deny entries do not expand wildcards.
+    return classifyToolSet(desired, current, false);
   }
   if (
     (path === "tools.profile" || path === "tools.allow" || path === "tools.alsoAllow") &&
@@ -243,16 +232,8 @@ function classifyAgentCapability(
 function pushAgentCapabilityChanges(params: {
   changes: ClawUpdateCapabilityChange[];
   agentId: string;
-  currentAgent: unknown;
-  desiredAgent: unknown;
-  currentSandbox?: unknown;
-  desiredSandbox?: unknown;
-  currentHeartbeat?: unknown;
-  desiredHeartbeat?: unknown;
-  currentMemorySearch?: unknown;
-  desiredMemorySearch?: unknown;
-  currentTools?: unknown;
-  desiredTools?: unknown;
+  current: unknown;
+  desired: unknown;
 }): void {
   const fields = [
     ["model"],
@@ -275,33 +256,8 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
-    const sandboxField = field[0] === "sandbox" ? field.slice(1) : undefined;
-    const heartbeatField = field[0] === "heartbeat" ? field.slice(1) : undefined;
-    const memorySearchField =
-      field[0] === "memory" && field[1] === "search" ? field.slice(2) : undefined;
-    const effectiveToolField =
-      field[0] === "tools" &&
-      (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
-        ? field.slice(1)
-        : undefined;
-    const currentValue = sandboxField
-      ? getPath(params.currentSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.currentHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.currentMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.currentTools, effectiveToolField)
-            : getPath(params.currentAgent, field);
-    const desiredValue = sandboxField
-      ? getPath(params.desiredSandbox, sandboxField)
-      : heartbeatField
-        ? getPath(params.desiredHeartbeat, heartbeatField)
-        : memorySearchField
-          ? getPath(params.desiredMemorySearch, memorySearchField)
-          : effectiveToolField
-            ? getPath(params.desiredTools, effectiveToolField)
-            : getPath(params.desiredAgent, field);
+    const currentValue = getPath(params.current, field);
+    const desiredValue = getPath(params.desired, field);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveClawProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveClawProfileCapabilities(desiredValue) : desiredValue;
@@ -313,7 +269,7 @@ function pushAgentCapabilityChanges(params: {
       path,
       current,
       desired,
-      params.currentAgent !== undefined,
+      params.current !== undefined,
     );
     params.changes.push({
       kind: "agent",
@@ -352,8 +308,6 @@ function pushAgentCapabilityChanges(params: {
   }
 }
 
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
 function normalizeLegacyAgent(
   config: OpenClawConfig,
   currentAgent: AgentConfig,
@@ -365,11 +319,7 @@ function normalizeLegacyAgent(
   }
   const snapshot = resolveClawToolProfileSnapshot({
     ...tools,
-    alsoAllow: (
-      resolvePortableTools(config, currentAgent.id) as {
-        alsoAllow?: string[];
-      }
-    ).alsoAllow,
+    alsoAllow: resolvePortableTools(config, currentAgent.id).alsoAllow,
   });
   if (!snapshot) {
     return currentAgent;
@@ -402,7 +352,7 @@ function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
   };
 }
 
-function resolvePortableTools(config: OpenClawConfig, agentId: string): unknown {
+function resolvePortableTools(config: OpenClawConfig, agentId: string) {
   const globalTools = config.tools;
   const agentTools = listAgentEntries(config).find((agent) => agent.id === agentId)?.tools;
   return {
@@ -433,16 +383,24 @@ function prepareCapabilityComparisonConfig(
   entries: AgentConfig[],
   preferredDefaultAgentId: string,
 ): OpenClawConfig {
-  const hasDefault = entries.some((entry) => entry.default === true);
-  const comparisonEntries = hasDefault
-    ? entries
-    : entries.map((entry) =>
-        entry.id === preferredDefaultAgentId ? { ...entry, default: true } : entry,
-      );
-  const { list: _legacyList, ...agents } = config.agents ?? {};
+  const agents = config.agents ?? {};
+  const systemAgentId =
+    agents.ownership !== "explicit" && entries.some((entry) => entry.id === preferredDefaultAgentId)
+      ? (tryResolveAmbientOwnerAgentId(config) ?? preferredDefaultAgentId)
+      : undefined;
   return {
     ...config,
-    agents: { ...agents, entries: toAgentEntriesRecord(comparisonEntries) },
+    agents: {
+      ...agents,
+      ownership: entries.length > 1 ? "explicit" : agents.ownership,
+      entries: toAgentEntriesRecord(entries),
+      defaults: systemAgentId
+        ? {
+            ...agents.defaults,
+            systemAgent: { ...agents.defaults?.systemAgent, agentId: systemAgentId },
+          }
+        : agents.defaults,
+    },
   };
 }
 export function pushResolvedAgentCapabilityChanges(params: {
@@ -477,23 +435,23 @@ export function pushResolvedAgentCapabilityChanges(params: {
     desiredAgents,
     params.agentId,
   );
+  const resolveCapabilities = (
+    config: OpenClawConfig,
+    agent: AgentConfig | undefined,
+    memoryConfig = config,
+  ) =>
+    agent && {
+      ...agent,
+      sandbox: resolveSandboxConfigForAgent(config, params.agentId),
+      heartbeat: resolveHeartbeat(config, params.agentId),
+      memory: { search: resolvePortableMemorySearch(memoryConfig, params.agentId) },
+      tools: { ...agent.tools, ...resolvePortableTools(config, params.agentId) },
+    };
   pushAgentCapabilityChanges({
     changes: params.changes,
     agentId: params.agentId,
-    currentAgent,
-    desiredAgent: params.desiredAgent,
-    currentSandbox: currentAgent
-      ? resolveSandboxConfigForAgent(currentConfig, params.agentId)
-      : undefined,
-    desiredSandbox: resolveSandboxConfigForAgent(desiredConfig, params.agentId),
-    currentHeartbeat: currentAgent ? resolveHeartbeat(currentConfig, params.agentId) : undefined,
-    desiredHeartbeat: resolveHeartbeat(desiredConfig, params.agentId),
-    currentMemorySearch: currentAgent
-      ? resolvePortableMemorySearch(params.config, params.agentId)
-      : undefined,
-    desiredMemorySearch: resolvePortableMemorySearch(desiredConfig, params.agentId),
-    currentTools: currentAgent ? resolvePortableTools(currentConfig, params.agentId) : undefined,
-    desiredTools: resolvePortableTools(desiredConfig, params.agentId),
+    current: resolveCapabilities(currentConfig, currentAgent, params.config),
+    desired: resolveCapabilities(desiredConfig, params.desiredAgent),
   });
 }
 
@@ -608,43 +566,6 @@ function summarizeMcpCapabilityEffect(server: unknown): Record<string, unknown> 
   };
 }
 
-export function mcpCapabilityChange(params: {
-  id: string;
-  action: ClawUpdateCapabilityChange["action"];
-  current?: unknown;
-  desired?: unknown;
-}): ClawUpdateCapabilityChange | undefined {
-  if (params.action === "unchanged") {
-    return undefined;
-  }
-  const reduction = params.desired === undefined;
-  return {
-    kind: "mcpServer",
-    id: params.id,
-    path: `mcpServers.${params.id}`,
-    action: params.action,
-    classification: reduction ? "reduction" : "escalation",
-    requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes or releases an MCP tool surface."
-      : "Target manifest adds, restores, or changes an MCP tool surface.",
-    effect:
-      params.desired === undefined
-        ? { removed: true }
-        : summarizeMcpCapabilityEffect(params.desired),
-    ...(params.current === undefined
-      ? {}
-      : {
-          current: capabilityValue(summarizeMcpCapability(params.current), params.current),
-        }),
-    ...(params.desired === undefined
-      ? {}
-      : {
-          desired: capabilityValue(summarizeMcpCapability(params.desired), params.desired),
-        }),
-  };
-}
-
 function summarizeCronCapability(cron: unknown): string {
   if (!cron || typeof cron !== "object") {
     return "not configured";
@@ -675,7 +596,8 @@ function summarizeCronCapabilityEffect(cron: unknown): Record<string, unknown> {
   };
 }
 
-export function cronCapabilityChange(params: {
+export function resourceCapabilityChange(params: {
+  kind: "mcpServer" | "cronJob";
   id: string;
   action: ClawUpdateCapabilityChange["action"];
   current?: unknown;
@@ -684,30 +606,39 @@ export function cronCapabilityChange(params: {
   if (params.action === "unchanged") {
     return undefined;
   }
+  const isMcp = params.kind === "mcpServer";
+  const summarize = isMcp ? summarizeMcpCapability : summarizeCronCapability;
   const reduction = params.desired === undefined;
   return {
-    kind: "cronJob",
+    kind: params.kind,
     id: params.id,
-    path: `cronJobs.${params.id}`,
+    path: `${isMcp ? "mcpServers" : "cronJobs"}.${params.id}`,
     action: params.action,
     classification: reduction ? "reduction" : "escalation",
     requiresDistinctConsent: !reduction,
-    reason: reduction
-      ? "Target manifest removes a scheduled automation."
-      : "Target manifest adds, restores, or changes a scheduled automation.",
+    reason: isMcp
+      ? reduction
+        ? "Target manifest removes or releases an MCP tool surface."
+        : "Target manifest adds, restores, or changes an MCP tool surface."
+      : reduction
+        ? "Target manifest removes a scheduled automation."
+        : "Target manifest adds, restores, or changes a scheduled automation.",
     effect:
       params.desired === undefined
         ? { removed: true }
-        : summarizeCronCapabilityEffect(params.desired),
+        : isMcp
+          ? summarizeMcpCapabilityEffect(params.desired)
+          : summarizeCronCapabilityEffect(params.desired),
+    // Omitted values must stay absent: consent digests distinguish them from undefined fields.
     ...(params.current === undefined
       ? {}
       : {
-          current: capabilityValue(summarizeCronCapability(params.current), params.current),
+          current: capabilityValue(summarize(params.current), params.current),
         }),
     ...(params.desired === undefined
       ? {}
       : {
-          desired: capabilityValue(summarizeCronCapability(params.desired), params.desired),
+          desired: capabilityValue(summarize(params.desired), params.desired),
         }),
   };
 }

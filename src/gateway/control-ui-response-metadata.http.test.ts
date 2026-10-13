@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { respondControlUiNotAcceptable } from "./control-ui-static.js";
-import { handleControlUiHttpRequest, type ControlUiRootState } from "./control-ui.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 type HttpResult = {
   body: Buffer;

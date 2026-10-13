@@ -67,11 +67,13 @@
     },
     "defaults.fileScale": {
       "label": "Default File Scale",
-      "help": "Device scale factor used while rendering file artifacts."
+      "help": "Uses the quality preset: standard 2, HQ 2.5, or print 3. Set a value to override.",
+      "placeholder": "Automatic (quality preset)"
     },
     "defaults.fileMaxWidth": {
       "label": "Default File Max Width",
-      "help": "Maximum file render width in CSS pixels."
+      "help": "Uses the quality preset: standard 960 px, HQ 1200 px, or print 1400 px. Set a value to override.",
+      "placeholder": "Automatic (quality preset)"
     },
     "defaults.mode": {
       "label": "Default Output Mode",

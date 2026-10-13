@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import * as handles from "../state/openclaw-state-db-handle.js";
 import {
@@ -12,9 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
-import * as sqlite from "./node-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasManagedUpdateRecoveryRecord } from "./update-managed-service-recovery-presence.js";
 import {
   createRetainedUpdateRecovery,
   storeRetainedUpdateRecovery,
@@ -46,12 +42,8 @@ function source() {
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(pathname);
   try {
-    // Legitimate v15/no-Workshop shape also covered by the state-owner migration tests.
+    // Legitimate v15 shape also covered by the state-owner migration tests.
     legacy.exec(`PRAGMA foreign_keys=OFF;
-      DROP TABLE IF EXISTS skill_workshop_proposal_events;
-      DROP TABLE IF EXISTS skill_workshop_proposal_rollbacks;
-      DROP TABLE IF EXISTS skill_workshop_collection_reviews;
-      DROP TABLE IF EXISTS skill_workshop_proposals;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
   } finally {
@@ -73,15 +65,17 @@ function shape(pathname: string) {
     db.close();
   }
 }
-it("refuses existing-state writes while another owner excludes the physical state file", async () => {
+it("refuses existing-state writes while another connection holds the native transaction", () => {
   const f = source();
   const before = fs.readFileSync(f.pathname);
-  const held = await acquireOpenClawStateDatabaseFileExclusion(f.pathname);
+  const writer = openNodeSqliteDatabase(f.pathname);
+  writer.exec("BEGIN IMMEDIATE");
   try {
-    expect(() => probeExistingWriter(f)).toThrow(/state-handles/);
+    expect(() => probeExistingWriter(f, 0)).toThrow(/locked/);
     expect(fs.readFileSync(f.pathname)).toEqual(before);
   } finally {
-    held.release();
+    writer.exec("ROLLBACK");
+    writer.close();
   }
 });
 
@@ -131,32 +125,6 @@ it.each(["future", "metadata", "trigger"])(
   },
 );
 
-it("does not recreate canonical state displaced immediately before the ownership probe", () => {
-  const f = source();
-  const before = shape(f.pathname);
-  const open = sqlite.openNodeSqliteDatabase;
-  let displaced = false;
-  const spy = vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-    if (
-      !displaced &&
-      options === undefined &&
-      (location === f.pathname || location === `${pathToFileURL(f.pathname).href}?mode=rw`)
-    ) {
-      displaced = true;
-      fs.renameSync(f.pathname, f.pathname + ".retained");
-    }
-    return open(location, options);
-  });
-  try {
-    expect(() => probeExistingWriter(f)).toThrow();
-  } finally {
-    spy.mockRestore();
-  }
-  expect(displaced).toBe(true);
-  expect(fs.existsSync(f.pathname)).toBe(false);
-  expect(shape(f.pathname + ".retained")).toEqual(before);
-});
-
 it("does not recreate canonical state displaced immediately before the tracked writer", () => {
   const f = source();
   const before = shape(f.pathname);
@@ -176,62 +144,7 @@ it("does not recreate canonical state displaced immediately before the tracked w
   expect(shape(f.pathname + ".retained")).toEqual(before);
 });
 
-it("detects WAL-only helper recovery without changing the canonical SQLite family", () => {
-  const f = source();
-  const db = openNodeSqliteDatabase(f.pathname);
-  try {
-    const key = `update.recovery.${f.run.runId}`;
-    const row = db.prepare("SELECT * FROM config_machine_state WHERE state_key=?").get(key);
-    if (typeof row?.value_json !== "string" || typeof row.updated_at_ms !== "number") {
-      throw new Error("Expected the prepared recovery row");
-    }
-    db.prepare("DELETE FROM config_machine_state WHERE state_key=?").run(key);
-    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-    expect(hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toBe(false);
-    db.prepare(
-      "INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES (?,?,?)",
-    ).run(key, row.value_json, row.updated_at_ms);
-    const family = () =>
-      ["", "-wal", "-shm", "-journal"].map((suffix) => {
-        const file = f.pathname + suffix;
-        return fs.existsSync(file) ? fs.readFileSync(file) : null;
-      });
-    const before = family();
-    expect(before[1]?.length).toBeGreaterThan(0);
-    expect(hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toBe(true);
-    expect(family()).toEqual(before);
-  } finally {
-    db.close();
-  }
-});
-it.each(["missing", "metadata", "run", "future"])(
-  "does not classify %s helper state as recovery absence",
-  (failure) => {
-    const f = source();
-    if (failure === "missing") {
-      fs.renameSync(f.pathname, f.pathname + ".retained");
-    } else {
-      const db = openNodeSqliteDatabase(f.pathname);
-      try {
-        if (failure === "metadata") {
-          db.exec("UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'");
-        } else if (failure === "run") {
-          db.prepare("DELETE FROM update_runs WHERE run_id=?").run(f.run.runId);
-        } else {
-          db.exec("PRAGMA user_version=2147483647");
-        }
-      } finally {
-        db.close();
-      }
-    }
-    expect(() => hasManagedUpdateRecoveryRecord(f.pathname, f.run.runId)).toThrow();
-    if (failure === "missing") {
-      expect(fs.existsSync(f.pathname)).toBe(false);
-    }
-  },
-);
-
-function probeExistingWriter(f: ReturnType<typeof source>) {
+function probeExistingWriter(f: ReturnType<typeof source>, busyTimeoutMs?: number) {
   return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {
     schemaSql: ["schema_meta", "config_machine_state", "update_runs"]
       .map((table) => {
@@ -244,6 +157,7 @@ function probeExistingWriter(f: ReturnType<typeof source>) {
       })
       .join("\n"),
     operationLabel: "retained-test-owner",
+    busyTimeoutMs,
   });
 }
 it("preserves the previous runtime schema during ledger bookkeeping", () => {

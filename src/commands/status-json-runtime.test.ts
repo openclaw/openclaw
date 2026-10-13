@@ -1,6 +1,14 @@
 // Status JSON runtime tests cover runtime status payload construction and command dependencies.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  readRuntimeConfig,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
@@ -14,7 +22,16 @@ const mocks = vi.hoisted(() => ({
       kind: "git" as const,
     },
   })),
+  readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
+  resolveStatusUsageSummary: vi.fn(),
+}));
+
+// mock-isolation: Keep config I/O out of this fixture while exercising the real snapshot owner.
+vi.mock("../config/config.js", async () => ({
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  setAppliedRuntimeConfigSnapshot: (await import("../config/runtime-snapshot.js"))
+    .setAppliedRuntimeConfigSnapshot,
 }));
 
 vi.mock("../state/backup-run-records.js", () => ({
@@ -25,8 +42,10 @@ vi.mock("./status-json-payload.ts", () => ({
   buildStatusJsonPayload: mocks.buildStatusJsonPayload,
 }));
 
+// mock-isolation: Exercise the usage callback without starting Gateway or daemon probes.
 vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
+  resolveStatusUsageSummary: mocks.resolveStatusUsageSummary,
 }));
 
 function createScan() {
@@ -75,6 +94,8 @@ function requireStatusPayloadInput() {
 describe("status-json-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRuntimeConfigSnapshot();
+    vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
@@ -85,6 +106,11 @@ describe("status-json-runtime", () => {
     });
   });
 
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    vi.restoreAllMocks();
+  });
+
   it("records requested local inspections as not collected for online JSON", async () => {
     const scan = createScan();
     scan.collection = {
@@ -93,7 +119,7 @@ describe("status-json-runtime", () => {
     };
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -101,6 +127,7 @@ describe("status-json-runtime", () => {
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeSecurityAudit: false }),
     );
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(requireStatusPayloadInput().securityAudit).toMatchObject({ collected: false });
     expect(result.pluginCompatibility).toEqual({
       count: 0,
@@ -113,11 +140,51 @@ describe("status-json-runtime", () => {
     );
   });
 
+  it("publishes full runtime policy before resolving explicit online usage", async () => {
+    const sourceConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true, config: { appServer: { homeScope: "agent" } } },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      gateway: { port: 18789 },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({ runtimeConfig, sourceConfig });
+    mocks.resolveStatusUsageSummary.mockImplementationOnce(async () => {
+      expect(readRuntimeConfig().plugins).toEqual(sourceConfig.plugins);
+      expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+      return { updatedAt: 123, providers: [] };
+    });
+    mocks.resolveStatusRuntimeSnapshot.mockImplementationOnce(
+      async (input: Parameters<typeof resolveStatusRuntimeSnapshot>[0]) => ({
+        usage: await input.resolveUsage?.({
+          config: input.config,
+          gatewayProbeDeadlineMs: input.gatewayProbeDeadlineMs,
+        }),
+      }),
+    );
+    const scan = createScan();
+    scan.collection = { source: "gateway", notCollected: [] };
+
+    await resolveStatusJsonOutput({
+      scan,
+      opts: { ...createStatusGatewayProbeBudget(), usage: true },
+      includeSecurityAudit: false,
+    });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.resolveStatusUsageSummary).toHaveBeenCalledOnce();
+    expect(requireStatusPayloadInput().usage).toEqual({ updatedAt: 123, providers: [] });
+  });
+
   it("builds the full json output for status --json", async () => {
     const scan = createScan();
     const result = await resolveStatusJsonOutput({
       scan,
-      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234 },
+      opts: { ...createStatusGatewayProbeBudget(1234), deep: true, usage: true, agent: "beta" },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
     });
@@ -126,6 +193,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 1234,
+      gatewayProbeDeadlineMs: 1234,
       agentId: "beta",
       usage: true,
       deep: true,
@@ -177,7 +245,7 @@ describe("status-json-runtime", () => {
     const { env: _env, ...scanWithoutEnv } = createScan();
     await resolveStatusJsonOutput({
       scan: scanWithoutEnv,
-      opts: { deep: false, usage: false, timeoutMs: 500 },
+      opts: { ...createStatusGatewayProbeBudget(500), deep: false, usage: false },
       includeSecurityAudit: false,
       includePluginCompatibility: false,
     });
@@ -186,6 +254,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 500,
+      gatewayProbeDeadlineMs: 500,
       usage: false,
       deep: false,
       gatewayReachable: true,
@@ -215,7 +284,7 @@ describe("status-json-runtime", () => {
 
     await resolveStatusJsonOutput({
       scan: createScan(),
-      opts: { deep: true, timeoutMs: 500 },
+      opts: { ...createStatusGatewayProbeBudget(500), deep: true },
       includeSecurityAudit: false,
       suppressHealthErrors: true,
     });
@@ -228,6 +297,7 @@ describe("status-json-runtime", () => {
       config: { update: { channel: "stable" }, gateway: {} },
       sourceConfig: { gateway: {} },
       timeoutMs: 500,
+      gatewayProbeDeadlineMs: 500,
       usage: undefined,
       deep: true,
       gatewayReachable: true,

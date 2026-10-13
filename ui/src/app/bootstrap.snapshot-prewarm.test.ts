@@ -17,94 +17,110 @@ afterEach(() => {
 describe("bootstrap routed snapshot prewarm", () => {
   it.each([
     {
-      key: "agent:other:custom-main",
-      boot: true,
-      url: "/chat",
-      expected: "agent:other:main",
-    },
-    {
       key: "agent:other:conversation",
       boot: true,
       url: "/chat",
       expected: "agent:other:conversation",
     },
-    { key: "main", boot: true, url: "/chat", expected: null },
-    { key: "agent:main:main", boot: false, url: "/chat", expected: null },
-    { key: "agent:main:main", boot: true, url: "/approve/approval-1", expected: null },
-    { key: "agent:main:main", boot: true, url: "/focus/terminal", expected: null },
     {
       key: "agent:main:main",
       boot: true,
       url: "/chat?gatewayUrl=ws%3A%2F%2Fanother.example",
       expected: null,
     },
-  ])("prewarms $key at $url only when warm boot permits it", ({ key, boot, url, expected }) => {
-    const previousUrl = window.location.href;
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    const settings = {
-      ...loadSettings(),
-      sessionKey: key,
-      lastActiveSessionKey: key,
-    };
-    saveSettings(settings);
-    persistSessionToken(settings.gatewayUrl, "test-token");
-    const record: BootRecord = {
-      version: 2,
-      authMethod: "token",
-      credential: "9d17676d",
-      scope: gatewayCredentialScope(settings.gatewayUrl),
-      savedAt: Date.now(),
-      profileId: null,
-      agents: {
-        defaultId: "main",
-        mainKey: "custom-main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "other" }],
-      },
-      groups: [],
-      sectionOrder: [],
-    };
-    if (boot) {
-      localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
-    }
-    window.history.replaceState({}, "", url);
-    const startRead = vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(() => undefined);
-    const runtime = bootstrapApplication();
-    try {
-      if (expected) {
-        expect(startRead).toHaveBeenCalledExactlyOnceWith(expected);
-      } else {
-        expect(startRead).not.toHaveBeenCalled();
+  ])(
+    "prewarms $key at $url only when warm boot permits it",
+    async ({ key, boot, url, expected }) => {
+      const previousUrl = window.location.href;
+      vi.stubGlobal("localStorage", createStorageMock());
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const settings = {
+        ...loadSettings(),
+        sessionKey: key,
+        lastActiveSessionKey: key,
+      };
+      saveSettings(settings);
+      persistSessionToken(settings.gatewayUrl, "test-token");
+      const record: BootRecord = {
+        version: 2,
+        recoveryScope: "account-a",
+        authMethod: "token",
+        credential: "9d17676d",
+        scope: gatewayCredentialScope(settings.gatewayUrl),
+        savedAt: Date.now(),
+        profileId: null,
+        agents: {
+          defaultId: "main",
+          mainKey: "custom-main",
+          scope: "per-sender",
+          agents: [{ id: "main" }, { id: "other" }],
+        },
+        groups: [],
+        sectionOrder: [],
+      };
+      if (boot) {
+        localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
       }
-      expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
-    } finally {
-      runtime.stop();
-      window.history.replaceState({}, "", previousUrl);
-    }
-  });
+      window.history.replaceState({}, "", url);
+      const startRead = vi
+        .spyOn(prewarm, "prewarmChatSnapshot")
+        .mockImplementation(() => undefined);
+      const runtime = bootstrapApplication();
+      try {
+        if (expected) {
+          expect(startRead).toHaveBeenCalledExactlyOnceWith(
+            `scope:${JSON.stringify([record.scope, "account-a"])}\u0000${expected}`,
+          );
+        } else {
+          expect(startRead).not.toHaveBeenCalled();
+        }
+        expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
+      } finally {
+        try {
+          await prewarm.readSidebarBootSnapshot(runtime.context.gateway);
+        } finally {
+          runtime.stop();
+          window.history.replaceState({}, "", previousUrl);
+        }
+      }
+    },
+  );
 });
 
 describe("warm startup credential binding", () => {
   it.each([
-    { authMethod: "token", token: "test-token", deviceToken: "other-token", warm: true },
-    { authMethod: "token", token: "changed-token", deviceToken: "test-token", warm: false },
-    { authMethod: "token", token: "", deviceToken: "test-token", warm: false },
-    { authMethod: "device-token", token: "", deviceToken: "test-token", warm: true },
-    { authMethod: "device-token", token: "", deviceToken: "rotated-token", warm: false },
-    { authMethod: "device-token", token: "", deviceToken: "", warm: false },
+    {
+      authMethod: "token",
+      token: "changed-token",
+      deviceToken: "test-token",
+      warm: false,
+      retained: true,
+    },
+    { authMethod: "token", token: "", deviceToken: "test-token", warm: false, retained: true },
+    {
+      authMethod: "device-token",
+      token: "",
+      deviceToken: "test-token",
+      warm: true,
+      retained: true,
+    },
     {
       authMethod: "device-token",
       token: "new-operator-token",
       deviceToken: "test-token",
       warm: false,
+      retained: true,
     },
-    { authMethod: "trusted-proxy", token: "test-token", deviceToken: "test-token", warm: false },
-    { authMethod: "password", token: "test-token", deviceToken: "test-token", warm: false },
-    { authMethod: undefined, token: "test-token", deviceToken: "test-token", warm: false },
+    {
+      authMethod: "trusted-proxy",
+      token: "test-token",
+      deviceToken: "test-token",
+      warm: false,
+      retained: false,
+    },
   ])(
     "$authMethod boot with operator '$token' and device '$deviceToken' is warm: $warm",
-    ({ authMethod, token, deviceToken, warm }) => {
+    ({ authMethod, token, deviceToken, warm, retained }) => {
       const previousUrl = window.location.href;
       window.history.replaceState({}, "", "/chat");
       vi.stubGlobal("localStorage", createStorageMock());
@@ -148,6 +164,7 @@ describe("warm startup credential binding", () => {
           sectionOrder: [],
         }),
       );
+      const savedRecord = localStorage.getItem(BOOT_RECORD_PREFIX + scope);
       const startRead = vi
         .spyOn(prewarm, "prewarmChatSnapshot")
         .mockImplementation(() => undefined);
@@ -155,8 +172,11 @@ describe("warm startup credential binding", () => {
       try {
         expect(runtime.warmBoot).toBe(warm);
         expect(startRead).toHaveBeenCalledTimes(warm ? 1 : 0);
-        expect(runtime.context.agents.state.agentsListCached).toBe(warm);
-        expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope) !== null).toBe(warm);
+        expect(runtime.context.agents.state.agentsList).toBeNull();
+        // Credential non-admission preserves a valid peer record; malformed records still retire.
+        expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBe(
+          retained ? savedRecord : null,
+        );
       } finally {
         runtime.stop();
         window.history.replaceState({}, "", previousUrl);

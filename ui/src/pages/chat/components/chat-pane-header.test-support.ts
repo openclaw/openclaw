@@ -1,6 +1,9 @@
-import { html, nothing, render } from "lit";
+import { nothing } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderChatPaneHeader } from "./chat-pane-header.ts";
 
 export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
@@ -24,6 +27,7 @@ export function mountChatPaneHeader(
   containers.push(container);
   const props: ChatPaneHeaderProps = {
     paneId: "pane-1",
+    presented: true,
     narrow: false,
     mergedChrome: false,
     title: "Session title",
@@ -42,13 +46,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    panelActions: nothing,
-    panelLayoutActions: nothing,
-    discussionAction: nothing,
-    diffAction: nothing,
-    backgroundTasksAction: nothing,
-    workspaceAction: nothing,
-    sessionRailAction: nothing,
     sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
@@ -60,8 +57,27 @@ export function mountChatPaneHeader(
     onBranchSelect: vi.fn(),
     ...patch,
   };
-  render(html`${renderChatPaneHeader(props)}`, container);
-  return { container, props };
+  const [current, setCurrent] = createSignal(props);
+  const mounted = mountSolid(
+    () =>
+      createComponent(LitContent, {
+        get value() {
+          return renderChatPaneHeader(current());
+        },
+      }),
+    { container },
+  );
+  return {
+    container,
+    get props() {
+      return current();
+    },
+    unmount: mounted.unmount,
+    update(this: void, changes: Partial<ChatPaneHeaderProps>) {
+      setCurrent({ ...current(), ...changes });
+      flush();
+    },
+  };
 }
 
 export function mockWorkspaceIconFetch() {

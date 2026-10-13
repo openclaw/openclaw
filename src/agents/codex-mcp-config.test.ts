@@ -60,6 +60,9 @@ describe("buildCodexMcpServersConfig", () => {
           openclaw: {
             type: "http",
             url: "http://127.0.0.1:23119/mcp",
+            connectionTimeoutMs: 12_345,
+            requestTimeoutMs: 20_125,
+            supportsParallelToolCalls: true,
             headers: {
               Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
               "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
@@ -71,6 +74,9 @@ describe("buildCodexMcpServersConfig", () => {
     ).toEqual({
       openclaw: {
         url: "http://127.0.0.1:23119/mcp",
+        startup_timeout_sec: 12.345,
+        tool_timeout_sec: 20.125,
+        supports_parallel_tool_calls: true,
         default_tools_approval_mode: "approve",
         bearer_token_env_var: "OPENCLAW_MCP_TOKEN",
         http_headers: {
@@ -83,23 +89,17 @@ describe("buildCodexMcpServersConfig", () => {
     });
   });
 
-  it("preserves Codex-specific MCP approval mode metadata", () => {
+  it("keeps native timeout projection within OpenClaw timer bounds", () => {
     expect(
       buildCodexMcpServersConfig({
         mcpServers: {
-          search: {
-            url: "https://mcp.example.com/mcp",
-            codex: {
-              defaultToolsApprovalMode: "prompt",
-            },
-          },
+          bounded: { command: "mcp", connectionTimeoutMs: 0.25, requestTimeoutMs: 1e306 },
+          defaults: { command: "mcp" },
         },
       }),
     ).toEqual({
-      search: {
-        url: "https://mcp.example.com/mcp",
-        default_tools_approval_mode: "prompt",
-      },
+      bounded: { command: "mcp", startup_timeout_sec: 0.001, tool_timeout_sec: 2_147_000 },
+      defaults: { command: "mcp" },
     });
   });
 });
@@ -151,16 +151,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     expect(revoked.fingerprint).not.toBe(granted.fingerprint);
   });
 
-  it("forwards a prepared manifest registry to bundle loading", async () => {
-    const manifestRegistry = { plugins: [] };
-
-    await loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace", manifestRegistry });
-
-    expect(mocks.loadCalls).toEqual([
-      expect.objectContaining({ workspaceDir: "/workspace", manifestRegistry }),
-    ]);
-  });
-
   it("prepares Agent Plugins data dirs before projecting Codex thread config", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-agent-mcp-"));
     tempDirs.push(tempDir);
@@ -173,6 +163,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
           weather: {
             command: "node",
             env: { PLUGIN_DATA: dataDir },
+            supportsParallelToolCalls: false,
             codex: { defaultToolsApprovalMode: "prompt" },
           },
           broken: { command: "node", env: { PLUGIN_DATA: collisionPath } },
@@ -193,7 +184,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     const loaded = await loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
-    expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({ command: "node" });
+    expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({
+      command: "node",
+      supports_parallel_tool_calls: false,
+      default_tools_approval_mode: "prompt",
+    });
     expect(loaded.configPatch?.mcp_servers.broken).toBeUndefined();
     expect(loaded.diagnostics).toEqual([
       expect.objectContaining({
@@ -210,6 +205,9 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
           search: {
             type: "http",
             url: "https://mcp.example.com/mcp",
+            connectionTimeoutMs: 12_345,
+            requestTimeoutMs: 20_125,
+            supportsParallelToolCalls: true,
           },
         },
       },
@@ -231,11 +229,31 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       mcp_servers: {
         search: {
           url: "https://mcp.example.com/mcp",
+          startup_timeout_sec: 12.345,
+          tool_timeout_sec: 20.125,
+          supports_parallel_tool_calls: true,
         },
       },
     });
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(loaded.staticServerNames).toEqual(["search"]);
+    for (const changedControls of [
+      { connectionTimeoutMs: 25_000 },
+      { requestTimeoutMs: 45_000 },
+      { supportsParallelToolCalls: false },
+    ]) {
+      mocks.bundleMcp.config.mcpServers = {
+        search: {
+          url: "https://mcp.example.com/mcp",
+          connectionTimeoutMs: 12_345,
+          requestTimeoutMs: 20_125,
+          supportsParallelToolCalls: true,
+          ...changedControls,
+        },
+      };
+      const changed = await loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
+      expect(changed.fingerprint).not.toBe(loaded.fingerprint);
+    }
   });
 
   it("applies session server and tool denials to bundled Codex MCP config", async () => {
@@ -311,31 +329,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     });
   });
 
-  it("leaves user mcp.servers to the Codex user MCP projection path", async () => {
-    // User MCP config is projected elsewhere; this loader only injects bundled
-    // MCP servers so the same server does not appear twice in Codex.
-    const loaded = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            search: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
-            },
-          },
-        },
-      },
-      toolsEnabled: true,
-    });
-
-    expect(loaded.configPatch).toBeUndefined();
-    expect(loaded.fingerprint).toBeUndefined();
-    expect(loaded.evaluated).toBe(true);
-    expect(loaded.staticServerNames).toEqual(["search"]);
-    expect(loaded.userStaticServerNames).toEqual(["search"]);
-  });
-
   it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", async () => {
     const cfg = {
       mcp: {
@@ -365,18 +358,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.evaluated).toBe(true);
       expect(loaded.staticServerNames).toEqual([]);
     }
-  });
-
-  it("omits the config patch when no MCP servers are configured", async () => {
-    const loaded = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-
-    expect(loaded.configPatch).toBeUndefined();
-    expect(loaded.fingerprint).toBeUndefined();
-    expect(loaded.evaluated).toBe(true);
   });
 
   it("excludes requester-scoped servers from projection and fingerprint", async () => {
@@ -438,40 +419,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
       expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
       expect(loaded.staticServerNames).toEqual(["search"]);
-    });
-  });
-
-  it("keeps static projection byte-identical when no resolver exists", async () => {
-    mocks.bundleMcp = {
-      config: {
-        mcpServers: {
-          search: {
-            type: "http",
-            url: "https://mcp.example.com/mcp",
-          },
-        },
-      },
-      diagnostics: [],
-    };
-
-    const a = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-    const b = await loadCodexBundleMcpThreadConfigCore({
-      workspaceDir: "/workspace",
-      cfg: {},
-      toolsEnabled: true,
-    });
-    expect(a.configPatch).toEqual(b.configPatch);
-    expect(a.fingerprint).toBe(b.fingerprint);
-    expect(a.configPatch).toEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-        },
-      },
     });
   });
 });

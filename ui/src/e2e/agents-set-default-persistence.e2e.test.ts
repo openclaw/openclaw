@@ -1,7 +1,7 @@
 // Control UI tests cover Agents page Set Default persistence behavior.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -25,7 +25,11 @@ suite.define(() => {
   it("persists Set Default through config.set instead of only staging the form draft", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const initialConfig = {
-        agents: { entries: { main: { default: true }, kimi: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, kimi: {} },
+        },
       };
       const savedConfig = {
         agents: {
@@ -72,7 +76,7 @@ suite.define(() => {
       // Click auto-waits for the elements to be actionable (enabled), so
       // these implicitly assert the dropdown loaded and Set Default is clickable for a
       // non-default agent.
-      const agentSelect = page.locator("wa-dropdown.agent-select");
+      const agentSelect = page.locator("openclaw-agent-select");
       await agentSelect.locator(".agent-select__trigger").click();
       await agentSelect.getByRole("menuitemradio", { name: "Kimi agent", exact: true }).click();
       await page.getByRole("button", { name: "Set Default", exact: true }).click();
@@ -133,7 +137,7 @@ suite.define(() => {
             selectionRequired ? "ownerless.png" : "designated.png",
           ),
         });
-        expect(await page.locator("wa-dropdown-item .agent-select__badge").count()).toBe(0);
+        expect(await page.locator(".agent-select__option .agent-select__badge").count()).toBe(0);
         await page
           .getByRole("menuitemradio", {
             name: selectionRequired ? "Main agent" : "Research agent",

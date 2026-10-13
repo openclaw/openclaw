@@ -1,45 +1,13 @@
-// Regression: drain IIFE finally (drain.ts:263-271) previously performed an
-// unconditional `FOLLOWUP_QUEUES.delete(key)` + `clearFollowupDrainCallback(key)`
-// based on the queue key alone, without checking whether its captured `queue`
-// reference still matched the map entry. Under the `/stop` + immediate followup
-// sequence, a late-returning D1 finally would delete the map entry belonging to
-// a fresh Q2 and orphan it.
-//
-// production trigger:
-//   T0 enqueueFollowupRun(msg1) + scheduleFollowupDrain → Q1 + D1 start
-//   T1 clearSessionQueues([key])                         (e.g. /stop command)
-//   T2 enqueueFollowupRun(msg2)                          → Q2 map.set
-//   T3 D1 awaited branch returns → finally
-//      L265 items=0 && dropped=0 → L266 FOLLOWUP_QUEUES.delete(key)
-//      ← current map entry (Q2) is removed → Q2 orphaned.
-//
-// Deterministic design:
-//   T2 uses `restartIfIdle=false` so D2 is NOT kicked. Q2 stays registered and
-//   no second drain runs, so D1's finally is the only mutator that can touch
-//   the map. D1 is parked on a Deferred gate inside runFollowup until T3.
-//
-//     pre-fix : D1 finally deletes the map entry → get(key)===undefined,
-//               getFollowupQueueDepth === 0.
-//     post-fix: identity guard sees get(key) !== Q1, skips delete →
-//               get(key)===Q2, getFollowupQueueDepth === 1.
-//
-// CAL-003 / R-7: no module mocks. Real clearSessionQueues, enqueueFollowupRun,
-// scheduleFollowupDrain, and FOLLOWUP_QUEUES are imported. The Deferred gate
-// mirrors the pattern in queue.drain-restart.test.ts:207-234.
-
+// A late drain finally must not delete the replacement queue created after a reset.
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  clearSessionQueues,
-  enqueueFollowupRun,
-  getFollowupQueueDepth,
-  scheduleFollowupDrain,
-} from "../queue.js";
+import { enqueueFollowupRun, getFollowupQueueDepth, scheduleFollowupDrain } from "../queue.js";
 import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "../queue.test-helpers.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { clearFollowupDrainCallback } from "./drain.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun, QueueSettings } from "./types.js";
 
 installQueueRuntimeErrorSilencer();
@@ -48,12 +16,13 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
   const keysToCleanup: string[] = [];
 
   afterEach(() => {
-    if (keysToCleanup.length > 0) {
-      clearSessionQueues(keysToCleanup.splice(0));
+    for (const key of keysToCleanup.splice(0)) {
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
     }
   });
 
-  it("preserves Q2 map entry after /stop when D1 finally runs late", async () => {
+  it("preserves Q2 map entry after reset when D1 finally runs late", async () => {
     const key = `test-drain-identity-${Date.now()}-${Math.random()}`;
     keysToCleanup.push(key);
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -75,11 +44,12 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
 
     const q1 = FOLLOWUP_QUEUES.get(key);
     if (!q1) {
-      throw new Error("Q1 should be registered pre-/stop");
+      throw new Error("Q1 should be registered before reset");
     }
     expect(q1.draining).toBe(true);
 
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     expect(FOLLOWUP_QUEUES.has(key)).toBe(false);
 
     enqueueFollowupRun(

@@ -25,9 +25,14 @@ const hasPowerShell =
   }).status === 0;
 
 describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
-  it.each(["available", "missing"] as const)(
-    "keeps the PowerShell owner and binds a %s profile privately",
-    async (credentialState) => {
+  it.each([
+    { credentialState: "available", externalCommand: false },
+    { credentialState: "missing", externalCommand: false },
+    { credentialState: "available", externalCommand: true },
+    { credentialState: "missing", externalCommand: true },
+  ])(
+    "keeps the PowerShell owner for $credentialState credentials (external: $externalCommand)",
+    async ({ credentialState, externalCommand }) => {
       const root = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "github-powershell-")),
       );
@@ -48,16 +53,29 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
         process.stdout.write(JSON.stringify({
           cwd: process.cwd(), selected: process.env.GH_TOKEN === "synthetic-powershell-token",
           cleared: !process.env.GITHUB_TOKEN,
+          args: process.argv.slice(2),
         }));
         process.exitCode = 7;
       `,
       );
       const quotePowerShell = (value: string) => `'${value.replaceAll("'", "''")}'`;
-      const command = `& ${[process.execPath, target].map(quotePowerShell).join(" ")}; exit $LASTEXITCODE`;
+      const args = ["a b", "'quoted'", "$HOME", "$(false)", "line\nbreak", "--literal"];
+      const targetArgv = [process.execPath, target, ...args];
+      const command = `& ${targetArgv.map(quotePowerShell).join(" ")}; exit $LASTEXITCODE`;
       const launchArgv = withMockedWindowsPlatform(() =>
         buildGitHubExecLaunchArgv(
-          [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+          externalCommand
+            ? targetArgv
+            : [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
           profile,
+          externalCommand
+            ? {
+                externalCommandShell: {
+                  shell: powershell,
+                  args: ["-NoProfile", "-NonInteractive", "-Command"],
+                },
+              }
+            : undefined,
         ),
       );
       expect(JSON.stringify(launchArgv)).not.toContain("synthetic-powershell-token");
@@ -87,14 +105,14 @@ describe.skipIf(!hasPowerShell)("GitHub launch PowerShell boundary", () => {
       });
       if (credentialState === "available") {
         expect(code).toBe(7);
-        expect(JSON.parse(stdout)).toEqual({ cwd: root, selected: true, cleared: true });
+        expect(JSON.parse(stdout)).toEqual({ cwd: root, selected: true, cleared: true, args });
         expect(stderr).toBe("");
       } else {
         expect(code).toBe(1);
         expect(stdout).toBe("");
         expect(stderr).toContain("GitHub Identity credential is unavailable or insecure");
       }
-      expect(launchArgv[0]).toBe(powershell);
+      expect(path.basename(launchArgv[0]!)).toBe(path.basename(powershell));
       expect(`${stdout}${stderr}`).not.toContain("synthetic-powershell-token");
     },
   );

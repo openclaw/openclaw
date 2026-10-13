@@ -24,18 +24,9 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
     }),
   resolve: (params) => {
     const authority = resolveGatewayChatCronCreatorAuthorityAdmission({
-      runId: params.runId,
+      ...params,
       resolvedSessionKey: params.sessionKey,
-      spawnedBy: params.spawnedBy,
-      client: params.client,
-      isCurrent: params.isCurrent,
-      inputProvenance: params.inputProvenance,
-      hasExplicitOrigin: params.hasExplicitOrigin,
-      hasRestoredCronContinuation: params.hasRestoredCronContinuation,
       isIncognito: params.isIncognitoEntry || isIncognitoSessionKey(params.sessionKey),
-      isReconnectResume: params.isReconnectResume,
-      isSystemGenerated: params.isSystemGenerated,
-      turnKind: params.turnKind,
       isDirectExternalUser: true,
     });
     return authority
@@ -44,6 +35,9 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
           authority.callerOrigin,
           authority.managementEntitlement,
           authority.isCurrent,
+          undefined,
+          authority.requesterOwner,
+          authority.callerScopedCreation,
         )
       : undefined;
   },

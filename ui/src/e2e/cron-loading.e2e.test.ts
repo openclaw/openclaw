@@ -8,6 +8,7 @@ import {
   startControlUiE2eServer,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -66,15 +67,16 @@ suite.define(() => {
             { match: { id: b.id }, response: b },
           ],
         });
-        const list = (jobs: CronJob[]) => ({
-          jobs,
-          snapshotRevision: "garden-inventory",
-          total: jobs.length,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-        });
+        const list = (jobs: CronJob[]) =>
+          cronListResponseFixture({
+            jobs,
+            snapshotRevision: "garden-inventory",
+            total: jobs.length,
+            offset: 0,
+            limit: 50,
+            hasMore: false,
+            nextOffset: null,
+          });
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "cron.list": list([a, b]),

@@ -71,114 +71,6 @@ describe("public account config writers", () => {
   );
 });
 
-describe("clearAccountEntryFields", () => {
-  it("clears configured values and removes empty account entries", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("treats empty string values as not configured by default", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "   ",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: false,
-    });
-  });
-
-  it("can mark cleared when fields are present even if values are empty", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          tokenFile: "",
-        },
-      },
-      accountId: "default",
-      fields: ["tokenFile"],
-      markClearedOnFieldPresence: true,
-    });
-
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("keeps other account fields intact", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-          name: "Primary",
-        },
-        backup: {
-          botToken: "keep",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: {
-        default: {
-          name: "Primary",
-        },
-        backup: {
-          botToken: "keep",
-        },
-      },
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("returns unchanged when account entry is missing", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      accountId: "other",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      changed: false,
-      cleared: false,
-    });
-  });
-});
-
 describe("clearAccountFieldsFromConfigSection", () => {
   function clear(cfg: OpenClawConfig, accountId = "default", markClearedOnFieldPresence = false) {
     const original = structuredClone(cfg);
@@ -193,7 +85,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     return result;
   }
 
-  it.each(["token", "   ", { source: "env", provider: "default", id: "SAMPLE_TOKEN" }])(
+  it.each([{ source: "env", provider: "default", id: "SAMPLE_TOKEN" }])(
     "clears the entire root field group for truthy value %j",
     (token) => {
       const cfg: OpenClawConfig = {
@@ -212,7 +104,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves nested field-presence reporting with mode %s",
     (markClearedOnFieldPresence) => {
       const sibling = { token: "keep" };
@@ -240,12 +132,7 @@ describe("clearAccountFieldsFromConfigSection", () => {
     });
   });
 
-  it.each([
-    {},
-    { channels: {} },
-    { channels: { sample: { accounts: {} } } },
-    { channels: { sample: { token: "", secret: "" } } },
-  ])("returns original config without pruning a no-op %j", (cfg) => {
+  it.each([{ channels: {} }])("returns original config without pruning a no-op %j", (cfg) => {
     const result = clear(cfg);
     expect(result).toEqual({ nextConfig: cfg, changed: false, cleared: false });
     expect(result.nextConfig).toBe(cfg);

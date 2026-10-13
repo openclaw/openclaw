@@ -1,18 +1,54 @@
 import type { TypeBoxValidationError } from "@openclaw/normalization-core/json-schema";
+import { hasNonEmptyString, readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = TypeBoxValidationError;
 
-function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
+export function checkProtocolJson(data: unknown, maxDepth: number): ValidationError | undefined {
+  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
+  const seen = new WeakSet<object>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    if (current.depth > maxDepth) {
+      return {
+        keyword: "maxDepth",
+        params: { limit: maxDepth },
+        message: `must not exceed JSON nesting depth ${maxDepth}`,
+      };
+    }
+    if (
+      current.value === null ||
+      typeof current.value === "string" ||
+      typeof current.value === "boolean"
+    ) {
+      continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) {
+        return { keyword: "finite", message: "must contain only finite JSON numbers" };
+      }
+      continue;
+    }
+    if (typeof current.value !== "object") {
+      return { keyword: "jsonValue", message: "must contain only JSON values" };
+    }
+    if (seen.has(current.value)) {
+      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
+    }
+    seen.add(current.value);
+    const values = Array.isArray(current.value) ? current.value : Object.values(current.value);
+    for (const value of values) {
+      stack.push({ depth: current.depth + 1, value });
+    }
   }
   return undefined;
+}
+
+function firstStringParam(value: unknown): string | undefined {
+  return Array.isArray(value) ? value.find(hasNonEmptyString) : readNonBlankString(value);
 }
 
 /** Convert validator errors into compact operator-facing failure text. */
@@ -55,9 +91,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const message =
       keyword === "then" || (keyword === "if" && failingKeyword === "then")
         ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
+        : (readNonBlankString(err?.message) ?? "validation error");
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }

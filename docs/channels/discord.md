@@ -150,6 +150,14 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
 - Grant least-privilege Discord permissions.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
 
+Discord model-picker preferences and thread bindings use SQLite. Their old
+`discord/model-picker-preferences.json` and `discord/thread-bindings.json` files
+predate the July 2026 upgrade support window. Doctor preserves these files and
+reports recovery guidance instead of importing them. Keep a pre-update backup,
+[upgrade through OpenClaw 2026.9.5](/install/updating#upgrading-very-old-versions),
+and run `openclaw doctor --fix` before installing the latest version.
+July SQLite state and the July command-deployment cache remain supported.
+
 ## Related
 
 <CardGroup cols={2}>

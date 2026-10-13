@@ -95,15 +95,8 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   }
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;
-  if (!stored) {
-    return createExecutionIdentityRecoveryAdmission({
-      retryOnly: params.retryOnly,
-      expectedOperationalRunId: params.runId,
-    });
-  }
-  const token = parseExecutionIdentityAdmissionToken(stored);
   return createExecutionIdentityRecoveryAdmission({
-    token,
+    ...(stored ? { token: parseExecutionIdentityAdmissionToken(stored) } : {}),
     retryOnly: params.retryOnly,
     expectedOperationalRunId: params.runId,
   });

@@ -27,8 +27,7 @@ openclaw-custodian-page {
 
 .custodian-surface {
   display: grid;
-  /* Notices share one row so their presence cannot displace the flexible transcript. */
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -51,8 +50,13 @@ openclaw-custodian-page {
   text-align: center;
 }
 
-.custodian__setup-state openclaw-mascot {
+.custodian__setup-state openclaw-mascot,
+.custodian__mark openclaw-mascot,
+.custodian__mascot-avatar openclaw-mascot {
   display: block;
+}
+
+.custodian__setup-state openclaw-mascot {
   margin-bottom: 4px;
 }
 
@@ -86,7 +90,7 @@ openclaw-custodian-page {
 }
 
 .custodian-surface--empty-error {
-  grid-template-rows: auto auto auto auto;
+  grid-template-rows: auto auto auto;
   align-content: start;
 }
 
@@ -147,10 +151,6 @@ openclaw-custodian-page {
   height: 38px;
   flex: 0 0 38px;
   place-items: center;
-}
-
-.custodian__mark openclaw-mascot {
-  display: block;
 }
 
 .custodian__messages {
@@ -270,6 +270,11 @@ openclaw-custodian-page {
   cursor: var(--cursor-action);
 }
 
+.custodian__nudge-dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
 .custodian__nudge-action:focus-visible,
 .custodian__nudge-dismiss:focus-visible {
   outline: none;
@@ -309,32 +314,14 @@ openclaw-custodian-page {
   background: var(--bg-elevated);
 }
 
-.custodian__wizard-title {
+.custodian__wizard-title,
+.custodian__history-heading strong {
   color: var(--text-strong);
   font-size: 14px;
 }
 
 .custodian__wizard-step .btn {
   min-height: 44px;
-}
-
-.custodian__wizard-step .btn:disabled:hover {
-  border-color: var(--border);
-  background: var(--bg-elevated);
-  box-shadow: none;
-}
-
-.custodian__wizard-step .btn.primary:disabled:hover {
-  border-color: var(--accent);
-  background: var(--primary);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
-.custodian__wizard-step .custodian__wizard-cancel:disabled:hover {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
 }
 
 .custodian__wizard-cancel:not(:disabled) {
@@ -359,14 +346,46 @@ openclaw-custodian-page {
   background: transparent;
 }
 
-.custodian__mascot-avatar openclaw-mascot {
-  display: block;
-}
-
 .custodian-surface > .agent-chat__composer-shell {
   width: 100%;
   max-width: none;
   margin: 8px 0 0;
+}
+
+.custodian-surface .agent-chat__input {
+  --chat-composer-min-height: 0px;
+}
+
+.custodian-surface .agent-chat__composer-input-row {
+  padding-bottom: var(--chat-composer-editor-inset-block);
+}
+
+.custodian__plugin-intro {
+  display: grid;
+  gap: 20px;
+  margin-block: auto;
+  padding: 24px 12px;
+}
+
+.custodian__plugin-intro h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 20px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.custodian__plugin-starters {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.custodian__plugin-starters .btn {
+  min-height: 44px;
+  max-width: 100%;
+  text-align: start;
+  white-space: normal;
 }
 
 .custodian__thinking > span:not(.sr-only) {
@@ -417,11 +436,6 @@ openclaw-custodian-page {
   gap: 12px;
 }
 
-.custodian__history-heading strong {
-  color: var(--text-strong);
-  font-size: 14px;
-}
-
 .custodian__history-heading span,
 .custodian__history-state {
   color: var(--muted);
@@ -436,13 +450,7 @@ openclaw-custodian-page {
   border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
   border-top-color: currentcolor;
   border-radius: var(--radius-full);
-  animation: custodian-history-spin 0.7s linear infinite;
-}
-
-@keyframes custodian-history-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -584,12 +592,4 @@ openclaw-custodian-page {
   .custodian__thinking > span:not(.sr-only) {
     animation: none;
   }
-}
-
-.custodian__plugin-reference {
-  padding: 8px 0;
-  color: var(--muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  border-bottom: 1px solid var(--border);
 }

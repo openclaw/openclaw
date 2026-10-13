@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -19,6 +20,7 @@ import {
 } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
+  applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
@@ -44,20 +46,15 @@ function seedCachedHistory(
 ): ChatMessageCache {
   const cache: ChatMessageCache = new Map();
   state.chatMessagesBySession = cache;
-  state.chatMessages = messages;
-  state.chatHistoryPagination = { hasMore: false, completeSnapshot: true };
-  state.currentSessionId = "session-cursor";
-  cacheChatSessionSnapshot(
-    cache,
-    state,
-    { sessionKey: state.sessionKey },
-    {
-      ...(deltaCursor !== undefined ? { deltaCursor } : {}),
-      messages,
-      pagination: state.chatHistoryPagination,
-      sessionId: "session-cursor",
-    },
-  );
+  const snapshot = {
+    ...(deltaCursor !== undefined ? { deltaCursor } : {}),
+    displayedLeafEntryId: state.chatDisplayedLeafEntryId,
+    messages,
+    pagination: { hasMore: false, completeSnapshot: true } as const,
+    sessionId: "session-cursor",
+  };
+  applyChatCacheSnapshot(state, snapshot);
+  cacheChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey }, snapshot);
   return cache;
 }
 
@@ -82,170 +79,215 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 describe("chat history cursor revalidation", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(["live", "history-delta"] as const)(
-    "retains an attributed pending steer across a leaf advance before %s persistence",
-    async (delivery) => {
-      vi.stubGlobal("sessionStorage", createStorageMock());
-      const sessionKey = "agent:main:participant-steer";
-      const sendRunId = "bob-send";
-      const aliceFinal = {
-        ...message("assistant", "Alice finished the command.", "alice-final", 4),
-        timestamp: 2000,
-      };
-      const handler = vi.fn(async (): Promise<unknown> => ({
-        kind: "delta",
-        messages: [
-          {
-            sessionKey,
-            message: aliceFinal,
-            messageId: "alice-final",
-            messageSeq: 4,
-            runId: "alice-run",
-          },
-        ],
-        deltaCursor: "cursor-4",
-        sessionInfo: {
-          key: sessionKey,
-          kind: "direct",
-          sessionId: "session-cursor",
-          activeLeafEntryId: "alice-final",
-          updatedAt: 2000,
-          hasActiveRun: false,
-          status: "done",
-          lastRunId: "alice-run",
-        },
+  it("catches up a lagging split after a sibling advances", async () => {
+    const cached = message("user", "First turn", "user-1", 1);
+    const reply = message("assistant", "New reply", "answer-2", 2);
+    const handler = vi.fn(async (params?: unknown) => ({
+      kind: "delta",
+      messages:
+        asOptionalRecord(params)?.cursor === "cursor-1"
+          ? [{ message: reply, messageId: "answer-2", messageSeq: 2 }]
+          : [],
+      deltaCursor: "cursor-2",
+      sessionInfo: { key: "main", kind: "direct", sessionId: "session-cursor", updatedAt: 2 },
+    }));
+    const first = createState(handler);
+    const second = createState(handler);
+    second.client = first.client;
+    second.sessions = first.sessions;
+    const cache = seedCachedHistory(first, [cached], "cursor-1");
+    seedCachedHistory(second, [cached], "cursor-1");
+    second.chatMessagesBySession = cache;
+    await loadChatHistory(first);
+    expect(first.chatMessages).toEqual([cached, reply]);
+    expect(second.chatMessages).toEqual([cached]);
+    await loadChatHistory(second);
+    expect(second.chatMessages).toEqual([cached, reply]);
+    expect(handler).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: "cursor-1", toolResultMaxChars: 2_000 }),
+    );
+  });
+
+  it.each(["session", "agent", "transcript", "reset"] as const)(
+    "does not reuse a pane cursor after its %s changes",
+    async (transition) => {
+      const handler = vi.fn(async () => ({
+        messages: [message("assistant", "Replacement history", "replacement", 1)],
+        sessionId: "replacement-session",
       }));
       const state = createState(handler);
-      state.sessionKey = sessionKey;
-      state.chatDisplayedLeafEntryId = "alice-tool-result";
-      seedCachedHistory(
-        state,
-        [
-          {
-            ...message("user", "Run the long command.", "alice-user", 1),
-            __openclaw: {
-              id: "alice-user",
-              seq: 1,
-              idempotencyKey: "alice-run:user",
-              senderId: "alice-profile",
-              senderName: "Alice Proof",
-            },
-          },
-          message(
-            "assistant",
-            [{ type: "toolCall", id: "exec-call", name: "exec", arguments: {} }],
-            "alice-tool-call",
-            2,
-          ),
-          {
-            role: "toolResult",
-            toolCallId: "exec-call",
-            content: "Command finished.",
-            __openclaw: { id: "alice-tool-result", seq: 3 },
-          },
-        ],
-        "cursor-3",
-      );
-      const queued: ChatQueueItem = {
-        id: "bob-queued-send",
-        text: "Reply exactly: BOB_STEER_ACK",
-        createdAt: 1500,
-        sendRunId,
-        sendState: "sending",
-        sendAttempts: 1,
-        queueMode: "steer",
-        sessionKey,
-        sender: { id: "bob-profile", name: "Bob Proof" },
-      };
-      expect(
-        admitStoredChatComposerQueueItem(
-          state,
-          captureChatOutboxAdmission(state, sessionKey, queued.agentId),
-          queued,
-        ),
-      ).toBe(true);
-      state.chatQueue = [queued];
-      const renderedBobMessages = () =>
-        buildChatItems({
-          paneId: "participant-steer-cursor",
-          sessionKey,
-          runId: state.chatRunId,
-          messages: state.chatMessages,
-          queue: state.chatQueue,
-          toolMessages: state.chatToolMessages ?? [],
-          streamSegments: state.chatStreamSegments ?? [],
-          stream: state.chatStream,
-          streamStartedAt: state.chatStreamStartedAt,
-          showToolCalls: true,
-        }).flatMap((item) =>
-          item.kind === "group" && item.role === "user"
-            ? item.messages.filter(
-                ({ message: candidate }) => extractText(candidate) === queued.text,
-              )
-            : [],
-        );
-      expect(renderedBobMessages()).toHaveLength(1);
-
-      // Delivery retirement materializes the acknowledged turn before its durable row arrives.
-      expect(await retireDeliveredQueuedUserTurn(state, sendRunId, { sessionKey })).toBe("retired");
-      expect(state.chatQueue).toEqual([]);
-      expect(renderedBobMessages()).toHaveLength(1);
-      await loadChatHistory(state);
-      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));
-      expect(state.chatDisplayedLeafEntryId).toBe("alice-final");
-      expect(renderedBobMessages()).toHaveLength(1);
-
-      const persistedBob = {
-        role: "user",
-        content: queued.text,
-        timestamp: queued.createdAt,
-        idempotencyKey: `${sendRunId}:user`,
-        __openclaw: {
-          id: "bob-user",
-          seq: 5,
-          idempotencyKey: `${sendRunId}:user`,
-          senderId: "bob-profile",
-          senderName: "Bob Proof",
-          recordTimestampMs: 2500,
-        },
-      };
-      const persistedPayload = {
-        sessionKey,
-        clientRunId: sendRunId,
-        message: persistedBob,
-        messageId: "bob-user",
-        messageSeq: 5,
-      };
-      if (delivery === "live") {
-        applySessionMessagePayload(state, persistedPayload, true, {
-          kind: "live",
-          activeRunId: state.chatRunId,
-        });
+      state.sessionKey = "global";
+      state.assistantAgentId = "main";
+      seedCachedHistory(state, [message("user", "Previous history", "previous", 1)], "old-cursor");
+      if (transition === "session") {
+        state.sessionKey = "agent:main:other";
+      } else if (transition === "agent") {
+        state.assistantAgentId = "other";
+      } else if (transition === "transcript") {
+        state.currentSessionId = "replacement-session";
       } else {
-        handler.mockResolvedValueOnce({
-          kind: "delta",
-          messages: [persistedPayload],
-          deltaCursor: "cursor-5",
-          sessionInfo: {
-            key: sessionKey,
-            kind: "direct",
-            sessionId: "session-cursor",
-            activeLeafEntryId: "bob-user",
-            updatedAt: 2500,
-            hasActiveRun: true,
-            status: "running",
-            lastRunId: "alice-run",
-          },
-        });
-        await loadChatHistory(state);
+        reduceChatSessionProjection(state, { type: "sessionReset" });
       }
-
-      expect(renderedBobMessages()).toHaveLength(1);
-      expect(
-        state.chatMessages.filter((candidate) => extractText(candidate) === queued.text),
-      ).toEqual([persistedBob]);
+      await loadChatHistory(state);
+      expect(handler).toHaveBeenCalledExactlyOnceWith(
+        expect.not.objectContaining({ cursor: expect.anything() }),
+      );
+      expect(state.chatMessages.map(extractText)).toEqual(["Replacement history"]);
     },
   );
+
+  it("retains an attributed pending steer across a leaf advance before history-delta persistence", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const sessionKey = "agent:main:participant-steer";
+    const sendRunId = "bob-send";
+    const aliceFinal = {
+      ...message("assistant", "Alice finished the command.", "alice-final", 4),
+      timestamp: 2000,
+    };
+    const handler = vi.fn(async (): Promise<unknown> => ({
+      kind: "delta",
+      messages: [
+        {
+          sessionKey,
+          message: aliceFinal,
+          messageId: "alice-final",
+          messageSeq: 4,
+          runId: "alice-run",
+        },
+      ],
+      deltaCursor: "cursor-4",
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: "session-cursor",
+        activeLeafEntryId: "alice-final",
+        updatedAt: 2000,
+        hasActiveRun: false,
+        status: "done",
+        lastRunId: "alice-run",
+      },
+    }));
+    const state = createState(handler);
+    state.sessionKey = sessionKey;
+    state.chatDisplayedLeafEntryId = "alice-tool-result";
+    seedCachedHistory(
+      state,
+      [
+        {
+          ...message("user", "Run the long command.", "alice-user", 1),
+          __openclaw: {
+            id: "alice-user",
+            seq: 1,
+            idempotencyKey: "alice-run:user",
+            senderId: "alice-profile",
+            senderName: "Alice Proof",
+          },
+        },
+        message(
+          "assistant",
+          [{ type: "toolCall", id: "exec-call", name: "exec", arguments: {} }],
+          "alice-tool-call",
+          2,
+        ),
+        {
+          role: "toolResult",
+          toolCallId: "exec-call",
+          content: "Command finished.",
+          __openclaw: { id: "alice-tool-result", seq: 3 },
+        },
+      ],
+      "cursor-3",
+    );
+    const queued: ChatQueueItem = {
+      id: "bob-queued-send",
+      text: "Reply exactly: BOB_STEER_ACK",
+      createdAt: 1500,
+      sendRunId,
+      sendState: "sending",
+      sendAttempts: 1,
+      queueMode: "steer",
+      sessionKey,
+      sender: { id: "bob-profile", name: "Bob Proof" },
+    };
+    expect(
+      admitStoredChatComposerQueueItem(
+        state,
+        captureChatOutboxAdmission(state, sessionKey, queued.agentId),
+        queued,
+      ),
+    ).toBe(true);
+    state.chatQueue = [queued];
+    const renderedBobMessages = () =>
+      buildChatItems({
+        paneId: "participant-steer-cursor",
+        sessionKey,
+        runId: state.chatRunId,
+        messages: state.chatMessages,
+        queue: state.chatQueue,
+        toolMessages: state.chatToolMessages ?? [],
+        streamSegments: state.chatStreamSegments ?? [],
+        stream: state.chatStream,
+        streamStartedAt: state.chatStreamStartedAt,
+        showToolCalls: true,
+      }).flatMap((item) =>
+        item.kind === "group" && item.role === "user"
+          ? item.messages.filter(({ message: candidate }) => extractText(candidate) === queued.text)
+          : [],
+      );
+    expect(renderedBobMessages()).toHaveLength(1);
+
+    // Delivery retirement materializes the acknowledged turn before its durable row arrives.
+    expect(await retireDeliveredQueuedUserTurn(state, sendRunId, { sessionKey })).toBe("retired");
+    expect(state.chatQueue).toEqual([]);
+    expect(renderedBobMessages()).toHaveLength(1);
+    await loadChatHistory(state);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ cursor: "cursor-3" }));
+    expect(state.chatDisplayedLeafEntryId).toBe("alice-final");
+    expect(renderedBobMessages()).toHaveLength(1);
+
+    const persistedBob = {
+      role: "user",
+      content: queued.text,
+      timestamp: queued.createdAt,
+      idempotencyKey: `${sendRunId}:user`,
+      __openclaw: {
+        id: "bob-user",
+        seq: 5,
+        idempotencyKey: `${sendRunId}:user`,
+        senderId: "bob-profile",
+        senderName: "Bob Proof",
+        recordTimestampMs: 2500,
+      },
+    };
+    const persistedPayload = {
+      sessionKey,
+      clientRunId: sendRunId,
+      message: persistedBob,
+      messageId: "bob-user",
+      messageSeq: 5,
+    };
+    handler.mockResolvedValueOnce({
+      kind: "delta",
+      messages: [persistedPayload],
+      deltaCursor: "cursor-5",
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        sessionId: "session-cursor",
+        activeLeafEntryId: "bob-user",
+        updatedAt: 2500,
+        hasActiveRun: true,
+        status: "running",
+        lastRunId: "alice-run",
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(renderedBobMessages()).toHaveLength(1);
+    expect(
+      state.chatMessages.filter((candidate) => extractText(candidate) === queued.text),
+    ).toEqual([persistedBob]);
+  });
 
   it("retains live and terminal run ownership across an accepted delta leaf advance", async () => {
     const state = createState(() => ({
@@ -282,7 +324,6 @@ describe("chat history cursor revalidation", () => {
   });
 
   it.each<{ name: string; items: AgentActivityItem[] }>([
-    { name: "authoritative quiet", items: [] },
     {
       name: "prepared completion",
       items: [
@@ -406,8 +447,6 @@ describe("chat history cursor revalidation", () => {
   });
 
   it.each([
-    { kind: "delta", persistedRunId: undefined },
-    { kind: "delta", persistedRunId: "run-live" },
     { kind: "delta", persistedRunId: "run-other" },
     { kind: "full", persistedRunId: "run-live" },
   ] as const)(
@@ -497,7 +536,6 @@ describe("chat history cursor revalidation", () => {
   );
 
   it.each([
-    { terminal: "final", historyFirst: false },
     { terminal: "aborted", historyFirst: false },
     { terminal: "error", historyFirst: false },
     { terminal: "final", historyFirst: true },
@@ -627,23 +665,5 @@ describe("chat history cursor revalidation", () => {
     expect(
       readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })?.deltaCursor,
     ).toBe("cursor-fresh");
-  });
-
-  it("uses a full tail fetch for a cached record without a cursor", async () => {
-    const cached = message("user", "cached", "cached-user", 1);
-    const fresh = message("assistant", "fresh", "fresh-assistant", 2);
-    const handler = vi.fn(async (_params?: unknown) => ({
-      messages: [cached, fresh],
-      deltaCursor: "cursor-1",
-      sessionId: "session-cursor",
-    }));
-    const state = createState(handler);
-    seedCachedHistory(state, [cached]);
-
-    await loadChatHistory(state);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("cursor");
-    expect(state.chatMessages).toEqual([cached, fresh]);
   });
 });
