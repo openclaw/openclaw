@@ -3,6 +3,7 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { Deferred } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveHookMappings } from "./hooks-mapping.js";
 import { createHooksConfig } from "./hooks-test-helpers.js";
@@ -60,7 +61,7 @@ function whenRequestCloses(req: IncomingMessage): Promise<void> {
 /** Resolves when dispatch has been entered the requested number of times. */
 function createArrivalGate() {
   let arrivals = 0;
-  const waiters: Array<{ target: number; gate: ReturnType<typeof createDeferred> }> = [];
+  const waiters: Array<{ target: number; gate: Deferred }> = [];
   return {
     arrive() {
       arrivals += 1;
