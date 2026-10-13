@@ -488,6 +488,8 @@ the adapter's final page-session and URL checks remain required.
 
 ## Worker provider allocation authority
 
+Worker runtime and enrollment grants may include `nodeBootstrap.linuxToolchainSetup`, a core-owned POSIX script that prepares a supported Node before invoking bootstrap JavaScript. Providers execute it only for Linux targets, using the same operation authority and command budget as bootstrap. It carries no credentials. macOS and Windows providers retain their image-provided Node contract.
+
 The Gateway supplies `assertCurrent()` in the options passed to worker providers'
 `provision` and `prepareProvision` methods. This required runtime callback binds
 the operation to the live environment owner and any requesting run. Invoke it

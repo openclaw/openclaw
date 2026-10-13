@@ -143,6 +143,8 @@ type WorkerNodeBootstrapAccess = {
     openclawVersion: string;
     enabledPluginIds: readonly string[];
     tlsFingerprint?: string;
+    /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
+    linuxToolchainSetup?: string;
   };
   /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
   signal?: AbortSignal;
