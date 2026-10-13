@@ -4,6 +4,10 @@
 // runMessageAction -> outbound adapter path; the adapter records the delivering account.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createConversationsSendTool } from "./conversation-tools.js";
@@ -80,6 +84,8 @@ function createConfig(extra: Record<string, unknown> = {}) {
 // Source-less (cron/CLI shaped): no current channel and no agent account, so only the
 // routing owner's precedence can name the delivering account.
 function createSourcelessMessageTool(config: Record<string, unknown>, sessionKey = SESSION_KEY) {
+  // The Gateway option resolver reads the runtime snapshot; keep it on the tool's config.
+  setRuntimeConfigSnapshot(config as never);
   return createMessageTool({
     agentId: "test",
     agentSessionKey: sessionKey,
@@ -119,6 +125,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetTurnSendLedgerForTest();
   resetPluginRuntimeStateForTest();
 });
