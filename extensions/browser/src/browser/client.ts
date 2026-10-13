@@ -240,6 +240,8 @@ export async function browserOpenTab(
     timeoutMs?: number;
     signal?: AbortSignal;
     managedOnly?: boolean;
+    /** Backend attachment allowance, independent of the navigation budget. */
+    requestTimeoutMs?: number;
   },
 ): Promise<BrowserOpenResult> {
   const timeoutMs =
@@ -253,7 +255,10 @@ export async function browserOpenTab(
       ...(opts?.managedOnly ? { managedOnly: true } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     },
-    resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
+    Math.max(
+      clampPositiveTimerTimeoutMs(opts?.requestTimeoutMs) ?? 0,
+      resolveBrowserOperationRequestTimeoutMs(timeoutMs ?? 30_000),
+    ),
     opts,
   );
 }

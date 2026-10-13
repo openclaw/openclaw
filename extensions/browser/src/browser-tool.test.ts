@@ -285,9 +285,19 @@ it.each<{
     name: "default open navigation",
     input: { action: "open", url: "https://example.com/slow" },
     replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
-    gatewayTimeout: 45_000,
-    nodeTimeout: 40_000,
-    params: { path: "/tabs/open", timeoutMs: 35_000 },
+    gatewayTimeout: 70_000,
+    nodeTimeout: 65_000,
+    params: { path: "/tabs/open", timeoutMs: 60_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
+    name: "existing-session open attachment",
+    input: { action: "open", profile: "user", url: "https://example.com/slow" },
+    profile: "user",
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 55_000,
+    nodeTimeout: 50_000,
+    params: { path: "/tabs/open", profile: "user", timeoutMs: 45_000 },
     exactBody: { url: "https://example.com/slow" },
   },
   {
@@ -618,7 +628,7 @@ it.each(["host fallback", "failed rollback"] as const)(
         expect(runtime.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
           method: "POST",
           body: JSON.stringify({ url: opened.url }),
-          timeoutMs: 35_000,
+          timeoutMs: 60_000,
           signal: controller.signal,
         });
       } else {
