@@ -1,7 +1,7 @@
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "./chat-activity-fixtures.ts";
 
-export const interruptedChatRunId = "synthetic-interrupted-run";
+const interruptedChatRunId = "synthetic-interrupted-run";
 export const interruptedChatPrompt = "Inspect the synthetic project and report your findings.";
 export const interruptedChatCommentary = [
   "I found the relevant files and am checking their behavior.",
