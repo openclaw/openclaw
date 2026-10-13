@@ -19,7 +19,7 @@ const { outboundAttachment, resolveOutboundAttachmentFromUrlMock, signalRpcReque
     };
     return {
       outboundAttachment: stagedAttachment,
-      resolveOutboundAttachmentFromUrlMock: vi.fn(async () => ({
+      resolveOutboundAttachmentFromUrlMock: vi.fn(async (..._args: unknown[]) => ({
         path: stagedAttachment.path,
         contentType: stagedAttachment.contentType,
       })),
