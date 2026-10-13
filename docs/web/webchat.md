@@ -102,7 +102,7 @@ The supporting RPCs require `operator.read` and use the authenticated profile, n
 
 Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restarts within their retention limits. Capacity limits can still skip alerts. Restarting or reconnecting does not resend old browser notifications or restore dismissed entries. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
-Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns a retryable `UNAVAILABLE` error, reconnect and retry the request.
+Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns an `UNAVAILABLE` error, the Control UI retries with increasing delays and respects the Gateway’s minimum retry delay. Ordinary connection updates and mention events do not bypass that backoff.
 
 ## Control UI agents tools panel
 
