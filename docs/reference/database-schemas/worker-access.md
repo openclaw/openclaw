@@ -4787,10 +4787,15 @@ incarnation, and revision before installing them; unknown outcomes use its
 existing asynchronous refill. Identity notifications retain the same prepared
 facts, and repeated registration of an unchanged physical store preserves the
 resident inventory. Missing databases are prepared by the same worker owner.
-Incognito replacements use the memory actor. Already executing workers, Doctor
-maintenance, and prepared native deletion rollback closures retain their
-synchronous kernels.
+Incognito replacements use the memory actor. Already executing workers and explicit
+Doctor maintenance retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
+
+Entry-cache revisions reuse the existing local mutation and sibling write receipts,
+plus admitted schema facts. They install no TEMP triggers or JavaScript SQL functions.
+Local rollback invalidates abandoned snapshots; unrelated local writes conservatively
+expire cached metadata. Entry writers record conversation, node, snapshot, and window
+writes together before publishing the resulting cache revision.
 
 Writer-held target discovery uses a separate, single-worker read lane under the
 existing session database lifecycle owner. Target reads and their awaited native
