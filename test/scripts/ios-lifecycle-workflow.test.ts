@@ -373,7 +373,12 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
         expect(commands.every((command) => command.settings === undefined)).toBe(true);
         const testRun = commands.find(isTestCommand);
         expect(testRun?.args).toEqual(
-          expect.arrayContaining(["-collect-test-diagnostics", "on-failure"]),
+          expect.arrayContaining([
+            "-collect-test-diagnostics",
+            "never",
+            "-resultBundlePath",
+            "apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.xcresult",
+          ]),
         );
         return;
       }
@@ -471,6 +476,14 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     const tests = commands.filter(isTestCommand);
     expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
+    expect(tests[0]?.args).toEqual(
+      expect.arrayContaining([
+        "-collect-test-diagnostics",
+        "never",
+        "-resultBundlePath",
+        "apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult",
+      ]),
+    );
     const authSelectors = [
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
