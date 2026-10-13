@@ -77,6 +77,7 @@ export function createOverlay(
     if (event.target !== surface) {
       return;
     }
+    refreshRegistry();
     if (event.newState === "open") {
       registry.nativeOrder.set(api, ++registry.nextOrder);
     }
@@ -186,12 +187,7 @@ export function createOverlay(
         generation += 1;
       }
       surface = node;
-      registry = registryFor(node.ownerDocument);
-      unregister = registerOverlay(registry, api, {
-        options,
-        valid,
-        elements: ownedElements,
-      });
+      refreshRegistry(true);
       node.addEventListener("beforetoggle", beforeToggle);
       node.addEventListener("toggle", nativeToggle);
       setPhase("hidden");
@@ -246,6 +242,7 @@ export function createOverlay(
       if (disposed || !surface) {
         return false;
       }
+      refreshRegistry();
       refreshOverlayRoots(registry, api);
       if (disposed) {
         return false;
@@ -447,6 +444,23 @@ export function createOverlay(
     }
     return native.isOpen(surface) === next;
   }
+  function refreshRegistry(rebind = false) {
+    const next = registryFor(surface.ownerDocument);
+    if (next === registry && !rebind) {
+      return;
+    }
+    // Solid refs can bind in an inert template before the surface is adopted.
+    if (registry) {
+      removeFromStack();
+      unregister?.();
+    }
+    registry = next;
+    unregister = registerOverlay(registry, api, { options, valid, elements: ownedElements });
+    if (opened) {
+      registry.nativeOrder.set(api, ++registry.nextOrder);
+      registry.stack.push(api);
+    }
+  }
   function removeFromStack() {
     const index = registry.stack.indexOf(api);
     if (index >= 0) {
@@ -551,6 +565,7 @@ export function createOverlay(
     if (!surface || nativeMutation) {
       return;
     }
+    refreshRegistry();
     const next = native.isOpen(surface);
     // Accepted close authority is already false while its finite exit still
     // needs the native top layer. Reconciliation must not turn that into a reopen.

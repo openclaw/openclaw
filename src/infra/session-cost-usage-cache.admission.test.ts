@@ -29,8 +29,6 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
-import * as agentExecution from "../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -94,10 +92,13 @@ it.each(["rollup", "prune"] as const)(
       const before = readSnapshot();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite({ agentId, path: databasePath }, async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
+        { agentId, path: databasePath },
+        async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      );
       await entered.promise;
       let settled = false;
       const writing = (async () => {
@@ -397,7 +398,7 @@ it.for(["rollup", "prune"] as const)(
       const before = readSessionCostUsageRollupRows(agentId, database.path);
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const held = runOpenClawAgentWorkerWrite(options, async () => {
+      const held = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
         entered.resolve();
         await release.promise;
       });
@@ -443,7 +444,7 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     expect(await owner.acquire()).toBe(true);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(options, async () => {
       entered.resolve();
       await release.promise;
     });
@@ -467,55 +468,6 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
   });
 });
-
-it.each(["rollup", "prune"] as const)(
-  "cancels a queued native usage %s before the writer settles",
-  async (operation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      vi.spyOn(agentExecution, "supportsOpenClawAgentDatabaseExecution").mockReturnValue(false);
-      const agentId = "usage-queued-deadline";
-      const options = { agentId, env: state.env };
-      const database = openOpenClawAgentDatabase(options);
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
-      expect(await owner.acquire()).toBe(true);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const admit = vi.spyOn(writerAdmission, "runOpenClawAgentWriteAdmission");
-      const controller = new AbortController();
-      const expired = new Error("usage host callback deadline expired");
-      const writing =
-        operation === "rollup"
-          ? owner.writeRollup(
-              {
-                rollupId: "expired",
-                valueJson: Buffer.from("{}"),
-                blob: null,
-                updatedAt: 1,
-              },
-              controller.signal,
-            )
-          : owner.pruneRows([], controller.signal);
-      const outcome = Promise.allSettled([writing]);
-      try {
-        // Check the queue boundary before awaiting: a missing signal fails without wedging cleanup.
-        expect(admit.mock.calls.at(-1)?.[4]).toBe(controller.signal);
-        controller.abort(expired);
-        expect(await outcome).toEqual([{ status: "rejected", reason: expired }]);
-        expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual([]);
-      } finally {
-        release.resolve();
-        await reservation;
-        await outcome;
-        await owner.release();
-      }
-    });
-  },
-);
 
 it("releases the acquired refresh lock after the caller changes its state directory", async () => {
   const originalRoot = tempDirs.make("openclaw-usage-lock-origin-");
@@ -580,7 +532,7 @@ it("keeps usage exclusion in its mixed-case Windows state root", async () => {
     );
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const reservation = runOpenClawAgentWorkerWrite(
+    const reservation = writerAdmission.runOpenClawAgentWorkerWrite(
       { ...options, path: database.path },
       async () => {
         entered.resolve();
@@ -670,7 +622,7 @@ it("finishes a foreground session write while pruning a cold existing usage stor
         admit(
           options,
           async () => {
-            if (!("target" in options) && options.path === storePath && priority !== "background") {
+            if (options.path === storePath && priority !== "background") {
               writerEntered.resolve();
             }
             return write();

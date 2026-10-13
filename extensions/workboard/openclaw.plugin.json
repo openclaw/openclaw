@@ -1,5 +1,8 @@
 {
   "id": "workboard",
+  "backupResources": [
+    { "disposition": "include", "scope": "state", "relativePath": "plugins/workboard/workboard.sqlite" }
+  ],
   "uiCapabilities": [
     "page",
     "navigation",

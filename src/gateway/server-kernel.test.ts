@@ -964,6 +964,7 @@ describe("createGatewayKernel", () => {
         "gateway.request-context",
         "sessions.projection",
         "gateway.instance-runtime-import",
+        "gateway.owner-profile",
         "sessions.materialize",
         "gateway.lifetime-sidecars",
       ]);

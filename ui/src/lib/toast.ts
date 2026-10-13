@@ -1,12 +1,6 @@
-import { html, nothing, type TemplateResult } from "lit";
-import { state } from "lit/decorators.js";
-import { styleMap } from "lit/directives/style-map.js";
-import { icons } from "../components/icons.ts";
-import { t } from "../i18n/index.ts";
-import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { formatUiExternalText } from "./format-error.ts";
+import type { TemplateResult } from "lit";
 
-type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
+export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
 export type ToastOptions = {
   /** A template lets a message name a destination the operator can actually open,
@@ -28,7 +22,7 @@ export type ToastOptions = {
 const DEFAULT_TOAST_DURATION_MS = 6_000;
 const TOAST_EXIT_FALLBACK_MS = 450;
 
-function resolveToastAnchorRect(anchor: Element | undefined) {
+export function resolveToastAnchorRect(anchor: Element | undefined) {
   const rect = anchor?.isConnected ? anchor.getBoundingClientRect() : null;
   return rect && rect.width > 0 ? rect : null;
 }
@@ -52,9 +46,8 @@ function restingToastLayer() {
 // dropping it, so no caller's message disappears because it arrived too early.
 let queuedToast: ToastOptions | null = null;
 
-class OpenClawToastHost extends OpenClawLightDomContentsElement {
-  @state() private toast: ToastOptions | null = null;
-  @state() private active = false;
+class ToastController {
+  constructor(private readonly host: OpenClawToastHost) {}
   private readonly toastQueue: ToastOptions[] = [];
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -63,15 +56,28 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   private deadline = 0;
   private hovered = false;
 
-  private syncPlacement() {
-    this.dataset.toastPlacement = this.parentElement?.matches(".shell") ? "shell" : "overlay";
+  hover(hovered: boolean) {
+    this.hovered = hovered;
+    this.syncDismissTimer();
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
+  transitionEnd() {
+    if (!this.host.active && this.exitReason) {
+      this.finishDismiss(this.exitReason);
+    }
+  }
+
+  private syncPlacement() {
+    this.host.dataset.toastPlacement = this.host.parentElement?.matches(".shell")
+      ? "shell"
+      : "overlay";
+  }
+
+  connect() {
+    this.host.style.display = "contents";
     this.syncPlacement();
     // Moving the light-DOM host can drop focus without a focusout event.
-    this.hovered = this.querySelector(".app-toast")?.matches(":hover") ?? false;
+    this.hovered = this.host.querySelector(".app-toast")?.matches(":hover") ?? false;
     this.syncDismissTimer();
     const pending = queuedToast;
     queuedToast = null;
@@ -80,51 +86,50 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
+  disconnect() {
     // append() relocations reconnect before reactions run. Keep the notification
     // and its deadline; only a real removal dismisses or returns it from a modal.
-    if (this.isConnected) {
+    if (this.host.isConnected) {
       return;
     }
     const target = activeModalToastLayer()?.container ?? restingToastLayer();
-    if (this.closest("openclaw-modal-dialog") && target) {
-      target.append(this);
+    if (this.host.closest("openclaw-modal-dialog") && target) {
+      target.append(this.host);
     } else {
       this.dismiss("disconnected");
     }
   }
 
   show(options: ToastOptions) {
-    if (options.fifo && this.toast) {
+    if (options.fifo && this.host.toast) {
       this.toastQueue.push(options);
       return;
     }
     this.finishDismiss(this.exitReason ?? "replaced");
-    this.toast = options;
-    this.active = true;
+    this.host.toast = options;
+    this.host.active = true;
     this.exitReason = null;
     this.remainingMs = options.durationMs ?? DEFAULT_TOAST_DURATION_MS;
     this.syncDismissTimer();
   }
 
-  override updated() {
-    // Lit can retain a focused child on replacement, or remove the action that
+  updated() {
+    // Replacement can retain a focused child, or remove the action that
     // held focus. Reconcile after rendering rather than inheriting stale focus.
-    if (!this.toast) {
+    if (!this.host.toast) {
       this.hovered = false;
     }
     this.syncDismissTimer();
   }
 
-  private syncDismissTimer(focused?: boolean) {
-    if (!this.toast || !this.active || !this.isConnected) {
+  syncDismissTimer(focused?: boolean) {
+    if (!this.host.toast || !this.host.active || !this.host.isConnected) {
       return;
     }
-    const root = this.getRootNode();
+    const root = this.host.getRootNode();
     const active =
-      root instanceof ShadowRoot ? root.activeElement : this.ownerDocument.activeElement;
-    const hasFocus = focused ?? this.contains(active);
+      root instanceof ShadowRoot ? root.activeElement : this.host.ownerDocument.activeElement;
+    const hasFocus = focused ?? this.host.contains(active);
     if (this.hovered || hasFocus) {
       if (this.dismissTimer !== null) {
         this.remainingMs = Math.max(0, this.deadline - performance.now());
@@ -146,12 +151,12 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  private finishDismiss(reason: ToastDismissReason) {
-    const toast = this.toast;
+  finishDismiss(reason: ToastDismissReason) {
+    const toast = this.host.toast;
     this.clearDismissTimer();
-    this.active = false;
+    this.host.active = false;
     this.exitReason = null;
-    this.toast = null;
+    this.host.toast = null;
     toast?.onDismiss?.(reason);
     if (reason === "disconnected") {
       this.hovered = false;
@@ -167,122 +172,54 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
   }
 
-  private dismiss(reason: ToastDismissReason) {
-    const toast = this.toast;
+  dismiss(reason: ToastDismissReason) {
+    const toast = this.host.toast;
     if (!toast) {
       return;
     }
     this.clearDismissTimer();
     if (
       (reason !== "dismiss" && reason !== "timeout") ||
-      !this.isConnected ||
+      !this.host.isConnected ||
       globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
       !resolveToastAnchorRect(toast.anchor)
     ) {
       this.finishDismiss(reason);
       return;
     }
-    this.active = false;
+    this.host.active = false;
     this.exitReason = reason;
     this.exitTimer = globalThis.setTimeout(() => {
-      if (this.toast === toast) {
+      if (this.host.toast === toast) {
         this.finishDismiss(reason);
       }
     }, TOAST_EXIT_FALLBACK_MS);
   }
+}
 
-  override render() {
-    const toast = this.toast;
-    if (!toast) {
-      return nothing;
-    }
-    const anchorRect = resolveToastAnchorRect(toast.anchor);
-    return html`
-      <div
-        class="app-toast ${anchorRect ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
-        data-active=${this.active ? "true" : "false"}
-        style=${styleMap(
-          anchorRect
-            ? {
-                "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
-                "--app-toast-anchor-top": `${anchorRect.top}px`,
-                "--app-toast-anchor-width": `${anchorRect.width}px`,
-              }
-            : {},
-        )}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        @pointerenter=${() => {
-          this.hovered = true;
-          this.syncDismissTimer();
-        }}
-        @pointerleave=${() => {
-          this.hovered = false;
-          this.syncDismissTimer();
-        }}
-        @focusin=${() => this.syncDismissTimer(true)}
-        @focusout=${(event: FocusEvent) => {
-          // relatedTarget keeps transfers between Undo, links, and Dismiss paused.
-          this.syncDismissTimer(
-            event.relatedTarget instanceof Node && this.contains(event.relatedTarget),
-          );
-        }}
-        @transitionend=${(event: TransitionEvent) => {
-          if (
-            event.target === event.currentTarget &&
-            event.propertyName === "opacity" &&
-            !this.active &&
-            this.exitReason
-          ) {
-            this.finishDismiss(this.exitReason);
-          }
-        }}
-      >
-        ${
-          toast.icon
-            ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-            : nothing
-        }
-        <span class="app-toast__message"
-          >${
-            typeof toast.message === "string" ? formatUiExternalText(toast.message) : toast.message
-          }</span
-        >
-        ${
-          toast.actionLabel && toast.onAction
-            ? html`
-                <button
-                  type="button"
-                  class="app-toast__action"
-                  @click=${() => {
-                    this.dismiss("action");
-                    toast.onAction?.();
-                  }}
-                >
-                  ${toast.actionLabel}
-                </button>
-              `
-            : nothing
-        }
-        <button
-          type="button"
-          class="app-toast__dismiss"
-          aria-label=${t("common.dismiss")}
-          @click=${() => this.dismiss("dismiss")}
-        >
-          ${icons.x}
-        </button>
-      </div>
-    `;
+export type ToastProperties = { toast: ToastOptions | null; active: boolean };
+export type ToastMethods = { show(options: ToastOptions): void };
+type OpenClawToastHost = HTMLElement & ToastProperties & ToastMethods;
+const controllers = new WeakMap<OpenClawToastHost, ToastController>();
+export function toastControllerFor(host: OpenClawToastHost) {
+  let controller = controllers.get(host);
+  if (!controller) {
+    controller = new ToastController(host);
+    controllers.set(host, controller);
   }
+  return controller;
 }
 
 export function showToast(options: ToastOptions): boolean {
   if (typeof document === "undefined") {
     return false;
   }
-  const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
+  // A modal can carry the host into a shadow root, outside document queries.
+  const host =
+    document.querySelector<OpenClawToastHost>("openclaw-toast-host") ??
+    [...(document.openClawModalLayers ?? [])]
+      .map((layer) => layer.querySelector<OpenClawToastHost>("openclaw-toast-host"))
+      .find((candidate) => candidate?.isConnected);
   if (!host) {
     queuedToast = options;
     return false;
@@ -303,15 +240,4 @@ export function showToast(options: ToastOptions): boolean {
   }
   host.show(options);
   return true;
-}
-
-// Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.
-if (typeof customElements !== "undefined" && !customElements.get("openclaw-toast-host")) {
-  customElements.define("openclaw-toast-host", OpenClawToastHost);
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-toast-host": OpenClawToastHost;
-  }
 }

@@ -108,6 +108,7 @@ export async function captureUpdateDatabases(params: {
         env,
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
+        postgresOffline: maintenance !== null && unavailable === undefined,
       });
       params.assertCurrent();
       maintenance?.assertCurrent();

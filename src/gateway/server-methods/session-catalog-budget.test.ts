@@ -108,8 +108,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
   try {
     for (let index = 0; index < 3; index++) {
       const waiting = startCall("sessions.catalog.list", query, config, client, context);
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waiting.completion;
+      await vi.advanceTimersByTimeAsync(0);
       expect(waiting.respond).toHaveBeenCalledWith(true, {
         catalogs: [
           expect.objectContaining({
@@ -121,6 +120,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
           }),
         ],
       });
+      await waiting.completion;
     }
     expect(list).toHaveBeenCalledTimes(2);
     late.resolve([freshHost]);

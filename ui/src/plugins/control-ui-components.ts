@@ -131,8 +131,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AppearancePicker } = await import("../components/appearance-picker.ts");
-          return new AppearancePicker();
+          await import("../components/appearance-picker.ts");
+          return document.createElement("openclaw-appearance-picker");
         },
         (element, next, current) => {
           element.props = {
@@ -149,8 +149,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { AppearanceGlyph } = await import("../components/appearance-picker.ts");
-          return new AppearanceGlyph();
+          await import("../components/appearance-picker.ts");
+          return document.createElement("openclaw-appearance-glyph");
         },
         (element, next) => {
           element.props = next;
@@ -230,8 +230,8 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          const { SelectPicker } = await import("../components/select-picker.ts");
-          return new SelectPicker();
+          await import("../components/select-picker.ts");
+          return document.createElement("openclaw-select-picker");
         },
         (element, next, current) => {
           element.className = "settings-select picker-select";

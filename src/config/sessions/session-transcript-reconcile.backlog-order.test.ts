@@ -24,6 +24,7 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => clearRuntimeConfigSnapshot());
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());

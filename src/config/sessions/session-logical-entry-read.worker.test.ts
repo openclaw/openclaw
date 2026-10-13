@@ -28,9 +28,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
-import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -424,29 +429,40 @@ it.each([
 );
 
 it.each([
-  { agentId: undefined, sessionKey: "topic" },
-  { agentId: "main", sessionKey: "global" },
+  { agentId: undefined, keyKind: "short" },
+  { agentId: "main", keyKind: "qualified" },
 ])(
-  "preserves a populated incognito owner for an explicit locator ($agentId, $sessionKey)",
-  async ({ agentId, sessionKey }) => {
-    const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${sessionKey}`, env: state.env };
+  "preserves a populated incognito owner for an explicit locator ($agentId, $keyKind)",
+  async ({ agentId, keyKind }) => {
+    const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${keyKind}`, env: state.env };
     const storePath = resolveIncognitoOpenClawAgentSqlitePath(owner);
-    const ownedScope = { ...owner, storePath, sessionKey };
-    const entry = { sessionId: "private-ops-session", updatedAt: 1 };
-    replaceSessionEntrySync(ownedScope, entry);
-    const database = openOpenClawAgentDatabase({ ...owner, path: storePath });
-    const scope = { env: state.env, storePath, sessionKey, agentId };
-    if (agentId === undefined) {
-      expect(loadSessionEntry(scope)).toMatchObject(entry);
-      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
-    } else {
-      const mismatch = "Explicit incognito database target does not match its agent and state root";
-      expect(() => loadSessionEntry(scope)).toThrow(mismatch);
-      await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+    const canonicalKey = `agent:${owner.agentId}:dashboard:incognito-topic`;
+    const sessionKey = keyKind === "qualified" ? canonicalKey : "dashboard:incognito-topic";
+    const ownedScope = { ...owner, storePath, sessionKey: canonicalKey };
+    const entry = { sessionId: "private-ops-session", updatedAt: 1, incognito: true as const };
+    await replaceSessionEntry(ownedScope, entry);
+    const memory = memorySessionActorOwners.read({ ...owner, path: storePath });
+    expect(memory).toBeDefined();
+    const observer = observeParentSqlite();
+    try {
+      const scope = { env: state.env, storePath, sessionKey, agentId };
+      if (agentId === undefined) {
+        expect(loadSessionEntry(scope)).toMatchObject(entry);
+        await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
+      } else {
+        const mismatch =
+          "Explicit incognito database target does not match its agent and state root";
+        expect(() => loadSessionEntry(scope)).toThrow(mismatch);
+        await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+      }
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(memorySessionActorOwners.read({ ...owner, path: storePath })).toBe(memory);
+      expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+      memorySessionActorOwners.closeDatabase({ ...owner, path: storePath });
     }
-    expect(fs.existsSync(storePath)).toBe(false);
-    expect(openOpenClawAgentDatabase({ ...owner, path: storePath })).toBe(database);
-    expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
   },
 );
 

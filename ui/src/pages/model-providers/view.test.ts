@@ -405,7 +405,7 @@ describe("renderModelProviders", () => {
       }),
     );
     const defaults = container.querySelector(".model-providers__defaults");
-    const messages = [...(defaults?.querySelectorAll('[role="status"]') ?? [])];
+    const messages = [...(defaults?.querySelectorAll('.callout[role="status"]') ?? [])];
 
     expect(messages.map((message) => text(message))).toEqual([
       "Default models saved.",
@@ -654,13 +654,13 @@ describe("renderModelProviders", () => {
           .querySelector('[role="option"][data-value="opus"]')
           ?.getAttribute("aria-selected") === "true",
       ).toBe(true);
-      expect(
-        text(
-          automatic
-            .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
-            ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
-        ),
-      ).toBe(automaticUtilityModel === null ? "Auto No recommended small model" : "Auto");
+      const automaticOption = automatic
+        .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+        ?.querySelector('[role="option"][aria-selected="true"]');
+      expect(text(automaticOption?.querySelector(".picker-select__label") ?? null)).toBe("Auto");
+      expect(text(automaticOption?.querySelector(".picker-select__description") ?? null)).toBe(
+        automaticUtilityModel === null ? "No recommended small model" : "",
+      );
 
       const disabled = mount(
         props({

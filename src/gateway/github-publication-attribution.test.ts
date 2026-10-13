@@ -27,6 +27,7 @@ import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublicati
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -306,6 +307,12 @@ describe("Gateway GitHub publication attribution", () => {
       childSessionKey: childKey,
       incognito: false,
       requesterInternalKey: SESSION_KEY,
+      parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+        cfg: config,
+        key: SESSION_KEY,
+        agentId: "main",
+        projection: "full",
+      }),
       creationPolicy: { actor: { type: "agent", id: "main" } },
       completionOwnerSessionKey: SESSION_KEY,
       modelPatch: {},

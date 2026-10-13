@@ -37,6 +37,12 @@ schema identity, the time of the last full verification, and the final physical
 file metadata. It is reconstructible verification metadata, not database state
 or a backup.
 
+Completed memory index schema receipts also survive a clean close. They remain
+scoped to the cache, FTS, and tokenizer settings that were validated, so an
+unchanged restart skips memory schema setup and the resulting agent schema
+refresh. Changed settings, in-process DDL, or a missing or invalid seal take the
+ordinary memory schema admission path. Imported-row backfills still run.
+
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
 inode, stable birthtime, byte size, nanosecond modification time, and schema
