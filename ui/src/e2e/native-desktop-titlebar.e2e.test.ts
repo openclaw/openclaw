@@ -372,6 +372,28 @@ suite.define(() => {
           expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
           expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
           expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+          // Empty header space must stay non-interactive so it can drag the window.
+          const dragGap = await header.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const controls = [...element.querySelectorAll("button")]
+              .map((button) => button.getBoundingClientRect())
+              .toSorted((a, b) => a.left - b.left);
+            let start = bounds.left;
+            let widest = { left: start, width: 0 };
+            for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
+              if (control.left - start > widest.width) {
+                widest = { left: start, width: control.left - start };
+              }
+              start = Math.max(start, control.right);
+            }
+            const hit = document.elementFromPoint(
+              widest.left + widest.width / 2,
+              bounds.top + bounds.height / 2,
+            );
+            return { width: widest.width, button: Boolean(hit?.closest("button")) };
+          });
+          expect(dragGap.width).toBeGreaterThanOrEqual(24);
+          expect(dragGap.button).toBe(false);
           if (native) {
             expect(panelGeometry.x).toBe(macos ? 92 : 68);
           }
