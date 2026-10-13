@@ -1,14 +1,7 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
-import { MarkdownBlocks } from "../../../components/markdown-blocks.ts";
+import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
+import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -23,6 +16,7 @@ import {
   LitContent,
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
+import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
@@ -41,15 +35,14 @@ declare module "@solidjs/web" {
 
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
+  const markdown = createMarkdownRef(() => ({
+    content: toSanitizedMarkdownHtml(props.text, {
+      mode: "document",
+      remoteImages: false,
+      codeBlockInteraction: "interactive",
+    }),
+  }));
   onSettled(() => {
-    // The reader is keyed by source and text; populate its sanitized document once.
-    article.innerHTML = untrack(() =>
-      toSanitizedMarkdownHtml(props.text, {
-        mode: "document",
-        remoteImages: false,
-        codeBlockInteraction: "interactive",
-      }),
-    );
     const blocks = new MarkdownBlocks(article);
     blocks.update(true);
     return () => blocks.dispose();
@@ -58,6 +51,7 @@ function MarkdownAttachment(props: { text: string; label: string }) {
     <article
       ref={(element) => {
         article = element;
+        markdown(element);
       }}
       class="sidebar-attachment-preview__markdown sidebar-markdown-reader sidebar-markdown"
       dir={detectTextDirection(props.text)}
@@ -288,47 +282,29 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
           )}
         </p>
       ) : (
-        <Show
-          when={reader()}
-          keyed
-          fallback={
-            <div
-              class="sidebar-attachment-preview__loading"
-              role="status"
-              aria-label={t("common.loading")}
-            >
-              <div class="skeleton skeleton-line" aria-hidden="true" />
-              <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true" />
-              <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true" />
-            </div>
-          }
-        >
+        <Show when={reader()} keyed fallback={<AttachmentPreviewSkeleton />}>
           {(content) => (
             <>
-              {htmlDocument() ? (
-                <>
-                  <div class="chat-html-preview" hidden={source()}>
-                    {htmlLoadState()}
-                    <openclaw-chat-html-preview
-                      prop:html={content.text}
-                      prop:sourceIdentity={props.sourceIdentity || props.src}
-                      title={props.label}
-                      prop:embedSandboxMode={props.embedSandboxMode}
-                    />
-                  </div>
-                  <pre
-                    class="sidebar-attachment-preview__text"
-                    tabindex={0}
-                    aria-label={props.label}
-                    hidden={!source()}
-                  >
-                    {content.text}
-                  </pre>
-                </>
-              ) : markdown() && !source() ? (
+              <Show when={htmlDocument()}>
+                <div class="chat-html-preview" hidden={source()}>
+                  {htmlLoadState()}
+                  <openclaw-chat-html-preview
+                    prop:html={content.text}
+                    prop:sourceIdentity={props.sourceIdentity || props.src}
+                    title={props.label}
+                    prop:embedSandboxMode={props.embedSandboxMode}
+                  />
+                </div>
+              </Show>
+              {markdown() && !htmlDocument() && !source() ? (
                 <MarkdownAttachment text={content.text} label={props.label} />
               ) : (
-                <pre class="sidebar-attachment-preview__text" tabindex={0} aria-label={props.label}>
+                <pre
+                  class="sidebar-attachment-preview__text"
+                  tabindex={0}
+                  aria-label={props.label}
+                  hidden={htmlDocument() && !source()}
+                >
                   {content.text}
                 </pre>
               )}
@@ -340,18 +316,22 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
   );
 }
 
-defineSolidBridge<TextAttachmentProps>("openclaw-chat-text-attachment", TextAttachment, {
-  properties: {
-    plainText: { default: false },
-    actions: { default: undefined, attribute: false },
-    embedSandboxMode: { default: "scripts" },
-    src: { default: "" },
-    sourceIdentity: { default: "" },
-    label: { default: "" },
-    mimeType: { default: "" },
-    sizeBytes: { default: undefined, type: Number },
+export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
+  "openclaw-chat-text-attachment",
+  TextAttachment,
+  {
+    properties: {
+      plainText: { default: false },
+      actions: { default: undefined, attribute: false },
+      embedSandboxMode: { default: "scripts" },
+      src: { default: "" },
+      sourceIdentity: { default: "" },
+      label: { default: "" },
+      mimeType: { default: "" },
+      sizeBytes: { default: undefined, type: Number },
+    },
   },
-});
+);
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-text-attachment": SolidBridgeElement<TextAttachmentProps>;

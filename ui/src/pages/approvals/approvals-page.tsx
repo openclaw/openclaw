@@ -142,6 +142,7 @@ function ApprovalsPageContent() {
     client: GatewayBrowserClient | null;
     gatewaySource: ApplicationContext["gateway"] | null;
     requestGeneration: number;
+    grantsGeneration: number;
     hasLoaded: boolean;
     historyRefreshPending: boolean;
   } = {
@@ -157,6 +158,7 @@ function ApprovalsPageContent() {
     client: null,
     gatewaySource: null,
     requestGeneration: 0,
+    grantsGeneration: 0,
     hasLoaded: false,
     historyRefreshPending: false,
   };
@@ -306,19 +308,21 @@ function ApprovalsPageContent() {
   }
 
   async function loadGrants(client: GatewayBrowserClient, isCurrent: () => boolean): Promise<void> {
+    const generation = ++state.grantsGeneration;
+    const canPublish = () => isCurrent() && state.grantsGeneration === generation;
     try {
       const result = await client.request<ExecApprovalGrantsListResult>(
         "exec.approval.grants.list",
         {},
       );
-      if (!isCurrent()) {
+      if (!canPublish()) {
         return;
       }
       state.grants = Array.isArray(result.grants) ? result.grants : [];
       state.grantsError = null;
       publish();
     } catch (error) {
-      if (isCurrent()) {
+      if (canPublish()) {
         state.grantsError = formatUiError(error);
         publish();
       }
@@ -363,6 +367,7 @@ function ApprovalsPageContent() {
       if (!isCurrent()) {
         return;
       }
+      state.grantsGeneration += 1;
       const nowMs = Date.now();
       state.grants = state.grants.map((grant) =>
         grant.grantId === grantId ? { ...grant, revokedAtMs: nowMs } : grant,

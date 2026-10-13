@@ -49,7 +49,12 @@ export async function deliverMattermostSlashModelPicker(params: {
     return false;
   }
 
-  const currentModel = await resolveMattermostModelPickerCurrentModel({ cfg, route, data });
+  const currentModel = await resolveMattermostModelPickerCurrentModel({
+    cfg,
+    route,
+    data,
+    sessionEntry,
+  });
   const viewParams = { ownerUserId: senderId, data, currentModel };
   const view =
     entry.kind === "summary"

@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as redact from "../logging/redact.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -21,12 +24,14 @@ afterEach(async () => {
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 function createScope(prefix: string) {
   const stateDir = tempDirs.make(prefix);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  setRuntimeConfigSnapshot({});
   return {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -36,6 +41,22 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it("reads replaced session identities without host SQL", async () => {
+    const scope = createScope("companion-context-identity");
+    for (const sessionId of [scope.sessionId, `${scope.sessionId}-replacement`]) {
+      await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+      const hostSql = observeHostDataSql();
+      try {
+        await expect(defaultSessionCompanionContextReader.currentSessionId(scope)).resolves.toBe(
+          sessionId,
+        );
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+    }
+  });
+
   it.each(
     [false, true].flatMap((warm) =>
       (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
@@ -146,29 +167,23 @@ describe("session companion context", () => {
       .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
       .run(scope.sessionId);
 
-    const redaction = vi.spyOn(redact, "redactToolPayloadText");
-    try {
-      const result = await defaultSessionCompanionContextReader.read(scope);
+    const result = await defaultSessionCompanionContextReader.read(scope);
 
-      expect(result.kind).toBe("ready");
-      if (result.kind !== "ready") {
-        return;
-      }
-      expect(result.context.messages).toHaveLength(40);
-      expect(result.context.messages.at(0)).toEqual({
-        role: "assistant",
-        text: "message 161",
-        ts: 161,
-      });
-      expect(result.context.messages.at(-1)).toEqual({
-        role: "user",
-        text: "message 200",
-        ts: 200,
-      });
-      expect(redaction).toHaveBeenCalledTimes(40);
-    } finally {
-      redaction.mockRestore();
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") {
+      return;
     }
+    expect(result.context.messages).toHaveLength(40);
+    expect(result.context.messages.at(0)).toEqual({
+      role: "assistant",
+      text: "message 161",
+      ts: 161,
+    });
+    expect(result.context.messages.at(-1)).toEqual({
+      role: "user",
+      text: "message 200",
+      ts: 200,
+    });
   });
 
   it("pages past a tool-heavy tail while retaining the selected session's latest user turn", async () => {
@@ -350,9 +365,7 @@ describe("session companion context", () => {
     const result = await defaultSessionCompanionContextReader
       .read(scope)
       .finally(() => hostSql.restore());
-    expect(
-      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
-    ).toEqual([]);
+    expect(hostSql.queries).toEqual([]);
     expect(result).toEqual({
       kind: "ready",
       context: {

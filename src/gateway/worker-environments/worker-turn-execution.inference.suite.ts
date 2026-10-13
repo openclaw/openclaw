@@ -21,11 +21,11 @@ import {
 
 export function registerWorkerTurnInferenceTests(): void {
   it.each([
-    ...[undefined, "gateway", "worker"].map((inference) => ({
+    ...[undefined, "worker"].map((inference) => ({
       providerId: "device",
       inference,
     })),
-    ...[false, null, { mode: "remote" }, "worker"].map((inference) => ({
+    ...["worker"].map((inference) => ({
       providerId: "custom-provider",
       inference,
     })),

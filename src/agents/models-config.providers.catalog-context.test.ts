@@ -134,6 +134,7 @@ it.each([undefined])(
       profileId,
       profileType: "oauth",
       credential: refreshed,
+      readCurrentCredential: null,
     });
     const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
     const provider: ProviderPlugin = {

@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -545,7 +546,7 @@ suite.define(() => {
           .locator("openclaw-app-sidebar")
           .getByRole("button", { name: "Sessions", exact: true })
           .click();
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await restoreChatAsMain(page);
         await expectOneAccessory();
@@ -553,7 +554,7 @@ suite.define(() => {
           .locator("openclaw-app-sidebar")
           .getByRole("button", { name: "Sessions", exact: true })
           .click();
-        await page.locator('[data-region-header="side"] .side-panel__minimize').click();
+        await selectChatLayoutAction(page, "Minimize side panel");
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await captureNativePluginUiProof(suite, page, "before.png", { fullPage: true });

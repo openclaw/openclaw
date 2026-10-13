@@ -1,5 +1,4 @@
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -15,6 +14,10 @@ import {
   resolveSqliteSessionKey,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isNativeSessionEntryRead } from "../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "../config/sessions/session-incognito-binding.js";
@@ -39,10 +42,7 @@ import {
   withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -51,11 +51,11 @@ import {
   scheduleSqliteTrajectoryRuntimeRetention,
   settleIncognitoTrajectoryRuntimeRetention,
 } from "./runtime-retention.js";
+import { createMemoryTrajectoryRuntimeSink } from "./runtime-store-memory.js";
 import type {
   SerializedTrajectoryEvent,
   SqliteTrajectoryRuntimeAppend,
 } from "./runtime-store.contract.js";
-import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {
@@ -66,6 +66,7 @@ type TrajectoryRuntimeSinkParams = {
   sessionKey?: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
+  sessionActor?: SessionActorStorageBinding;
 };
 
 type IncognitoTrajectoryTarget = NonNullable<
@@ -107,6 +108,14 @@ export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntime
         : undefined;
   params.assertCommitAllowed?.();
   const selected = scope ?? marker;
+  const memory = getSessionActorStorageBinding({
+    ...selected,
+    sessionKey: scope?.sessionKey ?? params.sessionKey,
+    sessionActor: params.sessionActor,
+  });
+  if (memory) {
+    return createMemoryTrajectoryRuntimeSink(memory, params);
+  }
   const incognito = selected && captureIncognitoSessionOperation({ ...selected, env: params.env });
   if (incognito) {
     const sessionKey =
@@ -324,7 +333,7 @@ function buildSqliteTrajectoryRuntimeSink(
                   });
                 }
               }
-            } else if (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
+            } else {
               await appendSqliteTrajectoryRuntimeEventsInWorker(
                 databaseOptions,
                 owner.database,
@@ -346,20 +355,6 @@ function buildSqliteTrajectoryRuntimeSink(
                   }
                 },
               );
-            } else {
-              appendSqliteTrajectoryRuntimeEvents(
-                {
-                  agentId: marker.agentId,
-                  discardPrevious: batch.discardPrevious,
-                  env: databaseOptions.env,
-                  maxRuntimeBytes: params.maxRuntimeFileBytes,
-                  sessionId: marker.sessionId,
-                  storePath: owner.database.path,
-                  assertCommitAllowed: params.assertCommitAllowed,
-                },
-                events,
-              );
-              inFlight = undefined;
             }
           } finally {
             if (inFlight === batch && !unsettledAppend) {

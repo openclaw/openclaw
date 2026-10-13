@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render as renderLit } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -9,8 +9,9 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
-import { renderDashboards } from "../dashboards/view.ts";
+import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
@@ -375,22 +376,21 @@ describe("session activity semantics", () => {
       if (surface === "activity") {
         renderSessionActivityViewSolid(input, surfaceContainer);
       } else {
-        renderLit(
-          renderDashboards(
-            {
-              result: input.result!,
-              error: null,
-              basePath: "",
-              fallbackAgentId: "main",
-              mainKey: "main",
-              globalScope,
-            },
-            { query: "", ownerId: "", sort: "updated" },
-            {
-              onFilterChange: vi.fn(),
-            },
-          ),
-          surfaceContainer,
+        mountDashboards(
+          () =>
+            createComponent(DashboardsView, {
+              data: {
+                result: input.result!,
+                error: null,
+                basePath: "",
+                fallbackAgentId: "main",
+                mainKey: "main",
+                globalScope,
+              },
+              filters: { query: "", ownerId: "", sort: "updated" },
+              handlers: { onFilterChange: vi.fn() },
+            }),
+          { container: surfaceContainer },
         );
       }
       const item = surfaceContainer.querySelector<HTMLElement>(

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-presence.test/"} */
 
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
@@ -11,8 +11,13 @@ import {
   createInitializationContext,
   createRenderTestChatPane,
 } from "./chat-pane.test-support.ts";
+import type { ChatStateController } from "./chat-state-controller.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 const sessionKey = "agent:main:dashboard:presence";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 function person(id: string, overrides: Partial<PresenceEntry> = {}): PresenceEntry {
   return {
@@ -31,6 +36,7 @@ async function createPane(presence: PresenceEntry[]) {
   > & {
     presencePayload: PresencePayload | undefined;
     performUpdate: () => void;
+    chatState: ChatStateController<ChatPageHost>;
   };
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({ instanceId: "self-tab" }),
@@ -41,6 +47,8 @@ async function createPane(presence: PresenceEntry[]) {
   state.chatMessages = [{ role: "assistant", content: "Retained conversation", timestamp: 1 }];
   pane.presencePayload = { presence };
   ChatPaneBase.prototype.connectedCallback.call(pane);
+  state.renderLifecycle = pane.chatState.createRenderLifecycle();
+  pane.chatState.attach(state);
   await settleLitElement(pane);
   onTestFinished(() => ChatPaneBase.prototype.disconnectedCallback.call(pane));
   return { pane, context, state, update: vi.spyOn(pane, "performUpdate") };
@@ -112,6 +120,7 @@ it.each([
     const { pane, update } = await createPane(previous);
     const payload = { presence: next };
     pane.presencePayload = payload;
+    vi.advanceTimersToNextFrame();
     await settleLitElement(pane);
     expect(update).toHaveBeenCalledTimes(updates);
     expect(pane.presencePayload).toBe(payload);
@@ -135,6 +144,7 @@ it("refreshes the fallback self identity and defers to the authoritative profile
       }),
     ],
   };
+  vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).toHaveBeenCalledOnce();
   expect(pane.chatProps?.userName).toBe("Updated self");
@@ -153,6 +163,7 @@ it("refreshes the fallback self identity and defers to the authoritative profile
       person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
     ],
   };
+  vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).not.toHaveBeenCalled();
   expect(pane.chatProps?.userName).toBe("Authoritative self");

@@ -1,4 +1,4 @@
-import { render as renderSolid, type JSX } from "@solidjs/web";
+import { insert, render as renderSolid, type JSX } from "@solidjs/web";
 import { nothing, render as renderLit } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import type { Part } from "lit/directive.js";
@@ -6,6 +6,7 @@ import {
   createComponent,
   createContext,
   createEffect,
+  createRoot,
   createSignal,
   flush,
   getOwner,
@@ -19,10 +20,15 @@ import {
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 
+/** Render opaque plugin SDK templates with their event receiver. */
+export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
+  renderLit(template, target, { host });
+}
+
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
 export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
-export const emptyLegacyContent = nothing;
+export const emptyLegacyContent: typeof nothing = nothing;
 
 type LitContentMount = {
   update: (value: unknown) => void;
@@ -31,6 +37,8 @@ type LitContentMount = {
   dispose: () => void;
 };
 
+type NestedSolidRoot = { element: HTMLElement; dispose: () => void };
+let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
 
 /** One retained Lit range owns each legacy content container. */
@@ -46,10 +54,19 @@ export function mountLitContent(
   }
   const end = document.createComment("lit-content");
   container.append(end);
+  const owner = getOwner();
   const renderOptions = { ...options, renderBefore: end };
-  // Legacy directives own their signal writes, independently of the calling Solid effect.
-  const commit = (next: unknown) =>
-    runWithOwner(null, () => renderLit(next, container, renderOptions));
+  const roots = new Set<NestedSolidRoot>();
+  // Later commits restore the creator owner for nested directive resources.
+  const commit = (next: unknown) => {
+    const previous = currentLitRoots;
+    currentLitRoots = roots;
+    try {
+      return runWithOwner(owner, () => renderLit(next, container, renderOptions));
+    } finally {
+      currentLitRoots = previous;
+    }
+  };
   const part = commit(value);
   let ownedNodes: Node[] = [];
   const readOwnedNodes = (): Node[] => {
@@ -69,6 +86,15 @@ export function mountLitContent(
     update(next) {
       commit(next);
       ownedNodes = readOwnedNodes();
+      // Lit does not notify a second disconnection when parked content is removed.
+      for (const root of roots) {
+        if (
+          !root.element.isConnected &&
+          root.element.getRootNode() !== part.startNode?.getRootNode()
+        ) {
+          root.dispose();
+        }
+      }
     },
     nodes() {
       const nodes = [...readOwnedNodes()];
@@ -78,7 +104,7 @@ export function mountLitContent(
       nodes.push(end);
       return nodes;
     },
-    setConnected: (connected) => runWithOwner(null, () => part.setConnected(connected)),
+    setConnected: (connected) => runWithOwner(owner, () => part.setConnected(connected)),
     dispose() {
       if (disposed) {
         return;
@@ -86,6 +112,9 @@ export function mountLitContent(
       disposed = true;
       const nodes = readOwnedNodes();
       runWithOwner(null, () => part.setConnected(false));
+      for (const root of roots) {
+        root.dispose();
+      }
       // Solid can remove the markers first. Retire remaining template roots
       // directly instead of rendering into an already-detached ChildPart.
       for (const node of nodes) {
@@ -135,11 +164,15 @@ export function LitContent(props: { value: unknown }): JSX.Element {
 }
 
 class SolidContent extends AsyncDirective {
+  private readonly owner = getOwner();
   private element?: HTMLSpanElement;
   private component?: Component<Record<string, unknown>>;
   private props: Record<string, unknown> = {};
   private updateProps?: (props: Record<string, unknown>) => void;
+  private updatePresented?: (presented: boolean) => void;
   private dispose?: () => void;
+  private roots = currentLitRoots;
+  private root?: NestedSolidRoot;
 
   render(_component: Component<Record<string, unknown>>, _props: Record<string, unknown>) {
     return this.element ?? nothing;
@@ -150,10 +183,10 @@ class SolidContent extends AsyncDirective {
     [component, props]: [Component<Record<string, unknown>>, Record<string, unknown>],
   ) {
     if (this.component !== component) {
-      this.dispose?.();
-      this.dispose = undefined;
+      this.disposeRoot();
       this.component = component;
     }
+    this.roots ??= currentLitRoots;
     this.props = props;
     this.element ??= Object.assign(document.createElement("span"), {
       style: "display: contents",
@@ -178,34 +211,73 @@ class SolidContent extends AsyncDirective {
     if (!component || !element) {
       return;
     }
-    // This directive owns the root, independently of a surrounding Solid effect.
-    this.dispose = runWithOwner(null, () =>
-      renderSolid(() => {
-        // A legacy host can publish props during its parent's Solid commit.
-        const [props, setProps] = createSignal(this.props, { ownedWrite: true });
-        this.updateProps = (next) => setProps(() => next);
-        const liveProps = new Proxy<Record<string, unknown>>(
-          {},
-          {
-            get: (_target, key: string) => props()[key],
-            has: (_target, key: string) => key in props(),
-            ownKeys: () => Reflect.ownKeys(props()),
-            getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
-          },
-        );
-        return createComponent(component, liveProps);
-      }, element),
+    const owner = this.owner ?? getOwner();
+    const view = () => {
+      // A legacy host can publish props during its parent's Solid commit.
+      const [props, setProps] = createSignal(this.props, { ownedWrite: true });
+      const [presented, setPresented] = createSignal(this.isConnected, { ownedWrite: true });
+      this.updateProps = (next) => setProps(() => next);
+      this.updatePresented = setPresented;
+      const liveProps = new Proxy<Record<string, unknown>>(
+        {},
+        {
+          get: (_target, key: string) => props()[key],
+          has: (_target, key: string) => key in props(),
+          ownKeys: () => Reflect.ownKeys(props()),
+          getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+        },
+      );
+      return (
+        <SolidContentPresentation value={presented}>
+          {createComponent(component, liveProps)}
+        </SolidContentPresentation>
+      );
+    };
+    // Nested top-level rendering can flush effects under the parent's render owner.
+    this.dispose = runWithOwner(owner, () =>
+      owner
+        ? createRoot((dispose) => {
+            insert(element, view());
+            return () => {
+              dispose();
+              element.replaceChildren();
+            };
+          })
+        : renderSolid(view, element),
     );
+    this.root = { element, dispose: () => this.disposeRoot() };
+    this.roots?.add(this.root);
   }
 
-  protected override disconnected() {
+  private disposeRoot() {
     this.dispose?.();
     this.dispose = undefined;
     this.updateProps = undefined;
+    this.updatePresented = undefined;
+    if (this.root) {
+      this.roots?.delete(this.root);
+      this.root = undefined;
+    }
+  }
+
+  protected override disconnected() {
+    this.updatePresented?.(false);
+    // A parked Lit range is still in the DOM. Keep its Solid controls and local
+    // state; actual removal happens after Lit notifies its directives.
+    queueMicrotask(() => {
+      if (!this.isConnected && !this.element?.isConnected) {
+        this.disposeRoot();
+      }
+    });
   }
 
   protected override reconnected() {
-    this.mount();
+    if (this.dispose) {
+      this.updateProps?.(this.props);
+      this.updatePresented?.(true);
+    } else {
+      this.mount();
+    }
   }
 }
 

@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   linkEmail,
   setDisplayName,
@@ -19,11 +20,11 @@ import {
 } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import * as mentionStore from "./mention-inbox-store.js";
+import type { MentionStoreSource } from "./mention-inbox-store.js";
 import {
   readMentionStoreSnapshot,
   writeMentionStoreChanges,
-  type MentionStoreSource,
-} from "./mention-inbox-store.js";
+} from "./mention-inbox-store.worker.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
   SESSION_KEY,
@@ -54,6 +55,46 @@ function holdMentionRead() {
 }
 
 describe("temporary human mention Inbox", () => {
+  it("recovers the same authenticated reader after the profile catalog becomes ready", async () => {
+    await withInbox(
+      async (f) => {
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE" },
+        });
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        expect(await f.call("mentions.list", {})).toMatchObject({
+          ok: true,
+          payload: { items: [] },
+        });
+        await f.post();
+        expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
+      },
+      {},
+      { retainProfileCatalog: false },
+    );
+  });
+
+  it("dismisses an absent mention while an unrelated session is published", async () => {
+    await withInbox(async (f) => {
+      await f.post("retained");
+      const before = (await read(f.inbox, f.bobClient)).items;
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        await f.setSession({ displayName: "Unrelated conversation" }, "agent:main:unrelated");
+        return commit(...args);
+      });
+
+      expect(await f.call("mentions.dismiss", { ids: ["synthetic-absent-mention"] })).toMatchObject(
+        {
+          ok: true,
+          payload: { items: before },
+        },
+      );
+      expect((await read(f.openInbox("after-no-op"), f.bobClient)).items).toEqual(before);
+    });
+  });
+
   it("merges a foreign dismissal between snapshot and mutation while keeping queued input FIFO", async () => {
     await withInbox(async (f) => {
       await f.post("original");
@@ -487,7 +528,9 @@ describe("temporary human mention Inbox", () => {
                 return statement.sourceSQL;
               }),
             )
-            .filter((query) => /config_machine_state/i.test(query)),
+            .filter((query) =>
+              /config_machine_state|\bselect\b[\s\S]*\bsession_nodes\b/i.test(query),
+            ),
         ).toEqual([]);
       } finally {
         for (const spy of sql) {
@@ -546,6 +589,10 @@ describe("temporary human mention Inbox", () => {
       expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
       await f.post();
       const visible = await read(f.inbox, f.bobClient);
+      await f.setSession({ displayName: "Updated design review" });
+      expect((await read(f.inbox, f.bobClient)).items[0]?.sessionTitle).toBe(
+        "Updated design review",
+      );
       await f.setSession({ visibility: "draft" });
       await f.inbox.invalidateAsync();
       const hidden = await read(f.inbox, f.bobClient);

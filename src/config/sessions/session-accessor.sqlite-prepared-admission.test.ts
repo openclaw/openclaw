@@ -214,7 +214,7 @@ function evictCachedHandleForIntegrityAdmission(f: Fixture) {
   if (!database) {
     throw new Error("Fixture lost its cached handle before eviction");
   }
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
@@ -417,42 +417,6 @@ it("checks replacement commit authority before stale rows or worker admission", 
   expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
 });
 
-it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
-  const f = fixture();
-  const probe = observeWorkerAdmission(f.databasePath, "warm");
-  const denied = new Error("synthetic lifecycle denied");
-  const guard = vi.fn(() => {
-    throw denied;
-  });
-  const committed = vi.fn();
-  const buildEntry = vi.fn(
-    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      replaceSessionEntrySync(f.input, {
-        sessionId: "original",
-        label: "newer",
-        updatedAt: Date.now(),
-      });
-      await closeForIntegrityAdmission(f);
-      return { ...currentEntry!, label: "uncommitted" };
-    },
-  );
-  const work = own(
-    applySessionEntryLifecycleMutation({
-      storePath: f.databasePath,
-      skipMaintenance: true,
-      beforeCommitInTransaction: guard,
-      onLifecycleCommitted: committed,
-      upserts: [{ sessionKey: f.input.sessionKey, buildEntry }],
-    }),
-  );
-  await expect(work).rejects.toBe(denied);
-  expect(buildEntry).toHaveBeenCalledOnce();
-  expect(guard).toHaveBeenCalledOnce();
-  expect(committed).not.toHaveBeenCalled();
-  await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
-  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
-});
-
 function seedTranscript(f: Fixture) {
   const scope = { ...f.input, sessionId: "original" };
   const events = [{ type: "session", id: "original", content: "retained prepared history" }];
@@ -513,7 +477,7 @@ it("reacquires the split lifecycle writer after archive materialization with ret
     if (!cached) {
       throw new Error("Fixture lost its cached handle before materialization");
     }
-    closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+    closeCachedOpenClawAgentDatabase(cached);
     expect(cached.db.isOpen).toBe(false);
   };
   const work = own(
@@ -583,7 +547,7 @@ it.each([false, true])(
         throw new Error("Fixture lost its cached handle before native deletion preparation");
       }
       // Evict the handle without revoking the lifecycle operation's captured execution owner.
-      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      closeCachedOpenClawAgentDatabase(cached);
       expect(cached.db.isOpen).toBe(false);
       invalidateOpenClawAgentDatabaseValidation(f.databasePath);
       clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);

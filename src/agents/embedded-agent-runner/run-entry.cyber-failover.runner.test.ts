@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown, markAuthProfileFailure } from "../auth-profiles/usage.js";
 import { FailoverError } from "../failover-error.js";
@@ -64,8 +68,10 @@ type RunCandidate = Parameters<
 >[0]["runCandidate"];
 
 function runEntry(runId: string, runCandidate: RunCandidate, hasCommittedSideEffect = () => false) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   return runEmbeddedAgentEntry({
-    selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
+    selection: { cfg: config, provider: "openai", model: "gpt-5.6" },
     identity: { runId, agentId: "main", sessionId: "session-1" },
     harness: createDirectHarness(),
     behavior: { kind: "command-rpc", hasCommittedSideEffect },
@@ -79,6 +85,10 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
     resetFallbackSkipCacheForTest();
     authStoreRuntimeMocks.state.store = undefined;
     authStoreRuntimeMocks.updateAuthProfileStoreWithLock.mockClear();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   it("propagates a recognized provider error thrown after the Daybreak retry delivered", async () => {

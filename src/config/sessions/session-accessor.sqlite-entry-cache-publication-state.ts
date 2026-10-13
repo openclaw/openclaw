@@ -4,7 +4,6 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -36,7 +35,7 @@ import {
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export const preparedSharingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedSessionSharingReads"),
@@ -131,7 +130,6 @@ function prepareSessionEntryReplacementChanges(
   owner: PendingSessionEntryPublication,
   replacement: SessionEntryReplacementPublication,
   databaseIdentity: string,
-  transcriptUnchanged: boolean,
 ): PreparedSessionEntryChanges | undefined {
   if (replacement.source?.identity !== databaseIdentity) {
     return undefined;
@@ -151,6 +149,13 @@ function prepareSessionEntryReplacementChanges(
           .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
           .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
       ),
+    actorPostimages:
+      replacement.actorPostimages &&
+      new Map(
+        [...replacement.actorPostimages]
+          .filter(([key]) => current(key))
+          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
+      ),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
@@ -161,9 +166,7 @@ function prepareSessionEntryReplacementChanges(
       new Map(
         [...replacement.projection]
           .filter(
-            ([key, facts]) =>
-              readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
-              (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
           )
           .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
       ),
@@ -176,19 +179,12 @@ export function prepareSessionEntryPublicationFacts(params: {
   owner: PendingSessionEntryPublication;
   databaseIdentity: string;
   unknown: boolean;
-  transcriptVersion: number | undefined;
 }) {
-  const { replacement, owner, databaseIdentity, unknown, transcriptVersion } = params;
+  const { replacement, owner, databaseIdentity, unknown } = params;
   const current = (key: string) => !owner.superseded.has(key);
-  const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
   const prepared =
     !unknown && replacement
-      ? prepareSessionEntryReplacementChanges(
-          owner,
-          replacement,
-          databaseIdentity,
-          transcriptUnchanged,
-        )
+      ? prepareSessionEntryReplacementChanges(owner, replacement, databaseIdentity)
       : undefined;
   const currentMetadata = (key: string) => current(key) && replacement !== undefined;
   const readCurrent = (key: string) => {
@@ -215,11 +211,8 @@ export function prepareSessionEntryPublicationFacts(params: {
     return {
       entry,
       fullEntry: prepared?.fullEntries?.get(key),
-      projection:
-        projection?.activitySummaryWatermark === undefined ||
-        transcriptVersion === readSessionTranscriptUpdateVersion()
-          ? projection
-          : undefined,
+      actorPostimage: prepared?.actorPostimages?.get(key),
+      projection,
     };
   };
   return { prepared, currentMetadata, readCurrent };
@@ -288,8 +281,40 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
         !publication.superseded.has(params.sessionKey) &&
         !publication.generationUnchanged.has(params.sessionKey),
     );
+  const predicatePending = () =>
+    (read.predicate?.pending.size ?? 0) > 0 ||
+    [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
+      if (publication.settled || publication.superseded.has(params.sessionKey)) {
+        return false;
+      }
+      const entryPostimage = publication.entryPostimages?.get(params.sessionKey);
+      if (read.predicate && entryPostimage) {
+        // These fields are unchanged whether the pending transaction commits or rolls back.
+        try {
+          return !read.predicate.matches(entryPostimage);
+        } catch {
+          return true;
+        }
+      }
+      if (!read.predicate || !publication.participantProjections?.has(params.sessionKey)) {
+        return true;
+      }
+      const projection = publication.participantProjections.get(params.sessionKey);
+      if (!projection) {
+        return false;
+      }
+      const postimage = projectSessionEntryPredicateChange(read.predicate, {
+        kind: "participants",
+        projection,
+      });
+      try {
+        return !postimage || !read.predicate.matches(postimage);
+      } catch {
+        return true;
+      }
+    });
   return {
-    hasPendingPublication: () => pending(false, read.predicate?.pending),
+    hasPendingPublication: predicatePending,
     prepareRead: (): Promise<void> | undefined => {
       // Publication begins only after writer admission; queued writers cannot block their owner.
       const completions = [...(pendingSessionEntryPublications.get(key) ?? [])].flatMap(
@@ -307,6 +332,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);
       read.acquisition = undefined;
+      return read.facts;
+    },
+    adoptCreatedEntry: (entry: SessionSharingEntry) => {
+      read.facts = { entry, membership: new Set() };
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
     readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
@@ -347,9 +376,11 @@ export function retainPreparedSessionEntryPredicate(params: {
   });
   let active = true;
   const canRefresh = () => active && predicate.state !== "changed";
+  const isCurrent = () =>
+    canRefresh() && predicate.state === "current" && !retained.hasPendingPublication();
   return {
-    isCurrent: () =>
-      canRefresh() && predicate.state === "current" && !retained.hasPendingPublication(),
+    isCurrent,
+    readCurrent: () => (isCurrent() ? { entry: structuredClone(predicate.entry) } : undefined),
     canRefresh,
     captureRevision: () => predicate.revision,
     acknowledge: (entry: SessionEntry | undefined, revision: number) => {
@@ -415,7 +446,7 @@ export function retainedSharingReads(
 type PreparedSharingChangeRegistry = {
   changes: WeakMap<object, SessionEntryPublicationRecord>;
   operations: WeakMap<SessionEntryCreationOperation, CreationRecord>;
-  current: AsyncLocalStorage<CreationRecord>;
+  current: AsyncLocalStorage<CreationRecord | undefined>;
 };
 
 export const preparedSharingChanges: PreparedSharingChangeRegistry = resolveGlobalSingleton(
@@ -423,7 +454,7 @@ export const preparedSharingChanges: PreparedSharingChangeRegistry = resolveGlob
   () => ({
     changes: new WeakMap<object, SessionEntryPublicationRecord>(),
     operations: new WeakMap<SessionEntryCreationOperation, CreationRecord>(),
-    current: new AsyncLocalStorage<CreationRecord>(),
+    current: new AsyncLocalStorage<CreationRecord | undefined>(),
   }),
 );
 
@@ -507,6 +538,9 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
     source: prepared.source,
     entry,
     fullEntry: record.readCurrent ? current?.fullEntry : prepared.fullEntries?.get(sessionKey),
+    actorPostimage: record.readCurrent
+      ? current?.actorPostimage
+      : prepared.actorPostimages?.get(sessionKey),
     sharing: record.readCurrent
       ? (current?.sharing ?? (current?.entry && projectSessionSharingEntry(current.entry)))
       : (prepared.sharing?.get(sessionKey) ??

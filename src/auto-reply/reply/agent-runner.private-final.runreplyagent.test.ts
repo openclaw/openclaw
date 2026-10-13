@@ -1,7 +1,7 @@
 import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   onAgentEvent as subscribeAgentEvent,
@@ -167,8 +167,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       },
     });
 
-    // Session seeding pins an empty runtime snapshot that would override visibleReplies.
-    clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(followupRun.run.config);
 
     const runId = `stranded-${path.basename(tmp)}`;
     const agentEvents: AgentEventPayload[] = [];

@@ -5,6 +5,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
@@ -25,6 +26,7 @@ export function createInterruptedRecoveryCoordinator(params: {
   finalizeRun: ReturnType<
     typeof createSubagentRegistryCompletionRuntime
   >["finalizeInterruptedSubagentRun"];
+  isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
   recoverRow: (params: RestartRecoveryParams) => Promise<RestartRecoveryResult>;
   schedule: (delayMs: number) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -36,6 +38,7 @@ export function createInterruptedRecoveryCoordinator(params: {
     retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   };
   let attempts = new Map<string, Attempt>();
+  let warnedRetainedOwners = new WeakSet<object>();
   let unsubscribe: (() => void) | undefined;
   const invalidate = (entry: SubagentRunRecord) => {
     if (attempts.delete(entry.runId)) {
@@ -95,14 +98,32 @@ export function createInterruptedRecoveryCoordinator(params: {
       unsubscribe?.();
       unsubscribe = undefined;
       attempts = new Map();
+      warnedRetainedOwners = new WeakSet();
     },
     async recover(runId: string, entry: SubagentRunRecord): Promise<boolean> {
+      const authority = resolveSubagentChildAuthority(entry);
+      if (authority.status === "mismatch") {
+        const owner = getSubagentRunRuntimeKey(entry);
+        if (!warnedRetainedOwners.has(owner)) {
+          warnedRetainedOwners.add(owner);
+          params.warn("retained subagent record cannot be recovered", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            error: new Error(authority.error),
+          });
+        }
+        return true;
+      }
       if (
         entry.execution.restartRecovery === undefined &&
         entry.terminalOwner !== "interrupted-recovery" &&
         (getAgentRunContext(runId) || typeof entry.execution.endedAt === "number")
       ) {
         return false;
+      }
+      if (entry.execution.status === "terminal" && params.isTerminalTailActive(entry)) {
+        // Replay drains orphaned winners; this process is still draining this one.
+        return true;
       }
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const gatewayRuntime = params.getGatewayRuntime();

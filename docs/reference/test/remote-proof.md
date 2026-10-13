@@ -10,28 +10,41 @@ read_when:
 
 ## Remote proof policy for agents
 
-Agent sessions run trusted development tests, changed gates, typecheck/lint,
-and builds locally by default, broadening only when the touched contract
-requires it. Never execute untrusted repository tooling locally. Use Crabbox
-when the environment is part of the proof: clean-machine, install/package,
-Docker, E2E, live, desktop, or cross-platform work, or when the operator
-explicitly requests remote proof. Do not use Crabbox merely as generic compute
-offload. The configured Testbox workflow hydrates credentials, so untrusted
-contributor or fork code must use secretless fork CI or sanitized direct AWS
-Crabbox instead.
+Use the canonical
+[proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy)
+to select a qualified proof route. Prefer bounded local proof on an available
+host; expensive checks and busy or unqualified local hosts can use remote proof.
+Never execute untrusted repository tooling locally; use
+secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 
-Do not pre-warm for anticipated work. Acquire the backend lazily when the
-first environment-sensitive command is ready, reuse the returned `tbx_...` id
-for later remote commands, sync the current checkout on every run, and stop it
-before handoff. Let the previous command and its cleanup finish before
-another synchronization or reuse of that lease.
+Acquire only when the command is ready; reuse task-owned leases and stop them
+before handoff. Finish commands and cleanup before syncing or reusing a lease.
 
 Testbox `run` and `warmup` use the workflow from `main` so new allocations
 inherit the maintained spending limits. The wrapper overrides configured workflow
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
-workflow and job selection still support the high-memory profile.
+workflow and job selection support explicit focused, routine, and high-memory
+profiles. The default stays 16-class until real smaller-machine qualification
+passes; neither `--class` nor `--type` sizes delegated Testbox leases.
+
+| Workload                                     | Workflow                           | Runner tier | Runtime ceiling |
+| -------------------------------------------- | ---------------------------------- | ----------- | --------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4 vCPU      | 60 minutes      |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8 vCPU      | 120 minutes     |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16 vCPU     | 240 minutes     |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32 vCPU     | 240 minutes     |
+
+Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
+on a fresh lease. Small profiles are opt-in qualification candidates, not proof
+that arbitrary compiler or lint graphs fit. Capture actual CPU affinity, cgroup
+limits, peak memory, OOM events, hydration and payload time before promoting a
+workload; runner labels alone do not establish usable RAM. All profiles retain
+the same 32-slot concurrency namespace; memory-heavy proof still shares four
+of those slots. Hash collisions can queue even when another slot is free.
+Stop only task-owned queued allocations; do not compensate with a larger box
+or force expensive work locally.
 
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
@@ -94,8 +107,7 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
-The [local test commands](/reference/test/local) are the normal trusted development path. Keep proof
-proportional to the touched contract.
+See [local commands](/reference/test/local) for focused development proof.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
 `CRABBOX_ENV_ALLOW=CI`, pass `--provider aws --no-hydrate`, and use
@@ -150,7 +162,7 @@ See [runner limits](/ci/runners#testbox-spending-limits) for queue behavior.
 
 ## Crabbox repository setup
 
-The shared [Crabbox skill](https://github.com/openclaw/agent-skills/tree/main/skills/crabbox)
+The [Crabbox skill](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/SKILL.md)
 owns portable lease, trust, sync, and cleanup procedures. This section owns the
 OpenClaw wrapper and workflow inputs. Routine task-needed Crabbox/Testbox use
 and task-owned worktrees do not require another confirmation; preserve unrelated

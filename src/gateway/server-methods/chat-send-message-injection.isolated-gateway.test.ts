@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { installQueueRuntimeErrorSilencer } from "../../auto-reply/reply/queue.test-helpers.js";
@@ -18,6 +19,7 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -85,7 +87,7 @@ function visibleMessageText(message: unknown): string {
 }
 
 let ws: WebSocket;
-const sharedTempDirs: string[] = [];
+let sessionStoreDir: string | undefined;
 let liveOperation: ReturnType<typeof createReplyOperation> | undefined;
 
 installConnectedControlUiServerSuite((started) => {
@@ -110,7 +112,6 @@ beforeEach(() => {
   delete resolverCapture.ctxBody;
   delete resolverCapture.runId;
   delete resolverCapture.messageInjectionDisposition;
-  clearLiveOperation("test-cleanup");
   dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
     const p = params as DispatchInboundParams;
     dispatchCapture.calls += 1;
@@ -121,6 +122,21 @@ beforeEach(() => {
   });
 });
 
+afterEach(async () => {
+  const sessionKey = liveOperation?.key;
+  try {
+    if (sessionKey && testState.sessionStorePath) {
+      // Dispatch diagnostics precede cleanup; settle its writes before reseeding this store.
+      await getSessionWorkAdmissionRelease({
+        scope: testState.sessionStorePath,
+        identities: [sessionKey],
+      });
+    }
+  } finally {
+    clearLiveOperation("test-cleanup");
+  }
+});
+
 async function seedActiveTurn(params: {
   sessionKey: string;
   sessionId: string;
@@ -129,9 +145,9 @@ async function seedActiveTurn(params: {
   sourceTurnId?: string;
   deliverySourceRunId?: string;
 }) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
-  sharedTempDirs.push(dir);
-  testState.sessionStorePath = path.join(dir, "sessions.json");
+  // One suite Gateway keeps one physical store; retained populated stores collide in discovery.
+  sessionStoreDir ??= await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-iso-gw-"));
+  testState.sessionStorePath = path.join(sessionStoreDir, "sessions.json");
   await writeSessionStore({
     entries: {
       [params.sessionKey]: {
@@ -182,9 +198,10 @@ async function seedActiveTurn(params: {
 
 afterAll(async () => {
   clearLiveOperation("test-cleanup-final");
-  for (const dir of sharedTempDirs.splice(0)) {
+  if (sessionStoreDir) {
     // Defer removal until Gateway teardown; Windows may still hold SQLite handles.
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(sessionStoreDir, { recursive: true, force: true }).catch(() => undefined);
+    sessionStoreDir = undefined;
   }
   testState.sessionStorePath = undefined;
 });
@@ -227,7 +244,10 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           idempotencyKey: `slow-steer-${durationMs}`,
           queueMode: "steer",
         })) as WireResponse;
-        expect(response).toMatchObject({ ok: true, payload: { status: "started" } });
+        expect(response, JSON.stringify(response)).toMatchObject({
+          ok: true,
+          payload: { status: "started" },
+        });
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(dispatchCapture.calls).toBe(0);
         clock = durationMs;
@@ -247,7 +267,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     },
   );
 
-  it.each([
+  it.for([
     {
       name: "a tombstone for the active source",
       sessionKey: SESSION_KEY,
@@ -271,8 +291,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
   ])(
     "$name rejects steering and delivers exactly one follow-up reply over the real transport",
     { timeout: 30_000 },
-    async (scenario) => {
+    async (scenario, { signal }) => {
       const queueMessage = await seedActiveTurn(scenario);
+      const resolved = createDeferred();
 
       // Resetting this seam uses the production dispatcher and delivery owner;
       // only the reply source is controlled. Observe its final on the real socket.
@@ -283,11 +304,13 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         const options = (opts ?? {}) as { runId?: string; messageInjectionDisposition?: unknown };
         resolverCapture.runId = options.runId;
         resolverCapture.messageInjectionDisposition = options.messageInjectionDisposition;
+        resolved.resolve();
         return { text: scenario.replyText };
       });
 
       const runId = `idem-iso-gw-${randomUUID()}`;
       const chatFrames: ChatWirePayload[] = [];
+      const finalReceived = createDeferred();
       const onChatFrame = (raw: RawData) => {
         try {
           const frame = JSON.parse(rawDataToString(raw)) as {
@@ -297,6 +320,9 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           };
           if (frame.type === "event" && frame.event === "chat" && frame.payload?.runId === runId) {
             chatFrames.push(frame.payload);
+            if (frame.payload.state === "final") {
+              finalReceived.resolve();
+            }
           }
         } catch {
           // Unrelated frames on the shared test socket.
@@ -316,29 +342,26 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
           20_000,
         )) as WireResponse;
 
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expect(res.payload?.status).toBe("started");
         expect(res.payload?.runId).toBe(runId);
         expect(queueMessage).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(resolverCapture.calls).toBe(1), {
-          interval: 50,
-          timeout: 15_000,
-        });
+        await withinTest(resolved.promise, signal);
+        expect(resolverCapture.calls).toBe(1);
         expect(resolverCapture.ctxBody).toBe(scenario.message);
         expect(resolverCapture.runId).toBe(runId);
         expect(resolverCapture.messageInjectionDisposition).toBe("rejected");
         expect(dispatchCapture.calls).toBe(0);
 
-        await vi.waitFor(
-          () => {
-            expect(chatFrames.some((frame) => frame.state === "final")).toBe(true);
-          },
-          { interval: 50, timeout: 15_000 },
-        );
-        // Quiet-period check: no second terminal may follow the first.
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
+        await withinTest(finalReceived.promise, signal);
+        await getSessionWorkAdmissionRelease({
+          scope: testState.sessionStorePath!,
+          identities: [scenario.sessionKey, scenario.sessionId],
         });
+        // The producer is settled; a pong drains earlier frames on this same connection.
+        const pong = once(ws, "pong", { signal });
+        ws.ping();
+        await withinTest(pong, signal);
         const finals = chatFrames.filter((frame) => frame.state === "final");
         expect(finals.length).toBe(1);
         expect(visibleMessageText(finals[0]?.message)).toContain(scenario.replyText);
@@ -372,7 +395,7 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
         20_000,
       )) as WireResponse;
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, JSON.stringify(res)).toBe(true);
       expect(res.payload?.status).toBe("started");
       expect(queueMessage).toHaveBeenCalledOnce();
       expect(queueMessage.mock.calls[0]?.[0]).toContain("unrelated-tombstone inbound");

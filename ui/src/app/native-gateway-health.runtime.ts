@@ -5,17 +5,11 @@ type NativeGatewaysWindow = Window & {
   __OPENCLAW_NATIVE_GATEWAY_HEALTH__?: { gatewayUrl: string; health: NativeGateway["health"] };
 };
 
-let healthReporter: object | undefined;
-
 export function startNativeGatewayHealthReporting(gateway: ApplicationGateway): () => void {
   // SAFETY: The native document owns these optional globals; this reporter writes the typed health value.
   const nativeWindow = window as NativeGatewaysWindow;
-  const owner = {};
-  healthReporter = owner;
+  // Startup owns one reporter per document; overlapping app roots are best effort.
   const publish = (health: NativeGateway["health"]) => {
-    if (healthReporter !== owner) {
-      return;
-    }
     const gatewayUrl = gateway.connection.gatewayUrl;
     const previous = nativeWindow["__OPENCLAW_NATIVE_GATEWAY_HEALTH__"];
     if (previous?.gatewayUrl === gatewayUrl && previous.health === health) {
@@ -34,9 +28,6 @@ export function startNativeGatewayHealthReporting(gateway: ApplicationGateway): 
   refresh();
   return () => {
     unsubscribe();
-    if (healthReporter === owner) {
-      publish("unknown");
-      healthReporter = undefined;
-    }
+    publish("unknown");
   };
 }

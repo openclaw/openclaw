@@ -142,14 +142,11 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
           this.#store.delete(staleEntryKey);
           update(REEF_AUDIT_HEAD_KEY, (current) => {
             const latest = parseReefAuditHead(current);
-            if (latest.pending?.owner !== owner || latest.pending.entryKey !== staleEntryKey) {
-              return latest;
-            }
             return {
               ...latest,
               pending: {
                 owner,
-                expiresAt: latest.pending.expiresAt,
+                expiresAt: latest.pending!.expiresAt,
               },
             };
           });
@@ -160,9 +157,6 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
           this.#store.delete(head.garbageEntryKey);
           update(REEF_AUDIT_HEAD_KEY, (current) => {
             const latest = parseReefAuditHead(current);
-            if (latest.pending?.owner !== owner) {
-              return latest;
-            }
             const { garbageEntryKey: _garbageEntryKey, ...cleaned } = latest;
             return cleaned;
           });
@@ -173,22 +167,12 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
         this.authoritySignal?.throwIfAborted();
         entryHash = entry.entryHash;
         entryKey = reefAuditEntryKey(entry.entryHash);
-        let staged = false;
+        // All store callbacks below commit synchronously; another Gateway cannot
+        // steal this lease mid-call under the exclusive state-owner contract.
         update(REEF_AUDIT_HEAD_KEY, (current) => {
           const latest = parseReefAuditHead(current);
-          if (
-            latest.hash !== head.hash ||
-            latest.seq !== head.seq ||
-            latest.pending?.owner !== owner
-          ) {
-            return latest;
-          }
-          staged = true;
-          return { ...latest, pending: { ...latest.pending, entryKey } };
+          return { ...latest, pending: { ...latest.pending!, entryKey } };
         });
-        if (!staged) {
-          throw new Error("Reef audit append lease was lost before staging");
-        }
         inserted = this.#store.registerIfAbsent(entryKey, { kind: "entry", entry });
         if (!inserted) {
           throw new Error("Reef audit entry already exists before head advancement");
@@ -198,10 +182,6 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
             const previous = parseAuditStateRecord(current);
             if (previous.entry.entryHash !== head.hash) {
               throw new Error("Reef audit head entry differs before linking append");
-            }
-            const latestHead = parseReefAuditHead(this.#headStore.lookup(REEF_AUDIT_HEAD_KEY));
-            if (latestHead.pending?.owner !== owner) {
-              throw new Error("Reef audit append lease was lost before linking");
             }
             if (previous.nextHash === entry.entryHash) {
               return previous;
@@ -227,12 +207,7 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
         let advanced = false;
         update(REEF_AUDIT_HEAD_KEY, (current) => {
           const latest = parseReefAuditHead(current);
-          if (
-            latest.hash !== head.hash ||
-            latest.seq !== head.seq ||
-            latest.pending?.owner !== owner ||
-            latest.pending.entryKey !== entryKey
-          ) {
+          if (latest.pending?.owner !== owner) {
             return latest;
           }
           advanced = true;
@@ -252,9 +227,6 @@ export class ReefLegacySqliteAuditStore implements AuditStore {
             this.#store.delete(garbageEntryKey);
             update(REEF_AUDIT_HEAD_KEY, (current) => {
               const latest = parseReefAuditHead(current);
-              if (latest.hash !== entry.entryHash || latest.garbageEntryKey !== garbageEntryKey) {
-                return latest;
-              }
               const { garbageEntryKey: _garbageEntryKey, ...cleaned } = latest;
               return cleaned;
             });

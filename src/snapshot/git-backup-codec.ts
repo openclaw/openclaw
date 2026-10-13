@@ -8,16 +8,30 @@ import { finished } from "node:stream/promises";
 import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
+import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import {
+  extractSqliteTableSchema,
   findSqlCharacter,
   normalizeSqlWhitespace,
   quoteSqliteIdentifier as quoteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import {
+  assertAgentSchemaVersion,
+  assertSupportedAgentSchemaVersion,
+  getOpenClawAgentMigrationSchema,
+} from "../state/openclaw-agent-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openClawStateMigrationAssertions } from "../state/openclaw-state-db-maintenance.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+} from "../state/openclaw-state-db-schema-version.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import {
   AGENT_SECRET_TABLE_NAMES,
@@ -28,6 +42,7 @@ import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
 import { assertFreshRestoreTarget, assertNoSqliteSidecarsSync } from "./restore-paths.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
+import { encodeSqliteValue, escapedSqliteText } from "./sqlite-cell-codec.js";
 
 export const GIT_BACKUP_MANIFEST = "manifest.json";
 export const GIT_BACKUP_SCHEMA = "schema.sql";
@@ -138,27 +153,6 @@ function readTableColumns(database: DatabaseSync, table: string): TableColumn[] 
     });
 }
 
-function encodeSqliteValue(value: unknown): unknown {
-  if (value === null || typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("Git backup cannot encode a non-finite SQLite REAL value.");
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    return value >= Number.MIN_SAFE_INTEGER && value <= Number.MAX_SAFE_INTEGER
-      ? Number(value)
-      : { $int: value.toString() };
-  }
-  if (value instanceof Uint8Array) {
-    return { $hex: Buffer.from(value).toString("hex") };
-  }
-  throw new Error(`Git backup cannot encode SQLite value type ${typeof value}.`);
-}
-
 async function serializeGitBackupTable(
   database: DatabaseSync,
   table: string,
@@ -179,7 +173,7 @@ async function serializeGitBackupTable(
   // on decoded values and sorting on source columns, not escaped result aliases.
   const projection = columns.map(({ name }) => {
     const column = quoteIdentifier(name);
-    return `CASE WHEN typeof(${column}) = 'text' THEN json_quote(${column}) ELSE ${column} END AS ${column}`;
+    return `${escapedSqliteText(column)} AS ${column}`;
   });
   const statement = database.prepare(
     `SELECT ${projection.join(", ")}
@@ -466,9 +460,33 @@ function validateRestoredOwner(
   database: DatabaseSync,
   databasePath: string,
   identity: GitBackupIdentity,
+  userVersion: number,
 ): void {
   assertSqliteIntegrity(database, databasePath);
-  buildSnapshotValidator(identity)(database, databasePath);
+  if (identity.role === "agent") {
+    assertOpenClawAgentDatabaseOwner(database, {
+      agentId: identity.agentId,
+      pathname: databasePath,
+    });
+    assertSupportedAgentSchemaVersion(database, databasePath);
+    // Restore the recorded representation; current-runtime admission and migration
+    // belong to Doctor, not lossless verification of a historical Git snapshot.
+    assertAgentSchemaVersion(
+      database,
+      { agentId: identity.agentId, pathname: databasePath, version: userVersion },
+      getOpenClawAgentMigrationSchema(userVersion),
+    );
+  } else {
+    assertSupportedStateSchemaVersion(database, databasePath);
+    const historicalAssertion = openClawStateMigrationAssertions.get(
+      readStateSchemaContentVersion(database),
+    );
+    if (historicalAssertion) {
+      historicalAssertion(database, { pathname: databasePath });
+    } else {
+      buildSnapshotValidator(identity)(database, databasePath);
+    }
+  }
 }
 
 /** Load and hash one JSONL table without retaining the whole artifact. */
@@ -620,12 +638,31 @@ export async function restoreGitBackupDirectory(params: {
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
     // Redacted and operational projection tables are absent from Git. Recreate
     // their canonical empty schemas before enforcing database ownership.
-    database.exec(
+    const ownerSchema =
       restoreIdentity.role === "global"
         ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
-        : OPENCLAW_AGENT_SCHEMA_SQL,
-    );
-    validateRestoredOwner(database, stagedPath, restoreIdentity);
+        : getOpenClawAgentMigrationSchema(manifest.userVersion);
+    if (
+      restoreIdentity.role === "global" &&
+      readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION
+    ) {
+      // Historical tables already have their recorded DDL. Only recreate omitted
+      // tables here; current indexes can depend on columns owned by a later migration.
+      const omitted = new Set([...manifest.excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
+      for (const table of getCanonicalSqliteTableNames(ownerSchema)) {
+        if (omitted.has(table)) {
+          database.exec(extractSqliteTableSchema(ownerSchema, table));
+        }
+      }
+    } else {
+      database.exec(ownerSchema);
+    }
+    if (restoreIdentity.role === "agent") {
+      // Index definitions can improve without a schema-version bump. Normalize
+      // derived indexes only in private staging; rows and version markers stay intact.
+      repairCanonicalSqliteIndexes(database, stagedPath, ownerSchema);
+    }
+    validateRestoredOwner(database, stagedPath, restoreIdentity, manifest.userVersion);
     const tables: GitBackupTableResult[] = [];
     for (const [table, expected] of Object.entries(manifest.tables)) {
       const actual = await serializeGitBackupTable(database, table);
@@ -642,7 +679,7 @@ export async function restoreGitBackupDirectory(params: {
     applyPrivateModeSync(stagedPath, 0o600);
     const artifact = await hashSnapshotArtifact(stagingDirectory);
     await publishVerifiedSqliteFile({
-      sourceIdentity: artifact.stat,
+      sourceIdentity: artifact.identity,
       sourcePath: stagedPath,
       targetPath,
       expectedContent: artifact,
@@ -651,7 +688,7 @@ export async function restoreGitBackupDirectory(params: {
       validatePublished: async (publishedPath) => {
         const published = openNodeSqliteDatabase(publishedPath, { readOnly: true });
         try {
-          validateRestoredOwner(published, publishedPath, restoreIdentity);
+          validateRestoredOwner(published, publishedPath, restoreIdentity, manifest.userVersion);
         } finally {
           published.close();
         }

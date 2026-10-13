@@ -3,6 +3,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -93,11 +94,17 @@ export function createFollowupRunner(
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
   // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request-local authority.
+  // without borrowing the invoking turn's request or workspace-preparation authority.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
-      inheritRequestScope: false,
-    });
+    runWithAgentWorkspaceReadiness(undefined, () =>
+      withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () => executeFollowup(queued),
+        {
+          inheritRequestScope: false,
+        },
+      ),
+    );
   const deliverProgress = async (
     turn: AdmittedFollowupTurn,
     payloads: ReplyPayload[],

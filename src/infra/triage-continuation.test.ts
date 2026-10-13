@@ -16,6 +16,11 @@ import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
+  expectReleasedTriage,
+  expectTriageCompleted,
+  expectTriageDenial,
+} from "./triage-continuation-recovery.test-support.js";
+import {
   triageRuntimePreloadEnv,
   useTriageLeaseDatabaseFixture,
 } from "./triage-lease-fixture.test-support.js";
@@ -265,7 +270,7 @@ function foreground(root: string, label: string, kind = "update", defer = false)
   child.stdout!.on("data", (chunk) => (stdout += chunk));
   child.stderr!.on("data", (chunk) => (stderr += chunk));
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once("exit", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, signal) => resolve({ code, signal }));
   });
   operations.set(path.join(root, label), exit);
   cleanups.push(async () => {
@@ -437,20 +442,54 @@ unix.for([
       first = foreground(root, firstLabel, "update", order === "foreground-simultaneous");
       if (order === "foreground-simultaneous") {
         simultaneous = foreground(root, "other", "update", true);
+        const exits = Promise.all([first.exit, simultaneous.exit]);
         first.child.stdin!.end("go");
         simultaneous.child.stdin!.end("go");
         await withinTest(
           Promise.race([
             receipts.waitFor(path.join(root, "first.ready"), "written"),
             receipts.waitFor(path.join(root, "other.ready"), "written"),
-            Promise.all([first.exit, simultaneous.exit]).then(async () => {
-              const files = await fs.readdir(root);
-              expect(files.includes("first.ready") || files.includes("other.ready")).toBe(true);
-            }),
+            exits,
           ]),
           signal,
         );
-        firstLabel = (await fs.readdir(root)).includes("first.ready") ? "first" : "other";
+        const files = await fs.readdir(root);
+        const ready = ["first", "other"].filter((label) => files.includes(`${label}.ready`));
+        if (ready.length === 0) {
+          await exits;
+          const outcomes = [first, simultaneous].map((child) => {
+            const { stdout, stderr } = child.output();
+            return {
+              exit: { code: child.child.exitCode, signal: child.child.signalCode },
+              stdout,
+              stderr,
+            };
+          });
+          const diagnostics = JSON.stringify(outcomes);
+          // #168859: "the rare disappearance can fail once"; both failures and a failed holder must recover.
+          const failed = outcomes.map((outcome) => expectTriageDenial(outcome, diagnostics));
+          expect(failed.some(Boolean), diagnostics).toBe(true);
+          if (!failed.every(Boolean)) {
+            expect(outcomes[failed.indexOf(true)]!.stderr, diagnostics).toContain(
+              "Automatic triage is preparing the installed CLI;",
+            );
+          }
+          expect(
+            files.filter((file) => /^(first|other)\.(cli|ready|pids)$/.test(file)),
+            diagnostics,
+          ).toEqual([]);
+          await expectReleasedTriage(root, diagnostics);
+          const next = foreground(root, "next");
+          await live(root, "next", signal).catch((error: unknown) => {
+            throw new Error(`${String(error)}; ${JSON.stringify(next.output())}`);
+          });
+          await control(root, "next", "release");
+          expectTriageCompleted({ exit: await next.exit, ...next.output() });
+          await expectReleasedTriage(root, diagnostics);
+          return;
+        }
+        expect(ready).toHaveLength(1);
+        firstLabel = ready[0]!;
       }
       await live(root, firstLabel, signal).catch((error: unknown) => {
         throw new Error(`${String(error)}; owner output: ${JSON.stringify(first?.output())}`);

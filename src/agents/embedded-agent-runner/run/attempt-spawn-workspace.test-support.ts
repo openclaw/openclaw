@@ -452,9 +452,11 @@ vi.mock("../../docs-path.js", () => ({
   resolveOpenClawReferencePaths: async () => ({ docsPath: undefined, sourcePath: undefined }),
 }));
 
+// mock-isolation: Attempt fixtures use in-memory settings without reading project or user settings.
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
+    getCompactionEnabled: () => true,
     getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultProvider: () => undefined,
@@ -474,19 +476,6 @@ vi.mock("../../agent-project-settings.js", () => ({
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),
-}));
-
-vi.mock("../../agent-settings.js", () => ({
-  applyAgentAutoCompactionGuard: () => {},
-  applyAgentCompactionSettingsFromConfig: () => ({
-    didOverride: false,
-    compaction: {
-      reserveTokens: 0,
-      keepRecentTokens: 40_000,
-    },
-  }),
-  isSilentOverflowProneModel: () => false,
-  resolveEffectiveCompactionMode: () => "default",
 }));
 
 vi.mock("../extensions.js", () => ({
@@ -644,8 +633,9 @@ vi.mock("../../custom-api-registry.js", () => ({
   ensureCustomApiRegistered: () => {},
 }));
 
+// mock-isolation: Workspace attempts do not resolve auth mode from host profiles or environment keys.
 vi.mock("../../model-auth.js", () => ({
-  resolveModelAuthMode: () => undefined,
+  resolveModelAuthModeAsync: () => undefined,
 }));
 
 vi.mock("../../model-tool-support.js", async (importOriginal) => ({

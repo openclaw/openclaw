@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import {
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
   type ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntryAsync,
+  resolveStorePath,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -187,45 +191,27 @@ export async function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  readConsistency?: "latest";
+  sessionEntry: SessionEntry | undefined;
 }): Promise<string> {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionEntry = await getSessionEntryAsync({
-      agentId: params.route.agentId,
-      storePath,
-      sessionKey: params.route.sessionKey,
-      readConsistency: params.readConsistency,
-    });
-    const overrideParams = {
+    const loadSessionEntry = (sessionKey: string) =>
+      getSessionEntryAsync({
+        agentId: params.route.agentId,
+        storePath,
+        sessionKey,
+      });
+    const sessionEntry = params.sessionEntry;
+    const override = await resolveStoredModelOverrideAsync({
       sessionEntry,
       sessionKey: params.route.sessionKey,
       parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
-    };
-    let parentSessionKey: string | undefined;
-    let override = resolveStoredModelOverride({
-      ...overrideParams,
-      loadSessionEntry: (key) => {
-        parentSessionKey = key;
-        return undefined;
-      },
+      loadSessionEntry,
     });
-    if (parentSessionKey) {
-      const parentSessionEntry = await getSessionEntryAsync({
-        agentId: params.route.agentId,
-        storePath,
-        sessionKey: parentSessionKey,
-        readConsistency: params.readConsistency,
-      });
-      override = resolveStoredModelOverride({
-        ...overrideParams,
-        loadSessionEntry: () => parentSessionEntry,
-      });
-    }
     if (!override?.model) {
       return fallback;
     }

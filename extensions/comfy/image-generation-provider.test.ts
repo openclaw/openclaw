@@ -244,10 +244,10 @@ describe("comfy image-generation provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to legacy models.providers comfy config when plugin config is absent", () => {
+  it("falls back to legacy models.providers comfy config when plugin config is absent", async () => {
     const provider = buildComfyImageGenerationProvider();
     expect(
-      provider.isConfigured?.({
+      await provider.isConfiguredAsync?.({
         cfg: buildLegacyComfyConfig({
           workflow: {
             "6": { inputs: { text: "" } },
@@ -258,11 +258,11 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("treats cloud comfy workflows as configured with a plugin config env SecretRef", () => {
+  it("treats cloud comfy workflows as configured with a plugin config env SecretRef", async () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
     const provider = buildComfyImageGenerationProvider();
     expect(
-      provider.isConfigured?.({
+      await provider.isConfiguredAsync?.({
         cfg: buildComfyConfig({
           mode: "cloud",
           apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
@@ -277,7 +277,7 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("uses provider-owned config auth for a complete Comfy Cloud workflow", () => {
+  it("uses provider-owned config auth for a complete Comfy Cloud workflow", async () => {
     const cfg = buildComfyConfig({
       mode: "cloud",
       image: {
@@ -295,10 +295,10 @@ describe("comfy image-generation provider", () => {
       },
     };
 
-    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(true);
+    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(true);
   });
 
-  it("does not let provider config auth bypass incomplete Comfy Cloud workflows", () => {
+  it("does not let provider config auth bypass incomplete Comfy Cloud workflows", async () => {
     const cfg = buildComfyConfig({ mode: "cloud" });
     cfg.models = {
       providers: {
@@ -310,10 +310,10 @@ describe("comfy image-generation provider", () => {
       },
     };
 
-    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(false);
+    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
-  it("preserves an unavailable plugin-secret veto even with provider config auth", () => {
+  it("preserves an unavailable plugin-secret veto even with provider config auth", async () => {
     vi.stubEnv("COMFY_MISSING_PLUGIN_SECRET", "");
     const cfg = buildComfyConfig({
       mode: "cloud",
@@ -333,7 +333,7 @@ describe("comfy image-generation provider", () => {
       },
     };
 
-    expect(buildComfyImageGenerationProvider().isConfigured?.({ cfg })).toBe(false);
+    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
   it("reports completed local history without image outputs after one lookup", async () => {
@@ -380,7 +380,7 @@ describe("comfy image-generation provider", () => {
   it.each([
     ["missing env", { source: "env", provider: "default", id: "COMFY_HEADER_MISSING" }, false],
     ["file ref", { source: "file", provider: "comfyfile", id: "value" }, true],
-  ])("checks %s header availability for every capability", (_label, header, configured) => {
+  ])("checks %s header availability for every capability", async (_label, header, configured) => {
     vi.stubEnv("COMFY_HEADER_AVAILABLE", "Basic fixture");
     vi.stubEnv("COMFY_HEADER_MISSING", undefined);
     for (const [capability, provider] of [
@@ -392,7 +392,7 @@ describe("comfy image-generation provider", () => {
         [capability]: testWorkflowConfig(),
         headers: { Authorization: header },
       });
-      expect(provider.isConfigured?.({ cfg })).toBe(configured);
+      expect(await provider.isConfiguredAsync?.({ cfg })).toBe(configured);
     }
   });
 

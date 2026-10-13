@@ -15,6 +15,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../../infra/sqlite-schema-facts.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -23,7 +28,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { selectStoredGitHubIdentities } from "../../state/user-profile-github-identity.js";
 import { selectUserProfileDisplaysInDatabase } from "../../state/user-profile-identity.read.js";
 import {
@@ -57,33 +62,41 @@ export type SkillLibraryDatabase = Pick<
   | "skill_library_uploads"
 >;
 export const skillLibraryDb = (db: DatabaseSync) => getNodeSqliteKysely<SkillLibraryDatabase>(db);
-const ensured = new WeakSet<DatabaseSync>();
+const ensured = new WeakMap<DatabaseSync, SqliteSchemaFacts>();
+const ensureSkillLibrarySchemaInDatabase = createSqliteSchemaEnsurer(
+  () => getOpenClawStateFeatureSchemaSql("skill_library_entries"),
+  {
+    tables: [
+      "skill_library_entries",
+      "skill_library_revisions",
+      "skill_library_events",
+      "skill_library_uploads",
+    ],
+  },
+);
 
 export function ensureSkillLibrarySchema(
   options: OpenClawStateDatabaseOptions,
   admit: (stage: "transaction" | "commit") => void,
 ): void {
-  const { db } = openOpenClawStateDatabase(options);
-  if (ensured.has(db)) {
+  const database = openOpenClawStateDatabase(options);
+  const facts = getAdmittedSqliteSchemaFacts(database.db);
+  if (facts && ensured.get(database.db) === facts) {
     return;
-  }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS skill_library_entries (",
-  );
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf("-- End profile-owned skill library.", start);
-  if (start < 0 || end < start) {
-    throw new Error("Canonical skill library schema missing.");
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
       admit("transaction");
-      transactionDb.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- canonical first-use additive DDL.
+      ensureSkillLibrarySchemaInDatabase(transactionDb);
       admit("commit");
     },
-    options,
+    { ...options, database },
     { operationLabel: "skills.library.schema" },
   );
-  ensured.add(db);
+  const initialized = getAdmittedSqliteSchemaFacts(database.db);
+  if (initialized) {
+    ensured.set(database.db, initialized);
+  }
 }
 
 export function readSkillLibraryStore<T>(
@@ -343,14 +356,17 @@ export function selectSkillLibraryEntries(
   const ownerIds = [
     ...new Set(rows.flatMap((row) => (row.owner_profile_id ? [row.owner_profile_id] : []))),
   ];
-  const readOwners = (ids: string[]) =>
-    new Map(
-      tableExists(db, "user_profiles")
-        ? chunkItems(ids, 500).flatMap((batch) =>
-            Array.from(selectUserProfileDisplaysInDatabase(db, batch)),
-          )
-        : [],
-    );
+  function readOwners(ids: string[]) {
+    const owners: ReturnType<typeof selectUserProfileDisplaysInDatabase> = new Map();
+    if (tableExists(db, "user_profiles")) {
+      for (const batch of chunkItems(ids, 500)) {
+        for (const [id, owner] of selectUserProfileDisplaysInDatabase(db, batch)) {
+          owners.set(id, owner);
+        }
+      }
+    }
+    return owners;
+  }
   const owners = readOwners(ownerIds);
   // Canonical identity and display each retain their existing one-hop, missing-target fallback.
   const labels = readOwners([

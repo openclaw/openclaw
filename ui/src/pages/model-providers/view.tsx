@@ -181,9 +181,6 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
             ? t("modelProviders.probe.status.partial")
             : t(`modelProviders.probe.status.${result.status}`)}
         </strong>
-        {result.latencyMs !== undefined ? (
-          <span>{t("modelProviders.probe.latency", { ms: String(result.latencyMs) })}</span>
-        ) : undefined}
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>

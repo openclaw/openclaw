@@ -1,15 +1,16 @@
-import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import {
-  ShellLayoutOwner,
   shellLayoutOwnerForHost,
+  type ShellLayoutOwner,
   type ShellLayoutTraits,
 } from "./shell-layout-owner.ts";
 
 export type { ShellLayoutTraits } from "./shell-layout-owner.ts";
 
 /** Render owners publish layout facts before their descendants can measure layout. */
+// Temporary Lit reporter for the shared layout owner; remove at renderer cutover.
 class ShellLayoutTraitsDirective extends AsyncDirective {
   private host?: Element;
   private traits: ShellLayoutTraits = {};
@@ -51,10 +52,3 @@ class ShellLayoutTraitsDirective extends AsyncDirective {
 }
 
 export const shellLayoutTraits = directive(ShellLayoutTraitsDirective);
-
-export class ShellLayoutController extends ShellLayoutOwner implements ReactiveController {
-  constructor(host: ReactiveControllerHost) {
-    super(() => host.requestUpdate());
-    host.addController(this);
-  }
-}

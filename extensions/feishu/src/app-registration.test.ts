@@ -6,6 +6,7 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
+import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 
 type FeishuAppRegistrationFetch = typeof fetch;
 
@@ -24,7 +25,6 @@ type LocalServer = {
   stop: () => Promise<void>;
 };
 
-type DispatcherInit = RequestInit & { dispatcher?: unknown };
 type RegistrationFetchOptions = {
   fetchImpl: FeishuAppRegistrationFetch;
   lookupFn: LookupFn;
@@ -67,14 +67,6 @@ async function startLocalServer(
   });
 }
 
-function stripDispatcher(init: RequestInit | undefined): RequestInit | undefined {
-  if (!init || !("dispatcher" in init)) {
-    return init;
-  }
-  const { dispatcher: _dispatcher, ...rest } = init as DispatcherInit;
-  return rest;
-}
-
 function createLocalRedirectFetch(port: number): FeishuAppRegistrationFetch {
   const realFetch = globalThis.fetch.bind(globalThis);
   return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -107,56 +99,6 @@ async function withRegistrationServer<T>(
 function writeJson(res: ServerResponse, payload: unknown): void {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
-}
-
-function writeOversizedJson(
-  res: ServerResponse,
-  totalBytes: number,
-): { bytesPulled: () => number; canceled: () => boolean } {
-  const chunk = Buffer.alloc(1024 * 1024, 0x20);
-  let bytesPulled = 0;
-  let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
-  });
-  const prefix = Buffer.from('{"device_code":"dev","padding":"');
-  bytesPulled += prefix.byteLength;
-  res.write(prefix);
-  const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
-      }
-      return;
-    }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
-      setImmediate(sendChunk);
-      return;
-    }
-    res.once("drain", sendChunk);
-  };
-  setImmediate(sendChunk);
-  return {
-    bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
-  };
-}
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  let body = "";
-  for await (const chunk of req) {
-    body += String(chunk);
-  }
-  return body;
 }
 
 async function readRegistrationAction(req: IncomingMessage): Promise<string> {
@@ -324,7 +266,11 @@ describe("Feishu app registration", () => {
       | undefined;
     await withRegistrationServer(
       (_req, res) => {
-        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+        streamState = writeOversizedJson(
+          res,
+          FEISHU_JSON_MAX_BYTES * 2,
+          '{"device_code":"dev","padding":"',
+        );
       },
       async () => {
         await expect(beginAppRegistration("feishu")).rejects.toThrow(

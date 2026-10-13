@@ -65,8 +65,11 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Watch skill folders and refresh the skills snapshot when `SKILL.md` files
-  change. Covers nested files under grouped skill roots.
+  Enable passive automatic skill discovery. One background worker checks local
+  skill roots about once per minute, including nested files under grouped roots.
+  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  relevant configuration changes, and Gateway startup still request an immediate
+  rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -365,10 +368,17 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
   after substantial work, and learned skills unused for 30 days are archived.
-  Review changes are announced in the conversation, and every change can be
-  undone. `off` disables the background review and unused-skill cleanup.
+  Review changes appear as a **Learned** row in the Control UI chat, and every
+  change can be undone. `off` disables the background review and unused-skill cleanup.
   User-prompted skill creation, `/learn`, and manual learning sessions work in
   both modes.
+</ParamField>
+
+<ParamField path="skills.workshop.autonomous.channelNotices" type="boolean" default="false">
+  When `true`, background review notices are posted to channel conversations
+  (except Slack) with an **Undo** button; the Control UI shows that message as
+  plain text. When `false`, they appear only as the **Learned** row in the
+  Control UI chat. Saying "undo" works either way.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

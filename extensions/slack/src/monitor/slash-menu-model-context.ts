@@ -1,7 +1,7 @@
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -32,30 +32,13 @@ export async function resolveSlackCommandMenuModelContext(params: {
       provider = defaultModel.provider;
       model = defaultModel.model;
     } else {
-      const overrideParams = {
+      const override = await resolveStoredModelOverrideAsync({
         sessionEntry: entry,
         sessionKey: params.sessionKey,
         defaultProvider: defaultModel.provider,
-      };
-      let parentSessionKey: string | undefined;
-      let override = resolveStoredModelOverride({
-        ...overrideParams,
-        loadSessionEntry: (key) => {
-          parentSessionKey = key;
-          return undefined;
-        },
+        loadSessionEntry: (sessionKey) =>
+          getSessionEntryAsync({ agentId: params.agentId, storePath, sessionKey }),
       });
-      if (parentSessionKey) {
-        const parentEntry = await getSessionEntryAsync({
-          agentId: params.agentId,
-          storePath,
-          sessionKey: parentSessionKey,
-        });
-        override = resolveStoredModelOverride({
-          ...overrideParams,
-          loadSessionEntry: () => parentEntry,
-        });
-      }
       provider = override?.model
         ? override.provider || defaultModel.provider
         : (normalizeOptionalString(entry?.providerOverride) ??

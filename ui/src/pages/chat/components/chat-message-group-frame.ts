@@ -1,6 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import {
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
@@ -10,7 +13,6 @@ import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { readPendingSendStatus } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
@@ -26,12 +28,8 @@ import {
 import { extractGroupMeta } from "./chat-message-timestamp-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 
-export type NativeMessageGroupOptions = Omit<
-  RenderMessageGroupOptions,
-  "frameContent" | "avatar"
-> & {
+export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
   frameContent?: JSX.Element[];
-  avatar?: GroupedMessageOptions["avatar"];
 };
 
 export type GroupMessage = MessageGroupData["messages"][number];
@@ -65,6 +63,14 @@ export function prepareGroupMessage(
 
 export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
+    return false;
+  }
+  if (
+    bubbleMode &&
+    group.messages.some(
+      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
+    )
+  ) {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));

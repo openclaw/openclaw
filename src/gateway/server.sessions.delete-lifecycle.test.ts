@@ -79,9 +79,9 @@ async function expectSessionDeleteChanged(request: SessionDeleteRequest) {
 }
 
 test("sessions.delete protects the sole explicit agent's global session before cleanup", async () => {
-  const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
   testState.sessionConfig = { scope: "global" };
+  const { storePath } = await createSessionStoreDir();
   const target = { agentId: "ops", sessionKey: "global", storePath };
   await replaceSessionEntry(target, sessionStoreEntry("sole-global"));
   const before = loadSessionEntry(target);

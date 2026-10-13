@@ -3,14 +3,6 @@ import CryptoKit
 import Darwin
 import Foundation
 
-enum MacNodeCodexThreadCatalogContract {
-    static let pluginId = "codex"
-    static let capability = "codex-app-server-threads"
-    static let listCommand = "codex.appServer.threads.list.v1"
-    static let turnsCommand = "codex.appServer.thread.turns.list.v1"
-    static let commands = [listCommand, turnsCommand]
-}
-
 enum MacNodeCodexThreadCatalog {
     struct ResolvedInvocation: Equatable, Sendable {
         var executable: String

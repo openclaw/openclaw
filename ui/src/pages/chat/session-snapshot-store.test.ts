@@ -452,7 +452,7 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(6);
+    expect(database.version).toBe(7);
     expect(Array.from(database.objectStoreNames)).toEqual([
       SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,

@@ -117,6 +117,11 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         cleanup.registries.clear();
       }
     },
+    "ai-session-resources": async () => {
+      // Keep the provider runtime outside the CLI bootstrap import graph.
+      const { cleanupSessionResources } = await import("@openclaw/ai/internal/runtime");
+      cleanupSessionResources();
+    },
     "skills-watchers": async () => {
       if (cleanup) {
         // Only the executable owner retires process-wide skill observation.

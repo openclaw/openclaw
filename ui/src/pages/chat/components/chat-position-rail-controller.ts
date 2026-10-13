@@ -47,6 +47,7 @@ export class ChatPositionRailController {
   private session: ChatTranscriptSession | null = null;
   private interaction = initialInteraction();
   private previewElement: HTMLElement | undefined;
+  private previewWindow: Window | null = null;
   private scrollElement: HTMLElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
   private observationPending = false;
@@ -577,14 +578,14 @@ export class ChatPositionRailController {
   };
 
   private readonly bindPreview = (element?: Element) => {
-    this.previewElement?.ownerDocument.defaultView?.removeEventListener(
-      "keydown",
-      this.dismissPreview,
-    );
+    this.previewWindow?.removeEventListener("keydown", this.dismissPreview);
     this.previewElement = element instanceof HTMLElement ? element : undefined;
+    // Solid refs run before the preview leaves its inert template document.
+    // The mounted rail supplies the actual event window.
+    this.previewWindow = element ? (this.scrollElement?.ownerDocument.defaultView ?? null) : null;
     this.scheduleLayout();
     // Focused markers handle Escape before the window fallback dismisses hover-only previews.
-    element?.ownerDocument.defaultView?.addEventListener("keydown", this.dismissPreview);
+    this.previewWindow?.addEventListener("keydown", this.dismissPreview);
   };
 
   disconnect() {

@@ -15,6 +15,7 @@ import {
   prepareSystemEventStorePath,
 } from "../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -38,7 +39,6 @@ import type { SessionStateActorType } from "./session-state-event-kinds.js";
 import { beginAmbientWatchPrune } from "./session-state-events.ambient-read.js";
 import {
   getSessionStateKysely,
-  isNotifiableWatcherKey,
   rowToSessionStateEvent,
   type SessionStateEventInput,
 } from "./session-state-events.kernel.js";
@@ -49,6 +49,10 @@ import {
 import { pruneSessionStateEvents } from "./session-state-events.prune.js";
 import type { SessionStateReadOperations } from "./session-state-events.read.worker-contract.js";
 import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import {
+  isSessionStateWatchAddress,
+  sessionStateWatchAgentId,
+} from "./session-state-events.watch-address.js";
 import type {
   SessionStateWatchAddress,
   SessionStateWorkerOperations,
@@ -116,9 +120,6 @@ export async function getSessionStateVersions(
       { context },
     );
     context.admission.assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     return result?.type === "sessionState.versions" ? result.versions : {};
   } catch (error) {
     log.warn(`failed to read session state versions: ${String(error)}`);
@@ -145,9 +146,6 @@ export async function listSessionStateEventsSince(
       { context },
     );
     context.admission.assertCurrent();
-    if (result && !result.ok) {
-      throw new Error(result.message);
-    }
     if (result?.type === "sessionState.events") {
       return result.page;
     }
@@ -366,11 +364,17 @@ export async function recordSessionGoalChanged(params: {
   });
 }
 
-/** Released synchronous SDK compatibility; runtime prompt preparation uses worker reads. */
+/** @deprecated Retained for prepareWatchedSessionsPrompt; use its async replacement. */
 export function listAmbientGroupWatchTargets(
   watcherSessionKey: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Set<string> {
+  warnPluginSdkDeprecation({
+    family: "watched-sessions-prompt",
+    method: "prepareWatchedSessionsPrompt",
+    replacement: "prepareWatchedSessionsPromptAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     const { db } = openOpenClawStateDatabase(options);
     const rows = executeSqliteQuerySync(
@@ -381,7 +385,13 @@ export function listAmbientGroupWatchTargets(
         .where("watcher_session_key", "=", watcherSessionKey)
         .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
     ).rows;
-    return new Set(rows.map((row) => row.target_session_key));
+    return new Set(
+      rows
+        .map((row) => row.target_session_key)
+        .filter((targetSessionKey) =>
+          isSessionStateWatchAddress({ watcherSessionKey, targetSessionKey }),
+        ),
+    );
   } catch (error) {
     log.warn(`failed to list ambient group watch targets: ${String(error)}`);
     return new Set();
@@ -393,10 +403,7 @@ async function registerWatch(
   provenance: SessionWatchCursorProvenance,
   options: SessionWatchRegistrationOptions,
 ): Promise<boolean> {
-  if (
-    params.watcherSessionKey === params.targetSessionKey ||
-    !isNotifiableWatcherKey(params.watcherSessionKey)
-  ) {
+  if (params.watcherSessionKey === params.targetSessionKey || !isSessionStateWatchAddress(params)) {
     return false;
   }
   let prepared: PreparedSessionWatchCaller | undefined;
@@ -405,7 +412,7 @@ async function registerWatch(
     const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.watcherSessionKey);
     const input = {
       ...params,
-      targetAgentId: params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey),
+      targetAgentId: sessionStateWatchAgentId(params.targetSessionKey)!,
       provenance,
       now: options.now ?? Date.now(),
     };

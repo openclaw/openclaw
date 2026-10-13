@@ -1,9 +1,11 @@
 // Covers shared media-generation runtime polling and timeout helpers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import { buildDashscopeVideoGenerationProvider } from "../plugin-sdk/video-generation.js";
 import {
   normalizeDurationToClosestMax,
   resolveCapabilityModelCandidates,
+  resolveCapabilityModelCandidatesAsync,
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
@@ -29,10 +31,46 @@ function parseModelRef(raw?: string) {
 }
 
 function configuredProvider(id: string, defaultModel: string) {
-  return { id, defaultModel, isConfigured: () => true };
+  return { id, defaultModel, isConfiguredAsync: async () => true };
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    ["standard-key", "https://dashscope.example.test", true],
+    ["subscription-key", "https://dashscope.example.test", false],
+    ["standard-key", "https://coding.example.test", false],
+  ] as const)(
+    "preserves DashScope factory policy in sync and async discovery (%s, %s)",
+    async (apiKey, baseUrl, allowed) => {
+      const provider = buildDashscopeVideoGenerationProvider({
+        providerId: "qwen",
+        label: "Qwen",
+        taskLabel: "Qwen",
+        defaultBaseUrl: "https://dashscope.example.test",
+        credentialPolicy: {
+          acceptsApiKey: (key) => key === "standard-key",
+          acceptsBaseUrl: (url) => url !== "https://coding.example.test",
+          unsupportedMessage: "Use Standard credentials and endpoint",
+        },
+      });
+      const params = {
+        cfg: {
+          models: {
+            providers: {
+              qwen: { apiKey, baseUrl, auth: "api-key" as const, models: [] },
+            },
+          },
+        },
+        modelConfig: undefined,
+        parseModelRef,
+        listProviders: () => [provider],
+      };
+      const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
+      expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
+      expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
+    },
+  );
+
   it.each([
     [0, undefined, undefined],
     [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
@@ -55,8 +93,8 @@ describe("media-generation runtime shared candidates", () => {
     },
   );
 
-  it("appends auth-backed provider defaults after explicit refs by default", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("appends auth-backed provider defaults after explicit refs by default", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
@@ -85,8 +123,8 @@ describe("media-generation runtime shared candidates", () => {
       [{ provider: "media-config-only", model: "configured-video" }],
     ],
     ["honors an owner readiness veto over generic auth", () => false, []],
-  ] as const)("%s", (_name, isConfigured, expected) => {
-    const candidates = resolveCapabilityModelCandidates({
+  ] as const)("%s", async (_name, isConfigured, expected) => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: {
         models: {
           providers: {
@@ -112,8 +150,8 @@ describe("media-generation runtime shared candidates", () => {
     expect(candidates).toEqual(expected);
   });
 
-  it("orders auto-detected provider defaults by canonical aliases", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("orders auto-detected provider defaults by canonical aliases", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } },
       modelConfig: undefined,
       parseModelRef,
@@ -132,8 +170,32 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("treats an explicit model override as exact-only", () => {
-    const candidates = resolveCapabilityModelCandidates({
+  it("uses async readiness and observes an in-process credential change", async () => {
+    let configured = false;
+    const resolve = () =>
+      resolveCapabilityModelCandidatesAsync({
+        cfg: {},
+        modelConfig: undefined,
+        parseModelRef,
+        listProviders: () => [
+          {
+            id: "media",
+            defaultModel: "image",
+            isConfigured: () => {
+              throw new Error("deprecated readiness must not run");
+            },
+            isConfiguredAsync: async () => configured,
+          },
+        ],
+      });
+
+    expect(await resolve()).toEqual([]);
+    configured = true;
+    expect(await resolve()).toEqual([{ provider: "media", model: "image" }]);
+  });
+
+  it("treats an explicit model override as exact-only", async () => {
+    const candidates = await resolveCapabilityModelCandidatesAsync({
       cfg: {},
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",

@@ -11,13 +11,11 @@ import {
   projectPresenceViewers,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { resolveIdentityAvatarView } from "../identity-avatar-view.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { useIdentityApplication } from "./identity-application.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
 
@@ -38,26 +36,13 @@ export type ViewerAvatarProps = {
 };
 
 export function ViewerAvatarContent(props: ViewerAvatarProps) {
-  const application = useIdentityApplication();
-  const gateway = application ? projectGateway(application.gateway) : undefined;
-  const selfAvatarUrl = () => {
-    const identity = props.identity ?? props.user?.identity;
-    const self = gateway?.read().snapshot.selfUser;
-    return identity?.type === "profile" &&
-      self?.identity?.type === "profile" &&
-      identity.id === self.identity.id
-      ? self.avatarUrl
-      : undefined;
-  };
-  const view = createMemo(() =>
-    resolveIdentityAvatarView({
-      identity: props.identity ?? props.user?.identity,
-      id: props.user?.id,
-      name: props.user?.name,
-      username: props.user?.email,
-      profileAvatarUrl: props.user?.avatarUrl?.trim() || selfAvatarUrl(),
-    }),
-  );
+  const view = useIdentityAvatarView(() => ({
+    identity: props.identity ?? props.user?.identity,
+    id: props.user?.id,
+    name: props.user?.name,
+    username: props.user?.email,
+    profileAvatarUrl: props.user?.avatarUrl,
+  }));
   return (
     <Show when={props.user}>
       <span
@@ -171,30 +156,36 @@ function FacepilePerson(props: {
       ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
       : null,
   );
-  const avatar = () =>
-    props.user.identity?.type === "agent" ? (
-      <AgentViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-      />
-    ) : (
-      <ViewerAvatar
-        user={props.user}
-        identity={props.user.identity}
-        markAsViewer={props.markAsViewer}
-        variant="session"
-      />
-    );
+  const avatar = (
+    <Show
+      when={props.user.identity?.type === "agent" ? props.user.identity : undefined}
+      fallback={
+        <ViewerAvatar
+          user={props.user}
+          identity={props.user.identity}
+          markAsViewer={props.markAsViewer}
+          variant="session"
+        />
+      }
+    >
+      {(identity) => (
+        <AgentViewerAvatar
+          user={props.user}
+          identity={identity()}
+          markAsViewer={props.markAsViewer}
+        />
+      )}
+    </Show>
+  );
   return (
-    <Show when={link()} fallback={avatar()}>
+    <Show when={link()} fallback={avatar}>
       {(target) => (
         <a
           class="person-activity-avatar-link"
           href={target().href}
           onClick={(event) => target().open(event)}
         >
-          {avatar()}
+          {avatar}
         </a>
       )}
     </Show>

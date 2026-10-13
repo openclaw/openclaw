@@ -335,7 +335,10 @@ describe("memory actor history", () => {
     const fresh = await acquire();
     await expect(
       fresh.storage!.read({ type: "session.history.hydrate", input: { sessionId } }, authority),
-    ).rejects.toThrow("unavailable");
+    ).resolves.toMatchObject({
+      kind: "full",
+      snapshot: { events: [], eventJson: [], eventSeqs: [] },
+    });
   });
 
   it("keeps full hydration exact while model context excludes obsolete payloads and private fields", async () => {

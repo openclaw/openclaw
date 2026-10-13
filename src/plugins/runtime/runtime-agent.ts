@@ -1,6 +1,13 @@
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
+import {
+  resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync,
+} from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   buildConfiguredModelCatalog,
@@ -21,7 +28,8 @@ import {
   loadSessionEntryReadOnly,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -29,6 +37,7 @@ import {
   getSessionEntryByIdAsync,
 } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
+  listSessionEntriesAsync,
   patchSessionEntry,
   prepareSessionEntryPatch,
   updateSessionStoreEntry,
@@ -36,6 +45,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -76,6 +86,11 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
 }
 
 const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.listSessionEntries",
+    replacement: "runtime.agent.session.listSessionEntriesAsync",
+  });
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
@@ -106,20 +121,52 @@ async function runWithSessionWorkAdmission<T>(
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    // Capture native identity before yielding so queued work cannot adopt a replacement.
-    const initialEntry = source
-      ? await readSessionEntryReadOnlyInWorker({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        })
-      : getSessionEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-        });
+    return withSessionEntryReadOnlyInWorker(
+      {
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      },
+      () => params.signal?.throwIfAborted(),
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const initialEntry = read.value;
+        const retained = owner.source?.databaseIdentity
+          ? retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${owner.source.databaseIdentity}`,
+              sessionKey: owner.scope?.sessionKey ?? params.sessionKey,
+              entry: initialEntry,
+              matches: (before, after) =>
+                before?.sessionId === after?.sessionId &&
+                before?.lifecycleRevision === after?.lifecycleRevision,
+            })
+          : undefined;
+        try {
+          return await admit(initialEntry, () => {
+            owner.assertCurrent();
+            const current = retained?.readCurrent();
+            if (retained && !current) {
+              throw session.createSessionWorkStartChangedError(params.sessionKey);
+            }
+            return current ? current.entry : initialEntry;
+          });
+        } finally {
+          retained?.release();
+        }
+      },
+    );
+  }
+
+  async function admit(
+    initialEntry: SessionEntry | undefined,
+    readDurableEntry: () => SessionEntry | undefined,
+  ): Promise<T> {
     const lifecycleAbortController = new AbortController();
     const admission = await beginSessionWorkAdmission({
+      agentId: resolveSessionAgentIds({ config: getRuntimeConfig(), sessionKey: params.sessionKey })
+        .sessionAgentId,
       scope: params.storePath,
       identities: [params.sessionKey, initialEntry?.sessionId],
       signal: params.signal,
@@ -136,16 +183,14 @@ async function runWithSessionWorkAdmission<T>(
           ? "kind" in source
             ? undefined
             : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
+          : readDurableEntry();
+        if (source) {
+          const changed = initialEntry
+            ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+            : Boolean(currentEntry);
+          if (changed) {
+            throw session.createSessionWorkStartChangedError(params.sessionKey);
+          }
         }
         const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
         if (startError) {
@@ -201,6 +246,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     },
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
+    resolveCliBackendDispatchEligibilityAsync: resolveEmbeddedCliBackendDispatchEligibilityAsync,
     ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
@@ -237,6 +283,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryAsync,
     getSessionEntryByIdAsync,
     listSessionEntries,
+    listSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>

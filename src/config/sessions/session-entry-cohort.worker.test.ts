@@ -21,7 +21,7 @@ import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
-it("reads cold entry, participant and membership facts in one statement without a transaction", async () => {
+it.each([false, true])("reads complete cold entry facts with lifecycle=%s", async (lifecycle) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:fused";
@@ -29,6 +29,7 @@ it("reads cold entry, participant and membership facts in one statement without 
     replaceSessionEntrySync(scope, {
       sessionId: "fused",
       updatedAt: 1,
+      sessionStartedAt: 1,
       skillsSnapshot: { prompt: "cold prompt", skills: [] },
     });
     const contribution = {
@@ -54,6 +55,7 @@ it("reads cold entry, participant and membership facts in one statement without 
           snapshotFields,
           includeMembers: true,
           includeParticipantRecords: true,
+          ...(lifecycle ? { lifecycleSessionKey: sessionKey } : {}),
         },
         context,
       );
@@ -62,7 +64,7 @@ it("reads cold entry, participant and membership facts in one statement without 
     try {
       const first = read();
       expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
+      expect(transactions.mock.calls).toEqual([]);
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -88,11 +90,35 @@ it("reads cold entry, participant and membership facts in one statement without 
         ],
       });
       expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
+      expect(first.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 1, lastInteractionAt: undefined } : {},
+      );
       statements.counts.all = 0;
       expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
       expect(statements.counts.all).toBe(1);
+      statements.counts.all = 0;
+      const target = operations["session.entry.read"](
+        {
+          sessionKeys: [sessionKey],
+          runtimeTarget: { agentId: "main", sessionId: "fused", sessionKey },
+        },
+        context,
+      );
+      expect(target.runtimeTarget).toEqual({
+        agentId: "main",
+        sessionId: "fused",
+        sessionKey,
+        storePath: database.path,
+      });
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
       recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
       removeSessionMember(scope, "member");
+      replaceSessionEntrySync(scope, {
+        sessionId: "fused",
+        updatedAt: 5,
+        sessionStartedAt: 5,
+      });
       statements.counts.all = 0;
       transactions.mockClear();
       const next = read();
@@ -101,7 +127,10 @@ it("reads cold entry, participant and membership facts in one statement without 
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
       expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
+      expect(transactions.mock.calls).toEqual([]);
+      expect(next.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 5, lastInteractionAt: undefined } : {},
+      );
       database.db
         .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
         .run(9_007_199_254_740_992n, sessionKey);

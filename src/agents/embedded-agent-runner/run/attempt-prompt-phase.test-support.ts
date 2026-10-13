@@ -240,7 +240,10 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           activeSession,
           hookRunner: null,
           setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
+          settingsManager: {
+            getCompactionEnabled: () => true,
+            getCompactionReserveTokens: () => 77,
+          },
         },
         boundary: {
           includeBoundaryTimestamp: false,

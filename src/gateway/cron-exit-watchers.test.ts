@@ -120,7 +120,6 @@ type FixtureHandlers = Omit<CronExitWatcherHandlers, "fireOnExit"> & {
   reserveExit: (job: CronJob) => Promise<void>;
   fireOnExit: FireOnExit;
   readJob?: (jobId: string) => Promise<CronJob | undefined>;
-  waitForRunSettlement?: (jobId: string, signal: AbortSignal) => Promise<boolean>;
 };
 
 function createWatcherFixture(
@@ -137,12 +136,6 @@ function createWatcherFixture(
   const handlers = (next: FixtureHandlers): CronExitWatcherHandlers => ({
     ...next,
     fireOnExit: async (job, exit, controls) => {
-      if (
-        next.waitForRunSettlement &&
-        !(await next.waitForRunSettlement(job.id, controls.signal))
-      ) {
-        return;
-      }
       controls.commitGuard();
       const current = next.readJob ? await next.readJob(job.id) : jobs.get(job.id);
       if (!current) {
@@ -351,47 +344,50 @@ describe("createCronExitWatchers", () => {
     expect(supervisor.cancelScope).not.toHaveBeenCalled();
   });
 
-  it("rebinds a pending receipt wait during scheduler handoff", async () => {
+  it("rebinds a pending callback during scheduler handoff", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const oldWaitAborted = vi.fn();
-    const oldPersist = vi.fn(async () => {});
-    const oldFire = vi.fn(async () => {});
-    const oldWait = vi.fn(
-      async (_jobId: string, signal: AbortSignal) =>
-        await new Promise<boolean>((resolve) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              oldWaitAborted();
-              resolve(false);
-            },
-            { once: true },
-          );
-        }),
+    const waiting = createDeferred();
+    const watchers = createCronExitWatchers(
+      {
+        getProcessSupervisor: () => supervisor as never,
+        logger: noopLogger,
+        fireOnExit: async (_job, _exit, { signal }) => {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                oldWaitAborted();
+                resolve();
+              },
+              { once: true },
+            );
+            waiting.resolve();
+          });
+        },
+      },
+      scheduler,
     );
-    const watchers = createWatcherFixture({
-      getProcessSupervisor: () => supervisor as never,
-      waitForRunSettlement: oldWait,
-      reserveExit: oldPersist,
-      fireOnExit: oldFire,
-    });
     watchers.reconcile([onExitJob("job-a")]);
     await flush();
     expectDefined(runs[0], "watched command").deferred.resolve({ exitCode: 0, reason: "exit" });
-    await vi.waitFor(() => expect(oldWait).toHaveBeenCalledOnce());
+    await waiting.promise;
     const newFire = vi.fn(async () => {});
     const newPersist = vi.fn(async () => {});
     await watchers.updateHandlers({
       getProcessSupervisor: () => supervisor as never,
-      reserveExit: newPersist,
-      fireOnExit: newFire,
+      fireOnExit: async (_job, _exit, controls) => {
+        controls.commitGuard();
+        controls.onTerminalWriteStarted();
+        await newPersist();
+        controls.onReserved();
+        await newFire();
+      },
       logger: noopLogger,
     });
     await vi.waitFor(() => expect(newFire).toHaveBeenCalledOnce());
     expect(newPersist).toHaveBeenCalledOnce();
     expect(oldWaitAborted).toHaveBeenCalledOnce();
-    expect(oldPersist).not.toHaveBeenCalled();
-    expect(oldFire).not.toHaveBeenCalled();
     expect(supervisor.spawn).toHaveBeenCalledOnce();
     await watchers.cancelAll();
   });

@@ -20,6 +20,7 @@ import { publishSystemEventStoreConfig } from "../config/sessions/session-store-
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -56,6 +57,7 @@ import {
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
+import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
@@ -420,7 +422,10 @@ export async function prepareGatewayServerBootstrap(input: {
       return applied;
     };
     const reapplyRuntimeOverlays = (config: OpenClawConfig): OpenClawConfig =>
-      applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config)));
+      resolveGatewayStartupSourceConfig(
+        applyFixedGatewayOverlays(applyReloadableGatewayAuthRefs(reapplyCompareOverlays(config))),
+        runtimeEnv.env,
+      );
     const runtimeConfig = reapplyRuntimeOverlays(params.runtimeConfig);
     // Both managed writes and watcher reloads must reject unmigrated workspaces
     // before persistence or publication, using the candidate's final config and env.
@@ -433,7 +438,7 @@ export async function prepareGatewayServerBootstrap(input: {
       reapplyCompareOverlays,
     };
   };
-  setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
+  await setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
   applyLoggingConfig(cfgAtStart.logging);
   initializePublishedConfigRuntimeEnv(configSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
@@ -474,12 +479,19 @@ export async function prepareGatewayServerBootstrap(input: {
       });
     })(),
     startupTrace.measure("plugins.bootstrap-imports", () => import("./server-startup-plugins.js")),
+    startupTrace.measure("cron.store-path", () =>
+      resolveCronJobsStorePathFromConfigAsync(cfgAtStart),
+    ),
   ] as const;
   // These owners share admitted state, but no preparation consumes another's result.
   // Join every owner before startup failure can close their database resources.
   await Promise.allSettled(preparations);
-  const [workerEnvironmentStartup, startupSessionDatabases, { prepareGatewayPluginBootstrap }] =
-    await Promise.all(preparations);
+  const [
+    workerEnvironmentStartup,
+    startupSessionDatabases,
+    { prepareGatewayPluginBootstrap },
+    cronStorePath,
+  ] = await Promise.all(preparations);
   const pluginGatewayContext: {
     current: import("./server-methods/types.js").GatewayRequestContext | undefined;
   } = { current: undefined };
@@ -516,7 +528,7 @@ export async function prepareGatewayServerBootstrap(input: {
   // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
   // snapshot and reject the Gateway's own model catalog.
   copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
-  setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
+  await setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
   const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
@@ -560,6 +572,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupActivationSourceConfig,
     startupRuntimeConfig,
     startupSessionDatabases,
+    cronStorePath,
     cfgAtStart,
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,

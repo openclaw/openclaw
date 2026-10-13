@@ -117,27 +117,27 @@ function* rowFragments(
   }
 }
 
-export function memoryPublicationHeader(replacement: MemorySourceIndexReplacement): {
-  header: MemorySourceIndexHeader;
-  rows: number;
-} {
-  const { chunks, embeddings: _embeddings, ...fields } = replacement;
+export function memoryPublicationHeader(
+  replacement: MemorySourceIndexReplacement,
+): MemorySourceIndexHeader {
+  const { chunks: _chunks, embeddings: _embeddings, ...fields } = replacement;
   if (fields.source !== "sessions") {
-    return { header: fields, rows: chunks.length };
+    return fields;
   }
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained = [], ...header } = fields;
-  return {
-    header: { ...header, delta: retained.length > 0 },
-    rows: chunks.length + retained.length,
-  };
+  const { retained: _retained, removedIds, ...header } = fields;
+  return { ...header, delta: removedIds !== undefined };
 }
 
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    // The kernel validates every retained row before it writes the first new row.
+    if (replacement.source === "sessions") {
+      for (const removedId of replacement.removedIds ?? []) {
+        yield { removedId };
+      }
+    }
     const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
     for (const chunk of retained) {
       yield {
@@ -173,7 +173,28 @@ export function memoryPublicationInline(replacement: MemorySourceIndexReplacemen
   if (!batches.next().done) {
     return undefined;
   }
-  return { ...memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+  return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+}
+
+/** A group shares one bounded worker request and one native transaction. */
+export function memoryPublicationGroup(replacements: readonly MemorySourceIndexReplacement[]) {
+  const sources = [];
+  let bytes = 0;
+  for (const replacement of replacements) {
+    const source = memoryPublicationInline(replacement);
+    if (!source) {
+      return undefined;
+    }
+    bytes += JSON.stringify(source.header).length * 2;
+    for (const fragment of source.fragments) {
+      bytes += Math.max(Buffer.byteLength(fragment.json), fragment.json.length * 2) + 128;
+    }
+    if (bytes > BATCH_BYTES) {
+      return undefined;
+    }
+    sources.push(source);
+  }
+  return sources;
 }
 
 export function* memoryEmbeddingCacheBatches(
@@ -188,11 +209,9 @@ function* publicationBatches(
 ): Generator<MemoryPublicationFragment[]> {
   let batch: MemoryPublicationFragment[] = [];
   let bytes = 0;
-  let row = 0;
   for (const value of rows) {
     const fragments = rowFragments(value, preserveNegativeZero);
     let current = fragments.next();
-    let part = 0;
     while (!current.done) {
       const next = fragments.next();
       const cost = Math.max(Buffer.byteLength(current.value), current.value.length * 2) + 128;
@@ -201,11 +220,10 @@ function* publicationBatches(
         batch = [];
         bytes = 0;
       }
-      batch.push({ row, part: part++, json: current.value, last: next.done === true });
+      batch.push({ json: current.value, last: next.done === true });
       bytes += cost;
       current = next;
     }
-    row++;
   }
   if (batch.length) {
     yield batch;

@@ -306,7 +306,19 @@ suite.define(() => {
       );
       expect(targetState).toBeGreaterThan(-1);
       expect(targetState).toBeLessThan(navigationResult);
-      await pane.getByRole("link", { name: "Linked conversation", exact: true }).click();
+      const linkedConversation = pane.getByRole("link", {
+        name: "Linked conversation",
+        exact: true,
+      });
+      // An empty native-session preview must not starve the next frame or navigation.
+      await linkedConversation.focus();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      await linkedConversation.click();
       await expect
         .poll(async () =>
           (await messages(page)).findLast((message) => message.type === "route-changed"),

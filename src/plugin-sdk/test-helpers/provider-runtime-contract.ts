@@ -680,6 +680,50 @@ export function describeOpenAIProviderRuntimeContract(
       await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
     });
 
+    it("uses the subscription budget with a manifest-backed startup registry", async () => {
+      const [{ ModelRegistry }, { AuthStorage }] = await Promise.all([
+        import("../../agents/sessions/model-registry.js"),
+        import("../../agents/sessions/auth-storage.js"),
+      ]);
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), undefined, {
+        modelsJsonContents: null,
+        pluginCatalogs: [],
+        staticProviderConfigs: {
+          openai: buildManifestModelProviderConfig({
+            providerId: "openai",
+            catalog: manifestCatalog,
+          }),
+        },
+      });
+      // Startup publishes the shared Platform manifest before account discovery.
+      expect(registry.find("openai", "gpt-6.1-sol")).toMatchObject({
+        api: "openai-responses",
+        contextTokens: 272_000,
+      });
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-6.1-sol",
+        agentRuntimeId: "openclaw",
+        authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
+        modelRegistry: registry,
+      });
+      expect(model).toMatchObject({
+        api: "openai-chatgpt-responses",
+        contextTokens: 500_000,
+      });
+      expect(
+        provider.resolveDynamicModel?.({
+          provider: "openai",
+          modelId: "gpt-6.1-sol",
+          agentRuntimeId: "openclaw",
+          authProfileMode: "api_key",
+          modelRegistry: registry,
+        }),
+      ).toMatchObject({ api: "openai-responses", contextTokens: 272_000 });
+    });
+
     it("owns forward-compat codex models", () => {
       const provider = requireProviderContractProvider("openai");
       // Codex gpt-5.4 has no OpenAI manifest row; this keeps its transport mapping independent.
@@ -946,7 +990,8 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
             ZAI_API_KEY: "env-zai-token",
           } as NodeJS.ProcessEnv,
           provider: "zai",
-          resolveApiKeyFromConfigAndStore: () => "env-zai-token",
+          resolveApiKeyFromConfigAndStore: () => undefined,
+          resolveApiKeyCandidatesFromConfigAndStore: async () => ["env-zai-token"],
           resolveOAuthToken: async () => null,
         }),
       ).resolves.toEqual({

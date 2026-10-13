@@ -89,8 +89,9 @@ function createEventConverter(partial: AssistantMessage) {
       }
       if (type === "error" && (reason === "error" || reason === "aborted")) {
         for (const block of partial.content) {
-          // SAFETY: Only in-flight tool blocks carry this optional producer buffer.
-          delete (block as { partialJson?: string }).partialJson;
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
         }
         partial.stopReason = reason;
         partial.errorMessage =
@@ -119,7 +120,7 @@ function createEventConverter(partial: AssistantMessage) {
       } else if (type === "thinking_start") {
         partial.content.push({ type: "thinking", thinking: "" });
       } else {
-        const toolCall: ToolCall & { partialJson?: string } = {
+        const toolCall: ToolCall = {
           type: "toolCall",
           id: string(event.id),
           name: string(event.toolName),
@@ -179,11 +180,10 @@ function createEventConverter(partial: AssistantMessage) {
           break;
         }
         const delta = string(event.delta);
-        // SAFETY: The pending entry is installed with this block's scratch buffer at start.
-        const streaming = block as ToolCall & { partialJson: string };
-        streaming.partialJson += delta;
-        if (pending(streaming.partialJson.length)) {
-          block.arguments = parseStreamingJson(streaming.partialJson);
+        const partialJson = (block.partialJson ?? "") + delta;
+        block.partialJson = partialJson;
+        if (pending(partialJson.length)) {
+          block.arguments = parseStreamingJson(partialJson);
         }
         return { type, contentIndex, delta, partial };
       }
@@ -196,8 +196,7 @@ function createEventConverter(partial: AssistantMessage) {
           throw new Error("Radius terminal tool call does not match its start");
         }
         block.arguments = parseTerminalToolCallArguments(call.arguments);
-        // SAFETY: The matching start created this producer-only optional buffer.
-        delete (block as ToolCall & { partialJson?: string }).partialJson;
+        delete block.partialJson;
         if (call.thoughtSignature !== undefined) {
           block.thoughtSignature = string(call.thoughtSignature);
         }
@@ -330,8 +329,9 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
         throw new Error("Radius stream ended without a terminal event");
       } catch (error) {
         for (const block of partial.content) {
-          // SAFETY: Only in-flight tool blocks carry this optional producer buffer.
-          delete (block as { partialJson?: string }).partialJson;
+          if (block.type === "toolCall") {
+            delete block.partialJson;
+          }
         }
         failTransportStream({ stream, output: partial, signal: options?.signal, error });
       } finally {

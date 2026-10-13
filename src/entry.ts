@@ -24,7 +24,6 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
-import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
@@ -137,7 +136,6 @@ async function runEntryMain(): Promise<void> {
   }
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
-  installDistEsmResolveFastPath(import.meta.url);
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
@@ -168,7 +166,6 @@ async function runEntryMain(): Promise<void> {
     !isNodeHostLauncherChild() &&
     (await respawnWithoutOpenClawCompileCacheIfNeeded({
       currentFile: entryFile,
-      installRoot,
       env: startupEnv,
       prepareWriteError: async () => {
         // The child environment was already snapshotted. Load dotenv only to format
@@ -179,6 +176,7 @@ async function runEntryMain(): Promise<void> {
     }));
   if (!waitingForCompileCacheRespawn) {
     enableOpenClawCompileCache({
+      currentFile: entryFile,
       installRoot,
     });
 

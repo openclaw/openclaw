@@ -193,10 +193,14 @@ export function prepareGroupedMessage(
       ));
   const bubbleClasses = [
     "chat-bubble",
+    opts.firstBubbleKey === messageKey ? "chat-bubble--first" : "",
     transparentShell ? "chat-bubble--with-images" : "",
     onlyPreviewChips ? "chat-bubble--preview-chips-only" : "",
     hasUserFiles ? "chat-bubble--with-files" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
+    reasoningMarkdown && !markdown && !hasMediaContent && !hasToolCards && !asyncQuestions
+      ? "chat-bubble--activity-only"
+      : "",
     opts.isStreaming ? "streaming" : "",
   ];
 

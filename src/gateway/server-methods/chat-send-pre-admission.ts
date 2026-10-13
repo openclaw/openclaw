@@ -3,7 +3,6 @@ import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
-import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -15,7 +14,10 @@ import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -32,7 +34,7 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  assertExpectedLeafActive,
+  assertExpectedLeafActiveAsync,
 } from "./chat-send-active-leaf.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
@@ -330,6 +332,15 @@ export async function runChatSendPreAdmission(
     sessionRoutingChanged,
   } = session;
 
+  const reloadEntry = async () =>
+    (
+      await loadGatewaySessionEntryReadOnlyInWorker({
+        excludeInternalEffects: true,
+        cfg,
+        key: sessionLoadKey,
+        ...sessionLoadOptions,
+      })
+    ).entry;
   const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
     resolveDurableChatClaim({
       canonicalSessionKey: sessionKey,
@@ -337,7 +348,7 @@ export async function runChatSendPreAdmission(
       clientRunId,
       entry: currentEntry,
       persistedSessionKey: legacyKey ?? sessionKey,
-      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+      reloadEntry,
       storePath,
       recoveryRuntime: context.recoveryRuntime,
       warn,
@@ -471,24 +482,26 @@ export async function runChatSendPreAdmission(
       }
       try {
         params.assertCurrent?.();
+      } catch (error) {
+        guard.failure = { error };
+        throw error;
+      }
+    };
+    const beforeAbort = async () => {
+      try {
         if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-          assertExpectedLeafActive(
+          await assertExpectedLeafActiveAsync(
             {
               canonicalKey: sessionKey,
               storePath: stopStorePath,
-              entry: loadExactSessionEntryCandidates({
-                ...(session.readSource
-                  ? { readSource: session.readSource }
-                  : { storePath: stopStorePath, agentId: session.agentId }),
-                sessionKeys: [sessionKey],
-                readOnly: true,
-              })[0]?.entry,
+              entry,
             },
             session.agentId,
             session.expectedLeafEntryId,
             session.requestedSessionId,
           );
         }
+        assertCurrent();
       } catch (error) {
         guard.failure = { error };
         throw error;
@@ -519,8 +532,17 @@ export async function runChatSendPreAdmission(
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
         assertCurrent,
+        beforeAbort,
         cascadeDescendants: true,
       });
+      // A stale child refusal can precede beforeAbort; the request's leaf error wins.
+      if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {
+        try {
+          await beforeAbort();
+        } catch (error) {
+          throw abortedPartialPersistenceError(error, res.warning);
+        }
+      }
       // Descendant cancellation aggregates errors; preserve the admission reason.
       if (guard.failure) {
         throw abortedPartialPersistenceError(guard.failure.error, res.warning);
@@ -569,15 +591,31 @@ export async function runChatSendPreAdmission(
     const { reconcileOrphanedGatewaySessionRecovery } =
       await import("../session-recovery-service.js");
     try {
-      const recoveryEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      const recoveryEntry = entry;
       if (recoveryEntry) {
-        const comparison = await prepareChatSendRetryComparison({
-          ...params,
-          session: { ...session, entry: recoveryEntry },
+        const comparison = await prepareChatSendRetryComparison(params);
+        const conflict = resolveChatSendRequestConflict(params, comparison);
+        if (conflict) {
+          throw new Error(conflict.message);
+        }
+        const workStartError = resolveSessionWorkStartError(sessionKey, recoveryEntry, {
+          allowPendingWorkspace: true,
+          providerReviewAcknowledgment: request.providerReviewAcknowledgment,
+          runId: clientRunId,
+          expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
+        });
+        if (workStartError) {
+          throw new Error(workStartError);
+        }
+        captureAdmittedChatSendSessionSettings({
+          commit: false,
+          entry: recoveryEntry,
+          expectedPermissionMode: request.p.expectedPermissionMode,
+          expectedToolOverrides: request.p.expectedToolOverrides,
         });
         await reconcileOrphanedGatewaySessionRecovery({
           cfg,
-          target: resolveGatewaySessionStoreTarget({
+          target: await resolveGatewaySessionStoreTargetInWorker({
             cfg,
             key: sessionKey,
             agentId: session.agentId,
@@ -589,42 +627,11 @@ export async function runChatSendPreAdmission(
             if (sessionRoutingChanged(context.getRuntimeConfig())) {
               throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
             }
-            const current = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
-            const conflict = resolveChatSendRequestConflict(
-              { ...params, session: { ...session, entry: current.entry } },
-              comparison,
-            );
-            if (conflict) {
-              throw new Error(conflict.message);
-            }
-            const workStartError = resolveSessionWorkStartError(sessionKey, current.entry, {
-              allowPendingWorkspace: true,
-              providerReviewAcknowledgment: request.providerReviewAcknowledgment,
-              runId: session.clientRunId,
-              expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
-            });
-            if (workStartError) {
-              throw new Error(workStartError);
-            }
-            if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-              assertExpectedLeafActive(
-                current,
-                session.agentId,
-                session.expectedLeafEntryId,
-                session.requestedSessionId,
-              );
-            }
-            captureAdmittedChatSendSessionSettings({
-              commit: false,
-              entry: current.entry,
-              expectedPermissionMode: request.p.expectedPermissionMode,
-              expectedToolOverrides: request.p.expectedToolOverrides,
-            });
           },
           workerPlacementContext: resolveSessionWorkerPlacementContext(context),
         });
       }
-      durableEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
+      durableEntry = await reloadEntry();
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;

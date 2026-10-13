@@ -280,14 +280,11 @@ export function startHeartbeatRunner(opts: {
           deps: { runtime },
         };
         const execute = runOnce ?? (await loadHeartbeatExecution()).runHeartbeatOnce;
-        // Import can outlive this runner or its wake generation. The wake owner
-        // retains/requeues canceled work; a late loader must not dispatch it too.
-        if (
-          state.stopped ||
-          opts.abortSignal?.aborted ||
-          wakeSignal?.aborted ||
-          !areHeartbeatsEnabled()
-        ) {
+        // A stopped runner has not executed this wake yet; hand it to its successor.
+        if (state.stopped || opts.abortSignal?.aborted || wakeSignal?.aborted) {
+          return { result: { status: "skipped", reason: "preempted" } };
+        }
+        if (!areHeartbeatsEnabled()) {
           return { result: { status: "skipped", reason: "disabled" } };
         }
         res = await execute(runOptions);

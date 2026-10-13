@@ -12,6 +12,10 @@ import {
   loadUserTurnTranscriptRecorderFactoryForTest,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -86,6 +90,40 @@ afterEach(() => {
   createSession.mockReset();
   registerRun.mockReset();
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
+});
+
+it("rejects unexpected remote functions before Gateway execution when forwarding is disabled", async () => {
+  const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
+  fixture.params.disableTools = false;
+  const construct = vi.spyOn(fixture.params.hostCapabilities, "createToolSurfaceAsync");
+  const beforeTool = vi.spyOn(fixture.params.hostCapabilities, "runBeforeToolCall");
+  const close = vi.fn(async () => {});
+  createSession.mockImplementationOnce((options) => ({
+    ...completedSession(options),
+    close,
+    run: async () => {
+      await options.executeFunction!({
+        type: "function_call",
+        turn_id: completedTurn.id,
+        call_id: "unexpected-call",
+        name: "memory_search",
+        arguments: { query: "must not execute" },
+      });
+      throw new Error("A disabled Gateway callback must not return normally");
+    },
+  }));
+  const result = await fixture.run();
+  expect(result.terminal).toMatchObject({
+    kind: "failed",
+    error: expect.objectContaining({
+      message:
+        "Agents API Gateway tool forwarding is disabled; refusing remote function call: memory_search",
+    }),
+  });
+  expect(construct).not.toHaveBeenCalled();
+  expect(beforeTool).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 describe("Agents API completed reply settlement", () => {
@@ -318,7 +356,7 @@ describe("Agents API completed reply settlement", () => {
 
 it("leaves PDF steering uncommitted so its next turn transfers the original in the same session", async () => {
   await withOpenClawTestState({ label: "agentsapi-pdf-steering" }, async () => {
-    const fixture = await createAttempt();
+    const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
     const bytes = Buffer.from("%PDF-1.4\nThe launch window is October.\n%%EOF\n");
     const saved = await saveMediaBuffer(bytes, "application/pdf", "inbound");
     const media = [
@@ -599,7 +637,9 @@ describe("Agents API retry prompt history", () => {
   );
 });
 
-async function createAttempt() {
+async function createAttempt(pluginConfig: unknown = {}) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   const workspaceDir = tempDirs.make();
   const target = {
     agentId: "main",
@@ -629,7 +669,7 @@ async function createAttempt() {
     sessionFile: path.join(workspaceDir, "session.jsonl"),
     workspaceDir,
     agentDir: workspaceDir,
-    config: {},
+    config,
     runId: "run-fixture",
     prompt: "Create an output file and summarize the result.",
     timeoutMs: 5_000,
@@ -678,7 +718,7 @@ async function createAttempt() {
         assertCurrent,
         () => {},
         target,
-        () => ({}),
+        () => pluginConfig,
         promptHistories,
       );
     },

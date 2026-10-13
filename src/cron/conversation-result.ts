@@ -127,7 +127,9 @@ async function resolveCronResultConversationEntry(
       accountId: params.delivery.accountId,
       route,
       sourceSessionKey: params.sourceSessionKey,
-      assertCommitAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+      workerGuard: {
+        assertMutationAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+      },
     });
   }
   const entry = await readSessionEntryInWorker({

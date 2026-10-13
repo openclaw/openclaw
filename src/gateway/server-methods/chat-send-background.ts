@@ -21,12 +21,6 @@ type DashboardSessionTitleRequest = {
   storePath: string;
 };
 
-/** Reply gate for chat-turn naming; `released` reports whether its turn was still running. */
-type DashboardSessionTitleTurn = {
-  released: Promise<boolean>;
-  settled: Promise<void>;
-};
-
 export function scheduleCreatedDashboardSessionTitle(
   created: {
     key: string;
@@ -55,7 +49,7 @@ export function scheduleCreatedDashboardSessionTitle(
 
 export function scheduleChatDashboardSessionTitle(
   params: DashboardSessionTitleRequest,
-  turn?: DashboardSessionTitleTurn,
+  retryAfter?: Promise<void>,
 ): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
@@ -69,7 +63,6 @@ export function scheduleChatDashboardSessionTitle(
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     // Naming only patches metadata under the title writer's session identity check.
     // It must not hold a turn admission while waiting on a model.
-    const retryAfter = turn && (await turn.released) ? turn.settled : undefined;
     const updated = await maybeGenerateDashboardSessionTitle({
       cfg: params.cfg,
       agentId: params.agentId,

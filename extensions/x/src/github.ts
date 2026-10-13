@@ -1,4 +1,5 @@
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchXService } from "./fetch.js";
 
 export type XGitHubPermission = "push" | "maintain" | "admin";
 export type XGitHubCollaborator = {
@@ -21,7 +22,6 @@ type ProfileCache = {
   social?: Cached<string[]>;
 };
 
-const API_ORIGIN = "https://api.github.com";
 const PERMISSION_RANK = { push: 1, maintain: 2, admin: 3 };
 // Enterprise-managed accounts append an underscore and enterprise shortcode.
 const LOGIN_PATTERN = /^[a-z\d][a-z\d_-]*$/i;
@@ -116,26 +116,7 @@ export function createXGitHubReader(options: {
     let response: Response;
     try {
       requestSignal.throwIfAborted();
-      if (options.fetch) {
-        response = await options.fetch(`${API_ORIGIN}${path}`, init);
-      } else {
-        const [{ fetchWithSsrFGuard }, { responseWithRelease }, { fetchWithRuntimeDispatcher }] =
-          await Promise.all([
-            import("openclaw/plugin-sdk/ssrf-runtime"),
-            import("openclaw/plugin-sdk/fetch-runtime"),
-            import("openclaw/plugin-sdk/runtime-fetch"),
-          ]);
-        const guarded = await fetchWithSsrFGuard({
-          url: `${API_ORIGIN}${path}`,
-          init,
-          capture: false,
-          requireHttps: true,
-          policy: { hostnameAllowlist: ["api.github.com"] },
-          maxRedirects: 0,
-          fetchImpl: fetchWithRuntimeDispatcher,
-        });
-        response = responseWithRelease(guarded.response, guarded.release);
-      }
+      response = await fetchXService("api.github.com", path, init, options.fetch);
     } catch {
       throw new XGitHubError(
         "GitHub request failed or was cancelled; the last verified set is unchanged.",

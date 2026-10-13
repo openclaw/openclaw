@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -23,6 +24,7 @@ describe("retained transcript sharing", () => {
           plugins: { enabled: false },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:retained-private-history",

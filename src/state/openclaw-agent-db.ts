@@ -133,6 +133,7 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -273,7 +274,7 @@ function* openOpenClawAgentDatabaseSteps(
     ensureOpenClawAgentSchema(db, agentId, pathname);
     admitSqliteSchema(db);
     assertCanonicalSessionValidationSchema(db);
-    registerOpenClawAgentDatabaseIdentity(db);
+    registerOpenClawAgentDatabaseIdentity(db, resolveOpenClawStateSqlitePath(options.env));
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
@@ -379,7 +380,7 @@ function* openOpenClawAgentDatabaseSteps(
       { allowExtension },
     );
     openedDb = db;
-    registerOpenClawAgentDatabaseIdentity(db);
+    registerOpenClawAgentDatabaseIdentity(db, resolveOpenClawStateSqlitePath(leaseEnvironment));
     assertCurrent({ db, path: pathname });
     if (repairAdmission?.expectedIdentity) {
       ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
@@ -586,11 +587,8 @@ function* openOpenClawAgentDatabaseSteps(
       }
     }
     if (openedDb?.isOpen) {
-      if (
-        pending &&
-        cache.databases.has(pathname) &&
-        cache.databases.get(pathname)?.db !== openedDb
-      ) {
+      const successor = cache.databases.get(pathname);
+      if (pending && successor && successor.db !== openedDb) {
         // A synchronous opener may supersede pending work. Retain failed cleanup
         // with its original native owner; never overwrite the replacement cache/lease.
         const retainedDb = openedDb;
@@ -661,11 +659,11 @@ export function getOpenClawAgentDatabaseIfOpen(
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   // Incognito skips durable database leases, but still follows the agent deletion fence.
-  if (
-    isIncognitoOpenClawAgentSqlitePath(pathname, options) &&
-    readAgentDeletionJournal(agentId, { env: options.env }, "runtime")
-  ) {
-    throw new Error(`OpenClaw agent database is unavailable while agent ${agentId} is deleted.`);
+  if (isIncognitoOpenClawAgentSqlitePath(pathname, options)) {
+    const journal = readAgentDeletionJournal(agentId, { env: options.env }, "runtime");
+    if (journal && (journal.phase !== "draining" || journal.cleanupCompleted)) {
+      throw new Error(`OpenClaw agent database is unavailable while agent ${agentId} is deleted.`);
+    }
   }
   const database = cache.databases.get(pathname);
   if (!database?.db.isOpen) {

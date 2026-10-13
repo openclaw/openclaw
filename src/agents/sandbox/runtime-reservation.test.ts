@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -32,7 +36,10 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: async () => [],
 }));
 vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => undefined }));
-vi.mock("../exec-defaults.js", () => ({ resolveNodeExecEligibility: () => ({ canExec: false }) }));
+// mock-isolation: Runtime-reservation tests keep skill eligibility independent of host approval storage.
+vi.mock("../exec-defaults.js", () => ({
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -41,6 +48,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -91,6 +99,7 @@ beforeEach(() => {
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
 });
 
 function handle(params: CreateSandboxBackendParams) {
@@ -438,30 +447,51 @@ describe("durable sandbox runtime generations", () => {
 
   it("serializes concurrent creators onto one durable generation", async () => {
     const started = createDeferred();
+    const secondReservation = createDeferred();
     const finish = createDeferred();
     const runtimeIds: string[] = [];
     let active = 0;
     let maximumActive = 0;
-    install(async (params) => {
-      const backend = handle(params);
-      active++;
-      maximumActive = Math.max(maximumActive, active);
-      runtimeIds.push(backend.runtimeId);
-      started.resolve();
-      await finish.promise;
-      active--;
-      return backend;
+    disposeBackend = registerSandboxBackend("reserved-test", {
+      reserveRuntimeId: () => {
+        const id = `reserved-${++nextId}`;
+        if (nextId === 2) {
+          secondReservation.resolve();
+        }
+        return id;
+      },
+      factory: async (params: CreateReservedSandboxBackendParamsV1) => {
+        const backend = handle(params);
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        runtimeIds.push(backend.runtimeId);
+        started.resolve();
+        await finish.promise;
+        active--;
+        return backend;
+      },
     });
     const first = resolve();
-    await started.promise;
-    const second = resolve();
-    await vi.waitFor(() => expect(nextId).toBe(2));
-    finish.resolve();
-    const contexts = await Promise.all([first, second]);
-    expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
-    expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
-    expect(maximumActive).toBe(1);
-    expect((await readRegistry()).entries).toHaveLength(1);
+    let second: ReturnType<typeof resolve> | undefined;
+    try {
+      await awaitGateBeforeSettlement(started.promise, first, "First creator did not start");
+      second = resolve();
+      await awaitGateBeforeSettlement(
+        secondReservation.promise,
+        second,
+        "Second creator did not reserve a runtime",
+      );
+      expect(nextId).toBe(2);
+      finish.resolve();
+      const contexts = await Promise.all([first, second]);
+      expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
+      expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
+      expect(maximumActive).toBe(1);
+      expect((await readRegistry()).entries).toHaveLength(1);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it.each(["recreate", "prune"] as const)(

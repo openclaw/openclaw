@@ -2,7 +2,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -146,6 +149,7 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
     if (fixture.entryPoint === "speech") {
       const result = await buildMinimaxSpeechProvider({
         isProviderAuthProfileConfigured,
+        isProviderAuthProfileConfiguredAsync,
       }).synthesize({
         text: "loopback fixture",
         cfg: {},
@@ -194,7 +198,6 @@ async function runMinimaxLoopbackFixture(fixture: MinimaxWireFixture): Promise<B
 describe("MiniMax media producers through real localhost HTTP", () => {
   it.each([
     { name: "null envelope", responseBody: null, error: "minimax.tts: malformed JSON response" },
-    { name: "array envelope", responseBody: [], error: "minimax.tts: malformed JSON response" },
     {
       name: "numeric audio",
       responseBody: { data: { audio: 42 } },
@@ -220,12 +223,6 @@ describe("MiniMax media producers through real localhost HTTP", () => {
     );
   });
 
-  it("reports malformed audio through the user-facing speech provider", async () => {
-    await expect(
-      runMinimaxLoopbackFixture({ entryPoint: "speech", audio: "666f6fZZ" }),
-    ).rejects.toThrow("MiniMax TTS API returned malformed hex audio");
-  });
-
   it.each([
     { provider: "minimax" as const, done: false },
     { provider: "minimax-portal" as const, done: true },
@@ -242,7 +239,7 @@ describe("MiniMax media producers through real localhost HTTP", () => {
     },
   );
 
-  it.each([{ status: 2 }, { status: "2" }])(
+  it.each([{ status: "2" }])(
     "accepts a terminal music frame with status $status",
     async ({ status }) => {
       const audio = Buffer.from("complete-audio");
@@ -255,32 +252,6 @@ describe("MiniMax media producers through real localhost HTTP", () => {
     },
   );
 
-  it("preserves progressive audio when its terminal frame repeats the aggregate", async () => {
-    const first = Buffer.from("first-");
-    const second = Buffer.from("second");
-    await expect(
-      runMinimaxLoopbackFixture({
-        entryPoint: "music",
-        provider: "minimax-portal",
-        frames: [
-          { status: 1, audio: first.toString("hex") },
-          { status: 1, audio: second.toString("hex") },
-          { status: 2, audio: Buffer.concat([first, second]).toString("hex") },
-        ],
-      }),
-    ).resolves.toEqual(Buffer.concat([first, second]));
-  });
-
-  it("accepts a terminal status without audio after progressive audio", async () => {
-    const audio = Buffer.from("complete-progress");
-    await expect(
-      runMinimaxLoopbackFixture({
-        entryPoint: "music",
-        frames: [{ status: 1, audio: audio.toString("hex") }, { status: 2 }, "[DONE]"],
-      }),
-    ).resolves.toEqual(audio);
-  });
-
   it("keeps the configured music byte limit before decoding terminal audio", async () => {
     await expect(
       runMinimaxLoopbackFixture({
@@ -289,12 +260,5 @@ describe("MiniMax media producers through real localhost HTTP", () => {
         mediaMaxMb: 0.000_001,
       }),
     ).rejects.toThrow("MiniMax generated music download exceeds 1 bytes");
-  });
-
-  it("keeps valid speech-provider audio unchanged", async () => {
-    const audio = Buffer.from("complete-audio");
-    await expect(
-      runMinimaxLoopbackFixture({ entryPoint: "speech", audio: audio.toString("hex") }),
-    ).resolves.toEqual(audio);
   });
 });

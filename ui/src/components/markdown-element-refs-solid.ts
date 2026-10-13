@@ -5,7 +5,7 @@ import {
   type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { LinkReaderPrefetchOwner } from "./link-reader-prefetch-owner.ts";
-import { MarkdownBlocks } from "./markdown-blocks.ts";
+import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 
 export function linkReaderPrefetchRef(
   values: () => readonly [sessionKey: string, presented: PresentationValue, connected: boolean],

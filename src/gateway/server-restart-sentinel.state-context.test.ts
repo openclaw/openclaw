@@ -79,6 +79,11 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
 }));
 // mock-isolation: Inspect the supplied state context without loading worker store discovery.
 vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (params: {
+    key: string;
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => mocks.loadSessionEntry(params.key, { agentId: params.agentId, env: params.env }),
   resolveGatewaySessionStoreTargetInWorker: mocks.resolveSessionTarget,
 }));
 // mock-isolation: The state-context suite observes adoption without executing a model turn.

@@ -8,6 +8,7 @@ import {
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
   ConfigFileSnapshot,
+  ConfigSnapshotReadOptions,
   GatewayAuthMode,
   GatewayBindMode,
   GatewayTailscaleMode,
@@ -131,23 +132,17 @@ function parseEnumOption<T extends string>(
   return raw ? (allowed.find((value) => value === raw) ?? null) : null;
 }
 
-async function readGatewayStartupConfig(params: {
-  lowerPrecedenceEnv: Readonly<Record<string, string>>;
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
-}): Promise<{
+async function readGatewayStartupConfig(
+  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
+  readOptions: Pick<ConfigSnapshotReadOptions, "lowerPrecedenceEnv"> = {},
+): Promise<{
   cfg: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead = await params.startupTrace.measure("cli.config-snapshot", () =>
-    readConfigFileSnapshotWithPluginMetadata({
-      isolateEnv: true,
-      observe: false,
-      ...(Object.keys(params.lowerPrecedenceEnv).length > 0
-        ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
-        : {}),
-    }),
+  const snapshotRead = await startupTrace.measure("cli.config-snapshot", () =>
+    readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true, observe: false, ...readOptions }),
   );
   const { snapshot } = snapshotRead;
   if (!snapshot.valid && isConfigReadFailure(snapshot)) {
@@ -219,10 +214,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
     lowerPrecedenceEnv: Readonly<Record<string, string>>;
   }
 > {
-  const startupConfig = await readGatewayStartupConfig({
-    lowerPrecedenceEnv: {},
-    startupTrace: params.startupTrace,
-  });
+  const startupConfig = await readGatewayStartupConfig(params.startupTrace);
   const plan = await resolveGatewayRunShellEnvFallbackPlan(
     startupConfig.snapshot.valid ? startupConfig.cfg : {},
   );
@@ -232,7 +224,7 @@ async function readGatewayStartupConfigWithShellEnv(params: {
   // Startup uses one shell-env plan; edits during this read take effect on the next start.
   const lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
   return {
-    ...(await readGatewayStartupConfig({ lowerPrecedenceEnv, startupTrace: params.startupTrace })),
+    ...(await readGatewayStartupConfig(params.startupTrace, { lowerPrecedenceEnv })),
     lowerPrecedenceEnv,
   };
 }
@@ -877,8 +869,9 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   };
   const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
-    completeGatewayBootLifecycle(activeBootId, completion, process.env);
+    const bootId = activeBootId;
     activeBootId = undefined;
+    return completeGatewayBootLifecycle(bootId, completion, process.env);
   };
   const startLoop = async (lifecycleLockDeadlineMs?: number) => {
     const code = await runGatewayLoop({
@@ -1005,7 +998,6 @@ const testing = {
   createConfiguredGatewayHealthProbe,
   isGatewayHealthzResponse,
   resolveGatewayLockErrorExitCode,
-  resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 

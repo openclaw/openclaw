@@ -8,11 +8,11 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
   hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
 } from "../secrets/runtime-state.js";

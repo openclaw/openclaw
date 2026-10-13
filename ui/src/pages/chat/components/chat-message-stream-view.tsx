@@ -17,7 +17,6 @@ import {
 } from "../../../lit/solid-content.tsx";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import { ChatBubbleDots } from "./chat-bubble-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
@@ -50,6 +49,7 @@ type StreamMessageOptions = Pick<
   | "sessionKey"
   | "presented"
   | "boardProvider"
+  | "widgetLayout"
   | "agentId"
   | "runActive"
   | "asyncQuestions"
@@ -71,12 +71,14 @@ type StreamMessageOptions = Pick<
   | "githubRepo"
   | "githubRepositories"
   | "onOpenWorkspaceFile"
+  | "onPermissionRetry"
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
+  firstBubbleKey?: string | null;
   entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -87,19 +89,10 @@ export type StreamGroupOptions = StreamMessageOptions & {
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
   subagentActivity?: LegacyTemplateResult;
-  onOpenSubagent?: (key: string) => void;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
-
-export function renderSolidStreamGroupParts(
-  parts: StreamGroupPart[],
-  opts: StreamGroupOptions,
-  presentation: "standalone" | "continuation",
-) {
-  return <StreamGroupParts parts={parts} options={opts} presentation={presentation} />;
-}
 
 export function StreamGroupParts(props: {
   parts: StreamGroupPart[];
@@ -109,7 +102,19 @@ export function StreamGroupParts(props: {
   return (
     <For each={props.parts} keyed={(part) => `${part.kind}:${part.key}`}>
       {(part) => (
-        <StreamPartView part={part()} options={props.options} presentation={props.presentation} />
+        <StreamPartView
+          part={part()}
+          options={{
+            ...props.options,
+            firstBubbleKey:
+              props.options.firstBubbleKey !== undefined
+                ? props.options.firstBubbleKey
+                : (props.parts.find(
+                    (candidate) => candidate.kind === "stream" && candidate.text.trim(),
+                  )?.key ?? null),
+          }}
+          presentation={props.presentation}
+        />
       )}
     </For>
   );
@@ -133,7 +138,7 @@ export function UnplacedSubagentWait(props: {
     {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
-      startedAt: props.wait.startedAt ?? 0,
+      startedAt: props.wait.startedAt,
       waitingOn: "subagents",
     },
   ]);
@@ -155,16 +160,7 @@ export function StreamPartView(props: {
 }) {
   const stream = () => (props.part.kind === "stream" ? props.part : undefined);
   return (
-    <Show
-      when={stream()}
-      fallback={
-        <NonstreamPart
-          part={props.part}
-          options={props.options}
-          presentation={props.presentation}
-        />
-      }
-    >
+    <Show when={stream()} fallback={<NonstreamPart {...props} />}>
       <StreamingMessage part={stream} options={props.options} />
     </Show>
   );
@@ -187,7 +183,6 @@ function NonstreamPart(props: {
           props.part.waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
         runningSubagents: props.options.runningSubagents,
         subagentActivity: props.options.subagentActivity,
-        onOpenSubagent: props.options.onOpenSubagent,
         onOpenSubagents: props.options.onOpenSubagents,
         startupLabel: props.options.startupLabel,
         outputTokens: props.options.runOutputTokens,
@@ -377,7 +372,7 @@ function WorkGroupSummaryBody(props: {
   summary: ReturnType<typeof prepareWorkGroupSummary>;
   options: WorkGroupSummaryOptions;
 }) {
-  const compact = () => props.options.bubbleMode && !props.options.expanded;
+  const compact = () => props.options.bubbleMode;
   return (
     <div
       class={[
@@ -392,48 +387,38 @@ function WorkGroupSummaryBody(props: {
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded={props.options.expanded ? "true" : "false"}
-        aria-label={compact() ? t("chat.view.activityDetails") : undefined}
         onPointerEnter={syncToolDisclosureOverflow}
         onFocus={syncToolDisclosureOverflow}
         onClick={() => props.options.onToggle()}
       >
-        <Show
-          when={compact()}
-          fallback={
-            <>
-              <span class="chat-tool-disclosure__content">
-                <span class="chat-activity-group__label">{props.summary.label}</span>
-              </span>
-              <Show when={props.options.expanded && props.summary.total > 0}>
-                <span class="chat-work-group__total">
-                  {" · "}
-                  {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {
-                    count: String(props.summary.total),
-                  })}
-                </span>
-              </Show>
-              <For each={props.summary.outcomes} keyed={(outcome) => outcome.kind}>
-                {(outcome) => (
-                  <span class="chat-activity-group__outcome muted">
-                    {" · "}
-                    {outcome().label}
-                  </span>
-                )}
-              </For>
-              <Show when={props.summary.toolOutcomes !== litNothing}>
-                <span class="chat-work-group__outcomes">
-                  {" · "}
-                  <LitContent value={props.summary.toolOutcomes} />
-                </span>
-              </Show>
-              <span class="chat-tool-row__chevron" aria-hidden="true">
-                <Icon name="chevronRight" />
-              </span>
-            </>
-          }
-        >
-          <ChatBubbleDots />
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-activity-group__label">{props.summary.label}</span>
+        </span>
+        <Show when={props.options.expanded && props.summary.total > 0}>
+          <span class="chat-work-group__total">
+            {" · "}
+            {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {
+              count: String(props.summary.total),
+            })}
+          </span>
         </Show>
+        <For each={props.summary.outcomes} keyed={(outcome) => outcome.kind}>
+          {(outcome) => (
+            <span class="chat-activity-group__outcome muted">
+              {" · "}
+              {outcome().label}
+            </span>
+          )}
+        </For>
+        <Show when={props.summary.toolOutcomes !== litNothing}>
+          <span class="chat-work-group__outcomes">
+            {" · "}
+            <LitContent value={props.summary.toolOutcomes} />
+          </span>
+        </Show>
+        <span class="chat-tool-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true" />
       <Show when={!props.options.expanded && !props.options.bubbleMode}>

@@ -120,6 +120,7 @@ type ReplyTurnParticipantInput = Pick<
 >;
 
 export type ReplyToolAuthoritySnapshot = Readonly<{
+  close?(): void;
   personalToolOwner?: ReplyTurnParticipantInput;
   /** Selection admitted before runtime fallback or hooks choose a concrete model. */
   requestedRoute?: ReplyToolAuthorityRoute;
