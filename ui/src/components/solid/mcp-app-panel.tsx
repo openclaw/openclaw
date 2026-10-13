@@ -78,6 +78,7 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
       host.isConnected &&
       generation === currentGeneration &&
       untrack(launchIdentity) === identity &&
+      props.launch?.owner === client &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
     setBusy(true);
@@ -86,8 +87,8 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
     try {
       if (loadView) {
         View = (await import("../mcp-app-view-registration.ts")).McpAppView;
-        // Loading presentation yields; recheck the captured launch before invoking a tool.
-        if (untrack(() => props.launch) !== launch || !untrack(current)) {
+        // Loading presentation yields; recheck the live target before invoking a tool.
+        if (!untrack(current)) {
           return;
         }
       }
