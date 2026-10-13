@@ -1,4 +1,8 @@
-import { assertSyncTransactionResult, assertPostgresTransactionUsable } from "../sql-connection.js";
+import {
+  assertSyncTransactionResult,
+  assertPostgresTransactionUsable,
+  sqlPublicationAnchor,
+} from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
@@ -20,7 +24,7 @@ export function runPostgresTransactionSync<T>(
 ): T {
   assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
-  return withSqlitePostCommitPublications(db.anchor, () => {
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () => {
     const nested = db.isTransaction && !reserved;
     try {
       if (nested) {
@@ -40,7 +44,7 @@ export function runPostgresTransactionSync<T>(
       } else {
         const scope = currentSqliteWorkerOperationAdmission.getStore();
         if (!readOnly && scope?.active) {
-          deferSqliteWorkerCommitReceipt(db.anchor, {});
+          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), {});
         }
         const commit = () => {
           assertPostgresOperationCurrent();

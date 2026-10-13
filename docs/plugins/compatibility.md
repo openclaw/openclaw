@@ -77,10 +77,13 @@ that introduces its replacement. Migration sequence:
 
 Deprecated records must include a warning start date, replacement, docs link,
 and either a final removal date no more than three months after the warning
-starts or an explicit version boundary such as `next-plugin-sdk-major`. Do not
-add a deprecated compatibility path with an open-ended removal window unless
-maintainers explicitly decide it is permanent compatibility and mark it
-`active` instead.
+starts or an explicitly approved gate such as `stable-deprecation-period`. That
+gate retains the contract until a later stable release after a stable deprecation
+period and supported external-plugin migration; the gate alone does not authorize
+removal. Legacy `next-plugin-sdk-major` registry values require owner migration to
+the later-stable-release policy. Do not add an open-ended
+removal window without an approved gate unless maintainers explicitly decide it
+is permanent compatibility and mark it `active` instead.
 
 ## Current compatibility areas
 

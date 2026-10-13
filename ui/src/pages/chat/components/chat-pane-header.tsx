@@ -404,7 +404,6 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
               prop:totalCount={props.session.participantCount}
               prop:maxVisible={4}
               prop:personActivity={props.personActivity}
-              variant="session"
             />
           ) : undefined}
           <LitContent value={props.placementControl} /> <LitContent value={props.presence} />

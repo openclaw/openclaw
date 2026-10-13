@@ -13,8 +13,8 @@ import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-run
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
-import { selectApprovalChoice, type MuseApprovalRequest } from "./src/approvals.js";
-import { MusePool, museEnvironment } from "./src/runtime.js";
+import { createApprovalHandler } from "./src/approvals.js";
+import { MusePool } from "./src/runtime.js";
 
 const writes = vi.hoisted(() => ({
   append: vi.fn(async (params: { messages: unknown[] }) => params.messages),
@@ -805,8 +805,12 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("keeps prepared credentials ahead of profile resolution and CLI login", async () => {
+  it("keeps prepared credentials ahead of profile, environment, and CLI login", async () => {
     const { harness, params } = setup();
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("META_API_KEY", "ambient-meta");
+    vi.stubEnv("MUSE_NO_AUTO_UPDATE", "0");
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
     try {
       const prepared = await harness.runAttempt({
         ...params,
@@ -821,10 +825,27 @@ describe("Muse native MSP harness", () => {
         authProfileId: "meta:test",
       });
       expect(profile.assistantTexts).toEqual(["credential:profile-key"]);
-      const login = await harness.runAttempt({ ...params, prompt: "credential" });
-      expect(login.assistantTexts).toEqual(["credential:cli-login"]);
+      const ambient = await harness.runAttempt({ ...params, prompt: "credential" });
+      expect(ambient.assistantTexts).toEqual(["credential:ambient-meta"]);
+      const spawns = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((request) => request.event === "spawn");
+      expect(spawns).not.toHaveLength(0);
+      expect(spawns.every((request) => request.noAutoUpdate === "1")).toBe(true);
     } finally {
       await harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+    const login = setup();
+    vi.stubEnv("META_API_KEY", undefined);
+    try {
+      const result = await login.harness.runAttempt({ ...login.params, prompt: "credential" });
+      expect(result.assistantTexts).toEqual(["credential:cli-login"]);
+    } finally {
+      await login.harness.dispose?.();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -872,24 +893,40 @@ describe("Muse native MSP harness", () => {
     }
   });
 
-  it("prefers the OpenClaw-selected key and otherwise keeps Muse's own credential order", () => {
-    vi.stubEnv("META_API_KEY", "ambient-meta");
-    try {
-      expect(museEnvironment().META_API_KEY).toBe("ambient-meta");
-      expect(museEnvironment("selected").META_API_KEY).toBe("selected");
-      expect(museEnvironment().MUSE_NO_AUTO_UPDATE).toBe("1");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("fails closed rather than minting approval choices", () => {
-    const request = {
-      availableChoices: [{ choiceId: "server-only", decision: "denied", scope: "once" }],
-    } as MuseApprovalRequest;
-    expect(selectApprovalChoice(request, undefined)).toEqual({ choiceId: "server-only" });
-    expect(() => selectApprovalChoice(request, "allow-once")).toThrow(
-      "no safe approved approval choice",
-    );
+  it("fails closed rather than minting approval choices", async () => {
+    const { params } = setup();
+    const requestApproval = vi
+      .fn<typeof params.hostCapabilities.requestApproval>()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ decision: "allow-once" });
+    const handler = createApprovalHandler({
+      ...params,
+      hostCapabilities: { ...params.hostCapabilities, requestApproval },
+    });
+    const request: Parameters<typeof handler>[0] = {
+      approvalId: "approval-1",
+      availableChoices: [
+        { choiceId: "server-only", decision: "denied", scope: "once", label: "Deny" },
+      ],
+      currentRequirementId: { approvalId: "approval-1", sourceIndex: 0 },
+      itemId: "item-1",
+      judgeEscalated: false,
+      protectedWrite: false,
+      rawArgs: '{"command":"pwd"}',
+      sessionId: "session-1",
+      sourceRange: {
+        first: { id: "event-1", sequence: 1 },
+        last: { id: "event-1", sequence: 1 },
+        stream: { id: "session-1", kind: "session" },
+      },
+      subject: { kind: "shell", command: "pwd" },
+      taskId: "task-1",
+      toolCallId: "call-1",
+      toolName: "shell",
+      turnId: "turn-1",
+      viewCursor: "1",
+    };
+    await expect(handler(request)).resolves.toEqual({ choiceId: "server-only" });
+    await expect(handler(request)).rejects.toThrow("no safe approved approval choice");
   });
 });

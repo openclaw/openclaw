@@ -10,12 +10,16 @@ import {
 import { bindChatPageSession } from "../pages/chat/chat-state-route.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
-import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
+import {
+  createContext,
+  createGatewayHarness,
+  createSidebarElement,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import "./app-sidebar.ts";
+import "./app-sidebar.tsx";
 
 it("keeps selected owners across agents and resumes the selected agent's own conversation", async () => {
   const rows: GatewaySessionRow[] = [
@@ -88,13 +92,10 @@ it("keeps selected owners across agents and resumes the selected agent's own con
   await sessions.refresh({ agentId: "main", force: true });
   const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
   const provider = createApplicationContextProvider(context);
-  const sidebar = document.createElement("openclaw-app-sidebar");
-  if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
-    throw new Error("Expected registered sidebar");
-  }
+  const sidebar = await createSidebarElement();
   sidebar.activeRouteId = "chat";
   sidebar.sidebarAgentsMode = "chip";
-  provider.append(sidebar);
+  provider.append(sidebar.hostElement);
   document.body.append(provider);
   try {
     sidebar.connected = true;

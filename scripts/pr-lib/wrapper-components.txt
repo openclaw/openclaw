@@ -362,6 +362,7 @@ src/infra/sql-query-compiler.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
+src/config/sessions/session-actor-context-metadata.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
 src/config/sessions/session-actor-transaction.ts

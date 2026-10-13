@@ -50,7 +50,7 @@ export function renderKbd(keys: string | number | readonly string[], options: Kb
   >`;
 }
 
-export function renderKeyboardShortcut(
+function renderKeyboardShortcut(
   combo: KeyboardShortcutCombo,
   options: KbdOptions & { separateKeys?: boolean; applePlatform?: boolean } = {},
 ) {

@@ -53,7 +53,8 @@ export function createPresenceRecipientProjection(params: {
       return entry ? { canonicalKey: key, entry } : undefined;
     }
     if (!targets.has(sessionKey)) {
-      targets.set(sessionKey, params.projection?.sharingTarget({ key, agentId }) ?? null);
+      const state = params.projection?.sharingTargetState({ key, agentId });
+      targets.set(sessionKey, state?.status === "ready" ? state.target : null);
     }
     return targets.get(sessionKey);
   };

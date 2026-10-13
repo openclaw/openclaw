@@ -26,16 +26,6 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement> & {
-        "prop:branding": ReturnType<typeof currentThemeBranding>;
-      };
-    }
-  }
-}
-
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 type AboutProps = {
   buildInfo: ControlUiBuildInfo;

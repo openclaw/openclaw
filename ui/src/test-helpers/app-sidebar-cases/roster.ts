@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   BUILTIN_THEMES,
@@ -9,6 +8,7 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { flush } from "../solid-settle.ts";
 import {
   agentIds,
   mountRoster,
@@ -44,6 +44,7 @@ describe("AppSidebar agent roster", () => {
     );
     patchSettings({ theme: theme.id });
     context.theme.refresh();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(sidebar.querySelector(".sidebar-workspace-header__mark--neutral svg")).not.toBeNull(),
     );
@@ -313,15 +314,46 @@ describe("AppSidebar agent roster", () => {
     expect(context.agentSelection.state).toEqual({ selectedId: "recent", scopeId: "recent" });
   });
 
-  it("offers new sessions for agents in group order from the brand menu", async () => {
+  it("defers agent menus and retains rail new-session links in group order", async () => {
     const { sidebar } = await mountRoster();
-    const onOpen = vi.fn();
-    sidebar.onOpenNewSession = onOpen;
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+    expect(sidebar.querySelectorAll(".sidebar-agent-roster__menu wa-dropdown-item")).toHaveLength(
+      0,
+    );
+    const agentMenu = sidebar.querySelector(
+      '[data-agent-group="main"] .sidebar-agent-roster__menu',
+    )!;
+    agentMenu.dispatchEvent(new Event("wa-show"));
+    flush();
+    const agentOptions = [...agentMenu.querySelectorAll("wa-dropdown-item")];
+    expect(agentOptions.map((item) => item.getAttribute("value"))).toEqual([
+      "main",
+      "sessions",
+      "collapse-others",
+    ]);
+    agentMenu.dispatchEvent(new Event("wa-hide"));
+    agentMenu.dispatchEvent(new Event("wa-show"));
+    flush();
+    const retainedAgentOptions = [...agentMenu.querySelectorAll("wa-dropdown-item")];
+    expect(retainedAgentOptions).toHaveLength(agentOptions.length);
+    retainedAgentOptions.forEach((item, index) => expect(item).toBe(agentOptions[index]));
+    expect(sidebar.querySelectorAll(".sidebar-agent-roster__menu wa-dropdown-item")).toHaveLength(
+      3,
+    );
+    await vi.dynamicImportSettled();
+    flush();
     const menus = sidebar.querySelectorAll(".sidebar-new-session-menu");
     expect(menus).toHaveLength(1);
     const trigger = menus[0]!.querySelector(".sidebar-new-session");
+    const options = [...menus[0]!.querySelectorAll<HTMLAnchorElement>('a[role="menuitem"]')];
+    expect(options.map((item) => item.getAttribute("data-value"))).toEqual(agentIds(sidebar));
+    expect(options.map((item) => item.getAttribute("href"))).toEqual(
+      agentIds(sidebar).map((id) => `/new?agent=${id}`),
+    );
+    expect(options[0]?.textContent).toContain("Harbor");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(menus[0]!.querySelector(".sidebar-agent-roster__avatar")).toBeNull();
     for (const view of ["pages", "online", "sessions"] as const) {
       for (const collapsed of [false, true]) {
         sidebar.navigationView = view;
@@ -332,27 +364,10 @@ describe("AppSidebar agent roster", () => {
         expect(sidebar.querySelector(".sidebar-session-toolbar .sidebar-new-session")).toBeNull();
       }
     }
-    for (const menu of menus) {
-      expect(menu.querySelectorAll("wa-dropdown-item")).toHaveLength(0);
-      menu.dispatchEvent(new Event("wa-show"));
-      await sidebar.querySelector<LitElement>("openclaw-sidebar-new-session-menu")?.updateComplete;
-      const options = [...menu.querySelectorAll("wa-dropdown-item")];
-      expect(options.map((item) => item.getAttribute("value"))).toEqual(agentIds(sidebar));
-      expect(options.map((item) => item.querySelector("a")?.getAttribute("href"))).toEqual(
-        agentIds(sidebar).map((id) => `/new?agent=${id}`),
-      );
-      expect(options[0]?.textContent).toContain("Harbor");
-      await vi.waitFor(() =>
-        expect(options[2]?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-      );
-    }
-    menus[0]?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: menus[0].querySelector('[value="recent"]') },
-        bubbles: true,
-      }),
-    );
-    expect(onOpen).toHaveBeenCalledWith("recent");
+    const retainedOptions = [...menus[0]!.querySelectorAll('a[role="menuitem"]')];
+    expect(retainedOptions).toHaveLength(options.length);
+    retainedOptions.forEach((item, index) => expect(item).toBe(options[index]));
+    expect(menus[0]!.querySelector(".sidebar-agent-roster__avatar")).toBeNull();
   });
 
   it.each([undefined, "main"])(
@@ -572,6 +587,7 @@ describe("AppSidebar agent roster", () => {
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     expect(loadSettings().sidebarAgentsMode).toBe("roster");
+    await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:recent"));
     sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
     await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain("agent:working:recent"));
     expect(
@@ -583,6 +599,7 @@ describe("AppSidebar agent roster", () => {
     remounted.sidebar.sidebarEntries = ["session:agent:working:pinned"];
     remounted.sidebar.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
     await vi.waitFor(() => expect(agentIds(remounted.sidebar)).toHaveLength(3));
+    await vi.waitFor(() => expect(sessionKeys(remounted.sidebar)).toContain("agent:recent:recent"));
     expect(
       remounted.sidebar
         .querySelector('[data-agent-collapse="working"]')
@@ -594,7 +611,6 @@ describe("AppSidebar agent roster", () => {
         '.sidebar-rail [data-sidebar-entry="session:agent:working:pinned"]',
       ),
     ).not.toBeNull();
-    expect(sessionKeys(remounted.sidebar)).toContain("agent:recent:recent");
     await toggleRoster(remounted.sidebar);
     await vi.waitFor(() =>
       expect(remounted.sidebar.querySelector(".sidebar-agent-roster")).toBeNull(),

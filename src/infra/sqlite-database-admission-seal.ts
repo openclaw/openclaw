@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SQLITE_DATABASE_SEAL_SCHEMA } from "../state/openclaw-database-seal-schema.js";
+import { sqliteDatabaseSealSchemaFor } from "../state/openclaw-database-seal-schema.js";
 import {
   invalidateSqliteCleanCloseSeal,
   readSqliteCleanCloseSeal,
@@ -17,6 +17,8 @@ import {
   type Admission,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission-record.js";
+
+const SQLITE_DATABASE_SEAL_SCHEMA = sqliteDatabaseSealSchemaFor();
 
 export const integrityVerificationKey: SqliteDatabaseAdmissionKey<number> = {
   name: "sqlite.full-verification",
