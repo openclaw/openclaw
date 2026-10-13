@@ -107,13 +107,14 @@ export function resolveGatewayShutdownDrainBudget(params: {
   budget: { nativeStopBudget: boolean; timeoutMs: number; reserveMs: number };
   action: GatewayRunSignalAction;
   forceRestart: boolean;
+  interruptAfterDrain?: true;
   restartWithoutSupervisor: boolean;
   acceptedAtMs: number;
   requestedRestartDrainTimeoutMs?: number;
 }) {
   const { budget, action } = params;
   const isRestart = action !== "stop";
-  const requested = params.requestedRestartDrainTimeoutMs;
+  const requested = params.interruptAfterDrain ? 0 : params.requestedRestartDrainTimeoutMs;
   const elapsedMs = performance.now() - params.acceptedAtMs;
   const remaining = requested === undefined ? undefined : Math.max(0, requested - elapsedMs);
   const restartDrainTimeoutMs = budget.nativeStopBudget
@@ -152,7 +153,8 @@ export function resolveGatewayShutdownDrainBudget(params: {
     // A supervisor SIGTERM owns the stop deadline. Its shorter drain request
     // must not discard time still available for checkpointing and native close.
     forceExitMs:
-      !isRestart || (action === "external-restart" && budget.nativeStopBudget)
+      !isRestart ||
+      (action === "external-restart" && (budget.nativeStopBudget || params.interruptAfterDrain))
         ? budget.timeoutMs
         : restartDrainTimeoutMs === undefined
           ? undefined

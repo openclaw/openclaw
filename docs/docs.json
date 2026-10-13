@@ -1795,6 +1795,7 @@
                     ]
                   },
                   "plugins/copilot",
+                  "plugins/muse",
                   {
                     "group": "Meetings and calls",
                     "pages": [

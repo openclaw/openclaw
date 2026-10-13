@@ -553,13 +553,6 @@ export function writeSessionEntry(
         ...(options.routeContext !== undefined ? { routeContext: options.routeContext } : {}),
         sessionScope: boundSessionRoot.session_scope,
       });
-      if (conversation) {
-        upsertConversationIdentities(
-          database,
-          prepareConversationIdentities([conversation.identity]),
-          updatedAt,
-        );
-      }
       const retainWindowOwner = canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId;
       const window = prepareSessionEntryWindowRow({
         boundSessionRow: { ...boundSessionRoot, primary_conversation_id: primaryConversationId },
@@ -574,8 +567,15 @@ export function writeSessionEntry(
       });
       const queries = getSessionEntryWriteQueries(database.db);
       const writeGeneration =
-        nodeChanged || persisted.snapshotsChanged
+        nodeChanged || persisted.snapshotsChanged || window.changed || conversation !== null
           ? trackSessionEntryCacheWrite(database, () => {
+              if (conversation) {
+                upsertConversationIdentities(
+                  database,
+                  prepareConversationIdentities([conversation.identity]),
+                  updatedAt,
+                );
+              }
               if (nodeChanged) {
                 const writeNode =
                   "legacy_acp_migration_json" in legacySources
@@ -586,6 +586,21 @@ export function writeSessionEntry(
               if (persisted.snapshotsChanged) {
                 writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots, persisted);
               }
+              if (window.changed) {
+                const writeWindow = retainWindowOwner ? queries.retainWindow : queries.claimWindow;
+                writeWindow(window.row);
+              }
+              if (conversation) {
+                linkSessionConversation({
+                  database,
+                  ...(previousEntry?.sessionId
+                    ? { previousSessionId: previousEntry.sessionId }
+                    : {}),
+                  sessionId: window.row.session_id,
+                  conversation,
+                  updatedAt,
+                });
+              }
             })
           : undefined;
       if (nodeChanged) {
@@ -593,19 +608,6 @@ export function writeSessionEntry(
           sessionKey,
           entry: normalizedEntry,
           previousEntry: canonicalPreviousEntry,
-        });
-      }
-      if (window.changed) {
-        const writeWindow = retainWindowOwner ? queries.retainWindow : queries.claimWindow;
-        writeWindow(window.row);
-      }
-      if (conversation) {
-        linkSessionConversation({
-          database,
-          ...(previousEntry?.sessionId ? { previousSessionId: previousEntry.sessionId } : {}),
-          sessionId: window.row.session_id,
-          conversation,
-          updatedAt,
         });
       }
       return { writeGeneration, window, conversationWritten: conversation !== null };

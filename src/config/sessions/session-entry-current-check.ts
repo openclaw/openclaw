@@ -266,6 +266,7 @@ async function prepareSessionEntryCurrentCheck(inputParams: SessionEntryCurrentC
               },
               expected: selected,
               fields,
+              preparedEntry: entryPredicate,
               assertCurrent,
               assertHostCurrent: () => {
                 assertActive();

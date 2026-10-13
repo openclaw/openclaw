@@ -572,8 +572,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       apply();
     }
   };
-  const publish = () => {
-    const notify = preparePlacementChangeNotification(owner, change);
+  const publish = (notify = preparePlacementChangeNotification(owner, change)) => {
     commitChange(owner, change, sequence);
     notify();
     for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
@@ -589,6 +588,8 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
       }),
     invalidate: () =>
       settle(() => {
+        // Keep the refresh identity without publishing an uncertain postimage.
+        const notify = preparePlacementChangeNotification(owner, change);
         change.indeterminate = true;
         // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
         // invalidate read observations while preserving the separate turn authority.
@@ -604,7 +605,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
             change.workspacePlacement = undefined;
           }
         }
-        publish();
+        publish(notify);
       }),
   };
 }

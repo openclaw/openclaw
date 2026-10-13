@@ -137,10 +137,7 @@ export function prepareSessionRowPublication(
       publications.set(projection, publication);
       const { lists } = publication;
       projection.onSelectionChange(() => lists.clear());
-      projection.onFactsChange((change) => {
-        if (change.kind === "reset") {
-          lists.clear();
-        }
+      projection.onFactsChange(() => {
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of lists.values()) {
           list.rows = undefined;

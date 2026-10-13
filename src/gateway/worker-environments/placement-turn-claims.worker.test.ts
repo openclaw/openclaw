@@ -191,10 +191,14 @@ it("transitions, drains and settles terminal placement failure without caller-th
 it.each(["delivered", "committed", "unknown"] as const)(
   "settles %s terminal-result failure before observers without caller-thread SQL",
   async (outcome) => {
-    const claim = await workerClaim(`terminal-failure-boundary-${outcome}`);
+    const name = `terminal-failure-boundary-${outcome}`;
+    const requested = input(name);
+    const claim = await workerClaim(name);
     await placements.markWorkspaceResultPending(claim);
     const [pending] = await placements.listPendingWorkspaceResultsAsync(claim.sessionId);
     const authority = await placements.prepareTurnClaimAuthority(claim);
+    const changes: Array<{ sessionId: string; sessionKey: string; agentId: string }> = [];
+    const stopChanges = placements.subscribeChanges((placement) => changes.push(placement));
     const closed: Array<{ claimId: string; current: boolean; pending: boolean }> = [];
     const stop = placements.registerTurnClaimClosedHandler((released) => {
       closed.push({
@@ -226,9 +230,17 @@ it.each(["delivered", "committed", "unknown"] as const)(
       if (corrupted) {
         expect(corrupted()).toBe(1);
       }
+      expect(changes).toEqual([
+        {
+          sessionId: requested.sessionId,
+          sessionKey: requested.sessionKey,
+          agentId: requested.agentId,
+        },
+      ]);
       expect(queries.queries).toEqual([]);
     } finally {
       stop();
+      stopChanges();
       authority.release();
       queries.restore();
     }

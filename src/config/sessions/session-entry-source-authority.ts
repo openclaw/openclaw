@@ -62,6 +62,8 @@ export function captureSessionEntrySourceAssertion(params: {
   readSource?: CapturedSessionEntryReadSource;
   expected: Partial<SessionEntry> | undefined;
   fields: readonly (keyof SessionEntry)[];
+  /** Borrow the selecting reader's publication lifetime instead of selecting the same row again. */
+  preparedEntry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
   assertCurrent: () => void;
   assertHostCurrent?: () => void;
   prepareConversations?: (
@@ -166,14 +168,16 @@ export function captureSessionEntrySourceAssertion(params: {
       const database = { agentId: source.agentId, path: source.path, env };
       const retained = retainSessionHistoryWorkerDatabase(database);
       // Join receipt publication before dispatch so a newer write cannot certify an older read.
-      const predicate = retainPreparedSessionEntryPredicate({
-        databaseIdentity: identity.key,
-        sessionKey: scope.sessionKey,
-        entry: undefined,
-        matches: (_before, current) =>
-          (current === undefined) === (expected === undefined) &&
-          fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
-      });
+      const predicate =
+        params.preparedEntry ??
+        retainPreparedSessionEntryPredicate({
+          databaseIdentity: identity.key,
+          sessionKey: scope.sessionKey,
+          entry: undefined,
+          matches: (_before, current) =>
+            (current === undefined) === (expected === undefined) &&
+            fields.every((field) => isDeepStrictEqual(current?.[field], expected?.[field])),
+        });
       const revision = predicate.captureRevision();
       let active = true;
       let conversations:
@@ -188,19 +192,21 @@ export function captureSessionEntrySourceAssertion(params: {
         }
       };
       try {
-        const result = await retained.owner.readExactEntries({
-          sessionKeys: [scope.sessionKey],
-          projection: "full",
-          includeAuthorization: true,
-          env,
-        });
-        const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
-        if (
-          result.databaseIdentity?.identity !== source.databaseIdentity ||
-          result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
-          !predicate.acknowledge(entry, revision)
-        ) {
-          params.refuse();
+        if (!params.preparedEntry) {
+          const result = await retained.owner.readExactEntries({
+            sessionKeys: [scope.sessionKey],
+            projection: "full",
+            includeAuthorization: true,
+            env,
+          });
+          const entry = result.entries.find((row) => row.sessionKey === scope.sessionKey)?.entry;
+          if (
+            result.databaseIdentity?.identity !== source.databaseIdentity ||
+            result.databaseIdentity?.birthtime !== source.databaseBirthtime ||
+            !predicate.acknowledge(entry, revision)
+          ) {
+            params.refuse();
+          }
         }
         assertCurrent();
         conversations = await params.prepareConversations?.(async (conversationRefs) => {
@@ -237,13 +243,17 @@ export function captureSessionEntrySourceAssertion(params: {
           ],
           release: () => {
             active = false;
-            predicate.release();
+            if (!params.preparedEntry) {
+              predicate.release();
+            }
             retained.release();
           },
         };
       } catch (error) {
         active = false;
-        predicate.release();
+        if (!params.preparedEntry) {
+          predicate.release();
+        }
         await releaseSessionSourceAuthorities([retained], [error]);
         throw error;
       }

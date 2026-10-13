@@ -7,7 +7,11 @@ import { hasErrnoCode } from "./errno.js";
 const count = z.number().int().nonnegative();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const absolutePath = z.string().refine((value) => path.isAbsolute(value) && !value.includes("://"));
-const capture = z.strictObject({ path: absolutePath, sha256: hash, size: count });
+export const databasePortArtifactSchema = z.strictObject({
+  path: absolutePath,
+  sha256: hash,
+  size: count,
+});
 const location = z.discriminatedUnion("engine", [
   z.strictObject({ engine: z.literal("sqlite"), path: absolutePath }),
   z.strictObject({
@@ -23,7 +27,7 @@ const target = z.strictObject({
   descriptorHash: hash,
   original: location,
   intended: location,
-  originalCapture: capture,
+  originalCapture: databasePortArtifactSchema,
   verification: z
     .strictObject({
       contentHash: hash,
@@ -50,8 +54,8 @@ const manifestSchema = z
       from: z.enum(["sqlite", "postgres"]),
       to: z.enum(["sqlite", "postgres"]),
     }),
-    originalConfig: z.array(capture).min(1),
-    artifacts: z.array(capture),
+    originalConfig: z.array(databasePortArtifactSchema).min(1),
+    artifacts: z.array(databasePortArtifactSchema),
     targets: z.array(target).min(1),
   })
   .superRefine((value, ctx) => {
@@ -62,7 +66,7 @@ const manifestSchema = z
         (entry) =>
           entry.original.engine !== value.direction.from ||
           entry.intended.engine !== value.direction.to ||
-          (value.state !== "preparing" && !entry.verification),
+          (value.state !== "preparing" && value.outcome !== "rolled-back" && !entry.verification),
       ) ||
       (value.state === "complete") !== Boolean(value.outcome);
     if (invalid) {
@@ -149,7 +153,7 @@ export function assertDatabasePortRecoveryAllowed(
     intent.manifestPath !== fixedPath ||
     !manifest ||
     manifest.operationId !== intent.operationId ||
-    manifest.state === "complete" ||
+    (manifest.state === "complete" && intent.action !== "resume") ||
     (intent.action !== "resume" && intent.action !== "rollback")
   ) {
     throw refusal(stateDir);
@@ -161,8 +165,8 @@ export function assertDatabasePortRecoveryAllowed(
   return manifest;
 }
 
-function syncDirectory(directory: string): void {
-  const fd = fs.openSync(directory, fs.constants.O_RDONLY);
+export function syncDatabasePortPath(pathname: string): void {
+  const fd = fs.openSync(pathname, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     fs.fsyncSync(fd);
   } finally {
@@ -173,7 +177,7 @@ function syncDirectory(directory: string): void {
 function ensurePrivateDirectory(directory: string): void {
   try {
     fs.mkdirSync(directory, { mode: 0o700 });
-    syncDirectory(path.dirname(directory));
+    syncDatabasePortPath(path.dirname(directory));
   } catch (error) {
     if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
@@ -182,26 +186,46 @@ function ensurePrivateDirectory(directory: string): void {
   assertPrivate(directory, true);
 }
 
-function writeAtomic(
+/** Private recovery artifacts and manifest revisions share one durable publication primitive. */
+export function writeDatabasePortArtifact(
   filePath: string,
-  manifest: DatabasePortManifest,
+  contents: string | Buffer,
   assertCustody: () => void,
+  replace = false,
 ): void {
   const temporary = path.join(path.dirname(filePath), `.manifest-${randomUUID()}.tmp`);
   const fd = fs.openSync(temporary, "wx", 0o600);
   try {
     try {
-      fs.writeFileSync(fd, `${JSON.stringify(manifest)}\n`);
+      fs.writeFileSync(fd, contents);
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
     assertCustody();
-    fs.renameSync(temporary, filePath);
-    syncDirectory(path.dirname(filePath));
+    if (replace) {
+      fs.renameSync(temporary, filePath);
+    } else {
+      fs.linkSync(temporary, filePath);
+      fs.unlinkSync(temporary);
+    }
+    syncDatabasePortPath(path.dirname(filePath));
   } finally {
     fs.rmSync(temporary, { force: true });
   }
+}
+
+export function prepareDatabasePortDirectory(stateDir: string, operationId: string): string {
+  const parent = path.dirname(databasePortManifestPath(stateDir));
+  const directory = path.join(parent, z.uuid().parse(operationId));
+  for (const entry of [path.dirname(parent), parent, directory]) {
+    ensurePrivateDirectory(entry);
+  }
+  return directory;
+}
+
+function writeAtomic(filePath: string, manifest: DatabasePortManifest, assertCustody: () => void) {
+  writeDatabasePortArtifact(filePath, `${JSON.stringify(manifest)}\n`, assertCustody, true);
 }
 
 /** The caller holds offline custody; every revision is durable before returning. */
@@ -233,7 +257,8 @@ export function writeDatabasePortManifest(
       manifest.revision !== previous.revision + 1 ||
       previous.state === "complete" ||
       states.indexOf(manifest.state) < states.indexOf(previous.state) ||
-      states.indexOf(manifest.state) > states.indexOf(previous.state) + 1 ||
+      (states.indexOf(manifest.state) > states.indexOf(previous.state) + 1 &&
+        !(previous.state === "preparing" && manifest.outcome === "rolled-back")) ||
       previous.artifacts.some(
         (artifact) =>
           !manifest.artifacts.some((next) => JSON.stringify(next) === JSON.stringify(artifact)),
@@ -268,6 +293,6 @@ export function archiveDatabasePortManifest(
   writeAtomic(archived, manifest, assertCustody);
   assertCustody();
   fs.unlinkSync(fixedPath);
-  syncDirectory(path.dirname(fixedPath));
+  syncDatabasePortPath(path.dirname(fixedPath));
   return archived;
 }
