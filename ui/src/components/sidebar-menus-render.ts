@@ -30,10 +30,12 @@ import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.ts";
 import { renderSidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
+import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
 import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
@@ -213,12 +215,23 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   }
   const context = host.sessionDataContext;
   const pluginActionSignal = controller.pluginActionLifetime.signal;
+  const placementScopeGeneration = host.sessionData.sessionScopeGeneration;
   const currentSession = host.findSidebarMenuSessionByKey(menu.session.key);
   // Read again at dispatch: session updates can arrive before the menu rerenders.
   const currentPluginSession = () =>
     host.sessionData.sessionsResult?.sessions.find(
       (row) => row.key === menu.session.key && row.sessionId === menu.session.sessionId,
     );
+  const currentPlacementSession = () => {
+    const row =
+      findActiveSidebarLineageRow(host.sessionData, menu.session.key) ??
+      currentPluginSession() ??
+      Object.values(host.sessionData.sessionResultsByAgent)
+        .flatMap((result) => result.sessions)
+        .find((candidate) => candidate.key === menu.session.key);
+    return row?.sessionId === menu.session.sessionId ? row : undefined;
+  };
+  const placementSession = currentPlacementSession();
   const pluginSession = currentPluginSession();
   // Appearance editing keeps this menu open. Refresh its row without adopting
   // a replacement session that happens to reuse the captured key.
@@ -262,6 +275,8 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const actionDisabledReasons = {
     ...sessionMenuReasons({
       snapshot: context?.gateway.snapshot,
+      placementRow: placementSession,
+      requiredProfile: context?.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
       session,
       batchRows,
       cloudWorkerStopAction: session.cloudWorkerStopAction,
@@ -274,6 +289,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
       <openclaw-session-menu
         .session=${{
           label: session.label,
+          placementAction: sessionPlacementAction(placementSession),
           target: { key: session.key, agentId: session.agentId },
           sessionId: session.sessionId ?? null,
           isChild: session.isChild,
@@ -394,6 +410,21 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "assign-owner":
               void host.sessionOrganizer.assignSessionOwner(session, action.owner);
+              break;
+            case "move-session":
+              if (context && placementSession) {
+                void moveSessionFromMenu({
+                  context,
+                  row: placementSession,
+                  fallbackAgentId:
+                    session.agentId ?? host.getSessionNavigationState().selectedAgentId,
+                  currentRow: currentPlacementSession,
+                  isCurrent: () =>
+                    !pluginActionSignal.aborted &&
+                    host.sessionDataContext === context &&
+                    host.sessionData.sessionScopeGeneration === placementScopeGeneration,
+                });
+              }
               break;
             case "fork":
               void host.sessionOrganizer.forkSession(session);

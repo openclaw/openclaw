@@ -42,6 +42,11 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
+      | "context"
+      | "activeSessionLineageRoot"
+      | "activeSessionLineageSelectedRow"
+      | "childSessionRowsByParent"
+      | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
       | "archiveSessionCatalog"

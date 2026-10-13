@@ -14,6 +14,7 @@ import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
+import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -126,6 +127,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return this.headerSessionDataMemo.read(
       [
         label,
+        sessionPlacementAction(row),
         row.key,
         row.agentId,
         row.sessionId,
@@ -146,6 +148,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       ],
       () => ({
         label,
+        placementAction: sessionPlacementAction(row),
         target: { key: row.key, agentId: row.agentId },
         sessionId: row.sessionId ?? null,
         isChild,
@@ -188,8 +191,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
-    if (action.kind === "stop-cloud-worker") {
-      return this.changeHeaderPlacement(row, "reclaim");
+    if (action.kind === "move-session" || action.kind === "stop-cloud-worker") {
+      const mode = action.kind === "move-session" ? "move" : "reclaim";
+      return this.changeHeaderPlacement(row, mode);
     }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;

@@ -29,6 +29,8 @@ type Options = {
   mode: "dispatch" | "move" | "restart";
   sessionLabel: string;
   activeRun: boolean;
+  repositoryOnly?: boolean;
+  allowMachineOverrides?: boolean;
   gatewayDisabledReason?: string;
   deviceDisabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
@@ -69,7 +71,7 @@ export function showSessionPlacementTargetDialog(
         const [loadError, setLoadError] = createSignal<string | null>(null);
         const [catalog, setCatalog] = createSignal<Catalog>({ profiles: [], devices: [] });
         const [selected, select] = createSignal<SessionMoveTarget | null>(
-          options.mode === "move" ? { kind: "gateway" } : null,
+          options.mode === "move" && !options.gatewayDisabledReason ? { kind: "gateway" } : null,
         );
         const [machineRevision, setMachineRevision] = createSignal(0);
         const cloudMachines = new DraftCloudMachineState();
@@ -80,17 +82,38 @@ export function showSessionPlacementTargetDialog(
         const warning = options.mode === "restart" || (!dispatch && options.activeRun);
         const notice = {
           restart: "restartSessionWarning",
-          dispatch: "dispatchSessionNotice",
+          dispatch: options.repositoryOnly ? "dispatchSessionNotice" : "dispatchLocalSessionNotice",
           move: options.activeRun ? "moveSessionActiveRunWarning" : "moveSessionNoReplayWarning",
         }[options.mode];
 
+        const selectable = () => {
+          const target = selected();
+          if (loading() || loadError() || !target) {
+            return false;
+          }
+          if (target.kind === "gateway") {
+            return !dispatch && !options.gatewayDisabledReason;
+          }
+          if (target.kind === "device") {
+            return (
+              !options.deviceDisabledReason &&
+              catalog().devices.some(
+                (device) => device.deviceId === target.deviceId && device.selectable,
+              )
+            );
+          }
+          return profiles().some(
+            (profile) =>
+              profile.id === target.profileId && !options.profileDisabledReason?.(profile),
+          );
+        };
         const submit = (event: Event) => {
           event.preventDefault();
           const target = selected();
-          if (!target) {
+          if (!target || !selectable()) {
             return;
           }
-          if (target.kind !== "profile") {
+          if (target.kind !== "profile" || options.allowMachineOverrides === false) {
             finish(target);
             return;
           }
@@ -101,7 +124,8 @@ export function showSessionPlacementTargetDialog(
 
         function choices(profile: DraftCloudProfile) {
           machineRevision();
-          const profileSelected = selectedKey() === `profile:${profile.id}`;
+          const profileSelected =
+            options.allowMachineOverrides !== false && selectedKey() === `profile:${profile.id}`;
           const machines = cloudMachines.machines(profile);
           const operatingSystems = profile.operatingSystems ?? [];
           return [
@@ -248,11 +272,7 @@ export function showSessionPlacementTargetDialog(
                 </div>
               )}
               <div class="exec-approval-actions">
-                <button
-                  type="submit"
-                  class="btn primary"
-                  disabled={loading() || Boolean(loadError()) || !selected()}
-                >
+                <button type="submit" class="btn primary" disabled={!selectable()}>
                   {t(`sessionsView.${options.mode}SessionAction`)}
                 </button>
                 <button type="button" class="btn" onClick={() => finish(null)}>
