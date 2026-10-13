@@ -18,7 +18,9 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { runGatewayStatusProbePass } from "./probe-run.js";
 
 const boundary = vi.hoisted(() => ({ start: vi.fn<() => Promise<SshTunnel>>() }));
+// mock-isolation: Replace the external SSH process with an owned TCP forwarder for real TLS traffic.
 vi.mock("../../infra/ssh-tunnel.js", () => ({ startSshPortForward: boundary.start }));
+// mock-isolation: Disable ambient network discovery to keep the configured SSH route isolated.
 vi.mock("../../infra/bonjour-discovery.js", () => ({ discoverGatewayBeacons: async () => [] }));
 
 it("probes configured TLS through a real byte-forwarding tunnel and rejects a wrong pin", async () => {
