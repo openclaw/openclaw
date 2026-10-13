@@ -1,6 +1,6 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -578,9 +578,37 @@ export function resolvePlaywrightChromiumExecutablePath(
     return defaultExecutablePath;
   }
   return (
-    systemChromiumExecutableCandidates.find((candidate) => canRun(candidate)) ??
-    defaultExecutablePath
+    [
+      ...installedPlaywrightChromiumCandidates(defaultExecutablePath),
+      ...systemChromiumExecutableCandidates,
+    ].find((candidate) => canRun(candidate)) ?? defaultExecutablePath
   );
+}
+
+// Preinstalled browser caches (for example a shared PLAYWRIGHT_BROWSERS_PATH image)
+// can hold another Chromium revision than this Playwright pin. Prefer the newest one
+// over system browsers; its Linux layout moved from chrome-linux to chrome-linux64.
+function installedPlaywrightChromiumCandidates(defaultExecutablePath: string): string[] {
+  const segments = defaultExecutablePath.split(path.sep);
+  const revisionIndex = segments.findIndex((segment) => /^chromium-\d+$/u.test(segment));
+  if (revisionIndex < 1) {
+    return [];
+  }
+  const browsersRoot = segments.slice(0, revisionIndex).join(path.sep);
+  let entries: string[];
+  try {
+    entries = readdirSync(browsersRoot);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => /^chromium-\d+$/u.test(entry))
+    .toSorted((left, right) => Number(right.slice(9)) - Number(left.slice(9)))
+    .flatMap((entry) =>
+      ["chrome-linux64", "chrome-linux"].map((dir) =>
+        path.join(browsersRoot, entry, dir, "chrome"),
+      ),
+    );
 }
 
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
