@@ -10,7 +10,6 @@ import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -164,12 +163,9 @@ describe("session list resolver cache", () => {
     });
   });
 
-  test.each([
-    { phase: "startup", cost: "acquisition" },
-    { phase: "dirty refresh", cost: "materialization" },
-  ])(
-    "yields during expensive $phase $cost without reacquiring unchanged rows",
-    async ({ phase, cost }) => {
+  test.each(["startup", "dirty refresh"])(
+    "yields during expensive %s materialization without reprojecting unchanged rows",
+    async (phase) => {
       await withStateDirEnv("openclaw-row-work-budget-", async () => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
@@ -192,28 +188,15 @@ describe("session list resolver cache", () => {
         }
         let workMs = 0;
         let projectedRows = 0;
-        let acquiredRows = 0;
         let rowsAtControl = 0;
         let control: Promise<void> | undefined;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
-        const readEntryCache = entryCache.readCommittedSessionEntryCache;
-        const acquisitions = vi
-          .spyOn(entryCache, "readCommittedSessionEntryCache")
-          .mockImplementation((...args) => {
-            acquiredRows++;
-            if (cost === "acquisition") {
-              workMs += 20;
-            }
-            return readEntryCache(...args);
-          });
         const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
           .spyOn(rowProjection, "readSessionRowInputs")
           .mockImplementation((params) => {
             const result = readInputs(params);
-            if (cost === "materialization") {
-              workMs += 20;
-            }
+            workMs += 20;
             projectedRows++;
             if (projectedRows === 1) {
               control = new Promise<void>((resolve) => {
@@ -237,14 +220,12 @@ describe("session list resolver cache", () => {
           expect(rowsAtControl).toBeGreaterThan(0);
           expect(rowsAtControl).toBeLessThan(rowCount);
           expect(projectedRows).toBe(rowCount);
-          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
           rows.mockClear();
           const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
           expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
           expect(rows).not.toHaveBeenCalled();
         } finally {
           rows.mockRestore();
-          acquisitions.mockRestore();
           clock.mockRestore();
           await control;
           projection?.dispose();

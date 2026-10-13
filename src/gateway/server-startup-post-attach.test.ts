@@ -1403,11 +1403,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect.any(Object),
       );
     expect(log.info).toHaveBeenCalledWith("http server listening (1 plugin: replacement)");
-    expect(log.warn.mock.calls).toEqual([
-      [
-        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
-      ],
-    ]);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {

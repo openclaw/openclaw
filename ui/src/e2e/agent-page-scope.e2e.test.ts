@@ -483,7 +483,7 @@ suite.define(() => {
 
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
 
@@ -501,7 +501,7 @@ suite.define(() => {
         const sessionRequestsBeforeAll = (await gateway.getRequests("sessions.list")).length;
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .evaluate((item) => (item as HTMLElement).click());
         await expect

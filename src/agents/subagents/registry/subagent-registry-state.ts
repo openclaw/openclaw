@@ -23,6 +23,7 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
+  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -41,6 +42,7 @@ import {
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
@@ -273,6 +275,28 @@ export function consumeFreshSubagentRegistryRows<T>(
   consume: (runs: ReadonlyMap<string, SubagentRunRecord>) => T,
 ): Promise<T> {
   return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
+}
+
+/** Registration shares the loaded registry; committed receipts keep retained generations current. */
+export async function prepareSubagentRegistrationRows(
+  childSessionKey: string,
+  selectedRunIds: readonly string[],
+  context: OpenClawStateWorkerContext,
+): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
+  const prepared = await prepareSubagentRunsCache(
+    persistedSubagentRunsReadCache,
+    readAllSubagentRunsInWorker,
+    context,
+  );
+  const runIds = new Set(selectedRunIds);
+  return () =>
+    mergeSelectedFullRuns(
+      persistedSubagentRunsReadCache,
+      subagentRuns,
+      prepared,
+      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
+      { context },
+    );
 }
 
 export function getSubagentRunsSnapshotForRead(

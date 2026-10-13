@@ -3,6 +3,7 @@ import path from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
@@ -17,6 +18,7 @@ import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
+import { readBackupEngine } from "./database-backup.js";
 import {
   applyScopeUpdate,
   gitBackupArtifactFiles,
@@ -270,7 +272,24 @@ export async function createGitBackup(params: {
   now?: Date;
   gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
-  for (const database of params.databases) {
+  const databases = [...params.databases];
+  if (params.all) {
+    const { createConfigIO } = await import("../config/io.js");
+    const { config } = await createConfigIO({
+      observe: false,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+    }).readConfigFileSnapshot();
+    for (const file of await discoverBackupDatabasePaths({ stateDir: params.stateDir, config })) {
+      if (
+        !databases.some((database) => database.path === file) &&
+        readBackupEngine(file).engine === "postgres"
+      ) {
+        databases.push({ path: file, identity: { role: "generic", id: "workboard" } });
+      }
+    }
+  }
+  for (const database of databases) {
     assertNotUpdateCapturePath(database.path, params.stateDir);
   }
   const repositoryPath = path.resolve(params.repositoryPath);
@@ -288,15 +307,19 @@ export async function createGitBackup(params: {
   const warnings: string[] = [];
   const updates: GitBackupScopeUpdate[] = [];
   try {
-    for (const [index, database] of params.databases.entries()) {
+    for (const [index, database] of databases.entries()) {
       const outputPath = path.join(staging.dir, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
       const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
+      let postgres: boolean;
       try {
-        await createOpenClawSnapshotCopy({
-          database: { ...database, path: await fs.realpath(database.path) },
-          targetPath: copyPath,
-        });
+        postgres = readBackupEngine(database.path).engine === "postgres";
+        if (!postgres) {
+          await createOpenClawSnapshotCopy({
+            database: { ...database, path: await fs.realpath(database.path) },
+            targetPath: copyPath,
+          });
+        }
       } catch (error) {
         if (!params.all || database.identity.role !== "agent") {
           throw error;
@@ -308,9 +331,10 @@ export async function createGitBackup(params: {
       }
       manifests.push(
         await dumpGitBackupDatabase({
-          snapshotPath: copyPath,
+          snapshotPath: postgres ? database.path : copyPath,
           outputPath,
           identity: database.identity,
+          physicalEngine: postgres ? "postgres" : "sqlite",
           excludeSecrets: params.excludeSecrets,
         }),
       );

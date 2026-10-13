@@ -278,7 +278,7 @@ export const placementLifecycleOperations = {
         throw new Error(`Worker session placement ${input.sessionId} changed before retirement`);
       }
       return retired
-        ? { sessionId: input.sessionId, retired: input.expectedState }
+        ? { sessionId: input.sessionId, retired: input.expectedState, retiredIdentity: retired }
         : { sessionId: input.sessionId, changed: false };
     },
   ),

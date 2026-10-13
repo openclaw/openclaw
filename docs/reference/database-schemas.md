@@ -101,6 +101,15 @@ does not redirect that operation to the replacement file; the next admission or
 open detects it through the database lifecycle owner. Commit authority checks and
 Doctor's explicit verification remain in place.
 
+Fresh agent databases install the current canonical schema directly, without
+running legacy migration discovery or repairing indexes that were just created.
+After the creation transaction commits, the schema owner publishes the admitted
+catalog and canonical-validation facts for later opens and workers. Tracked DDL
+and rollback still invalidate those facts; existing databases retain their first
+admission and migration checks. Connection lock timeouts are assigned through
+the shared per-handle owner so repeated setup does not repeat the PRAGMA.
+Schemas, stored bytes, and upgrade or downgrade behavior are unchanged.
+
 Chat input actors reuse their native owner’s admitted physical identity and
 canonical location, without queuing another writer reservation just to acquire
 the actor. Cold owners still prepare their database identity first. Captured
@@ -153,6 +162,11 @@ Closing a connection clears its prepared statements and row caches. Confirmed cl
 retains the physical database's completed validation facts for later opens in the
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
+
+The shared-state reader pool keeps its first worker warm for the normal handle
+idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+Retirement uses the pool's existing task and native-resource settlement so an
+active read or retained lease is not interrupted.
 
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The

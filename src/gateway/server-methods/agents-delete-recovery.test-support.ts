@@ -293,7 +293,7 @@ export function registerAgentDeleteRollbackTests(harness: AgentDeleteRecoveryHar
     ]);
     expect(mocks.beginAgentDeletionRollback).toHaveBeenCalledOnce();
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(2);
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(1);
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 

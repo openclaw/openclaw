@@ -194,6 +194,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
+      "dist/extensions/workboard/src/workboard-schema.postgres.sql",
     ]);
     expect(payload.sources).not.toContain(
       "extensions/diffs-language-pack/assets/viewer-runtime.js",

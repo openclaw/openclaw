@@ -80,6 +80,7 @@ async function customEntry() {
   const picker = pickers[0]!;
   await picker.updateComplete;
   const root = picker;
+  root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
   flush();
   return {
@@ -174,8 +175,13 @@ describe("transcript message reactions", () => {
   it("resets a closed custom picker without moving focus into its hidden palette", async () => {
     const { root } = await customEntry();
     const nextControl = host.appendChild(document.createElement("button"));
+    const hidden = new Promise<void>((resolve) => {
+      root
+        .querySelector(".chat-reaction-picker")!
+        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     nextControl.focus();
-    root.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+    await hidden;
     flush();
     expect(root.querySelector("input")).toBeNull();
     expect(document.activeElement).toBe(nextControl);

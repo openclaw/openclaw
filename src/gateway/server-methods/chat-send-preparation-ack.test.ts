@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
@@ -40,6 +41,12 @@ const createFixture = useBrowserFollowupFixture();
 
 it("acknowledges staged chat input and joins its terminal disposition without host pending-input writes", async () => {
   const fixture = await createFixture();
+  let clock = 0;
+  using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
+  using log = vi.spyOn(fixture.context.logGateway, "info");
+  fixture.beforeApprove.mockImplementation(() => {
+    clock = 1_400;
+  });
   let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
   const sql = observeHostDataSql();
   try {
@@ -74,6 +81,10 @@ it("acknowledges staged chat input and joins its terminal disposition without ho
   expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
     items: [{ state: "cancelled", runId: fixture.params.idempotencyKey }],
   });
+  const requestTiming = log.mock.calls.find(([message]) => message.includes("stage=request"))?.[0];
+  expect(requestTiming).toContain("detail.persist.stage=1400ms");
+  expect(requestTiming).toContain("detail.admission.work=0ms");
+  expect(requestTiming).toContain("detail.admission.revalidate=0ms");
 });
 
 it("retries a failed custody write with the same request identity without acknowledging lost input", async () => {
@@ -120,7 +131,7 @@ it("retries a failed custody write with the same request identity without acknow
   }
 });
 
-it.for(["durable", "native-incognito"] as const)(
+it.for(["durable", "memory"] as const)(
   "acknowledges %s chat input while unrelated history cannot dispatch",
   async (storage, { signal }) => {
     const fixture = await createFixture({ active: false, storage });
@@ -152,7 +163,7 @@ it.for(["durable", "native-incognito"] as const)(
     const respond = vi.fn<RespondFn>((ok) => {
       if (ok) {
         entryAtAck = loadSessionEntry(fixture.scope);
-        transcriptAtAck = loadTranscriptEventsSync(fixture.scope);
+        transcriptAtAck = fixture.readTranscript();
       }
       acknowledged.resolve();
     });
@@ -174,7 +185,7 @@ it.for(["durable", "native-incognito"] as const)(
         lifecycleRunId: fixture.params.idempotencyKey,
         restartRecoveryDeliveryRunId: fixture.params.idempotencyKey,
         restartRecoveryDeliverySourceRunId: fixture.params.idempotencyKey,
-        ...(storage === "native-incognito" ? { incognito: true } : {}),
+        ...(storage === "memory" ? { incognito: true } : {}),
       });
       expect(transcriptAtAck).toHaveLength(fixture.activeTranscript.length + 1);
       expect(transcriptAtAck?.at(-1)).toMatchObject({

@@ -2,11 +2,14 @@
 // caching behavior, delivery context, and policy filtering.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
@@ -346,6 +349,11 @@ function expectPayloadNotice(respond: ReturnType<typeof vi.fn>, id: string) {
 }
 
 describe("tools.effective handler", () => {
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     for (const mock of Object.values(runtimeMocks)) {
@@ -395,6 +403,47 @@ describe("tools.effective handler", () => {
       "invalid tools.effective params",
     );
     expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("uses memory session facts and refuses inventory after its captured owner closes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/effective-tools");
+    const sessionKey = "agent:main:dashboard:incognito-tools";
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: { entry: { sessionId: "private-tools", updatedAt: 1, incognito: true } },
+            },
+            { assertCurrent() {}, authorize() {} },
+          )
+        ).kind,
+      ).toBe("committed");
+      const first = createInvokeParams({ sessionKey });
+      await first.invoke();
+      expect(firstRespondCall(first.respond)?.[0]).toBe(true);
+      expect(resolveEffectiveToolInventoryArg()?.sessionId).toBe("private-tools");
+      expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
+      testing.resetToolsEffectiveCacheForTest();
+      runtimeMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
+        memorySessionActorOwners.closeDatabase(owner);
+        return makeCoreInventory();
+      });
+      const second = createInvokeParams({ sessionKey });
+      await second.invoke();
+      expect(firstRespondCall(second.respond)?.[0]).toBe(false);
+    } finally {
+      await actor.release();
+    }
   });
 
   it("rejects unknown session keys", async () => {
@@ -772,29 +821,33 @@ describe("tools.effective handler", () => {
   });
 
   it("loads a bare session through the persisted fixed-store owner", async () => {
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
+    const cfg: OpenClawConfig = {
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+        defaults: { sessionStore: { agentId: "ops" } },
+      },
+    };
+    const entry = { sessionId: "session-ops-global", updatedAt: 1 };
+    runtimeMocks.loadSessionEntry.mockReturnValue({
+      cfg,
+      agentId: "ops",
       canonicalKey: "global",
-      entry: { sessionId: "session-ops-global", updatedAt: 1 },
+      entry,
+      store: { global: entry },
       storePath: "/tmp/shared-sessions.sqlite",
-    } as never);
-    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("ops");
+      storeKeys: ["global"],
+      legacyKey: undefined,
+    });
+    runtimeMocks.resolveSessionAgentId.mockReturnValue("ops");
     runtimeMocks.resolveEffectiveToolInventory.mockResolvedValueOnce(makeCoreInventory());
 
-    const { respond, invoke } = createInvokeParams(
-      { sessionKey: "global" },
-      {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
-    );
+    const { respond, invoke } = createInvokeParams({ sessionKey: "global" }, cfg);
     await invoke();
 
     expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
     expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.agentId).toBe("ops");
   });
 });
