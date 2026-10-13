@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import uiPackageConfig from "../ui/vitest.config.ts";
 import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 const WEB_AWESOME = "@awesome.me/webawesome";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function inlinePatterns(config: unknown): Array<string | RegExp> {
   if (!isRecord(config) || !isRecord(config.test) || !isRecord(config.test.server)) {
