@@ -125,9 +125,7 @@ export function registerSessionOwnershipAvatarTests() {
     const carolChip = sidebar.querySelector(
       '[data-session-key="agent:main:carol"] .session-owner-chip',
     );
-    expect(carolChip?.querySelector("img")?.getAttribute("src")).toBe(
-      "/api/users/profile-carol/avatar",
-    );
+    expect(carolChip?.querySelector("img")).toBeNull();
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
@@ -151,6 +149,7 @@ export function registerSessionOwnershipAvatarTests() {
       result.owners = [
         { type, id: "profile-lobster", label },
         { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-bob", label: "Bob" },
       ];
 
       const { sidebar } = await mountSidebar(gateway, harness.sessions);

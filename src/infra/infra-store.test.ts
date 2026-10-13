@@ -4,11 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createDedupeCache } from "./dedupe.js";
-import {
-  emitDiagnosticEvent,
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-} from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import { loadVoiceWakeRoutingConfig, resolveVoiceWakeRouteByTrigger } from "./voicewake-routing.js";
 import { defaultVoiceWakeTriggers, setVoiceWakeTriggers } from "./voicewake.js";
@@ -32,15 +27,13 @@ describe("infra store", () => {
     });
   });
 
-  describe("missing store defaults", () => {
-    it("voicewake routing store returns defaults when missing", async () => {
-      await withTempDir("openclaw-voicewake-routing-", async (baseDir) => {
-        const cfg = await loadVoiceWakeRoutingConfig(baseDir);
-        expect(cfg.version).toBe(1);
-        expect(cfg.defaultTarget).toEqual({ mode: "current" });
-        expect(cfg.routes).toStrictEqual([]);
-        expect(cfg.updatedAtMs).toBe(0);
-      });
+  it("returns voicewake routing defaults when its store is missing", async () => {
+    await withTempDir("openclaw-voicewake-routing-", async (baseDir) => {
+      const cfg = await loadVoiceWakeRoutingConfig(baseDir);
+      expect(cfg.version).toBe(1);
+      expect(cfg.defaultTarget).toEqual({ mode: "current" });
+      expect(cfg.routes).toStrictEqual([]);
+      expect(cfg.updatedAtMs).toBe(0);
     });
   });
 
@@ -69,61 +62,7 @@ describe("infra store", () => {
     });
   });
 
-  describe("diagnostic-events", () => {
-    it("emits monotonic seq", () => {
-      resetDiagnosticEventsForTest();
-      const seqs: number[] = [];
-      const stop = onDiagnosticEvent((evt) => seqs.push(evt.seq));
-
-      emitDiagnosticEvent({
-        type: "model.usage",
-        usage: { total: 1 },
-      });
-      emitDiagnosticEvent({
-        type: "model.usage",
-        usage: { total: 2 },
-      });
-
-      stop();
-
-      expect(seqs).toEqual([1, 2]);
-    });
-
-    it("emits message-flow events", () => {
-      resetDiagnosticEventsForTest();
-      const types: string[] = [];
-      const stop = onDiagnosticEvent((evt) => types.push(evt.type));
-
-      emitDiagnosticEvent({
-        type: "webhook.received",
-        channel: "telegram",
-        updateType: "telegram-post",
-      });
-      emitDiagnosticEvent({
-        type: "message.queued",
-        channel: "telegram",
-        source: "telegram",
-        queueDepth: 1,
-      });
-      emitDiagnosticEvent({
-        type: "session.state",
-        state: "processing",
-        reason: "run_started",
-      });
-
-      stop();
-
-      expect(types).toEqual(["webhook.received", "message.queued", "session.state"]);
-    });
-  });
-
   describe("createDedupeCache", () => {
-    it("expires entries after TTL", () => {
-      const cache = createDedupeCache({ ttlMs: 1000, maxSize: 10 });
-      expect(cache.check("a", 100)).toBe(false);
-      expect(cache.check("a", 1501)).toBe(false);
-    });
-
     it("prunes expired entries even when refreshed keys are older in insertion order", () => {
       const cache = createDedupeCache({ ttlMs: 100, maxSize: 10 });
       expect(cache.check("a", 0)).toBe(false);

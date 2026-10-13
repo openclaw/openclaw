@@ -12,11 +12,15 @@ import {
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { definedFields } from "../record-fields.js";
 import {
   BLOCKED_TOO_LONG_MS,
   MAX_CARD_ATTEMPTS,
+  MAX_CARD_COMMENTS,
   MAX_CARD_EVENTS,
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
   READY_STRANDED_MS,
   RUNNING_HEARTBEAT_STALE_MS,
 } from "./store-constants.js";
@@ -98,7 +102,7 @@ export function syncExecutionAttemptMetadata(
   }
   const previousFailed =
     existingAttempt?.status === "blocked" || existingAttempt?.status === "failed";
-  const attemptFailed = attemptStatus === "blocked" || attemptStatus === "failed";
+  const attemptFailed = attemptStatus === "blocked";
   const failureCount = attemptFailed
     ? previousFailed
       ? metadata.failureCount
@@ -128,6 +132,18 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
+export function appendComment(
+  comments: WorkboardMetadata["comments"],
+  body: string | undefined,
+  now?: number,
+): WorkboardMetadata["comments"] {
+  return body
+    ? [...(comments ?? []), { id: randomUUID(), body, createdAt: now ?? Date.now() }].slice(
+        -MAX_CARD_COMMENTS,
+      )
+    : comments;
+}
+
 function metadataEntriesChanged(
   existing: WorkboardCard,
   next: WorkboardCard,
@@ -150,17 +166,10 @@ function metadataEntriesChanged(
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  if (!isRecord(metadata) || !Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
     return undefined;
   }
-  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
-    return undefined;
-  }
-  const sourceUpdatedAt = normalizeTimestamp(
-    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
-    0,
-  );
-  return sourceUpdatedAt;
+  return normalizeTimestamp(metadata.lifecycleStatusSourceUpdatedAt, 0);
 }
 
 function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
@@ -245,21 +254,16 @@ export function updateEvent(
     const existingAttempts = existing.metadata?.attempts ?? [];
     const nextAttempts = next.metadata?.attempts ?? [];
     const latestAttempt = nextAttempts.at(-1);
-    if (nextAttempts.length > existingAttempts.length) {
+    const attemptStarted = nextAttempts.length > existingAttempts.length;
+    const previousAttempt =
+      !attemptStarted && latestAttempt
+        ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
+        : undefined;
+    if (attemptStarted || (latestAttempt && previousAttempt?.status !== latestAttempt.status)) {
       return {
-        kind: "attempt_started",
+        kind: attemptStarted ? "attempt_started" : "attempt_updated",
         ...(latestAttempt?.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
         ...(latestAttempt?.runId ? { runId: latestAttempt.runId } : {}),
-      };
-    }
-    const previousAttempt = latestAttempt
-      ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
-      : undefined;
-    if (latestAttempt && previousAttempt?.status !== latestAttempt.status) {
-      return {
-        kind: "attempt_updated",
-        ...(latestAttempt.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
-        ...(latestAttempt.runId ? { runId: latestAttempt.runId } : {}),
       };
     }
     return {
@@ -283,10 +287,10 @@ export function updateEvent(
       ? { kind: "attachment_added" }
       : { kind: "edited" };
   }
-  if (existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state) {
-    return { kind: "orchestration" };
-  }
-  if (metadataEntriesChanged(existing, next, "workerLogs")) {
+  if (
+    existing.metadata?.workerProtocol?.state !== next.metadata?.workerProtocol?.state ||
+    metadataEntriesChanged(existing, next, "workerLogs")
+  ) {
     return { kind: "orchestration" };
   }
   if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
@@ -314,23 +318,7 @@ export function updateEvent(
 }
 
 export function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
-  const next = { ...card };
-  for (const key of [
-    "notes",
-    "agentId",
-    "sessionKey",
-    "runId",
-    "taskId",
-    "sourceUrl",
-    "execution",
-    "startedAt",
-    "completedAt",
-    "metadata",
-  ] as const) {
-    if (next[key] === undefined) {
-      delete next[key];
-    }
-  }
+  const next = definedFields({ ...card });
   if (metadataIsEmpty(next.metadata)) {
     delete next.metadata;
   }
@@ -566,7 +554,7 @@ export function buildWorkerContext(
   const parentResults = cardParentIds(card)
     .map((parentId) => cardsById.get(parentId))
     .filter((parent): parent is WorkboardCard => parent !== undefined && parent.status === "done")
-    .slice(-6);
+    .slice(-MAX_WORKER_CONTEXT_PARENTS);
   appendWorkerContextSection(
     lines,
     "Parent results",
@@ -585,7 +573,7 @@ export function buildWorkerContext(
               entry.status === "done",
           )
           .toSorted((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, 5)
+          .slice(0, MAX_WORKER_CONTEXT_RECENT_CARDS)
       : [];
   appendWorkerContextSection(
     lines,
@@ -625,18 +613,19 @@ export function buildWorkerContext(
   return lines.join("\n");
 }
 
-export function cardParentIds(card: WorkboardCard): string[] {
+function cardDependencyIds(card: WorkboardCard, type: "parent" | "child"): string[] {
   return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "parent" && link.targetCardId)
+    .filter((link) => link.type === type && link.targetCardId)
     .map((link) => link.targetCardId!)
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
+export function cardParentIds(card: WorkboardCard): string[] {
+  return cardDependencyIds(card, "parent");
+}
+
 export function cardChildIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "child" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return cardDependencyIds(card, "child");
 }
 
 export function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {

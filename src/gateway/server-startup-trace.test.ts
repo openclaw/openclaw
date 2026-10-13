@@ -33,15 +33,63 @@ vi.mock("node:perf_hooks", async (importOriginal) => {
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 
 describe("gateway startup trace", () => {
+  const originalArgv = process.argv;
   beforeEach(() => {
     eventLoopDelay.instances.length = 0;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    process.argv = originalArgv;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it.each([
+    { updateCanary: false, markers: 2 },
+    { updateCanary: true, markers: 0 },
+    { updateCanary: true, markers: 1 },
+    { updateCanary: true, markers: 2 },
+    { updateCanary: true, markers: 3 },
+  ])(
+    "reports completed Gateway milestones only to a supporting updater ($updateCanary, $markers)",
+    async ({ updateCanary, markers }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+      process.argv = [
+        "node",
+        "openclaw",
+        "gateway",
+        "run",
+        ...Array.from({ length: markers }, () => "--update-canary"),
+      ];
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const trace = createGatewayStartupTrace({ info: vi.fn() } as never, 0, updateCanary);
+      trace.detail("state.schema-preflight", [["agents", 2]]);
+      await trace.measure("config.snapshot", async () => {});
+      await expect(
+        trace.measure("plugins.bootstrap", async () => {
+          throw new Error("plugin startup failed");
+        }),
+      ).rejects.toThrow("plugin startup failed");
+      trace.mark("http.bound");
+      trace.mark("tick.1");
+      await trace.measure("plugins.bootstrap.tick.2", async () => {});
+      trace.close();
+      trace.mark("ready");
+
+      const progress = stderr.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.startsWith("openclaw-update-canary-progress: "));
+      expect(progress).toEqual(
+        updateCanary && markers >= 2
+          ? [
+              "openclaw-update-canary-progress: config.snapshot\n",
+              "openclaw-update-canary-progress: http.bound\n",
+            ]
+          : [],
+      );
+    },
+  );
 
   it("carries bootstrap step counts to ready without reusing them on restart", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "1");

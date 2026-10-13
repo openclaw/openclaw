@@ -1,84 +1,106 @@
 /** Private-local SDK subpath for memory session transcript helpers. */
+import { isMainThread } from "node:worker_threads";
 import {
-  listSessionParticipantsReadOnly,
-  listSessionTranscriptArchivesReadOnly as loadArchivedSessions,
+  buildSessionEntry as buildSessionEntryFromHost,
+  listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
+  readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
+} from "../../packages/memory-host-sdk/src/engine-sessions.js";
+import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
+import {
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
-  type SessionTranscriptInstance,
 } from "../config/sessions/session-accessor.js";
-import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { listSessionTranscriptInstancesInWorker } from "../config/sessions/session-history.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import {
+  projectSessionMetadata,
+  readMemorySessionTargets,
+} from "../config/sessions/session-memory-targets.js";
+import type {
+  MemorySessionSelectors,
+  MemorySessionTarget,
+} from "../config/sessions/session-memory-targets.types.js";
+import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-export { loadArchivedSessions };
+export type {
+  MemorySessionSelectors,
+  MemorySessionTarget,
+} from "../config/sessions/session-memory-targets.types.js";
+
+/** @deprecated Use loadArchivedSessionsAsync; removed at the next Plugin SDK major. */
+export function loadArchivedSessions(
+  params: Parameters<typeof listSessionTranscriptArchivesReadOnly>[0],
+) {
+  warnPluginSdkDeprecation({
+    family: "memory-session-sync-inventory",
+    method: "loadArchivedSessions",
+    replacement: "loadArchivedSessionsAsync",
+  });
+  assertBoundIncognitoMemorySyncAccess(params, "loadArchivedSessions", "loadArchivedSessionsAsync");
+  return listSessionTranscriptArchivesReadOnly(params);
+}
+export {
+  listSessionTranscriptArchivesInWorker as loadArchivedSessionsAsync,
+  resolveMemorySessionTargetsInWorker as resolveMemorySessionTargetsAsync,
+} from "../config/sessions/session-transcript-inventory-runtime.js";
 
 export {
-  buildSessionEntry,
+  buildSessionEntries,
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  isQueryStopWordToken,
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
-  listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
-  parseCanonicalSessionSyncTargetFromPath,
-  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
   sessionPathForFile,
   sessionPathForSessionIdentity,
+  statSessionEntry,
   statSessionEntrySync,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
+
+// Internal actor sources are not part of the released plugin call signatures.
+export const buildSessionEntry: (
+  absPath: string,
+  options?: Parameters<typeof buildSessionEntryFromHost>[1],
+) => ReturnType<typeof buildSessionEntryFromHost> = buildSessionEntryFromHost;
+export const listSessionTranscriptCorpusEntriesForAgent: (
+  agentId: string,
+  options?: Parameters<typeof listSessionTranscriptCorpusEntriesFromHost>[1],
+) => ReturnType<typeof listSessionTranscriptCorpusEntriesFromHost> =
+  listSessionTranscriptCorpusEntriesFromHost;
+export const readSessionResetRecallCutoff: (
+  scope: Parameters<typeof readSessionResetRecallCutoffFromHost>[0],
+) => ReturnType<typeof readSessionResetRecallCutoffFromHost> = readSessionResetRecallCutoffFromHost;
+
 export type {
-  BuildSessionEntryOptions,
   SessionFileEntry,
   SessionFileState,
   SessionTranscriptCorpusEntry,
-  SessionTranscriptCorpusOptions,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
-export type MemorySessionTarget = {
-  agentId: string;
-  sessionId: string;
-  sessionKey?: string;
-  resolution: "live" | "archived" | "unresolved";
-  hookExternalContentSource: string | null;
-  channel: string | null;
-  accountId: string | null;
-  chatType: string | null;
-  createdAt?: number;
-  participants: SessionParticipantIdentity[];
-};
-
-export type MemorySessionSelectors = {
-  agentId: string;
-  storePath?: string;
-  sessionIds?: readonly string[];
-  hookSources?: readonly string[];
-  participants?: readonly string[];
-  since?: string | number;
-};
-
-function projectSessionMetadata(
-  instance: SessionTranscriptInstance,
-  participants: SessionParticipantIdentity[] = [],
-): MemorySessionTarget {
-  return {
-    agentId: instance.agentId,
-    sessionId: instance.sessionId,
-    sessionKey: instance.sessionKey,
-    resolution: "live",
-    ...instance.sourceMetadata,
-    participants,
-  };
-}
-
-/** Read authoritative admission facts without creating a missing agent database. */
+/** @deprecated Use loadMemorySessionMetadataAsync; removed at the next Plugin SDK major. */
 export function loadMemorySessionMetadata(params: {
   agentId: string;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
 }): MemorySessionTarget | undefined {
+  if (isMainThread) {
+    warnPluginSdkDeprecation({
+      family: "memory-session",
+      method: "loadMemorySessionMetadata",
+      replacement: "loadMemorySessionMetadataAsync",
+    });
+  }
+  assertBoundIncognitoMemorySyncAccess(
+    params,
+    "loadMemorySessionMetadata",
+    "loadMemorySessionMetadataAsync",
+  );
   const instance = listSessionTranscriptInstances(params, {
     includeAllWindows: true,
     sessionId: params.sessionId,
@@ -90,79 +112,61 @@ export function loadMemorySessionMetadata(params: {
   return instance ? projectSessionMetadata(instance) : undefined;
 }
 
-/** Resolve explicit memory-forget selectors against authoritative session owners. */
-export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
-  const sessionIds = [...new Set(params.sessionIds ?? [])];
-  const hookSources = [...new Set(params.hookSources ?? [])];
-  const participants = [...new Set(params.participants ?? [])];
-  if (sessionIds.length === 0 && hookSources.length === 0 && participants.length === 0) {
+/** Read the selected transcript's recorded source metadata through its owner. */
+export async function loadMemorySessionMetadataAsync(
+  params: Parameters<typeof loadMemorySessionMetadata>[0],
+): Promise<MemorySessionTarget | undefined> {
+  return (await loadMemorySessionMetadataBatchAsync({ ...params, sessions: [params] }))[0];
+}
+
+/** One history read resolves the complete ingestion batch. */
+export async function loadMemorySessionMetadataBatchAsync(params: {
+  agentId: string;
+  storePath?: string;
+  sessions: readonly { sessionId: string; sessionKey?: string }[];
+}): Promise<MemorySessionTarget[]> {
+  const selectors = new Map<string, Set<string | undefined>>();
+  for (const { sessionId, sessionKey } of params.sessions) {
+    const keys = selectors.get(sessionId) ?? new Set<string | undefined>();
+    keys.add(sessionKey);
+    selectors.set(sessionId, keys);
+  }
+  if (selectors.size === 0) {
     return [];
   }
-  const since = typeof params.since === "string" ? Date.parse(params.since) : params.since;
-  if (since !== undefined && !Number.isFinite(since)) {
-    throw new Error(`Invalid memory session date: ${params.since}`);
-  }
-  const resolvedSelectors = new Set<string>();
-  const participantRecords = listSessionParticipantsReadOnly(params);
-  const targets = new Map<string, MemorySessionTarget>();
-  const instances = listSessionTranscriptInstances(params, { includeAllWindows: true })
-    .filter((instance) => instance.agentId === normalizeAgentId(params.agentId))
-    .toSorted(
-      (left, right) =>
-        left.sourceMetadata.createdAt - right.sourceMetadata.createdAt ||
-        left.sessionId.localeCompare(right.sessionId),
-    );
-  for (const instance of instances) {
-    const identities = (participantRecords.get(instance.sessionKey) ?? []).map(
-      ({ identity }) => identity,
-    );
-    const source = instance.sourceMetadata.hookExternalContentSource;
-    if (
-      !sessionIds.includes(instance.sessionId) &&
-      !sessionIds.includes(instance.sessionKey) &&
-      !(source && hookSources.includes(source)) &&
-      !identities.some((identity) => participants.includes(identity.id))
-    ) {
-      continue;
-    }
-    resolvedSelectors.add(instance.sessionId);
-    resolvedSelectors.add(instance.sessionKey);
-    if (since === undefined || instance.sourceMetadata.createdAt >= since) {
-      targets.set(instance.sessionId, projectSessionMetadata(instance, identities));
-    }
-  }
-  for (const archive of loadArchivedSessions({ ...params, sessionIds })) {
-    resolvedSelectors.add(archive.sessionId);
-    resolvedSelectors.add(archive.sessionKey);
-    if (targets.has(archive.sessionId) || (since !== undefined && archive.createdAt < since)) {
-      continue;
-    }
-    targets.set(archive.sessionId, {
-      agentId: params.agentId,
-      sessionId: archive.sessionId,
-      sessionKey: archive.sessionKey,
-      resolution: "archived",
-      hookExternalContentSource: null,
-      channel: null,
-      accountId: null,
-      chatType: null,
-      createdAt: archive.createdAt,
-      participants: [],
-    });
-  }
-  for (const sessionId of sessionIds) {
-    if (!resolvedSelectors.has(sessionId)) {
-      targets.set(sessionId, {
-        agentId: params.agentId,
-        sessionId,
-        resolution: "unresolved",
-        hookExternalContentSource: null,
-        channel: null,
-        accountId: null,
-        chatType: null,
-        participants: [],
-      });
-    }
-  }
-  return [...targets.values()];
+  const agentId = normalizeAgentId(params.agentId);
+  const scope = { agentId, storePath: params.storePath };
+  const sessionIds = [...selectors.keys()];
+  const metadata =
+    getSessionActorStorageBinding(scope) || captureIncognitoSessionSource(scope)
+      ? (await resolveMemorySessionTargetsInWorker({ ...scope, sessionIds })).filter(
+          (entry) => entry.resolution === "live",
+        )
+      : (
+          await listSessionTranscriptInstancesInWorker(
+            { ...scope, projection: "list" },
+            { includeAllWindows: true, sessionIds },
+          )
+        ).map((instance) => projectSessionMetadata(instance));
+  return metadata.filter(
+    (entry) =>
+      entry.agentId === agentId &&
+      (selectors.get(entry.sessionId)?.has(undefined) ||
+        selectors.get(entry.sessionId)?.has(entry.sessionKey)),
+  );
+}
+
+/** @deprecated Use resolveMemorySessionTargetsAsync; removed at the next Plugin SDK major. */
+export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
+  warnPluginSdkDeprecation({
+    family: "memory-session-sync-inventory",
+    method: "resolveMemorySessionTargets",
+    replacement: "resolveMemorySessionTargetsAsync",
+  });
+  assertBoundIncognitoMemorySyncAccess(
+    params,
+    "resolveMemorySessionTargets",
+    "resolveMemorySessionTargetsAsync",
+  );
+  return readMemorySessionTargets(params);
 }

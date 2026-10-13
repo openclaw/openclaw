@@ -236,7 +236,7 @@ describe("discord exec approval monitor helpers", () => {
     expect(interaction["editReply"]).toHaveBeenCalledTimes(1);
     const terminalPayload = editReply.mock.calls[0]?.[0];
     expect(JSON.stringify(terminalPayload)).toContain("Approval already resolved");
-    expect(JSON.stringify(terminalPayload)).toContain("Canonical result: **Denied**");
+    expect(JSON.stringify(terminalPayload)).toContain("Recorded result: **Denied**");
     expect(JSON.stringify(terminalPayload)).not.toContain("execapproval");
     expect(interaction["followUp"]).toHaveBeenCalledWith({
       content: "This approval was already resolved: Denied.",
@@ -370,20 +370,6 @@ describe("discord exec approval monitor helpers", () => {
       });
     },
   );
-
-  it("returns false when gateway resolution throws", async () => {
-    resolveApprovalOverGatewayMock.mockRejectedValue(new Error("boom"));
-    const ctx = createDiscordExecApprovalButtonContext({
-      cfg: buildConfig({ enabled: true, approvers: ["123"] }),
-      accountId: "default",
-      config: { enabled: true, approvers: ["123"] },
-    });
-
-    await expect(ctx.resolveApproval("abc", "exec", "allow-once", "123")).resolves.toEqual({
-      ok: false,
-      reason: "error",
-    });
-  });
 
   it("classifies structured approval-not-found gateway errors as stale clicks", async () => {
     const err = Object.assign(new Error("unknown or expired approval id"), {

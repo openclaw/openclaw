@@ -1,10 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  bytesToBase64,
-  RealtimeTalkMediaStreamMeter,
-  RealtimeTalkPcmOutputQueue,
-} from "./audio.ts";
+import { bytesToBase64 } from "../../../lib/bytes-base64.ts";
+import { RealtimeTalkMediaStreamMeter, RealtimeTalkPcmOutputQueue } from "./audio.ts";
 
 class MockAudioBufferSource {
   buffer: unknown = null;
@@ -168,11 +165,22 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     expect(queue.isPlaying).toBe(true);
   });
 
+  it("queues a thirty-second generated reply without cancelling its tail", () => {
+    const context = new MockOutputAudioContext();
+    const queue = new RealtimeTalkPcmOutputQueue();
+    const frame = silentPcmBase64(480);
+    for (let index = 0; index < 1_500; index += 1) {
+      expect(queue.play(frame, context as unknown as AudioContext, 24_000)).toBe("queued");
+    }
+    expect(queue.queuedUntil).toBeCloseTo(30);
+    expect(context.sources).toHaveLength(1_500);
+  });
+
   it("bounds a frozen AudioContext by queued seconds before allocating another source", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
 
-    expect(queue.play(silentPcmBase64(600), context as unknown as AudioContext, 100)).toBe(
+    expect(queue.play(silentPcmBase64(5_600), context as unknown as AudioContext, 100)).toBe(
       "queued",
     );
     expect(queue.play(silentPcmBase64(500), context as unknown as AudioContext, 100)).toBe(
@@ -180,14 +188,16 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     );
 
     expect(context.sources).toHaveLength(1);
-    expect(queue.queuedUntil).toBe(6);
+    expect(queue.queuedUntil).toBe(56);
   });
 
   it("rejects an oversized frame before base64 decoding", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
 
-    expect(queue.play("!".repeat(3_000), context as unknown as AudioContext, 100)).toBe("overflow");
+    expect(queue.play("!".repeat(30_000), context as unknown as AudioContext, 100)).toBe(
+      "overflow",
+    );
     expect(context.sources).toHaveLength(0);
   });
 
@@ -215,9 +225,9 @@ describe("RealtimeTalkPcmOutputQueue", () => {
       }
     }
 
-    expect(queued).toBe(320);
-    expect(overflowed).toBe(9_680);
-    expect(context.sources).toHaveLength(320);
+    expect(queued).toBe(4_096);
+    expect(overflowed).toBe(5_904);
+    expect(context.sources).toHaveLength(4_096);
   });
 
   it("releases source ownership on ended", () => {
@@ -225,7 +235,7 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     const queue = new RealtimeTalkPcmOutputQueue();
     const chunk = silentPcmBase64(1);
 
-    for (let index = 0; index < 320; index += 1) {
+    for (let index = 0; index < 4_096; index += 1) {
       expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("queued");
     }
     expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("overflow");
@@ -233,7 +243,7 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     context.sources[0]?.emitEnded();
 
     expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("queued");
-    expect(context.sources).toHaveLength(321);
+    expect(context.sources).toHaveLength(4_097);
   });
 
   it("stops idempotently and isolates late ended events from replacement playback", () => {

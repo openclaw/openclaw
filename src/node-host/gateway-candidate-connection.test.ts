@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     request: ReturnType<typeof vi.fn>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
 }));
@@ -18,6 +19,7 @@ vi.mock("../gateway/client.js", () => ({
       request: vi.fn(async () => ({ url: options.url })),
       start: vi.fn(),
       stop: vi.fn(),
+      stopAndWait: vi.fn(async () => {}),
       updateNodeManifest: vi.fn(),
     };
     mocks.options.push(options);
@@ -176,10 +178,38 @@ describe("gateway candidate connection", () => {
       connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
-    connection.stop();
+    await connection.stop();
     await Promise.resolve();
 
     expect(mocks.clients).toHaveLength(1);
+  });
+
+  it("does not start a connection when readiness completes after stop", async () => {
+    const { connection } = createConnection();
+
+    await connection.stop();
+    connection.start();
+
+    expect(mocks.clients[0]?.start).not.toHaveBeenCalled();
+  });
+
+  it("preserves a retired candidate's drain failure during shutdown", async () => {
+    const { connection } = createConnection();
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+    const retiredFailure = new Error("retired candidate storage failed");
+    mocks.clients[0]?.stopAndWait.mockRejectedValueOnce(retiredFailure);
+
+    await expect(Promise.resolve(connection.stop())).rejects.toBe(retiredFailure);
+    await expect(connection.stop()).rejects.toBe(retiredFailure);
+    expect(mocks.clients[0]?.stopAndWait).toHaveBeenCalledOnce();
+    expect(mocks.clients[1]?.stopAndWait).toHaveBeenCalledOnce();
   });
 
   it("never carries origin-bound Access credentials to another candidate host", async () => {

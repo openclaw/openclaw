@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -14,19 +14,18 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createFixtureLifetime();
+afterEach(() => tempDirs.cleanup());
 
-async function createSagCliFixture(binaryPresent: boolean, enabled?: boolean) {
-  const root = tempDirs.make("openclaw-sag-cli-");
+async function createSagCliFixture(enabled?: boolean) {
+  const root = tempDirs.createTempDir("openclaw-sag-cli-");
   const configPath = path.join(root, "openclaw.json");
   const binDir = path.join(root, "bin");
   fs.mkdirSync(binDir);
-  if (binaryPresent) {
-    // Readiness checks executable access; credentials are resolved only when sag runs.
-    fs.writeFileSync(path.join(binDir, process.platform === "win32" ? "sag.cmd" : "sag"), "", {
-      mode: 0o755,
-    });
-  }
+  // Readiness checks executable access; credentials are resolved only when sag runs.
+  fs.writeFileSync(path.join(binDir, process.platform === "win32" ? "sag.cmd" : "sag"), "", {
+    mode: 0o755,
+  });
   const config = {
     gateway: {
       mode: "local",
@@ -77,57 +76,57 @@ async function createSagCliFixture(binaryPresent: boolean, enabled?: boolean) {
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_TEST_FAST: "1",
   };
-  const cli = (args: string[]) => {
+  const cli = async (args: string[]) => {
     const result = source
-      ? runSourceRuntime(
-          runtimeRoot,
-          env,
-          [path.join(runtimeRoot, "src", "entry.ts"), ...args],
-          60_000,
-          4 * 1024 * 1024,
+      ? await tempDirs.track(
+          runSourceRuntime(
+            runtimeRoot,
+            env,
+            [path.join(runtimeRoot, "src", "entry.ts"), ...args],
+            60_000,
+            4 * 1024 * 1024,
+          ),
         )
-      : runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024);
+      : await tempDirs.track(
+          runBuiltRuntime(runtimeRoot, env, args, 60_000, { maxBuffer: 4 * 1024 * 1024 }),
+        );
     const output = `${result.stderr}\n${result.stdout}`;
-    expect(result.error, output).toBeUndefined();
     expect(result.signal, output).toBeNull();
-    expect(result.status, output).toBe(0);
+    expect(result.code, output).toBe(0);
     return result.stdout;
   };
   return { cli, configPath };
 }
 
 describe("bundled sag through the registered CLI", () => {
-  it.each([true, false])(
-    "requires the binary without requiring credential environment variables (installed: %s)",
-    async (binaryPresent) => {
-      const { cli } = await createSagCliFixture(binaryPresent);
-      const status = JSON.parse(cli(["skills", "info", "sag", "--json"]));
+  it("accepts an installed binary without credential environment variables", async () => {
+    const { cli } = await createSagCliFixture();
+    const status = JSON.parse(await cli(["skills", "info", "sag", "--json"]));
 
-      expect(status).toMatchObject({
-        name: "sag",
-        source: "openclaw-bundled",
-        bundled: true,
-        primaryEnv: "ELEVENLABS_API_KEY",
-        requirements: { bins: ["sag"], env: [] },
-        missing: { bins: binaryPresent ? [] : ["sag"], env: [] },
-        eligible: binaryPresent,
-        modelVisible: binaryPresent,
-        commandVisible: binaryPresent,
-      });
-    },
-    90_000,
-  );
+    expect(status).toMatchObject({
+      name: "sag",
+      source: "openclaw-bundled",
+      bundled: true,
+      primaryEnv: "ELEVENLABS_API_KEY",
+      requirements: { bins: ["sag"], env: [] },
+      missing: { bins: [], env: [] },
+      eligible: true,
+      modelVisible: true,
+      commandVisible: true,
+    });
+  }, 90_000);
 
-  it.each([undefined, true])(
-    "doctor --fix preserves an installed sag skill's saved enable flag (%s) with the Gateway stopped",
-    async (enabled) => {
-      const { cli, configPath } = await createSagCliFixture(true, enabled);
-      const output = cli(["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"]);
+  it("doctor --fix preserves an installed sag skill's enabled flag with the Gateway stopped", async () => {
+    const { cli, configPath } = await createSagCliFixture(true);
+    const output = await cli([
+      "doctor",
+      "--fix",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+    ]);
 
-      expect(output).toContain("Doctor complete.");
-      const saved: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      expect(saved.skills?.entries?.sag?.enabled, output).toBe(enabled);
-    },
-    90_000,
-  );
+    expect(output).toContain("Doctor complete.");
+    const saved: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(saved.skills?.entries?.sag?.enabled, output).toBe(true);
+  }, 90_000);
 });

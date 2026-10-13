@@ -1,4 +1,3 @@
-// Msteams plugin module implements file consent invoke behavior.
 import { formatUnknownError } from "./errors.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -8,9 +7,6 @@ import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/**
- * Handle fileConsent/invoke activities for large file uploads.
- */
 async function handleMSTeamsFileConsentInvoke(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
@@ -37,15 +33,7 @@ async function handleMSTeamsFileConsentInvoke(
   // invoke callback is delivered to a different process.
   const inMemoryFile = getPendingUpload(uploadId);
   const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
-  const pendingFile:
-    | {
-        buffer: Buffer;
-        filename: string;
-        contentType?: string;
-        conversationId: string;
-        consentCardActivityId?: string;
-      }
-    | undefined = inMemoryFile ?? fsFile;
+  const pendingFile = inMemoryFile ?? fsFile;
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -84,26 +72,18 @@ async function handleMSTeamsFileConsentInvoke(
           fileType: consentResponse.uploadInfo.fileType,
         });
 
-        if (!pendingFile.consentCardActivityId) {
-          await context.sendActivity({
-            type: "message",
-            attachments: [fileInfoCard],
-          });
-        }
-
+        const fileActivity = { type: "message", attachments: [fileInfoCard] };
         if (pendingFile.consentCardActivityId) {
           try {
             await context.updateActivity({
+              ...fileActivity,
               id: pendingFile.consentCardActivityId,
-              type: "message",
-              attachments: [fileInfoCard],
             });
           } catch {
-            await context.sendActivity({
-              type: "message",
-              attachments: [fileInfoCard],
-            });
+            await context.sendActivity(fileActivity);
           }
+        } else {
+          await context.sendActivity(fileActivity);
         }
 
         log.info("file upload complete", {
@@ -142,7 +122,7 @@ export async function runMSTeamsFileConsentInvokeHandler(
 ): Promise<void> {
   try {
     await withRevokedProxyFallback({
-      run: async () => await handleMSTeamsFileConsentInvoke(context, log),
+      run: () => handleMSTeamsFileConsentInvoke(context, log),
       onRevoked: async () => true,
       onRevokedLog: () => {
         log.debug?.("turn context revoked during file consent invoke; skipping delayed response");

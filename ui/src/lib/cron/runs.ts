@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -12,32 +13,15 @@ import { formatUiError } from "../format-error.ts";
 import type { CronState } from "./types.ts";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
+export type CronRunsViewState = "idle" | "pending" | "failed" | "ready";
 
-function normalizeCronRunsPageMeta(params: {
-  totalRaw: unknown;
-  offsetRaw: unknown;
-  nextOffsetRaw: unknown;
-  hasMoreRaw: unknown;
-  pageCount: number;
-}) {
-  const total =
-    typeof params.totalRaw === "number" && Number.isFinite(params.totalRaw)
-      ? Math.max(0, Math.floor(params.totalRaw))
-      : params.pageCount;
-  const offset =
-    typeof params.offsetRaw === "number" && Number.isFinite(params.offsetRaw)
-      ? Math.max(0, Math.floor(params.offsetRaw))
-      : 0;
-  const hasMore =
-    typeof params.hasMoreRaw === "boolean"
-      ? params.hasMoreRaw
-      : offset + params.pageCount < Math.max(total, offset + params.pageCount);
+function normalizeCronRunsPageMeta(page: CronRunsResult, pageCount: number) {
+  const total = Math.max(0, Math.floor(asFiniteNumber(page.total) ?? pageCount));
+  const offset = Math.max(0, Math.floor(asFiniteNumber(page.offset) ?? 0));
+  const hasMore = typeof page.hasMore === "boolean" ? page.hasMore : offset + pageCount < total;
+  const next = asFiniteNumber(page.nextOffset);
   const nextOffset =
-    typeof params.nextOffsetRaw === "number" && Number.isFinite(params.nextOffsetRaw)
-      ? Math.max(0, Math.floor(params.nextOffsetRaw))
-      : hasMore
-        ? offset + params.pageCount
-        : null;
+    next !== undefined ? Math.max(0, Math.floor(next)) : hasMore ? offset + pageCount : null;
   return { total, hasMore, nextOffset };
 }
 
@@ -55,6 +39,7 @@ type CronRunsRequestIdentity = {
   agentId: string | null;
   scope: CronRunScope;
   jobId: string | null;
+  runId: string | null;
   limit: number;
   offset: number;
   statuses: CronRunsStatusValue[];
@@ -78,6 +63,7 @@ function matchesCronRunsView(state: CronState, request: CronRunsRequestIdentity)
     state.client === request.client &&
     state.cronAgentId === request.agentId &&
     state.cronRunsScope === request.scope &&
+    (state.cronRunsRunId ?? null) === request.runId &&
     (request.scope !== "job" || state.cronRunsJobId === request.jobId) &&
     state.cronRunsLimit === request.limit &&
     state.cronRunsStatusFilter === request.status &&
@@ -100,6 +86,18 @@ function ownsCronRunsRequest(state: CronState, request: CronRunsRequestIdentity)
     (!request.append ||
       Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) === request.offset)
   );
+}
+
+export function getCronRunsViewState(state: CronState): CronRunsViewState {
+  const active = activeCronRunsRequests.get(state);
+  if (active && ownsCronRunsRequest(state, active)) {
+    return "pending";
+  }
+  const view = cronRunsViews.get(state);
+  if (!view || !matchesCronRunsView(state, view)) {
+    return "idle";
+  }
+  return state.cronRunsError === null ? "ready" : "failed";
 }
 
 export async function loadCronRuns(
@@ -141,6 +139,7 @@ export async function loadCronRuns(
     agentId: state.cronAgentId,
     scope,
     jobId: scope === "job" ? activeJobId : null,
+    runId: state.cronRunsRunId ?? null,
     limit: state.cronRunsLimit,
     offset: append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0,
     statuses: [...state.cronRunsStatuses],
@@ -151,7 +150,6 @@ export async function loadCronRuns(
     append,
   };
   activeCronRunsRequests.set(state, request);
-  cronRunsViews.set(state, request);
   // Retained rows cannot authorize an append until their replacement page arrives.
   if (!append) {
     state.cronRunsHasMore = false;
@@ -164,6 +162,7 @@ export async function loadCronRuns(
       ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,
       id: request.jobId ?? undefined,
+      runId: request.runId ?? undefined,
       limit: request.limit,
       offset: request.offset,
       statuses: request.statuses.length > 0 ? request.statuses : undefined,
@@ -175,16 +174,11 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = null;
     const entries = Array.isArray(res.entries) ? res.entries : [];
     state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
-    const meta = normalizeCronRunsPageMeta({
-      totalRaw: res.total,
-      offsetRaw: res.offset,
-      nextOffsetRaw: res.nextOffset,
-      hasMoreRaw: res.hasMore,
-      pageCount: entries.length,
-    });
+    const meta = normalizeCronRunsPageMeta(res, entries.length);
     state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
     state.cronRunsHasMore = meta.hasMore;
     state.cronRunsNextOffset = meta.nextOffset;
@@ -193,6 +187,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request) || request.queued) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = formatUiError(err);
     return "error";
   } finally {
@@ -216,12 +211,33 @@ export async function loadMoreCronRuns(state: CronState) {
   await loadCronRuns(state, { append: true });
 }
 
+export function loadCronRunsForJob(
+  state: CronState,
+  jobId: string | null,
+  runId: string | null = null,
+) {
+  updateCronRunsFilter(state, {
+    cronRunsScope: jobId === null ? "all" : "job",
+    cronRunsRunId: runId,
+  });
+  if (runId) {
+    updateCronRunsFilter(state, {
+      cronRunsQuery: "",
+      cronRunsStatuses: [],
+      cronRunsDeliveryStatuses: [],
+    });
+  }
+  state.cronRunsJobId = jobId;
+  return loadCronRuns(state);
+}
+
 export function updateCronRunsFilter(
   state: CronState,
   patch: Partial<
     Pick<
       CronState,
       | "cronRunsScope"
+      | "cronRunsRunId"
       | "cronRunsStatuses"
       | "cronRunsDeliveryStatuses"
       | "cronRunsStatusFilter"
@@ -231,6 +247,9 @@ export function updateCronRunsFilter(
   >,
 ) {
   state.cronRunsScope = patch.cronRunsScope ?? state.cronRunsScope;
+  if (patch.cronRunsRunId !== undefined) {
+    state.cronRunsRunId = patch.cronRunsRunId;
+  }
   if (Array.isArray(patch.cronRunsStatuses)) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter = patch.cronRunsStatuses[0] ?? "all";

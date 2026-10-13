@@ -3,6 +3,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
+const { readDirectoryAcl } = vi.hoisted(() => ({
+  readDirectoryAcl: vi.fn(() => "none"),
+}));
+// mock-isolation: isolate ACL policy from the host filesystem.
+vi.mock("./filesystem-apfs.native.js", () => ({ apfsFilesystem: { readDirectoryAcl } }));
+
 describe.skipIf(process.platform === "win32")("worktree filesystem backend", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const options = { commitGuard: () => {} };

@@ -3,18 +3,30 @@ import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import {
+  deriveMeetingTranscriptSessionColumns,
+  deriveMeetingTranscriptSummaryColumns,
+} from "./store-columns.js";
 import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
 import {
   parseTranscriptExportManifest,
   parseTranscriptPendingExports,
 } from "./store-export-state.js";
 import {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+} from "./store-sqlite-read.js";
+import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
+  parseOptionalJsonRecord,
   type MeetingTranscriptSessionRow,
-  readTranscriptSummaryInputRevision,
+  transcriptSessionInputRevisionFromRow,
+  readStoredTranscriptSummaryRevision,
   sessionFromRow,
+  transcriptSummaryInputRevisionFromRow,
 } from "./store-sqlite.js";
+import type { TranscriptSummaryWriteGuard } from "./store-types.js";
 
 type TranscriptSessionValues = Pick<
   MeetingTranscriptSessionRow,
@@ -32,48 +44,37 @@ type TranscriptSummaryValues = Pick<
   "generated_at" | "summary_json" | "markdown" | "utterance_count"
 >;
 
-export function assertMeetingTranscriptSelectorAvailableInDatabase(
-  database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
-  selector: string,
-): void {
-  const owner = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptDb(database)
-      .selectFrom("meeting_transcript_sessions")
-      .selectAll()
-      .where("selector", "=", selector),
-  );
-  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
-    throw new TranscriptSessionConflictError();
-  }
-}
-
 export function writeMeetingTranscriptSessionInDatabase(
   database: DatabaseSync,
   params: {
-    session: TranscriptSessionDescriptor;
+    session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
     sessionValues: TranscriptSessionValues;
     now: number;
     expectedInputRevision?: string;
+    expectedSessionRevision?: string;
   },
-): void {
-  const { session, sessionValues, now, expectedInputRevision } = params;
-  if (
-    expectedInputRevision !== undefined &&
-    readTranscriptSummaryInputRevision(database, session) !== expectedInputRevision
-  ) {
-    throw new TranscriptsSummaryChangedError();
-  }
-  assertMeetingTranscriptSelectorAvailableInDatabase(database, session, sessionValues.selector);
+): { inserted: boolean; inputRevision: string; sessionRevision: string } {
+  const { session, sessionValues, now, expectedInputRevision, expectedSessionRevision } = params;
   const previous = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptSessionQuery(database, session).selectAll(),
   );
+  if (
+    (expectedInputRevision !== undefined &&
+      (!previous || transcriptSummaryInputRevisionFromRow(previous) !== expectedInputRevision)) ||
+    (expectedSessionRevision !== undefined &&
+      (!previous || transcriptSessionInputRevisionFromRow(previous) !== expectedSessionRevision))
+  ) {
+    throw new TranscriptsSummaryChangedError();
+  }
+  const owner = readTranscriptCanonicalSessionRow(database, sessionValues.selector);
+  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
+    throw new TranscriptSessionConflictError();
+  }
   if (previous) {
     // ID origin belongs to admission, including the absence of that fact in legacy rows.
     const admittedMetadata = sessionFromRow(previous).metadata;
-    let metadata = session.metadata ? { ...session.metadata } : undefined;
+    let metadata = parseOptionalJsonRecord(sessionValues.metadata_json);
     if (admittedMetadata && Object.hasOwn(admittedMetadata, "sessionIdOrigin")) {
       metadata = { ...metadata, sessionIdOrigin: admittedMetadata.sessionIdOrigin };
     } else if (metadata) {
@@ -81,14 +82,21 @@ export function writeMeetingTranscriptSessionInDatabase(
     }
     sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
   }
-  executeSqliteQuerySync(
+  const values = {
+    ...sessionValues,
+    ...deriveMeetingTranscriptSessionColumns(
+      sessionValues.source_json,
+      sessionValues.metadata_json,
+    ),
+  };
+  const written = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)
       .insertInto("meeting_transcript_sessions")
       .values({
         session_id: session.sessionId,
         started_at: session.startedAt,
-        ...sessionValues,
+        ...values,
         export_manifest_json: "{}",
         export_pending_json: "[]",
         next_utterance_seq: 0,
@@ -97,27 +105,94 @@ export function writeMeetingTranscriptSessionInDatabase(
       })
       .onConflict((conflict) =>
         conflict.columns(["session_id", "started_at"]).doUpdateSet({
-          ...sessionValues,
+          ...values,
           updated_at_ms: now,
         }),
+      )
+      .returning(["next_utterance_seq", "title", "source_json", "metadata_json", "stopped_at"]),
+  );
+  if (!written) {
+    throw new Error("Transcript session write did not return its stored revision");
+  }
+  // SQLite normalizes bound text. Return this write's persisted tuple, not its inputs
+  // or a later reader's observation after another writer can change the row.
+  return {
+    inserted: previous === undefined,
+    inputRevision: transcriptSummaryInputRevisionFromRow(written),
+    sessionRevision: transcriptSessionInputRevisionFromRow(written),
+  };
+}
+
+export function deleteEmptyMeetingTranscriptCandidateInDatabase(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  expectedInputRevision: string,
+): void {
+  const stored = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).selectAll(),
+  );
+  // The retry owner may abandon only its unchanged, unaccepted admission.
+  if (
+    !stored ||
+    stored.stopped_at === null ||
+    transcriptSummaryInputRevisionFromRow(stored) !== expectedInputRevision ||
+    stored.next_utterance_seq !== 0 ||
+    stored.export_manifest_json !== "{}" ||
+    stored.export_pending_json !== "[]"
+  ) {
+    return;
+  }
+  const db = meetingTranscriptDb(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("meeting_transcript_sessions")
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            db
+              .selectFrom("meeting_transcript_summaries")
+              .select("session_id")
+              .where("session_id", "=", session.sessionId)
+              .where("session_started_at", "=", session.startedAt),
+          ),
+        ),
       ),
   );
 }
 
 export function writeMeetingTranscriptSummaryInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   summaryValues: TranscriptSummaryValues,
-  expectedInputRevision?: string,
+  guard?: TranscriptSummaryWriteGuard,
 ): void {
-  // Recheck under the writer lock; a concurrent writer can change the
-  // transcript after the caller's pre-check but before this commit.
-  if (
-    expectedInputRevision !== undefined &&
-    readTranscriptSummaryInputRevision(database, session) !== expectedInputRevision
-  ) {
-    throw new TranscriptsSummaryChangedError();
+  if (guard) {
+    // Recheck both transcript and prior notes under the same writer lock as publication.
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      meetingTranscriptSessionQuery(database, session).selectAll(),
+    );
+    if (
+      !row ||
+      (guard.allowAppends && row.stopped_at !== null) ||
+      row.next_utterance_seq < guard.nextSequence ||
+      transcriptSummaryInputRevisionFromRow({
+        ...row,
+        ...(guard.allowAppends ? { next_utterance_seq: guard.nextSequence } : {}),
+      }) !== guard.inputRevision ||
+      (readStoredTranscriptSummaryRevision(database, session) ?? "") !== guard.summaryRevision
+    ) {
+      throw new TranscriptsSummaryChangedError();
+    }
   }
+  const values = {
+    ...summaryValues,
+    ...deriveMeetingTranscriptSummaryColumns(summaryValues.summary_json),
+  };
   executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -125,30 +200,24 @@ export function writeMeetingTranscriptSummaryInDatabase(
       .values({
         session_id: session.sessionId,
         session_started_at: session.startedAt,
-        ...summaryValues,
+        ...values,
       })
       .onConflict((conflict) =>
-        conflict.columns(["session_id", "session_started_at"]).doUpdateSet(summaryValues),
+        conflict.columns(["session_id", "session_started_at"]).doUpdateSet(values),
       ),
   );
 }
 
 function updateMeetingTranscriptExportState(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   update: (
     stored:
       | Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">
       | undefined,
   ) => { export_pending_json: string; export_manifest_json?: string },
 ): void {
-  const stored = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptSessionQuery(database, session).select([
-      "export_manifest_json",
-      "export_pending_json",
-    ]),
-  );
+  const stored = readTranscriptExportOwnership(database, session);
   executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -161,7 +230,7 @@ function updateMeetingTranscriptExportState(
 
 export function updateMeetingTranscriptExportManifestInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   exportedHashes: Readonly<Record<string, string>>,
   removedExports: ReadonlySet<string>,
 ): void {
@@ -185,7 +254,7 @@ export function updateMeetingTranscriptExportManifestInDatabase(
 
 export function markMeetingTranscriptPendingExportsInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   fileNames: string[],
 ): void {
   updateMeetingTranscriptExportState(database, session, (stored) => {

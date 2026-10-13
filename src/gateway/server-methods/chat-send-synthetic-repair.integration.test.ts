@@ -6,9 +6,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { text as readText } from "node:stream/consumers";
 import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages";
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { expect, it } from "vitest";
 import {
-  DEFAULT_MISSING_TOOL_RESULT_TEXT,
+  LEGACY_MISSING_TOOL_RESULT_TEXT,
   makeMissingToolResult,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -202,6 +203,7 @@ it("chat.send replays synthetic repairs through session history and the register
           const missing = makeMissingToolResult({ toolCallId: "callmissing", toolName: "read" });
           if (legacy) {
             delete missing.details;
+            missing.content = [{ type: "text", text: LEGACY_MISSING_TOOL_RESULT_TEXT }];
           }
           manager.appendMessage(missing);
           if (late) {
@@ -256,7 +258,7 @@ it("chat.send replays synthetic repairs through session history and the register
           expect.soft(results, scenario).toEqual([
             expect.objectContaining({
               tool_use_id: "callmissing",
-              content: late ? "LATE_ACTUAL_RESULT" : "No result provided",
+              content: late ? "LATE_ACTUAL_RESULT" : DEFAULT_MISSING_TOOL_RESULT_TEXT,
               is_error: !late,
             }),
             expect.objectContaining({

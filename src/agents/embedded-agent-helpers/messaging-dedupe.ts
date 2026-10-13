@@ -1,18 +1,8 @@
-/**
- * Normalizes outbound message text to suppress duplicate send actions.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
 const MIN_SUBSTRING_DUPLICATE_RATIO = 0.5;
 
-/**
- * Normalize text for duplicate comparison.
- * - Trims whitespace
- * - Lowercases
- * - Strips emoji (Emoji_Presentation and Extended_Pictographic)
- * - Collapses multiple spaces to single space
- */
 export function normalizeTextForComparison(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
@@ -20,7 +10,6 @@ export function normalizeTextForComparison(text: string): string {
     .trim();
 }
 
-/** Compare already-normalized message text against prior sends. */
 export function isMessagingToolDuplicateNormalized(
   normalized: string,
   normalizedSentTexts: string[],
@@ -45,7 +34,6 @@ export function isMessagingToolDuplicateNormalized(
   });
 }
 
-/** Return true when raw message text duplicates a prior sent message. */
 export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boolean {
   if (sentTexts.length === 0) {
     return false;
@@ -54,7 +42,9 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
     return false;
   }
-  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
+  return sentTexts.some((sentText) =>
+    isMessagingToolDuplicateNormalized(normalized, [normalizeTextForComparison(sentText)]),
+  );
 }
 
 export function resolveCurrentSourceMessagingToolPartial(
@@ -76,15 +66,13 @@ export function resolveCurrentSourceMessagingToolPartial(
   const normalized = state.currentSourceMessagingToolSentTextsNormalized.length
     ? normalizeTextForComparison(text)
     : "";
-  if (!normalized) {
-    state.currentSourceMessagingToolHeldPartial = undefined;
-    return { hold: false, text };
-  }
   // A confirmed current-source tool send already made this prefix visible.
   // Hold it until the assistant either repeats the sent text or diverges with new content.
-  const hold = state.currentSourceMessagingToolSentTextsNormalized.some(
-    (sentText) => sentText === normalized || sentText.startsWith(normalized),
-  );
+  const hold =
+    Boolean(normalized) &&
+    state.currentSourceMessagingToolSentTextsNormalized.some(
+      (sentText) => sentText === normalized || sentText.startsWith(normalized),
+    );
   state.currentSourceMessagingToolHeldPartial = hold ? text : undefined;
   return { hold, text };
 }

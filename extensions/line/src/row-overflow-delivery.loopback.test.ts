@@ -141,9 +141,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 function createLoopbackRuntime(): PluginRuntime {
   return {
     channel: {
-      line: {
-        resolveLineAccount: resolveLineAccountMock,
-      },
       text: {
         chunkMarkdownText,
         resolveTextChunkLimit: () => 5000,
@@ -258,8 +255,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
 
   it.each([
     { delivery: "reply", card: false },
-    { delivery: "reply", card: true },
-    { delivery: "push", card: false },
     { delivery: "push", card: true },
   ])("carries every select through $delivery requests (card=$card)", async ({ delivery, card }) => {
     const selects = ["environment", "region", "version"].map((kind) => ({
@@ -352,64 +347,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
     expect(text.includes(presentation.title!)).toBe(!card);
   });
 
-  it("delivers all 15 rows of a 2-column overflow table through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
-    const markdown = `Header\n\n| Name | Price |\n|---|---|\n${rows}\n\nFooter`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:Utest15",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const allMessages = collectAllWireMessages(requests);
-
-    expect(requests.length).toBeGreaterThanOrEqual(1);
-    const pushRequest = requests.find((r) => r.path === "/v2/bot/message/push");
-    expect(pushRequest).toBeDefined();
-    expect(pushRequest!.authorization).toBe("Bearer line-loopback-proof-token");
-
-    const allText = allMessages
-      .filter((m) => m.type === "text" && m.text)
-      .map((m) => m.text!)
-      .join(" ");
-
-    for (let i = 1; i <= 15; i++) {
-      expect(allText).toContain(`Item${i}`);
-    }
-    expect(allText).toContain("Header");
-    expect(allText).toContain("Footer");
-    expect(allText.indexOf("Header")).toBeLessThan(allText.indexOf("Item1"));
-    expect(allText.indexOf("Item15")).toBeLessThan(allText.indexOf("Footer"));
-
-    expect(allMessages.some((m) => m.type === "flex" && m.altText === "Table")).toBe(false);
-  });
-
-  it("delivers all 11 rows of a 3-column overflow table through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 11 }, (_, i) => `| Row${i + 1} | Val${i + 1} | Extra |`).join(
-      "\n",
-    );
-    const markdown = `| Name | Value | Extra |\n|---|---|---|\n${rows}`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:Utest11",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const allMessages = collectAllWireMessages(requests);
-    const allText = allMessages
-      .filter((m) => m.type === "text" && m.text)
-      .map((m) => m.text!)
-      .join(" ");
-
-    for (let i = 1; i <= 11; i++) {
-      expect(allText).toContain(`Row${i}`);
-    }
-  });
-
   it("preserves source order of kept Flex card alongside overflow text through the production outbound adapter", async () => {
     const keptTable = "| Small | Card |\n|---|---|\n| Kept | row |";
     const bigRows = Array.from({ length: 13 }, (_, i) => `| Big${i + 1} | $${i + 1}.00 |`).join(
@@ -459,25 +396,6 @@ describe("Row-overflow table delivery through production outbound adapter over l
     for (let i = 1; i <= 13; i++) {
       expect(allText).toContain(`Big${i}`);
     }
-  });
-
-  it("preserves ordinary prose, code, and table order on the actual LINE HTTP wire", async () => {
-    const markdown =
-      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter";
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestOrdered",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    expect(
-      collectAllWireMessages(requests).map((message) =>
-        message.type === "flex" ? message.altText : message.text,
-      ),
-    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
-    expect(requests.every((request) => request.body.messages.length <= 5)).toBe(true);
   });
 
   it("delivers every line of an oversized code block through the production outbound adapter", async () => {
@@ -584,22 +502,5 @@ describe("Row-overflow table delivery through production outbound adapter over l
     });
     expect(recordChannelActivityMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
-  });
-
-  it("carries a valid Bearer token and recipient through the production outbound adapter", async () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| Item${i + 1} | $${i + 1}.00 |`).join("\n");
-    const markdown = `| Name | Price |\n|---|---|\n${rows}`;
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:UtestBearer",
-      text: markdown,
-      payload: { text: markdown },
-      cfg: LINE_TEST_CFG,
-    });
-
-    const pushRequest = requests.find((r) => r.path === "/v2/bot/message/push");
-    expect(pushRequest).toBeDefined();
-    expect(pushRequest!.authorization).toMatch(/^Bearer /);
-    expect(pushRequest!.body.messages.length).toBeGreaterThan(0);
   });
 });

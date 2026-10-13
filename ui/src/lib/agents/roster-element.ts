@@ -15,10 +15,14 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   protected readonly avatars = new IdentityAvatarController(this);
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
+    new SubscriptionsController(this).effect(
       () => (this.active && this.context ? rosterActivityStore(this.context) : undefined),
-      (store, notify) => store.subscribe(notify),
+      (store) => store.subscribe(() => this.requestRosterUpdate()),
     );
+  }
+
+  protected requestRosterUpdate(): void {
+    this.requestUpdate();
   }
 
   protected get roster() {

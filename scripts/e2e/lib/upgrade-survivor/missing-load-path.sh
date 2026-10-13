@@ -1,5 +1,40 @@
 #!/usr/bin/env bash
 
+missing_load_path_applicability=""
+
+start_missing_load_path_baseline() {
+  local start_status=0 exit_status=0
+  start_gateway || start_status=$?
+  [ "$start_status" -eq 0 ] && return 0
+  [ "$start_status" -eq 1 ] && [ -n "${gateway_pid:-}" ] || return "$start_status"
+  # Published startup may install migration plugins, then require one fresh process.
+  # Never restart a live/timed-out child or reinterpret an unrelated startup failure.
+  if kill -0 "$gateway_pid" >/dev/null 2>&1; then
+    local observation
+    if observation="$(mktemp "$ARTIFACT_ROOT/missing-load-path/startup-readiness.XXXXXX")"; then
+      {
+        printf '\nStartup readiness observation after failure (does not change the result):\n'
+        if probe_gateway_endpoint /readyz ready "$observation" \
+          --timeout-ms 400 --attempt-timeout-ms 400 --max-body-bytes 16384; then
+          cat "$observation"
+        fi
+      } >"$ARTIFACT_ROOT/missing-load-path/startup-readiness.log" 2>&1 || true
+      rm -f -- "$observation" || true
+    fi
+    return "$start_status"
+  fi
+  wait "$gateway_pid" || exit_status=$?
+  [ "$exit_status" -eq 1 ] || return "$start_status"
+  grep -Fxq 'OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.' \
+    "$GATEWAY_LOG" || return "$start_status"
+  local refused_log="$ARTIFACT_ROOT/missing-load-path/baseline-gateway-convergence-refusal.log"
+  cp "$GATEWAY_LOG" "$refused_log" || return "$?"
+  printf 'Published baseline %s completed plugin convergence (pid %s, exit %s); restarting once with the same config, state, and port. First attempt: %s\n' \
+    "$baseline_version" "$gateway_pid" "$exit_status" "$refused_log"
+  gateway_pid=""
+  start_gateway
+}
+
 capture_missing_load_path_lint() {
   local lint_exit=0
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
@@ -17,6 +52,26 @@ run_missing_load_path_fixture() {
   fi
   { [ "$SCENARIO" = "base" ] || [ "$SCENARIO" = "missing-load-path" ]; } &&
     [ "$UPDATE_RESTART_MODE" = "manual" ] || return 0
+  if [ -z "$missing_load_path_applicability" ]; then
+    missing_load_path_applicability="$(node --input-type=module -e '
+      import { parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+      import { supportsUpgradeSurvivorScenarioAtBaseline } from "./scripts/lib/upgrade-survivor-policy.mjs";
+      const version = process.argv[1];
+      if (!parseReleaseVersion(version)) throw new Error("Invalid baseline release version");
+      process.stdout.write(supportsUpgradeSurvivorScenarioAtBaseline("missing-load-path", `openclaw@${version}`)
+        ? "supported" : "unsupported-driver");
+    ' "$baseline_version")" || return "$?"
+    if [ "$missing_load_path_applicability" = "unsupported-driver" ]; then
+      printf 'Missing-load-path fixture unavailable for published %s: its CLI rejects invalid plugin paths before candidate staging.\n' "$baseline_version"
+    fi
+  fi
+  if [ "$missing_load_path_applicability" = "unsupported-driver" ]; then
+    if [ "$SCENARIO" = "missing-load-path" ]; then
+      echo "missing-load-path requires a published updater with invalid-config admission; choose a supported baseline." >&2
+      return 2
+    fi
+    return 0
+  fi
   local stage="$1"
   local helper="scripts/e2e/lib/upgrade-survivor/assertions.mjs"
   case "$stage" in
@@ -28,7 +83,25 @@ run_missing_load_path_fixture() {
       local GATEWAY_LOG="$ARTIFACT_ROOT/missing-load-path/baseline-gateway.log"
       local HEALTHZ_JSON="$ARTIFACT_ROOT/missing-load-path/baseline-healthz.json"
       local READYZ_JSON="$ARTIFACT_ROOT/missing-load-path/baseline-readyz.json"
-      phase missing-load-path-baseline-start openclaw_prepublish_plugin_registry_run_published start_gateway
+      local companion_version plugin
+      companion_version="$(node --input-type=module -e '
+        import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+        const release = parseReleaseVersion(process.argv[1]);
+        if (!release) throw new Error("Invalid baseline release version");
+        if (compareReleaseVersions(release.version, "2026.9.1") === -1) {
+          process.stdout.write(release.correctionNumber === undefined ? release.version : release.baseVersion);
+        }
+      ' "$baseline_version")" || return "$?"
+      if [ -n "$companion_version" ]; then
+        # Before 2026.9.1 exempted official plugin consent, startup repairs needed
+        # their published companion cohort; core corrections share it.
+        for plugin in codex discord whatsapp; do
+          phase "missing-load-path-baseline-$plugin" openclaw_prepublish_plugin_registry_run_published \
+            openclaw_e2e_fixture_plugin_command openclaw -- \
+            plugins install "@openclaw/$plugin@$companion_version" --force || return "$?"
+        done
+      fi
+      phase missing-load-path-baseline-start openclaw_prepublish_plugin_registry_run_published start_missing_load_path_baseline
       phase missing-load-path-baseline-ready check_gateway_probes
       phase missing-load-path-baseline-stop stop_gateway
       ;;

@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import {
@@ -31,7 +32,7 @@ export type AgentToAgentPolicy = SessionVisibilityDecisionPolicy & {
   matchesAllow: (agentId: string) => boolean;
 };
 
-/** Session operation whose visibility error copy should be rendered. */
+/** Session operation to authorize; send-only grants never apply to read/status actions. */
 export type SessionAccessAction = SessionVisibilityDecisionAction;
 
 /** Result of checking whether one session operation may target a session. */
@@ -127,28 +128,9 @@ async function resolveScopedSessionAccessAsync(
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
 export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 
-/** Public compatibility wrapper; direct guards use the richer private result. */
-export async function listSpawnedSessionKeys(params: {
-  requesterSessionKey: string;
-  limit?: number;
-  callGateway?: GatewayCaller;
-}): Promise<Set<string>> {
-  const result = await listSpawnedSessionKeysWithResult(params);
-  if (!result.ok) {
-    logSessionOwnershipLookupFailure({
-      requesterSessionKey: params.requesterSessionKey,
-      failure: result.error,
-    });
-    return new Set();
-  }
-  return result.value;
-}
-
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
-  const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
-    ?.visibility;
-  const value = normalizeLowercaseStringOrEmpty(raw);
+  const value = normalizeLowercaseStringOrEmpty(cfg.tools?.sessions?.visibility);
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
@@ -164,11 +146,7 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   if (!params.sandboxed) {
     return visibility;
   }
-  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
-  if (sandboxClamp === "spawned" && visibility !== "tree") {
-    return "tree";
-  }
-  return visibility;
+  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned" ? "tree" : visibility;
 }
 
 /** Resolve sandbox-specific session visibility clamp for agent defaults. */
@@ -216,13 +194,10 @@ function matchesCompiledWildcard(
   pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
   lower: string,
 ): boolean {
-  let pos = 0;
-  if (pattern.first) {
-    if (!lower.startsWith(pattern.first)) {
-      return false;
-    }
-    pos = pattern.first.length;
+  if (!lower.startsWith(pattern.first)) {
+    return false;
   }
+  let pos = pattern.first.length;
 
   const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
   if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
@@ -240,19 +215,10 @@ function matchesCompiledWildcard(
   return true;
 }
 
-/** Compile agent-to-agent allow rules into reusable matching predicates. */
-export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
-  const routingA2A = cfg.tools?.agentToAgent;
-  const enabled = routingA2A?.enabled !== false;
-  const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-  const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
+function compileAgentAllowMatcher(patterns: string[]): (agentId: string) => boolean {
+  const allowPatterns = patterns.map(compileAgentAllowPattern);
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
-  const matchesAllow = (agentId: string) => {
-    // Agent-to-agent is on by default; omitted/empty `allow` permits every agent pair.
-    // Blank entries compile to `deny`, so a configured-but-blank list still fails closed.
-    if (allowPatterns.length === 0) {
-      return true;
-    }
+  return (agentId: string) => {
     const lowerAgentId = hasWildcardPatterns ? agentId.toLowerCase() : "";
     return allowPatterns.some((pattern) => {
       if (pattern.kind === "all") {
@@ -267,16 +233,33 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
-  const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
-    if (requesterAgentId === targetAgentId) {
-      return true;
-    }
-    if (!enabled) {
-      return false;
-    }
-    return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
+}
+
+/** Compile participation and independent outbound-send rules; reads never use send grants. */
+export function createAgentToAgentPolicy(
+  cfg: OpenClawConfig,
+  options?: { sandboxed?: boolean },
+): AgentToAgentPolicy {
+  const enabled = cfg.tools?.agentToAgent?.enabled !== false;
+  const allow = cfg.tools?.agentToAgent?.allow;
+  // The shipped global empty list is unrestricted; explicit per-agent [] instead denies sends.
+  const matchesAllow = allow?.length ? compileAgentAllowMatcher(allow) : () => true;
+  return {
+    enabled,
+    matchesAllow,
+    isAllowed: (requester, target) =>
+      requester === target || (enabled && matchesAllow(requester) && matchesAllow(target)),
+    resolveSendAccess: (requester, target) => {
+      if (options?.sandboxed && resolveSandboxSessionToolsVisibility(cfg) === "spawned") {
+        return undefined;
+      }
+      // Reads never traverse the fleet; sends compile only the requester's destinations.
+      const send = listAgentEntries(cfg).find(
+        (entry) => normalizeLowercaseStringOrEmpty(entry.id) === requester,
+      )?.tools?.agentToAgent?.send;
+      return send ? compileAgentAllowMatcher(send)(target) : undefined;
+    },
   };
-  return { enabled, matchesAllow, isAllowed };
 }
 
 function toSessionAccessResult(

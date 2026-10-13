@@ -5,11 +5,12 @@
  */
 import { vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
@@ -31,52 +32,6 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
-export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "",
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
-  };
-}
-
 function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
   pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"],
@@ -97,6 +52,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({
       authStorage: { setRuntimeApiKey: vi.fn() } as never,
@@ -174,6 +130,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       };
     };
     return {
+      preparedModelRuntimeConfigsMatch,
       acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
       acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
       prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
@@ -217,9 +174,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     };
   };
   vi.doMock("../harness/selection.js", () => ({
-    agentHarnessBuildsOpenClawTools: vi.fn(
-      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
-    ),
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),

@@ -1,0 +1,224 @@
+title: Subagent empty completion recovery
+
+scenario:
+  id: subagent-empty-completion-recovery
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Prove a native subagent that returns no answer after a completed write recovers a terminal result without repeating its action.
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - write
+        - message
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow:
+              - write
+              - message
+  successCriteria:
+    - The child performs exactly one real write before returning empty assistant output.
+    - The requester receives one visible parent acknowledgement.
+    - Required finalization produces a truthful fallback that reaches the parent completion turn.
+    - The requester receives exactly one terminal recovery message, with no repeated action or replay after Gateway restart.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-lab/src/execution-identity-storage-inspection.ts
+    - src/agents/embedded-agent-runner/run/settled-turn-finalization.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle-completion.ts
+  execution:
+    kind: flow
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Exercise empty post-tool output, bounded finalization, and exact-once recovery through mock provider, ephemeral Gateway, native subagent state, and QA channel capture.
+    config:
+      requiredProviderMode: mock-openai
+      metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
+      recoveryMarker: QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED
+      fallbackReply: The tool run finished, but no final summary was produced. I did not repeat any completed actions.
+      sideEffectFile: qa-terminal-empty-side-effect.txt
+      sideEffectContents: "empty terminal QA side effect completed\n"
+
+flow:
+  steps:
+    - name: recovers empty completion without repeating completed work
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: readEmptyRun
+          value:
+            lambda:
+              params:
+                - runId
+              async: true
+              expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === 'qa-terminal-empty' && (!runId || run.runId === runId))"
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - set: requestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: conversationId
+          value:
+            expr: "`terminal-empty-${randomUUID().slice(0, 8)}`"
+        - set: sideEffectPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.sideEffectFile)"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Empty Reply Operator
+            text: "Subagent terminal reply QA check: empty. Spawn one native worker, reply to the requester after spawning, then finish without waiting. Do not use ACP."
+        - call: waitForCondition
+          saveAs: emptyRun
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { await env.mock?.terminalRequesters?.settle(env.gateway); const run = await readEmptyRun(); return run?.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered' ? run : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - assert:
+            expr: "emptyRun.execution.outcome?.status === 'ok' && emptyRun.delivery?.status === 'delivered'"
+            message:
+              expr: "`recovered completion did not settle at its lifecycle owner: ${JSON.stringify(emptyRun)}`"
+        - call: waitForCondition
+          saveAs: requesterAcknowledgements
+          args:
+            - lambda:
+                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId && String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK'); return messages.length > 0 ? messages : undefined; })()"
+            - 60000
+            - 250
+        - set: emptyOutboundHistory
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId)"
+        - set: emptyRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
+        - set: emptyTerminalOutbound
+          value:
+            expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() === config.recoveryMarker)"
+        - set: recoveryRequests
+          value:
+            expr: "emptyRequests.filter((request) => String(request.raw ?? '').includes('[Internal task completion event]') && String(request.raw ?? '').includes(config.fallbackReply))"
+        - assert:
+            expr: "requesterAcknowledgements.length === 1"
+            message:
+              expr: "`requester did not receive exactly one parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "emptyTerminalOutbound.length === 1 && !emptyTerminalOutbound[0].deleted"
+            message:
+              expr: "`empty completion did not produce exactly one visible recovery; outbound=${recentOutboundSummary(state)} requests=${JSON.stringify(emptyRequests)}`"
+        - assert:
+            expr: "emptyRequests.filter((request) => request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === 'qa-terminal-empty').length === 1 && emptyRequests.filter((request) => request.plannedToolName === 'write' && request.plannedToolArgs?.path === config.sideEffectFile).length === 1 && !emptyRequests.some((request) => request.plannedToolName === 'sessions_yield')"
+            message:
+              expr: "`empty completion repeated or skipped its action: ${JSON.stringify(emptyRequests)}`"
+        - call: readSessionTranscriptSummary
+          saveAs: childTranscript
+          args:
+            - ref: env
+            - expr: emptyRun.childSessionKey
+        - set: childWriteEvents
+          value:
+            expr: "(childTranscript.successfulToolCallEvents ?? []).filter((event) => event.name === 'write')"
+        - set: sideEffectContents
+          value:
+            expr: "await fs.readFile(sideEffectPath, 'utf8')"
+        - set: sideEffectMtimeMs
+          value:
+            expr: "(await fs.stat(sideEffectPath)).mtimeMs"
+        - assert:
+            expr: "childTranscript.assistantToolCallCounts.write === 1 && childTranscript.completedToolCallCounts.write === 1 && childTranscript.successfulToolCallCounts.write === 1 && childWriteEvents.length === 1 && sideEffectContents === config.sideEffectContents"
+            message:
+              expr: "`child did not record exactly one successful write with the expected file bytes: transcript=${JSON.stringify(childTranscript)} file=${JSON.stringify(sideEffectContents)}`"
+        - assert:
+            expr: "recoveryRequests.length > 0"
+            message:
+              expr: "`parent completion did not receive the truthful finalization fallback: ${JSON.stringify(emptyRequests)}`"
+        - assert:
+            expr: "emptyOutboundHistory.every((message) => !String(message.text ?? '').includes(config.metadataSentinel) && !String(message.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && String(message.text ?? '').trim() !== 'NO_REPLY')"
+            message:
+              expr: "`empty completion leaked silence or internal metadata; outbound=${recentOutboundSummary(state)}`"
+        - set: postCompletionRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: restartPatch
+          value:
+            expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } } })"
+        - call: restartGatewayWithConfigPatch
+          args:
+            - env:
+                ref: env
+              patch:
+                ref: restartPatch
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 180000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 180000
+        - call: waitForCondition
+          saveAs: restoredRun
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const run = await readEmptyRun(emptyRun.runId); return run?.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered' ? run : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - set: postRestartOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId).map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
+        - set: postRestartRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${postCompletionRequestCursor}`) : []"
+        - set: postRestartCompletionRequests
+          value:
+            expr: "postRestartRequests.filter((request) => String(request.raw ?? '').includes('[Internal task completion event]') || request.plannedToolArgs?.message === config.recoveryMarker || (request.plannedToolName === 'write' && request.plannedToolArgs?.path === config.sideEffectFile))"
+        - call: readSessionTranscriptSummary
+          saveAs: restoredChildTranscript
+          args:
+            - ref: env
+            - expr: restoredRun.childSessionKey
+        - set: restoredChildWriteEvents
+          value:
+            expr: "(restoredChildTranscript.successfulToolCallEvents ?? []).filter((event) => event.name === 'write')"
+        - set: restoredSideEffectContents
+          value:
+            expr: "await fs.readFile(sideEffectPath, 'utf8')"
+        - assert:
+            expr: "restoredChildTranscript.assistantToolCallCounts.write === 1 && restoredChildTranscript.completedToolCallCounts.write === 1 && restoredChildTranscript.successfulToolCallCounts.write === 1 && JSON.stringify(restoredChildWriteEvents) === JSON.stringify(childWriteEvents) && restoredSideEffectContents === config.sideEffectContents && (await fs.stat(sideEffectPath)).mtimeMs === sideEffectMtimeMs"
+            message:
+              expr: "`Gateway restart repeated or changed the completed write: before=${JSON.stringify(childWriteEvents)} transcript=${JSON.stringify(restoredChildTranscript)} file=${JSON.stringify(restoredSideEffectContents)}`"
+        - assert:
+            expr: "restoredRun?.runId === emptyRun.runId && restoredRun?.execution.status === 'terminal' && restoredRun.execution.outcome?.status === 'ok' && restoredRun.delivery?.status === 'delivered'"
+            message:
+              expr: "`recovered completion lost its terminal state after restart: ${JSON.stringify({ expectedRunId: emptyRun.runId, runId: restoredRun?.runId, status: restoredRun?.execution.status, terminalOutcome: restoredRun?.execution.outcome?.status, deliveryStatus: restoredRun?.delivery?.status })}`"
+        - assert:
+            expr: "postRestartCompletionRequests.length === 0 && postRestartOutbound.filter((message) => message.text.trim() === config.recoveryMarker).length === 1 && postRestartOutbound.some((message) => message.id === emptyTerminalOutbound[0].id && message.text.trim() === config.recoveryMarker) && postRestartOutbound.every((message) => !message.text.includes(config.metadataSentinel) && !message.text.includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && message.text.trim() !== 'NO_REPLY')"
+            message:
+              expr: "`Gateway restart replayed or lost recovered completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
+      detailsExpr: "JSON.stringify({ runId: emptyRun.runId, execution: emptyRun.execution, delivery: emptyRun.delivery, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterAcknowledgements.length, fallbackReply: config.fallbackReply, successfulWriteEvents: childWriteEvents, restoredSuccessfulWriteEvents: restoredChildWriteEvents, sideEffectFile: config.sideEffectFile, sideEffectContents, expectedTerminalSendCount: 1, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, postRestartCompletionRequestCount: postRestartCompletionRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"

@@ -51,7 +51,7 @@ export function addGatewayRestartHandoffCommands(gateway: Command): void {
         command.args.length === 0 && expectedPidValues.length === 1
           ? parseStrictPositiveInteger(expectedPidValues[0])
           : undefined;
-      if (expectedPid === undefined || !Number.isSafeInteger(expectedPid)) {
+      if (expectedPid === undefined) {
         writeRestartHandoffError("invalid-expected-pid");
         defaultRuntime.exit(2);
         return;

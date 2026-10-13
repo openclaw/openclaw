@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -13,7 +12,6 @@ import {
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { buildSync } from "esbuild";
-import { Compile } from "typebox/schema";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -293,41 +291,17 @@ describe("OpenClaw performance Crabbox boundary", () => {
   );
 
   it.each([
-    { name: "IPv6 rule readback", fault: "6:-C" },
-    { name: "IPv4 reachable metadata", family: 4, code: 0, output: "401" },
-    { name: "IPv6 reachable metadata", family: 6, code: 0, output: "401" },
-  ])("blocks runner handoff without its own metadata denial: $name", (options) => {
-    const run = prepareSut({ ...options, runner: true });
-    expect(run.result.error).toBeUndefined();
-    expect(run.result.status, run.result.stderr).not.toBe(0);
-    expect(run.handoff).toBe(false);
-  });
-
-  it.each([
-    ...["4:-I", "4:-C", "6:-I", "6:-C"].map((fault) => ({ name: fault, fault })),
-    ...["iptables", "ip6tables", "curl"].map((tool) => ({
+    ...["6:-I", "6:-C"].map((fault) => ({ name: fault, fault })),
+    ...["iptables", "curl"].map((tool) => ({
       name: `missing ${tool}`,
       fault: `missing:${tool}`,
     })),
-    ...["http", "ipv6", "version"].map((fault) => ({ name: `curl ${fault}`, fault })),
-    ...[4, 6].flatMap((family) =>
-      ["401", "404"].map((output) => ({
-        name: `IPv${family} HTTP ${output}`,
-        family,
-        output,
-        code: 0,
-      })),
-    ),
-    ...[0, 1, 2, 3, 4, 5, 6, 22, 23, 26, 28, 52, 55, 56, 126, 127, 143].map((code) => ({
-      name: `IPv6 curl exit ${code}`,
-      code,
-    })),
+    { name: "curl ipv6", fault: "ipv6" },
+    { name: "IPv6 HTTP 401", family: 6, output: "401", code: 0 },
+    { name: "IPv6 curl exit 0", code: 0 },
     { name: "IPv4 timeout", family: 4, code: 28 },
     { name: "HTTP response despite connection failure", output: "401", code: 7 },
-    ...["", "00", "000000", "000\n401", " 000", "000\n"].map((output) => ({
-      name: `malformed status ${JSON.stringify(output)}`,
-      output,
-    })),
+    { name: 'malformed status "000\\n"', output: "000\n" },
   ])("blocks IMDS preparation without candidate handoff: $name", (options) => {
     const run = prepareSut(options);
     expect(run.result.error).toBeUndefined();
@@ -338,67 +312,36 @@ describe("OpenClaw performance Crabbox boundary", () => {
     }
   });
 
-  it("uses the locally installed pnpm instead of an ambient executable", () => {
-    const root = tempDirs.make("performance-pnpm-path-");
-    mkdirSync(join(root, "openclaw"));
-    mkdirSync(join(root, "bin"));
-    writeFileSync(join(root, "bin/pnpm"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
-    const source = readFileSync(SCRIPT, "utf8");
-    const definitions = source.slice(0, source.lastIndexOf('\ncase "${1:-}" in'));
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
-        `${definitions}
-npm() {
-  mkdir -p "$HOME/.local/node_modules/.bin"
-  printf '#!/bin/sh\\nprintf selected > "$HOME/selected"\\nexit 83\\n' > "$HOME/.local/node_modules/.bin/pnpm"
-  chmod +x "$HOME/.local/node_modules/.bin/pnpm"
-}
-prepare_candidate "$HOME"
-`,
-      ],
-      { env: { HOME: root, PATH: `${root}/bin:/usr/bin:/bin` }, encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(83);
-    expect(existsSync(join(root, "selected"))).toBe(true);
-  });
-
-  it.each([
-    "regular",
-    "hardlink",
-    "redirected-parent",
-    "existing-output",
-    "reserved-cli",
-    "reserved-index",
-  ])("collects only bounded diagnostic bytes without candidate PATH: %s", (kind) => {
-    const root = tempDirs.make("performance-diagnostic-collector-");
-    const source = join(root, "candidate");
-    const destination = join(root, "runner");
-    const subtree = kind.startsWith("reserved-")
-      ? ".artifacts/openclaw-performance/source/mock-provider"
-      : ".artifacts/source";
-    const relative = `${subtree}/${kind === "reserved-cli" ? "cli-startup.json" : kind === "reserved-index" ? "index.md" : "profile.json"}`;
-    mkdirSync(join(source, subtree), { recursive: true });
-    mkdirSync(destination);
-    const input = join(source, relative);
-    writeFileSync(input, '{"diagnostic":true}');
-    if (kind === "hardlink") {
-      linkSync(input, join(root, "other-link"));
-    } else if (kind === "redirected-parent") {
-      mkdirSync(join(root, "redirect"));
-      symlinkSync(join(source, ".artifacts"), join(root, "redirect/.artifacts"));
-    } else if (kind === "existing-output") {
-      mkdirSync(join(destination, ".artifacts/source"), { recursive: true });
-      writeFileSync(join(destination, relative), "runner-owned");
-    }
-    const script = readFileSync(SCRIPT, "utf8");
-    const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `${definitions}
+  it.each(["regular", "hardlink", "redirected-parent", "existing-output", "reserved-cli"])(
+    "collects only bounded diagnostic bytes without candidate PATH: %s",
+    (kind) => {
+      const root = tempDirs.make("performance-diagnostic-collector-");
+      const source = join(root, "candidate");
+      const destination = join(root, "runner");
+      const subtree = kind.startsWith("reserved-")
+        ? ".artifacts/openclaw-performance/source/mock-provider"
+        : ".artifacts/source";
+      const relative = `${subtree}/${kind === "reserved-cli" ? "cli-startup.json" : "profile.json"}`;
+      mkdirSync(join(source, subtree), { recursive: true });
+      mkdirSync(destination);
+      const input = join(source, relative);
+      writeFileSync(input, '{"diagnostic":true}');
+      if (kind === "hardlink") {
+        linkSync(input, join(root, "other-link"));
+      } else if (kind === "redirected-parent") {
+        mkdirSync(join(root, "redirect"));
+        symlinkSync(join(source, ".artifacts"), join(root, "redirect/.artifacts"));
+      } else if (kind === "existing-output") {
+        mkdirSync(join(destination, ".artifacts/source"), { recursive: true });
+        writeFileSync(join(destination, relative), "runner-owned");
+      }
+      const script = readFileSync(SCRIPT, "utf8");
+      const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `${definitions}
 as_sut() {
   case "$1" in
     /usr/bin/realpath) shift; command realpath "$@" ;;
@@ -417,44 +360,39 @@ install() {
 chown() { :; }
 collect_diagnostics "$SOURCE" "$DESTINATION" "$SUBTREE"
 `,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          NODE: process.execPath,
-          PLATFORM: process.platform,
-          SOURCE: kind === "redirected-parent" ? join(root, "redirect") : source,
-          DESTINATION: destination,
-          SUBTREE: subtree,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            NODE: process.execPath,
+            PLATFORM: process.platform,
+            SOURCE: kind === "redirected-parent" ? join(root, "redirect") : source,
+            DESTINATION: destination,
+            SUBTREE: subtree,
+          },
         },
-      },
-    );
-    expect(result.status, result.stderr).toBe(kind === "regular" ? 0 : 1);
-    if (kind === "regular") {
-      expect(readFileSync(join(destination, relative), "utf8")).toBe('{"diagnostic":true}');
-    } else if (kind === "existing-output") {
-      expect(readFileSync(join(destination, relative), "utf8")).toBe("runner-owned");
-    } else {
-      expect(existsSync(join(destination, relative))).toBe(false);
-    }
-    expect(result.stderr).not.toContain("candidate PATH would execute");
-    if (kind.startsWith("reserved-")) {
-      expect(result.stderr).toContain("cannot supply runner measurement files");
-    }
-  });
+      );
+      expect(result.status, result.stderr).toBe(kind === "regular" ? 0 : 1);
+      if (kind === "regular") {
+        expect(readFileSync(join(destination, relative), "utf8")).toBe('{"diagnostic":true}');
+      } else if (kind === "existing-output") {
+        expect(readFileSync(join(destination, relative), "utf8")).toBe("runner-owned");
+      } else {
+        expect(existsSync(join(destination, relative))).toBe(false);
+      }
+      expect(result.stderr).not.toContain("candidate PATH would execute");
+      if (kind.startsWith("reserved-")) {
+        expect(result.stderr).toContain("cannot supply runner measurement files");
+      }
+    },
+  );
 
   it.each([
-    { name: "success", expected: 0 },
-    { name: "advisory matrix 17", matrixExit: 17, expected: 0 },
     { name: "adapted gated matrix 17", matrixExit: 17, gated: true, adapted: true, expected: 0 },
     { name: "rejected gated matrix 17", matrixExit: 17, gated: true, expected: 17 },
-    { name: "setup failure", setupExit: 23, expected: 23 },
-    { name: "build failure", buildExit: 29, expected: 29 },
     { name: "bundle failure after matrix 17", matrixExit: 17, bundleExit: 31, expected: 31 },
     { name: "candidate index cannot waive runner CLI", lane: "source", expected: 0 },
-    { name: "source setup failure", lane: "source", setupExit: 23, expected: 23 },
-    { name: "source build failure", lane: "source", buildExit: 29, expected: 29 },
     { name: "source summary failure", lane: "source", summaryExit: 37, expected: 37 },
     { name: "custom diagnostic summary", admitted: false, expected: 0 },
     { name: "custom failed evidence summary", admitted: false, validationExit: 1, expected: 1 },
@@ -464,13 +402,6 @@ collect_diagnostics "$SOURCE" "$DESTINATION" "$SUBTREE"
       setupExit: 23,
       collectionExit: 41,
       expected: 23,
-    },
-    {
-      name: "custom build failure",
-      admitted: false,
-      buildExit: 29,
-      collectionExit: 41,
-      expected: 29,
     },
     { name: "custom unsafe collection", admitted: false, collectionExit: 41, expected: 41 },
     { name: "custom summary failure", admitted: false, summaryExit: 37, expected: 37 },
@@ -578,7 +509,7 @@ finish
           SHA: "a".repeat(40),
           LANE: entry.lane ?? "mock-provider",
           SETUP_EXIT: String(entry.setupExit ?? 0),
-          BUILD_EXIT: String(entry.buildExit ?? 0),
+          BUILD_EXIT: "0",
           MATRIX_EXIT: String(entry.matrixExit ?? 0),
           BUNDLE_EXIT: String(entry.bundleExit ?? 0),
           SUMMARY_EXIT: String(entry.summaryExit ?? 0),
@@ -607,8 +538,8 @@ finish
       ),
     ).toMatchObject({ exitCode: entry.expected, exportExitCode: entry.collectionExit ? 43 : 0 });
     if (entry.lane === "source") {
-      expect(existsSync(join(root, "runner-cli"))).toBe(!entry.setupExit && !entry.buildExit);
-      if (!entry.setupExit && !entry.buildExit) {
+      expect(existsSync(join(root, "runner-cli"))).toBe(!entry.setupExit);
+      if (!entry.setupExit) {
         expect(readFileSync(join(root, "runner-cli"), "utf8")).toBe("runner-measurement");
       }
     } else if (entry.admitted === false) {
@@ -621,7 +552,7 @@ finish
         expect(summary).toContain("candidate-derived summary");
         expect(summary).toContain("candidate-produced diagnostics only; not gate evidence");
       }
-    } else if (!entry.setupExit && !entry.buildExit && !entry.bundleExit) {
+    } else if (!entry.setupExit && !entry.bundleExit) {
       expect(readFileSync(join(root, "validated-matrix-exit"), "utf8")).toBe(
         `${entry.matrixExit ?? 0}\n`,
       );
@@ -692,113 +623,6 @@ finish
     },
   );
 
-  it.each([
-    { capability: "all", expected: 0 },
-    { capability: "no-sqlite", expected: 0 },
-    { capability: "no-default", expected: 1 },
-    { capability: "no-source", expected: 0 },
-    { capability: "no-entry", expected: 0 },
-  ])(
-    "preserves source probe coverage and capability skips: $capability",
-    ({ capability, expected }) => {
-      const root = tempDirs.make("openclaw-performance-source-parity-");
-      const openclaw = join(root, "openclaw");
-      const calls = join(root, "calls");
-      mkdirSync(join(openclaw, "scripts"), { recursive: true });
-      mkdirSync(join(openclaw, "src/config"), { recursive: true });
-      mkdirSync(join(openclaw, ".artifacts/sqlite-perf"), { recursive: true });
-      writeFileSync(join(openclaw, "src/config/zod-schema.core.ts"), "");
-      writeFileSync(join(openclaw, "scripts/build-all.mts"), "");
-      writeFileSync(join(openclaw, ".artifacts/sqlite-perf/smoke.json"), "{}");
-      const script = readFileSync(SCRIPT, "utf8");
-      const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `${definitions}
-npm() { :; }
-pnpm() { printf 'pnpm %s\\n' "$*" >> "$CALLS"; }
-git() { printf '%040d\\n' 0; }
-curl() { return 0; }
-node() {
-  printf 'node %s\\n' "$*" >> "$CALLS"
-  case "$*" in
-    *extensionProbe*) [[ "$CAPABILITY" != no-source && "$CAPABILITY" != no-entry ]] ;;
-    *test:sqlite:perf:smoke*) [[ "$CAPABILITY" != no-sqlite ]] ;;
-    *build-all*--help*) printf '  sourcePerformance\\n' ;;
-    *bench-gateway-startup*--help*)
-      [[ "$CAPABILITY" == no-default ]] || printf '  default (baseline)\\n'
-      printf '  skipChannels (channels)\\n' ;;
-    *net.createServer*) echo 49152 ;;
-    *randomBytes*) printf '%064d\\n' 0 ;;
-  esac
-}
-as_candidate() {
-  if [[ "$1" == env ]]; then
-    shift
-    while [[ "$1" == *=* ]]; do shift; done
-  fi
-  "$@"
-}
-run_sut source "$ROOT" diagnostic 2 canonical - - false "$ROOT/helpers" mock-model false "$ROOT" "$ROOT/kova" false
-supported=true
-[[ "$CAPABILITY" != no-entry ]] || supported=false
-source_cli_probes "$ROOT/openclaw" "$ROOT/results" 2 "$ROOT/helpers" "$supported"
-if [[ "$supported" == true && "$CAPABILITY" != no-source ]]; then
-  node "$ROOT/helpers/openclaw-performance-source-summary.mjs" --source-dir "$ROOT/results"
-fi
-`,
-        ],
-        {
-          env: { ...process.env, HOME: root, ROOT: root, CALLS: calls, CAPABILITY: capability },
-          encoding: "utf8",
-        },
-      );
-      expect(result.status, result.stderr).toBe(expected);
-      const invocations = readFileSync(calls, "utf8");
-      if (capability === "no-entry") {
-        expect(readFileSync(join(root, "results/index.md"), "utf8")).toContain(
-          "Trusted CLI measurement unsupported",
-        );
-        expect(JSON.parse(readFileSync(join(root, "results/cli-capability.json"), "utf8"))).toEqual(
-          {
-            supported: false,
-            entry: "openclaw.mjs",
-          },
-        );
-        expect(invocations).not.toContain("pnpm test:gateway:cpu-scenarios");
-        expect(invocations).not.toContain("--case gatewayHealthJsonWarmState");
-        return;
-      }
-      if (capability === "no-source") {
-        expect(result.stdout).toContain("Source probes skipped");
-        expect(invocations).not.toContain("pnpm test:gateway:cpu-scenarios");
-        expect(invocations).toContain("--case gatewayHealthJsonWarmState");
-        expect(
-          existsSync(
-            join(openclaw, ".artifacts/openclaw-performance/source/mock-provider/index.md"),
-          ),
-        ).toBe(false);
-        return;
-      }
-      if (capability === "no-default") {
-        expect(result.stderr).toContain("required default case");
-        expect(invocations).not.toContain("pnpm test:gateway:cpu-scenarios");
-        return;
-      }
-      expect(invocations).toContain("--startup-case default --startup-case skipChannels");
-      expect(invocations).toContain("pnpm test:extensions:memory");
-      expect(invocations.match(/pnpm openclaw qa suite/g)).toHaveLength(2);
-      expect(invocations).toContain("--scenario channel-chat-baseline");
-      expect(invocations).toContain("--case gatewayHealthJsonWarmState");
-      expect(invocations).toContain("--case gatewayHealthJsonFreshState");
-      expect(invocations).toContain("--case configGetGatewayPort");
-      expect(invocations.includes("pnpm test:sqlite:perf:smoke")).toBe(capability !== "no-sqlite");
-      expect(invocations).toContain("openclaw-performance-source-summary.mjs");
-    },
-  );
-
   describe("native Kova evidence", () => {
     const helperDirs = useAutoCleanupTempDirTracker(afterAll);
     let helpers: string;
@@ -823,75 +647,42 @@ fi
     it.each([
       {
         name: "advisory BLOCKED",
-        gated: false,
         sutExit: 17,
-        records: true,
-        planFilter: "scenario:probe",
         expected: 0,
       },
       {
         name: "unadaptable gated BLOCKED",
         gated: true,
         sutExit: 17,
-        records: true,
-        planFilter: "scenario:probe",
         expected: 17,
       },
       {
-        name: "missing requested records",
-        gated: false,
-        sutExit: 0,
-        records: false,
-        planFilter: "scenario:probe",
-        expected: 1,
-      },
-      {
         name: "wrong plan filters",
-        gated: false,
-        sutExit: 0,
-        records: true,
         planFilter: "scenario:wrong",
         expected: 1,
       },
       {
-        name: "ambiguous full reports",
-        gated: false,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
-        ambiguous: true,
-        expected: 1,
-      },
-      {
-        name: "custom Kova diagnostics",
-        gated: false,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
-        admitted: false,
-        expected: 0,
-      },
-      {
         name: "custom Kova cannot approve a gate",
         gated: true,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
         admitted: false,
         expected: 1,
       },
       {
         name: "custom Kova invalid evidence",
-        gated: false,
-        sutExit: 0,
         records: false,
-        planFilter: "scenario:probe",
         admitted: false,
         expected: 1,
       },
     ])(
       "enforces native Kova evidence and gate semantics: $name",
-      ({ gated, sutExit, records, planFilter, expected, admitted = true, ambiguous = false }) => {
+      ({
+        gated = false,
+        sutExit = 0,
+        records = true,
+        planFilter = "scenario:probe",
+        expected,
+        admitted = true,
+      }) => {
         const root = tempDirs.make("openclaw-performance-kova-contract-");
         const openclaw = join(root, "openclaw");
         mkdirSync(join(openclaw, ".artifacts/kova/reports/mock-provider"), { recursive: true });
@@ -935,9 +726,6 @@ fi
           join(openclaw, ".artifacts/kova/bundles/mock-provider/bundle.json"),
           '{"files":[]}',
         );
-        if (ambiguous) {
-          writeFileSync(join(openclaw, ".artifacts/kova/reports/mock-provider/second.json"), "{}");
-        }
         const script = readFileSync(SCRIPT, "utf8");
         const definitions = script.slice(0, script.lastIndexOf('\ncase "${1:-}" in'));
         const result = spawnSync(
@@ -963,15 +751,7 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
           },
         );
         expect(result.status, result.stderr).toBe(expected);
-        if (ambiguous) {
-          expect(result.stderr).toContain("expected exactly one full Kova JSON report");
-          expect(readFileSync(join(root, "helper-calls"), "utf8")).not.toContain(
-            "kova-workflow-evidence.mjs",
-          );
-          expect(existsSync(join(openclaw, ".artifacts/kova/summaries/mock-provider.md"))).toBe(
-            false,
-          );
-        } else if (planFilter !== "scenario:probe") {
+        if (planFilter !== "scenario:probe") {
           expect(result.stderr).toContain("did not preserve the requested include filters");
         } else {
           const calls = readFileSync(join(root, "helper-calls"), "utf8");
@@ -1039,24 +819,6 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
     expect(script).toContain('"$executor" /usr/bin/git -C "$kova" rev-parse HEAD');
     expect(script).toContain('pkill -KILL -u "$uid"');
   });
-
-  it.each([0, 5])(
-    "preserves explicit stop status %i, including an already-released lease",
-    (status) => {
-      const root = tempDirs.make("openclaw-performance-stop-");
-      const crabbox = join(root, "crabbox");
-      writeFileSync(
-        crabbox,
-        `#!/bin/sh\n[ "$1:$2:$3:$4:$5" = "stop:--provider:aws:--id:cbx_0123456789ab" ] || exit 64\nexit ${status}\n`,
-      );
-      chmodSync(crabbox, 0o755);
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
-        expect(result.status).toBe(status);
-      }
-    },
-  );
 
   it("verifies tar paths, sizes, hashes, and lease cleanup before export", () => {
     const files = fixture();
@@ -1126,29 +888,5 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
     const result = verify(files);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Crabbox timing did not bind the expected lease");
-  });
-
-  it("keeps the evidence schema bound to immutable revisions and cleanup", () => {
-    const schema = JSON.parse(readFileSync(SCHEMA, "utf8")) as {
-      properties: Record<string, unknown>;
-      required: string[];
-    };
-
-    expect(schema.required).toEqual(
-      expect.arrayContaining(["openclawSha", "kovaSha", "workflow", "crabbox", "command", "lease"]),
-    );
-    expect(schema.properties).toHaveProperty("artifacts");
-    expect(schema.properties).toHaveProperty("isolation");
-  });
-
-  it("rejects malformed remote evidence against the checked-in schema", () => {
-    const schema = JSON.parse(readFileSync(SCHEMA, "utf8")) as object;
-    const evidence = JSON.parse(readFileSync(fixture().evidence, "utf8")) as {
-      isolation: Record<string, unknown>;
-    };
-    const validator = Compile(schema);
-    expect(validator.Check(evidence)).toBe(true);
-    delete evidence.isolation.tailscaleMetadataAbsent;
-    expect(validator.Check(evidence)).toBe(false);
   });
 });

@@ -71,7 +71,9 @@ describe("configured utility detection and activation", () => {
         expect(setup.login).not.toHaveBeenCalled();
         expect(setup.run).not.toHaveBeenCalled();
         expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
-        const migrated = migrateLegacyConfig(setup.config);
+        const migrated = migrateLegacyConfig(setup.config, {
+          sourceConfigBeforeMigrations: setup.config,
+        });
         assert(migrated.config);
         expect(migrated.partiallyValid).toBeUndefined();
         await fs.writeFile(setup.configPath, `${JSON.stringify(migrated.config, null, 2)}\n`);

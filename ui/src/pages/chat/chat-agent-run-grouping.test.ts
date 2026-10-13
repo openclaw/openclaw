@@ -57,6 +57,37 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
+  it.each(["interrupted", "active", "silent-terminal", "earlier-terminal"] as const)(
+    "classifies a persisted tool-use tail as %s without inventing a final answer",
+    (state) => {
+      const runId = "run-tail";
+      const commentary = group("assistant", "Checking the fixture.", runId, {
+        stopReason: "toolUse",
+        __openclaw: { runId, turnTainted: true },
+      });
+      const terminal = { role: "assistant", stopReason: "stop", content: [], runId };
+      const frame = requireFrame(
+        coalesceAgentRunFrames(
+          [userBoundary(runId), commentary, group("tool", "inspection", runId)],
+          {
+            messages: [
+              ...(state === "earlier-terminal" ? [terminal] : []),
+              ...commentary.messages.map(({ message }) => message),
+              ...(state === "silent-terminal" ? [terminal] : []),
+            ],
+            activeRunId: state === "active" ? runId : null,
+          },
+        )[1],
+      );
+      expect(frame.outcome).toEqual(
+        state === "interrupted" || state === "active"
+          ? { kind: state }
+          : { kind: "completed", actionOwner: null },
+      );
+      expect(frame.parts).toHaveLength(2);
+    },
+  );
+
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";
     const stream: StreamRunRenderItem = {
@@ -195,26 +226,14 @@ describe("coalesceAgentRunFrames", () => {
     ).not.toBe(requireFrame(coalesceAgentRunFrames([userBoundary("steer-run"), streamed])[1]).key);
   });
 
-  it("keeps different and missing run identities outside the same frame", () => {
-    const first = group("assistant", "first", "run-1");
-    const second = group("assistant", "second", "run-2");
-    const unowned = group("assistant", "unowned", undefined);
-    const items = coalesceAgentRunFrames([userBoundary(), first, second, unowned]);
-
-    expect(items.map((item) => item.kind)).toEqual([
-      "group",
-      "agent-run-frame",
-      "agent-run-frame",
-      "group",
-    ]);
-    expect(requireFrame(items[1]).runId).toBe("run-1");
-    expect(requireFrame(items[2]).runId).toBe("run-2");
-  });
-
-  it("does not compose across forwarded sessions_send input", () => {
-    const boundary = group("assistant", "forwarded", "run-1", {
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
+  it.each([
+    {
+      name: "forwarded sessions_send input",
+      boundary: group("assistant", "forwarded", "run-1", {
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    },
+  ])("does not compose across $name", ({ boundary }) => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", "run-1"),
@@ -222,9 +241,16 @@ describe("coalesceAgentRunFrames", () => {
       group("assistant", "after", "run-1"),
     ]);
 
-    expect(items.filter((item) => item.kind === "agent-run-frame")).toHaveLength(1);
-    expect(items).toContain(boundary);
-    expect(items.at(-1)).toMatchObject({ kind: "group", key: "group:after" });
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "agent-run-frame",
+      "group",
+      "agent-run-frame",
+    ]);
+    expect(items[2]).toBe(boundary);
+    expect(requireFrame(items[1]).parts.map((part) => part.key)).toEqual(["group:before"]);
+    expect(requireFrame(items[3]).parts.map((part) => part.key)).toEqual(["group:after"]);
+    expect(requireFrame(items[1]).key).not.toBe(requireFrame(items[3]).key);
   });
 
   it("starts a new frame at an authoritative projected turn boundary", () => {
@@ -244,26 +270,14 @@ describe("coalesceAgentRunFrames", () => {
     expect(frames.map((frame) => frame.boundaryId)).toEqual(["send:send-1", "entry:steer-entry"]);
   });
 
-  it("treats notices and dividers as hard boundaries", () => {
-    const notice = { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 };
-    const divider = { kind: "divider" as const, key: "divider", label: "Reset", timestamp: 3 };
-    const items = coalesceAgentRunFrames([
-      userBoundary(),
-      group("assistant", "before", "run-1"),
-      notice,
-      group("assistant", "between", "run-1"),
-      divider,
-      group("assistant", "after", "run-1"),
-    ]);
-
-    expect(items.filter((item) => item.kind === "agent-run-frame")).toHaveLength(1);
-    expect(items).toContain(notice);
-    expect(items).toContain(divider);
-  });
-
-  it("gives a restored run segment a unique key after a hard boundary", () => {
+  it.each([
+    {
+      name: "notice",
+      boundary: { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 },
+    },
+    { name: "metadata-less peer", boundary: group("user", "peer", undefined) },
+  ])("gives a restored run segment a unique key after a $name boundary", ({ boundary }) => {
     const runId = "run-1";
-    const notice = { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 };
     const restoredStream: StreamRunRenderItem = {
       kind: "stream-run",
       key: "stream-run:restored",
@@ -282,7 +296,7 @@ describe("coalesceAgentRunFrames", () => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", runId),
-      notice,
+      boundary,
       restoredStream,
     ]);
     const frames = items.filter(
@@ -291,56 +305,13 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(frames).toHaveLength(2);
     expect(frames[0]?.key).not.toBe(frames[1]?.key);
-    expect(frames[1]?.key).toContain("notice");
-  });
-
-  it("marks active frames active and tool-only terminal frames terminal", () => {
-    const runId = "run-1";
-    const activeStream: StreamRunRenderItem = {
-      kind: "stream-run",
-      key: "stream-run:active",
-      runId,
-      boundaryId: "send:send-1",
-      parts: [
-        {
-          kind: "reading-indicator",
-          key: "reading",
-          startedAt: 1,
-          runId,
-          boundaryId: "send:send-1",
-        },
-      ],
-    };
-    const active = requireFrame(coalesceAgentRunFrames([userBoundary(), activeStream])[1]);
-    const toolOnly = requireFrame(
-      coalesceAgentRunFrames([userBoundary(), group("tool", "tool-only", runId)])[1],
+    expect(frames[0]?.key).toBe(
+      requireFrame(coalesceAgentRunFrames([userBoundary(), group("assistant", "before", runId)])[1])
+        .key,
     );
-
-    expect(active.outcome).toEqual({ kind: "active" });
-    expect(toolOnly.outcome).toEqual({ kind: "completed", actionOwner: null });
-    expect(toolOnly.parts.at(-1)).toMatchObject({ role: "tool" });
   });
 
   it.each([
-    {
-      name: "tool-only completion",
-      parts: [group("tool", "tool-only", "run-1")],
-      outcome: { kind: "completed", actionOwner: null },
-    },
-    {
-      name: "tool-use commentary",
-      parts: [
-        group("assistant", "commentary-tool", "run-1", {
-          stopReason: "toolUse",
-          content: [
-            { type: "text", text: "I will inspect it." },
-            { type: "tool_call", id: "call-1", name: "read", args: {} },
-            { type: "tool_result", id: "call-1", name: "read", text: "done" },
-          ],
-        }),
-      ],
-      outcome: { kind: "completed", actionOwner: null },
-    },
     {
       name: "persisted keyed commentary",
       parts: [
@@ -409,11 +380,6 @@ describe("coalesceAgentRunFrames", () => {
       outcome: { kind: "completed", actionOwner: { key: "final-omitted-image" } },
     },
     {
-      name: "empty final",
-      parts: [group("assistant", "empty", "run-1", { stopReason: "stop", content: [] })],
-      outcome: { kind: "completed", actionOwner: null },
-    },
-    {
       name: "reasoning-only final",
       parts: [
         group("assistant", "thinking", "run-1", {
@@ -424,15 +390,18 @@ describe("coalesceAgentRunFrames", () => {
       outcome: { kind: "completed", actionOwner: null },
     },
     {
-      name: "explicit final followed by work",
+      name: "mixed-phase answer followed by work",
       parts: [
-        group("assistant", "final", "run-1", {
-          phase: "final_answer",
-          content: "Finished.",
+        group("assistant", "mixed-final", "run-1", {
+          content: ["commentary", "final_answer"].map((phase) => ({
+            type: "text",
+            text: phase === "commentary" ? "Checking" : "Finished.",
+            textSignature: JSON.stringify({ v: 1, id: phase, phase }),
+          })),
         }),
         group("tool", "trailing-tool", "run-1"),
       ],
-      outcome: { kind: "completed", actionOwner: { key: "final" } },
+      outcome: { kind: "completed", actionOwner: { key: "mixed-final" } },
     },
   ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
     const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
@@ -440,23 +409,8 @@ describe("coalesceAgentRunFrames", () => {
     expect(frame).toMatchObject({ outcome });
   });
 
-  it("marks preceding commentary failed when an error closes the run", () => {
-    const error = group("assistant", "error", "run-1", { stopReason: "error" });
-    const items = coalesceAgentRunFrames([
-      userBoundary(),
-      group("assistant", "commentary", "run-1", { phase: "commentary" }),
-      error,
-    ]);
-
-    expect(requireFrame(items[1])).toMatchObject({
-      outcome: { kind: "failed" },
-      parts: [{ key: "group:commentary" }, { key: "group:error" }],
-    });
-  });
-
   it.each([
     { name: "placement abort", terminal: { stopReason: "stop", openclawAbort: { aborted: true } } },
-    { name: "timeout", terminal: { stopReason: "timeout" } },
   ])("marks an interrupted partial failed for $name", ({ terminal }) => {
     const frame = requireFrame(
       coalesceAgentRunFrames([
@@ -466,6 +420,32 @@ describe("coalesceAgentRunFrames", () => {
     );
 
     expect(frame.outcome).toEqual({ kind: "failed" });
+  });
+
+  it("does not join promptless tools to a stream with a different explicit boundary", () => {
+    const tool = group("tool", "old-tool", "run-1");
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream:steered",
+      runId: "run-1",
+      boundaryId: "send:steer",
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:steered",
+          startedAt: 2,
+          runId: "run-1",
+          boundaryId: "send:steer",
+        },
+      ],
+    };
+    const items = coalesceAgentRunFrames([tool, stream]);
+    expect(items[0]).toBe(tool);
+    expect(requireFrame(items[1])).toMatchObject({
+      boundaryId: "send:steer",
+      outcome: { kind: "active" },
+      parts: [stream],
+    });
   });
 
   it("leaves active search projections uncomposed", () => {

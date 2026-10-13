@@ -3,9 +3,10 @@
  *
  * Builds restricted agent configs for sandbox tool-policy and workspace tests.
  */
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-type AgentToolsConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number]["tools"];
+type AgentToolsConfig = AgentConfig["tools"];
 type SandboxToolsConfig = {
   allow?: string[];
   deny?: string[];
@@ -24,9 +25,8 @@ export function createRestrictedAgentSandboxConfig(params: {
           scope: "agent",
         },
       },
-      list: [
-        {
-          id: "restricted",
+      entries: {
+        restricted: {
           workspace: params.workspace ?? "~/openclaw-restricted",
           sandbox: {
             mode: "all",
@@ -34,7 +34,7 @@ export function createRestrictedAgentSandboxConfig(params: {
           },
           ...(params.agentTools ? { tools: params.agentTools } : {}),
         },
-      ],
+      },
     },
     ...(params.globalSandboxTools
       ? {

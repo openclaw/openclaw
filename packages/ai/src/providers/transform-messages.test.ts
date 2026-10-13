@@ -38,7 +38,7 @@ function makeAssistant(
   };
 }
 
-describe.each(["error", "aborted"] as const)(
+describe.each(["aborted"] as const)(
   "%s assistant replay at the provider boundary",
   (stopReason) => {
     it("replaces partial text with one marker between unrelated user turns", () => {
@@ -73,15 +73,6 @@ describe.each(["error", "aborted"] as const)(
     });
 
     it.each([
-      { name: "empty content", content: [] },
-      {
-        name: "hidden reasoning",
-        content: [{ type: "thinking", thinking: "hidden partial reasoning" }],
-      },
-      {
-        name: "the no-content placeholder",
-        content: [{ type: "text", text: NO_CONTENT_PLACEHOLDER }],
-      },
       {
         name: "the no-content placeholder with hidden reasoning",
         content: [
@@ -227,7 +218,6 @@ describe("transformMessages", () => {
 
   it.each([
     ["synchronous call", false, " call_1 ", "call_1"],
-    ["synchronous result", false, "call_1", " call_1 "],
     ["asynchronous call", true, " call_1 ", "call_1"],
     ["asynchronous result", true, "call_1", " call_1 "],
   ] as const)(

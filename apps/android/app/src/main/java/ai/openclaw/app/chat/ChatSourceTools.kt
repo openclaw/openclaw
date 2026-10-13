@@ -114,16 +114,13 @@ private fun parseRecordedSources(
   return when (tool) {
     "web_search" -> {
       val kind = payload.sourceString("kind")
-      val rows =
-        payload[
-          if (kind == "results") {
-            "results"
-          } else if (kind == "answer") {
-            "citations"
-          } else {
-            return emptyList()
-          },
-        ] as? JsonArray
+      val rowsKey =
+        when (kind) {
+          "results" -> "results"
+          "answer" -> "citations"
+          else -> return emptyList()
+        }
+      val rows = payload[rowsKey] as? JsonArray
       rows.orEmpty().take(20).mapNotNull { item ->
         val row = item as? JsonObject ?: return@mapNotNull null
         val url = row.sourceString("url")?.takeIf { it.length <= 2_048 } ?: return@mapNotNull null

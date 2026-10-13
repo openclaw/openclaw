@@ -3,9 +3,34 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { dedupeSessionStoreTargetsBySqliteTarget } from "./targets.js";
 
 describe("session store target dedupe", () => {
+  it.runIf(process.platform !== "win32")(
+    "leaves a sole canonical target's inspection to its consumer",
+    async () => {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const agentsDir = path.join(stateDir, "agents");
+        await fs.mkdir(agentsDir, { recursive: true });
+        await fs.symlink("one", path.join(agentsDir, "one"), "dir");
+        const target = {
+          agentId: "one",
+          storePath: path.join(agentsDir, "one", "sessions", "sessions.json"),
+        };
+
+        expect(
+          dedupeSessionStoreTargetsBySqliteTarget([target], {
+            defaultAgentId: "one",
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            registeredDatabases: [],
+          }),
+        ).toEqual([target]);
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "refreshes aliased SQLite locators between dedupe calls",
     async () => {
@@ -20,6 +45,27 @@ describe("session store target dedupe", () => {
           { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
         ];
         const diagnostics: string[] = [];
+        const resolverOptions = {
+          agentId: "ops",
+          defaultAgentId: "main",
+          registeredDatabases: [{ agentId: "ops", path: path.join(realDir, "shared.sqlite") }],
+        };
+        const exactLocator = path.join(aliasDir, "shared.sqlite");
+        const customLocator = path.join(aliasDir, "shared.json");
+        expect(
+          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
+        ).toMatchObject({
+          agentId: "ops",
+          ownerSource: "database-registry",
+          path: exactLocator,
+          shared: true,
+        });
+        expect(
+          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
+        ).toMatchObject({
+          path: exactLocator,
+          unsuffixedOwnerAgentId: "ops",
+        });
 
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, {
@@ -34,6 +80,20 @@ describe("session store target dedupe", () => {
         await fs.mkdir(otherDir);
         await fs.unlink(aliasDir);
         await fs.symlink(otherDir, aliasDir, "dir");
+        expect(
+          resolveSqliteTargetFromSessionStorePath(exactLocator, resolverOptions),
+        ).toMatchObject({
+          agentId: "main",
+          ownerSource: "configured-default",
+          path: exactLocator,
+          shared: true,
+        });
+        expect(
+          resolveSqliteTargetFromSessionStorePath(customLocator, resolverOptions),
+        ).toMatchObject({
+          path: path.join(aliasDir, "shared.ops.sqlite"),
+          unsuffixedOwnerAgentId: "main",
+        });
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main", env }),
         ).toHaveLength(2);
@@ -61,6 +121,9 @@ describe("session store target dedupe", () => {
       await Promise.all(
         [...databaseDirs].map((databaseDir) => fs.mkdir(databaseDir, { recursive: true })),
       );
+      const databasePaths = new Set(
+        [...databaseDirs].map((databaseDir) => path.join(databaseDir, "openclaw-agent.sqlite")),
+      );
       const realpathNative = vi.spyOn(realpathSync, "native");
       try {
         expect(
@@ -68,8 +131,9 @@ describe("session store target dedupe", () => {
             defaultAgentId: targets[0]!.agentId,
           }),
         ).toEqual(targets);
+        // Parent lookup can use fs-safe's native backend; every identity starts here.
         const preparedPaths = realpathNative.mock.calls.flatMap(([pathname]) =>
-          typeof pathname === "string" && databaseDirs.has(pathname) ? [pathname] : [],
+          typeof pathname === "string" && databasePaths.has(pathname) ? [pathname] : [],
         );
         expect(preparedPaths).toHaveLength(targets.length);
         expect(new Set(preparedPaths).size).toBe(preparedPaths.length);

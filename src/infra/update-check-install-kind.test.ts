@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -38,6 +39,7 @@ describe("resolveUpdateInstallKind", () => {
           timeoutMs: 5000,
         });
         expect(observed.code, observed.stderr).toBe(0);
+        const probeStarted = createDeferredCore();
         vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
           if (!argv.includes("--show-toplevel")) {
             return await runCommand(argv, options);
@@ -48,6 +50,7 @@ describe("resolveUpdateInstallKind", () => {
           }
           await new Promise<void>((resolve) => {
             setTimeout(resolve, Math.min(discoveryMs, allowance));
+            probeStarted.resolve();
           });
           return allowance < discoveryMs
             ? {
@@ -76,6 +79,7 @@ describe("resolveUpdateInstallKind", () => {
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
+        await probeStarted.promise;
         await vi.advanceTimersByTimeAsync(discoveryMs);
         if (timeoutMs !== undefined && timeoutMs < discoveryMs) {
           expect(await outcome).toMatchObject({
@@ -98,13 +102,14 @@ describe("resolveUpdateInstallKind", () => {
       await initGit("--separate-git-dir", path.join(base, "git-dir"), root);
       await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
       await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
       const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
 
       await expect(resolveUpdateInstallKind(root)).resolves.toBe("git");
       await expect(resolveUpdateInstallKind(alias)).resolves.toBe("git");
       await expect(resolveUpdateInstallKind(nested)).resolves.toBe("package");
 
-      expect(runCommand).toHaveBeenCalledTimes(3);
+      expect(runCommand).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -112,13 +117,16 @@ describe("resolveUpdateInstallKind", () => {
     "does not treat a %s Git marker as a checkout",
     async (marker) => {
       await withTestDir({ prefix: "openclaw-update-install-marker-" }, async (root) => {
+        await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
         if (marker === "invalid-file") {
           await fs.writeFile(path.join(root, ".git"), "not a Git directory pointer\n");
         } else if (marker === "invalid-directory") {
           await fs.mkdir(path.join(root, ".git"));
         }
 
+        const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
         await expect(resolveUpdateInstallKind(root)).resolves.toBe("package");
+        expect(runCommand).toHaveBeenCalledTimes(marker === "absent" ? 0 : 1);
       });
     },
   );
@@ -136,9 +144,9 @@ describe("resolveUpdateInstallKind", () => {
     });
   });
 
-  it("keeps unavailable and undiscovered roots distinct", async () => {
+  it("leaves unavailable and undiscovered roots unclassified", async () => {
     await withTestDir({ prefix: "openclaw-update-install-missing-" }, async (base) => {
-      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("package");
+      await expect(resolveUpdateInstallKind(path.join(base, "missing"))).resolves.toBe("unknown");
       await expect(resolveUpdateInstallKind(null)).resolves.toBe("unknown");
     });
   });

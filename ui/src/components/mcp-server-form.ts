@@ -1,6 +1,9 @@
 import { html, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import type { McpServerTransport } from "../lib/config/mcp-servers.ts";
+
+registerMcpEnglish();
 
 export type McpServerForm = {
   name: string;

@@ -1,4 +1,3 @@
-// Resolves plugin enablement state from config and channel context.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
@@ -96,7 +95,9 @@ export async function enablePluginWithCapabilityConsent(
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
     onCapabilityConsent?: PluginCapabilityConsentHandler;
+    recordOfficialCapabilities?: boolean;
     beforePersistentEffect?: () => void | Promise<void>;
+    beforePersistentApply?: () => void;
   } = {},
 ): Promise<PluginEnableResult> {
   const result = enableExplicitlySelectedPluginInConfig(cfg, pluginId, options);
@@ -123,7 +124,11 @@ export async function enablePluginWithCapabilityConsent(
       const installed = metadata.index.plugins.find((plugin) => plugin.pluginId === id);
       // Compare the original state, never the synthetic enabled config. Legacy
       // plugins already running remain available without retroactive consent.
-      if (installed && !installed.enabled && installed.origin !== "bundled") {
+      if (
+        installed &&
+        (!installed.enabled || options.recordOfficialCapabilities) &&
+        installed.origin !== "bundled"
+      ) {
         const { resolvePluginCapabilityConsent } = await import("./capability-consent.js");
         await resolvePluginCapabilityConsent({
           config: cfg,
@@ -131,7 +136,9 @@ export async function enablePluginWithCapabilityConsent(
           env: options.env,
           metadata,
           onCapabilityConsent: options.onCapabilityConsent,
+          recordOfficialCapabilities: options.recordOfficialCapabilities,
           beforePersistentEffect: options.beforePersistentEffect,
+          beforePersistentApply: options.beforePersistentApply,
         });
       }
       return result;

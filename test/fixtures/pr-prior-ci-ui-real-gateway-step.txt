@@ -1,0 +1,79 @@
+set -euo pipefail
+if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
+  OPENCLAW_VITEST_INCLUDE_FILE="$(node --import tsx --input-type=module <<'NODE'
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { decodeNodeTestGroups } from "./scripts/lib/ci-node-test-groups-codec.mts";
+const [group] = decodeNodeTestGroups(process.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64);
+if (group.includePatterns) {
+  const includeFile = join(process.env.RUNNER_TEMP, "ui-real-gateway-include.json");
+  writeFileSync(includeFile, JSON.stringify(group.includePatterns));
+  process.stdout.write(includeFile);
+}
+NODE
+)"
+  export OPENCLAW_VITEST_INCLUDE_FILE
+fi
+config=test/vitest/vitest.ui-e2e-prebuilt.config.ts
+# Old frozen targets retain their own serial config and complete test list.
+# A present config's readiness failure must fail this invocation.
+if [[ ! -f "$config" ]]; then
+  if [[ "$FROZEN_TARGET" != "true" ]]; then
+    echo "::error::Current target is missing $config" >&2
+    exit 1
+  fi
+  config=test/vitest/vitest.ui-e2e.config.ts
+fi
+# Frozen targets retain their own reporter implementation and defaults.
+reporter_args=()
+if [[ "$FROZEN_TARGET" != "true" ]]; then
+  reporter_args=(--reporter verbose --reporter github-actions --reporter default --reporter ./scripts/lib/vitest-resource-reporter.mts)
+fi
+if [[ "$config" == test/vitest/vitest.ui-e2e-prebuilt.config.ts ]]; then
+  # The canonical config owns this inventory; desktop transport proof runs above.
+  node scripts/run-vitest.mjs run \
+    --config "$config" \
+    --configLoader runner \
+    "${reporter_args[@]}" \
+    --exclude ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts
+  exit 0
+fi
+node scripts/run-vitest.mjs run \
+  --config "$config" \
+  --configLoader runner \
+  "${reporter_args[@]}" \
+  ui/src/e2e/mcp-app-conformance.e2e.test.ts \
+  ui/src/e2e/control-ui-auth-transports.e2e.test.ts \
+  ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts \
+  ui/src/e2e/profile-page.real-gateway.e2e.test.ts \
+  ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts \
+  ui/src/e2e/logs-lifecycle.e2e.test.ts \
+  ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts \
+  ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts \
+  ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts \
+  ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
+  ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
+  ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts \
+  ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
+  ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
+  ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
+  ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts \
+  ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
+  ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
+  ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+  ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts \
+  ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
+  ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
+  ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
+  extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts \
+  extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts \
+  extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts \
+  extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts

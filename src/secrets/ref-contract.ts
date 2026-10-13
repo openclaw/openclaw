@@ -1,7 +1,6 @@
 /** Shared SecretRef grammar and validation helpers for config, schema, SDK, and gateway parity. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-/** Supported secret reference backends in config. */
 export type SecretRefSource = "env" | "file" | "exec" | "store"; // pragma: allowlist secret
 
 /**
@@ -18,20 +17,16 @@ export type SecretRef = {
   id: string;
 };
 
-/** Secret-bearing config input: either a literal string or a structured SecretRef. */
 export type SecretInput = string | SecretRef;
 
 /** Provider alias used when a SecretRef omits a source-specific provider. */
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
-/** Strict env-var id shape accepted for env-backed SecretRefs. */
 export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
-/** Return whether an env SecretRef id is a supported uppercase environment variable name. */
 export function isValidEnvSecretRefId(value: string): boolean {
   return ENV_SECRET_REF_ID_RE.test(value);
 }
 
-/** Narrow a value to the canonical SecretRef object shape. */
 export function isSecretRef(value: unknown): value is SecretRef {
   if (!isRecord(value)) {
     return false;
@@ -64,10 +59,8 @@ const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 /** Canonical id for file secret providers that expose exactly one value. */
 export const SINGLE_VALUE_FILE_REF_ID = "value";
 
-/** Failure class returned when an exec secret ref id is syntactically invalid. */
 type ExecSecretRefIdValidationReason = "pattern" | "traversal-segment";
 
-/** Result for callers that need to distinguish grammar failures from traversal attempts. */
 type ExecSecretRefIdValidationResult =
   | { ok: true }
   | {
@@ -75,19 +68,13 @@ type ExecSecretRefIdValidationResult =
       reason: ExecSecretRefIdValidationReason;
     };
 
-/** Minimal config shape needed to resolve default provider aliases for a secret source. */
 type SecretRefDefaultsCarrier = {
-  /** Secrets config subset; callers pass full config objects or narrow test doubles. */
   secrets?: {
     /** Explicit per-source provider aliases selected by the operator. */
     defaults?: {
-      /** Default provider alias for environment-variable secret refs. */
       env?: string;
-      /** Default provider alias for file-backed secret refs. */
       file?: string;
-      /** Default provider alias for exec-backed secret refs. */
       exec?: string;
-      /** Default provider alias for shared-store secret refs. */
       store?: string;
     };
     /** Provider declarations used only when callers ask to prefer the first matching source. */
@@ -95,12 +82,10 @@ type SecretRefDefaultsCarrier = {
   };
 };
 
-/** Builds the stable map key used to cache or compare resolved secret refs. */
 export function secretRefKey(ref: SecretRef): string {
   return `${ref.source}:${ref.provider}:${ref.id}`;
 }
 
-/** Resolves the default provider alias for one source, falling back to the built-in alias. */
 export function resolveDefaultSecretProviderAlias(
   config: SecretRefDefaultsCarrier,
   source: SecretRefSource,
@@ -127,7 +112,6 @@ export function resolveDefaultSecretProviderAlias(
   return DEFAULT_SECRET_PROVIDER_ALIAS;
 }
 
-/** Builds an environment-backed gateway credential using its configured provider alias. */
 export function createGatewayEnvSecretRef(
   config: SecretRefDefaultsCarrier,
   envVarName: string,
@@ -186,12 +170,10 @@ export function isValidFileSecretRefId(value: string): boolean {
     .every((segment) => FILE_SECRET_REF_SEGMENT_PATTERN.test(segment));
 }
 
-/** Validates a secret provider alias against the shared config/gateway grammar. */
 export function isValidSecretProviderAlias(value: string): boolean {
   return SECRET_PROVIDER_ALIAS_PATTERN.test(value);
 }
 
-/** Validates exec secret ref ids and reports why invalid ids failed. */
 export function validateExecSecretRefId(value: string): ExecSecretRefIdValidationResult {
   if (!EXEC_SECRET_REF_ID_PATTERN.test(value)) {
     return { ok: false, reason: "pattern" };
@@ -206,12 +188,10 @@ export function validateExecSecretRefId(value: string): ExecSecretRefIdValidatio
   return { ok: true };
 }
 
-/** Boolean convenience wrapper for callers that only need accept/reject behavior. */
 export function isValidExecSecretRefId(value: string): boolean {
   return validateExecSecretRefId(value).ok;
 }
 
-/** Validates a complete SecretRef against the shared provider/source/id grammar. */
 export function isValidSecretRef(ref: SecretRef): boolean {
   if (!isSecretRef(ref)) {
     return false;
@@ -219,23 +199,74 @@ export function isValidSecretRef(ref: SecretRef): boolean {
   if (!isValidSecretProviderAlias(ref.provider)) {
     return false;
   }
-  if (ref.source === "env") {
+  if (ref.source === "env" || ref.source === "store") {
     return isValidEnvSecretRefId(ref.id);
   }
   if (ref.source === "file") {
     return isValidFileSecretRefId(ref.id);
   }
-  if (ref.source === "store") {
-    return isValidEnvSecretRefId(ref.id);
-  }
   return isValidExecSecretRefId(ref.id);
 }
 
-/** Formats the user-facing validation message for rejected exec secret ref ids. */
 export function formatExecSecretRefIdValidationMessage(): string {
   return [
     "Exec secret reference id must match /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/",
     'and must not include "." or ".." path segments',
     '(example: "vault/openai/api-key" or "aws/secret#json_key").',
   ].join(" ");
+}
+
+export type ProviderRefGroup = {
+  source: SecretRefSource;
+  providerName: string;
+  refs: SecretRef[];
+};
+
+export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
+  if (refs.length === 0) {
+    return [];
+  }
+  const uniqueRefs = new Map<string, SecretRef>();
+  for (const ref of refs) {
+    const id = ref.id.trim();
+    if (!id) {
+      throw new Error("Secret reference id is empty.");
+    }
+    if (!isValidSecretProviderAlias(ref.provider)) {
+      throw new Error(
+        `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if ((ref.source === "env" || ref.source === "store") && !isValidEnvSecretRefId(id)) {
+      const label = ref.source === "env" ? "Env" : "Store";
+      throw new Error(
+        `${label} secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "file" && !isValidFileSecretRefId(id)) {
+      throw new Error(
+        `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    uniqueRefs.set(secretRefKey(ref), { ...ref, id });
+  }
+
+  const grouped = new Map<string, ProviderRefGroup>();
+  for (const ref of uniqueRefs.values()) {
+    // Provider calls are batched by source/provider so exec providers receive one request for
+    // many ids and file providers parse once per payload.
+    const key = `${ref.source}:${ref.provider}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.refs.push(ref);
+      continue;
+    }
+    grouped.set(key, { source: ref.source, providerName: ref.provider, refs: [ref] });
+  }
+  return [...grouped.values()];
 }

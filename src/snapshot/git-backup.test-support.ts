@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 
@@ -58,6 +58,8 @@ export async function createFormatFixture(databasePath: string): Promise<void> {
       CREATE VIRTUAL TABLE memory_vec USING vec0(embedding float[2]);
       CREATE TABLE empty_table (id INTEGER PRIMARY KEY, value TEXT);
       CREATE TABLE session_transcript_index_state (id TEXT PRIMARY KEY, cursor INTEGER);
+      CREATE TABLE session_transcript_fts_rows (session_id TEXT NOT NULL, fts_rowid INTEGER PRIMARY KEY);
+      INSERT INTO session_transcript_fts_rows VALUES ('main', 99);
     `);
     database
       .prepare(
@@ -129,6 +131,62 @@ export function createAgentFixture(databasePath: string, agentId: string): void 
   } finally {
     database.close();
   }
+}
+
+export function createCatalogFixture(databasePath: string) {
+  createAgentFixture(databasePath, "main");
+  const catalog = {
+    generatedBy: "openclaw-plugin-model-catalog-v1",
+    providers: {
+      fixture: {
+        api: "openai-completions",
+        apiKey: "provider-secret",
+        headers: { Authorization: "Bearer header-secret" },
+        models: [{ id: "model", apiKey: "model-secret", headers: { "X-Key": "model-key" } }],
+      },
+    },
+  };
+  const malformedHeaders = {
+    generatedBy: "openclaw-plugin-model-catalog-v1",
+    providers: {
+      fixture: {
+        api: "openai-completions",
+        apiKey: { value: "provider-secret" },
+        headers: ["provider-header-secret"],
+        models: [
+          { id: "array-header", headers: { Authorization: ["model-header-secret"] } },
+          { id: "object-header", headers: { Authorization: { token: "model-secret" } } },
+          { id: "string-headers", headers: "model-secret" },
+        ],
+      },
+    },
+  };
+  const unusableCatalogs = [
+    '{"apiKey":"malformed-secret"',
+    JSON.stringify({ ...catalog, providers: { fixture: ["provider-secret"] } }),
+    JSON.stringify({
+      ...catalog,
+      providers: { fixture: { models: { Authorization: "model-secret" } } },
+    }),
+    JSON.stringify({ ...catalog, providers: { fixture: { models: ["model-secret"] } } }),
+  ];
+  const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec("CREATE TABLE cache_entries (scope TEXT, key TEXT, value_json TEXT)");
+    const insert = database.prepare("INSERT INTO cache_entries VALUES (?, ?, ?)");
+    for (const scope of scopes) {
+      insert.run(scope, "fixture", JSON.stringify(catalog));
+      insert.run(scope, "malformed-headers", JSON.stringify(malformedHeaders));
+      for (const [index, contents] of unusableCatalogs.entries()) {
+        insert.run(scope, `broken-${index}`, contents);
+      }
+    }
+    insert.run("unrelated-cache", "keep", '{"value":"retained"}');
+  } finally {
+    database.close();
+  }
+  return { catalog, malformedHeaders, unusableCatalogs, scopes };
 }
 
 export async function writeBackupManifest(scopePath: string, agentId: string): Promise<void> {

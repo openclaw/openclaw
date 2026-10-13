@@ -51,7 +51,7 @@ export function registerGroupIntroPromptCases(): void {
     const telegramGroupParticipationNote =
       "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const groupSilentNote =
-      'If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting.';
+      'If no text reply is needed, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting.';
     const automaticGroupDeliveryGuidance = [
       "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
       "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",

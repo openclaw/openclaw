@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type { TopLevelComponents } from "./internal/discord.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
@@ -38,11 +37,7 @@ export type DiscordComponentSelectOption = {
   label: string;
   value: string;
   description?: string;
-  emoji?: {
-    name: string;
-    id?: string;
-    animated?: boolean;
-  };
+  emoji?: NonNullable<DiscordComponentButtonSpec["emoji"]>;
   default?: boolean;
 };
 
@@ -135,56 +130,38 @@ export type DiscordComponentMessageSpec = {
   modal?: DiscordModalSpec;
 };
 
-export type DiscordComponentEntry = {
+type DiscordInteractionEntry = {
   id: string;
+  callbackData?: string;
+  sessionKey?: string;
+  agentId?: string;
+  accountId?: string;
+  reusable?: boolean;
+  allowedUsers?: string[];
+  messageId?: string;
+  createdAt?: number;
+  expiresAt?: number;
+};
+
+export type DiscordComponentEntry = DiscordInteractionEntry & {
   kind: "button" | "select" | "modal-trigger";
   label: string;
-  callbackData?: string;
   callbackDataKind?: DiscordComponentCallbackDataKind;
   selectType?: DiscordComponentSelectType;
   options?: Array<{ value: string; label: string }>;
   modalId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
   consumptionGroupId?: string;
   consumptionGroupEntryIds?: string[];
-  allowedUsers?: string[];
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
 };
 
-export type DiscordModalFieldDefinition = {
+export type DiscordModalFieldDefinition = Omit<DiscordModalFieldSpec, "name"> & {
   id: string;
   name: string;
-  label: string;
-  type: DiscordComponentModalFieldType;
-  description?: string;
-  placeholder?: string;
-  required?: boolean;
-  options?: DiscordComponentSelectOption[];
-  minValues?: number;
-  maxValues?: number;
-  minLength?: number;
-  maxLength?: number;
-  style?: "short" | "paragraph";
 };
 
-export type DiscordModalEntry = {
-  id: string;
+export type DiscordModalEntry = DiscordInteractionEntry & {
   title: string;
-  callbackData?: string;
   fields: DiscordModalFieldDefinition[];
-  sessionKey?: string;
-  agentId?: string;
-  accountId?: string;
-  reusable?: boolean;
-  messageId?: string;
-  createdAt?: number;
-  expiresAt?: number;
-  allowedUsers?: string[];
 };
 
 export type DiscordComponentBuildResult = {

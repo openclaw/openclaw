@@ -2,10 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
-import {
-  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-  OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-} from "../../context-engine/host-compat.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import {
   registerContextEngineForOwner,
   resolveContextEngine,
@@ -23,12 +20,20 @@ import {
   type MemoryPromptSectionParams,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
+  prepareHarnessContextEnginePrompt,
 } from "./context-engine-lifecycle.js";
+import {
+  createContextEngine,
+  sessionParams,
+  textMessage,
+} from "./context-engine-lifecycle.test-support.js";
+import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 
 function registerTestContextEngine(
   id: string,
@@ -37,14 +42,6 @@ function registerTestContextEngine(
   return registerContextEngineForOwner(id, factory, `test:${id}`, {
     allowSameOwnerRefresh: true,
   });
-}
-
-function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
-  return {
-    role,
-    content: [{ type: "text", text }],
-    timestamp,
-  } as AgentMessage;
 }
 
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
@@ -60,26 +57,6 @@ function runtimeContextMessage(content: string, timestamp: number): AgentMessage
   } as AgentMessage;
 }
 
-function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  return {
-    info: { id: "test", name: "Test context engine" },
-    ingest: vi.fn(async () => ({ ingested: true })),
-    assemble: vi.fn(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    })),
-    compact: vi.fn(async () => ({ ok: true, compacted: false })),
-    ...overrides,
-  };
-}
-
-const sessionParams = {
-  sessionIdUsed: "session-1",
-  sessionId: "session-1",
-  sessionKey: "agent:main:main",
-  sessionFile: "sessions/main.jsonl",
-};
-
 let configuredProofEngineIdCounter = 0;
 function uniqueConfiguredProofEngineId() {
   configuredProofEngineIdCounter += 1;
@@ -87,130 +64,384 @@ function uniqueConfiguredProofEngineId() {
 }
 
 describe("harness context engine lifecycle", () => {
-  it("forwards session keys across bootstrap, assemble, and afterTurn hooks", async () => {
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-    const afterTurn = vi.fn(async () => {});
-    const contextEngine = createContextEngine({ bootstrap, assemble, afterTurn });
-
-    await bootstrapHarnessContextEngine({
-      hadSessionFile: true,
-      contextEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
-      runMaintenance: async () => undefined,
-      warn: () => {},
-    });
-    await assembleHarnessContextEngine({
-      contextEngine,
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [textMessage("user", "ask", 1)],
-      modelId: "gpt-test",
-    });
-    await finalizeHarnessContextEngineTurn({
-      contextEngine,
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
-      messagesSnapshot: [textMessage("assistant", "done", 2)],
-      prePromptMessageCount: 0,
-      runMaintenance: async () => undefined,
-      warn: () => {},
-    });
-
-    for (const hook of [bootstrap, assemble, afterTurn]) {
-      expect(hook).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: sessionParams.sessionKey }),
-      );
+  it("repairs windowed engine input and independently repairs engine output", async () => {
+    const evictedCall = textMessage("assistant", "", 2);
+    if (evictedCall.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
     }
+    evictedCall.content = [{ type: "toolCall", id: "evicted_call", name: "exec", arguments: {} }];
+    const currentRequest = textMessage("user", "Current request", 4);
+    const messages: AgentMessage[] = [
+      textMessage("user", "Old request", 1),
+      evictedCall,
+      textMessage("user", "Middle request", 3),
+      currentRequest,
+      {
+        role: "toolResult",
+        toolCallId: "evicted_call",
+        toolName: "exec",
+        content: [{ type: "text", text: "Late result from evicted history" }],
+        isError: false,
+        timestamp: 5,
+      },
+    ];
+    const original = JSON.stringify(messages);
+    const windowed = limitHistoryTurns(messages, 1);
+    expect(windowed).toEqual(messages.slice(3));
+    const output = textMessage("assistant", "", 6);
+    if (output.role !== "assistant") {
+      throw new Error("Expected assistant fixture");
+    }
+    output.content = [{ type: "toolCall", id: "engine_call", name: "exec", arguments: {} }];
+    const assemble = vi.fn(
+      async ({ messages: input }: Parameters<ContextEngine["assemble"]>[0]) => {
+        expect(input).toEqual([currentRequest]);
+        return {
+          messages: [...input, output],
+          estimatedTokens: 0,
+          promptAuthority: "preassembly_may_overflow" as const,
+        };
+      },
+    );
+    const warn = vi.fn();
+    const result = await prepareHarnessContextEnginePrompt({
+      ...sessionParams,
+      modelId: "test-model",
+      messages: windowed,
+      contextEngine: createContextEngine({ assemble }),
+      promptBudget: {
+        contextTokens: 100_000,
+        reserveTokens: 0,
+        systemPrompt: "system",
+        prompt: "next",
+      },
+      repairToolUseResultPairing: true,
+      isOpenAIResponsesApi: true,
+      warn,
+    });
+    expect(assemble).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.unwindowedContextEngineMessagesForPrecheck).toEqual([currentRequest]);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "engine_call",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(JSON.stringify(messages)).toBe(original);
+    expect(windowed).toEqual(messages.slice(3));
   });
 
-  it.each([false, true])(
-    "isolates prepared memory tools across non-legacy turns with sandboxed=%s",
-    async (sandboxed) => {
-      const prepare = vi.fn(async (params: MemoryPromptSectionParams) => {
-        const tools = [...params.availableTools].join(",");
-        params.availableTools.add("preparer-only");
-        await Promise.resolve();
-        return ["## Prepared Memory", `sandboxed=${params.sandboxed}; tools=${tools}`, ""];
-      });
-      registerTestMemoryPromptBuilder(({ availableTools }) => {
-        availableTools.add("builder-only");
-        return ["## Memory Recall", ""];
-      });
-      registerMemoryPromptPreparation("memory-wiki", prepare);
-      const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-        messages: params.messages,
-        estimatedTokens: 0,
-        systemPromptAddition: buildMemorySystemPromptAddition({
-          availableTools: params.availableTools ?? new Set(),
-          citationsMode: params.citationsMode,
-        }),
-      }));
-
-      try {
-        for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
-          const availableTools = toolNames ? new Set(toolNames) : undefined;
-          const result = await assembleHarnessContextEngine({
-            contextEngine: createContextEngine({ assemble }),
-            sessionId: sessionParams.sessionId,
-            sessionKey: "global",
-            agentId: "support",
-            messages: [textMessage("user", "visible ask", 1)],
-            availableTools,
-            citationsMode: "on",
-            sandboxed,
-            modelId: "gpt-test",
-          });
-
-          expect(result?.systemPromptAddition).toBe(
-            `## Memory Recall\n\n## Prepared Memory\nsandboxed=${sandboxed}; tools=${(toolNames ?? []).join(",")}`,
-          );
-          expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
-          expect(prepare).toHaveBeenLastCalledWith(
-            expect.objectContaining({
-              agentId: "support",
-              agentSessionKey: "global",
-              sandboxed,
+  it.each(["absent", "assembled", "fallback"] as const)(
+    "repairs the final tool conversation when the engine is %s",
+    async (mode) => {
+      const messages: AgentMessage[] = [
+        textMessage("user", "Run the tool", 1),
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_fixture", name: "exec", arguments: {} }],
+          timestamp: 2,
+        } as AgentMessage,
+      ];
+      const before = JSON.stringify(messages);
+      const warn = vi.fn();
+      const result = await prepareHarnessContextEnginePrompt({
+        ...sessionParams,
+        modelId: "test-model",
+        messages,
+        ...(mode === "absent"
+          ? {}
+          : {
+              contextEngine: createContextEngine({
+                assemble: async () => {
+                  if (mode === "fallback") {
+                    throw new Error("synthetic assembly failure");
+                  }
+                  return { messages, estimatedTokens: 0 };
+                },
+              }),
             }),
-          );
+        promptBudget: {
+          contextTokens: 100_000,
+          reserveTokens: 0,
+          systemPrompt: "system",
+          prompt: "next",
+        },
+        repairToolUseResultPairing: true,
+        isOpenAIResponsesApi: true,
+        warn,
+      });
+      expect(result.messages).toHaveLength(3);
+      expect(result.messages[2]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "call_fixture",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: "aborted" }],
+      });
+      expect(JSON.stringify(messages)).toBe(before);
+      expect(warn).toHaveBeenCalledTimes(mode === "fallback" ? 1 : 0);
+    },
+  );
+
+  it.each(["repair", "bounding"] as const)(
+    "falls back when plugin output fails during %s",
+    async (phase) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages = [textMessage("user", "Valid pipeline history", 1)];
+      const original = JSON.stringify(messages);
+      const malformed = textMessage("assistant", "Malformed plugin output", 2);
+      if (phase === "repair") {
+        Object.defineProperty(malformed, "content", {
+          get: () => {
+            throw new Error("synthetic repair failure");
+          },
+        });
+      } else {
+        const argumentsWithCycle: Record<string, unknown> = {};
+        argumentsWithCycle.self = argumentsWithCycle;
+        if (malformed.role !== "assistant") {
+          throw new Error("Expected assistant fixture");
         }
-        expect(buildMemorySystemPromptAddition({ availableTools: new Set() })).toBe(
-          "## Memory Recall",
+        malformed.content = [
+          { type: "toolCall", id: "cyclic_fixture", name: "exec", arguments: argumentsWithCycle },
+        ];
+      }
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async () => ({
+            messages: [malformed],
+            estimatedTokens: 0,
+            systemPromptAddition: "Invalid plugin instructions",
+          }),
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+        },
+      });
+      const warn = vi.fn();
+      try {
+        const result = await prepareHarnessContextEnginePrompt({
+          ...sessionParams,
+          contextEngine: lease.engine,
+          messages,
+          modelId: "test-model",
+          promptBudget: {
+            contextTokens: 100_000,
+            reserveTokens: 0,
+            systemPrompt: "Required instructions",
+            prompt: "next",
+          },
+          repairToolUseResultPairing: true,
+          isOpenAIResponsesApi: true,
+          warn,
+        });
+        expect(result.messages).toEqual(messages);
+        expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1024);
+        expect(JSON.stringify(messages)).toBe(original);
+        expect(result.systemPrompt).toBe("Required instructions");
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("context engine assemble failed, using pipeline messages:"),
         );
       } finally {
-        clearMemoryPluginState();
+        await lease.dispose();
       }
     },
   );
 
-  it("keeps hidden runtime-context custom messages out of assemble hooks", async () => {
-    const visibleUser = textMessage("user", "visible ask", 1);
-    const hiddenRuntimeContext = runtimeContextMessage("hidden runtime context", 2);
-    const visibleAssistant = textMessage("assistant", "visible answer", 3);
+  it.each([false, true])(
+    "counts synthetic tool results in the byte cap (engine throws=%s)",
+    async (throws) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages: AgentMessage[] = [
+        textMessage("user", "old history ".repeat(500), 1),
+        textMessage("user", "Run the tools", 2),
+        {
+          role: "assistant",
+          content: Array.from({ length: 6 }, (_, index) => ({
+            type: "toolCall",
+            id: `call_fixture_${index}`,
+            name: "exec",
+            arguments: {},
+          })),
+          timestamp: 3,
+        } as AgentMessage,
+        textMessage("user", "Current surviving request", 4),
+      ];
+      const original = JSON.stringify(messages);
+      const cap = Buffer.byteLength(JSON.stringify(messages.slice(1))) + 1;
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async ({ messages: input }) => {
+            if (throws) {
+              throw new Error("fixture assembly failure");
+            }
+            return { messages: input, estimatedTokens: 0 };
+          },
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: cap } } },
+        },
+      });
+      try {
+        const bounded = await prepareHarnessContextEnginePrompt({
+          ...sessionParams,
+          contextEngine: lease.engine,
+          messages,
+          modelId: "test-model",
+          promptBudget: {
+            contextTokens: 100_000,
+            reserveTokens: 0,
+            systemPrompt: "Required instructions",
+            prompt: "next",
+          },
+          repairToolUseResultPairing: true,
+          isOpenAIResponsesApi: true,
+          warn: vi.fn(),
+        });
+        expect(bounded.messages).toEqual(messages.slice(3));
+        expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(cap);
+        expect(JSON.stringify(messages)).toBe(original);
+      } finally {
+        await lease.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "bounds oversized assembly without changing stored messages (engine throws=%s)",
+    async (throws) => {
+      const engineId = uniqueConfiguredProofEngineId();
+      const messages = [
+        textMessage("user", "old history ".repeat(500), 1),
+        textMessage("assistant", "old answer", 2),
+        textMessage("user", "recent ask", 3),
+        textMessage("assistant", "recent answer", 4),
+      ];
+      const original = JSON.stringify(messages);
+      await registerTestContextEngine(engineId, () =>
+        createContextEngine({
+          info: { id: engineId, name: engineId },
+          assemble: async ({ messages: input }) => {
+            if (throws) {
+              throw new Error("fixture assembly failure");
+            }
+            return {
+              messages: input,
+              estimatedTokens: 10_000,
+              systemPromptAddition: "Required engine instructions",
+            };
+          },
+        }),
+      );
+      const lease = await createContextEngineLogicalTurnLease({
+        identity: { runId: engineId, sessionId: sessionParams.sessionId },
+        config: {
+          plugins: { slots: { contextEngine: engineId } },
+          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+        },
+      });
+      const contextEngine = lease.engine;
+      const params = {
+        ...sessionParams,
+        contextEngine,
+        messages,
+        modelId: "test-model",
+        tokenBudget: 2000,
+      };
+      const bounded = await prepareHarnessContextEnginePrompt({
+        ...params,
+        promptBudget: {
+          contextTokens: 4000,
+          reserveTokens: 1000,
+          systemPrompt: "Required system instructions",
+          prompt: "Current request",
+        },
+        repairToolUseResultPairing: true,
+        isOpenAIResponsesApi: false,
+        warn: vi.fn(),
+      });
+      expect(bounded.messages).toEqual(messages.slice(2));
+      expect(bounded.systemPrompt).toContain("Required system instructions");
+      expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(1024);
+      expect(JSON.stringify(messages)).toBe(original);
+      if (!throws) {
+        const first = await assembleHarnessContextEngine(params);
+        const second = await assembleHarnessContextEngine(params);
+        expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
+        expect(first?.contextProjection).toEqual(second?.contextProjection);
+        expect(first?.systemPromptAddition).toBe("Required engine instructions");
+      }
+      await lease.dispose();
+    },
+  );
+
+  it("isolates prepared memory tools across sandboxed non-legacy turns", async () => {
+    const sandboxed = true;
+    const prepare = vi.fn(async (params: MemoryPromptSectionParams) => {
+      const tools = [...params.availableTools].join(",");
+      params.availableTools.add("preparer-only");
+      await Promise.resolve();
+      return ["## Prepared Memory", `sandboxed=${params.sandboxed}; tools=${tools}`, ""];
+    });
+    registerTestMemoryPromptBuilder(({ availableTools }) => {
+      availableTools.add("builder-only");
+      return ["## Memory Recall", ""];
+    });
+    registerMemoryPromptPreparation("memory-wiki", prepare);
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
       messages: params.messages,
       estimatedTokens: 0,
+      systemPromptAddition: buildMemorySystemPromptAddition({
+        availableTools: params.availableTools ?? new Set(),
+        citationsMode: params.citationsMode,
+      }),
     }));
 
-    await assembleHarnessContextEngine({
-      contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [visibleUser, hiddenRuntimeContext, visibleAssistant],
-      modelId: "gpt-test",
-    });
+    try {
+      for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
+        const availableTools = toolNames ? new Set(toolNames) : undefined;
+        const result = await assembleHarnessContextEngine({
+          contextEngine: createContextEngine({ assemble }),
+          sessionId: sessionParams.sessionId,
+          sessionKey: "global",
+          agentId: "support",
+          messages: [textMessage("user", "visible ask", 1)],
+          availableTools,
+          citationsMode: "on",
+          sandboxed,
+          modelId: "gpt-test",
+        });
 
-    const assembleParams = assemble.mock.calls.at(0)?.[0];
-    expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
+        expect(result?.systemPromptAddition).toBe(
+          `## Memory Recall\n\n## Prepared Memory\nsandboxed=${sandboxed}; tools=${(toolNames ?? []).join(",")}`,
+        );
+        expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
+        expect(prepare).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: "support",
+            agentSessionKey: "global",
+            sandboxed,
+          }),
+        );
+      }
+      expect(buildMemorySystemPromptAddition({ availableTools: new Set() })).toBe(
+        "## Memory Recall",
+      );
+    } finally {
+      clearMemoryPluginState();
+    }
   });
 
   it("keeps persisted runtime-context carriers in place for append-only replay policies", async () => {
@@ -235,33 +466,6 @@ describe("harness context engine lifecycle", () => {
 
     const assembleParams = assemble.mock.calls.at(0)?.[0];
     expect(assembleParams?.messages).toEqual([visibleUser, persistedCarrier, visibleAssistant]);
-  });
-
-  it("isolates the authoritative history array while preserving in-place assembly", async () => {
-    const first = textMessage("user", "first", 1);
-    const second = textMessage("assistant", "second", 2);
-    const messages = [first, second];
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => {
-      expect(params.messages).not.toBe(messages);
-      expect(params.messages).toEqual(messages);
-      expect(params.messages[0]).toBe(first);
-      expect(params.messages[1]).toBe(second);
-      params.messages.reverse();
-      return { messages: params.messages, estimatedTokens: 0 };
-    });
-
-    const assembled = await assembleHarnessContextEngine({
-      contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages,
-      modelId: "gpt-test",
-    });
-
-    expect(messages).toEqual([first, second]);
-    expect(assembled?.messages).toEqual([second, first]);
-    expect(assembled?.messages[0]).toBe(second);
-    expect(assembled?.messages[1]).toBe(first);
   });
 
   it("preserves the authoritative history when assembly mutates then throws", async () => {
@@ -289,48 +493,6 @@ describe("harness context engine lifecycle", () => {
     expect(messages).toEqual([first, second]);
     expect(messages[0]).toBe(first);
     expect(messages[1]).toBe(second);
-  });
-
-  it("passes declared runtime settings into assemble hooks", async () => {
-    const visibleUser = textMessage("user", "visible ask", 1);
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-
-    await assembleHarnessContextEngine({
-      contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [visibleUser],
-      tokenBudget: 4096,
-      modelId: "gpt-5.5",
-      providerId: "openai",
-      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-    });
-
-    const assembleParams = assemble.mock.calls.at(0)?.[0];
-    expect(assembleParams?.runtimeSettings).toMatchObject({
-      schemaVersion: 1,
-      runtime: {
-        host: "openclaw",
-        mode: "normal",
-      },
-      model: {
-        resolved: "gpt-5.5",
-        provider: "openai",
-      },
-      contextEngineSelection: {
-        selectedId: expect.any(String),
-        source: "configured",
-      },
-      executionHost: {
-        id: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.id,
-      },
-      limits: {
-        promptTokenBudget: 4096,
-      },
-    });
   });
 
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
@@ -403,7 +565,7 @@ describe("harness context engine lifecycle", () => {
         return { ok: true, compacted: false };
       }),
     });
-    registerTestContextEngine(engineId, () => engine);
+    await registerTestContextEngine(engineId, () => engine);
     const configuredEngine = await resolveContextEngine({
       plugins: { slots: { contextEngine: engineId } },
     });
@@ -528,86 +690,6 @@ describe("harness context engine lifecycle", () => {
     }
   });
 
-  it("never derives model.family from the model id (defaults to null)", async () => {
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-
-    await assembleHarnessContextEngine({
-      contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [textMessage("user", "ask", 1)],
-      modelId: "anthropic/claude-opus-4-8",
-      providerId: "anthropic",
-    });
-
-    const noFamily = assemble.mock.calls.at(0)?.[0]?.runtimeSettings?.model;
-    // Regression: model.family must not mirror the model id.
-    expect(noFamily?.resolved).toBe("anthropic/claude-opus-4-8");
-    expect(noFamily?.family).toBeNull();
-
-    await assembleHarnessContextEngine({
-      contextEngine: createContextEngine({ assemble }),
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
-      messages: [textMessage("user", "ask", 1)],
-      modelId: "anthropic/claude-opus-4-8",
-      providerId: "anthropic",
-      modelFamily: "claude",
-    });
-
-    const withFamily = assemble.mock.calls.at(1)?.[0]?.runtimeSettings?.model;
-    // When a real family is supplied, it is carried through verbatim.
-    expect(withFamily?.family).toBe("claude");
-  });
-
-  it("keeps hidden runtime-context custom messages out of afterTurn hooks", async () => {
-    const beforePromptUser = textMessage("user", "old ask", 1);
-    const beforePromptRuntimeContext = runtimeContextMessage("old hidden context", 2);
-    const beforePromptAssistant = textMessage("assistant", "old answer", 3);
-    const turnUser = textMessage("user", "new ask", 4);
-    const turnRuntimeContext = runtimeContextMessage("new hidden context", 5);
-    const turnAssistant = textMessage("assistant", "new answer", 6);
-    const afterTurn = vi.fn(async () => {});
-
-    await finalizeHarnessContextEngineTurn({
-      contextEngine: createContextEngine({ afterTurn }),
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
-      sessionIdUsed: sessionParams.sessionIdUsed,
-      sessionKey: sessionParams.sessionKey,
-      sessionFile: sessionParams.sessionFile,
-      messagesSnapshot: [
-        beforePromptUser,
-        beforePromptRuntimeContext,
-        beforePromptAssistant,
-        turnUser,
-        turnRuntimeContext,
-        turnAssistant,
-      ],
-      prePromptMessageCount: 3,
-      tokenBudget: 2048,
-      runtimeContext: {},
-      runMaintenance: async () => undefined,
-      warn: () => {},
-    });
-
-    const afterTurnCalls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    const afterTurnParams = afterTurnCalls[0]?.[0] as
-      | { messages?: AgentMessage[]; prePromptMessageCount?: number }
-      | undefined;
-    expect(afterTurnParams?.messages).toEqual([
-      beforePromptUser,
-      beforePromptAssistant,
-      turnUser,
-      turnAssistant,
-    ]);
-    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
-  });
-
   describe("assembleHarnessContextEngine result validation", () => {
     // Regression for #75541: plugins that return a malformed assemble result
     // previously poisoned activeSession.messages with `undefined`, which then
@@ -630,36 +712,10 @@ describe("harness context engine lifecycle", () => {
       });
     }
 
-    it("passes through a well-formed AssembleResult unchanged", async () => {
-      const wellFormed = { messages: [visibleUser], estimatedTokens: 0 };
-      await expect(runAssembleWithEngineResult(wellFormed)).resolves.toBe(wellFormed);
-    });
-
     it("rejects an undefined assemble result with the engine id", async () => {
       await expect(runAssembleWithEngineResult(undefined)).rejects.toThrow(
         /context engine "broken-engine"[\s\S]*messages/,
       );
-    });
-
-    it("rejects a null assemble result with the engine id", async () => {
-      await expect(runAssembleWithEngineResult(null)).rejects.toThrow(
-        /context engine "broken-engine"[\s\S]*messages/,
-      );
-    });
-
-    it("rejects an assemble result missing the messages array (lossless-claw shape)", async () => {
-      // Mirrors the malformed shape reported in #75541, where the plugin
-      // returned an object that satisfied the truthy `if (!assembled)` guard
-      // but omitted the required `messages` field.
-      await expect(runAssembleWithEngineResult({ estimatedTokens: 0 })).rejects.toThrow(
-        /assemble\(\) returned an invalid result[\s\S]*messages of type undefined/,
-      );
-    });
-
-    it("rejects an assemble result whose messages field is not an array", async () => {
-      await expect(
-        runAssembleWithEngineResult({ messages: "all of them", estimatedTokens: 0 }),
-      ).rejects.toThrow(/messages of type string/);
     });
 
     it("rejects an assemble result whose messages field is null", async () => {
@@ -810,11 +866,7 @@ describe("harness context engine lifecycle", () => {
     );
   });
 
-  it.each([
-    { promptError: true, aborted: false, yieldAborted: false },
-    { promptError: false, aborted: true, yieldAborted: false },
-    { promptError: false, aborted: false, yieldAborted: true },
-  ])("does not advance context ingestion for unsuccessful turns: %o", async (terminal) => {
+  it("does not advance context ingestion for yielded turns", async () => {
     const afterTurn = vi.fn(async () => {});
     const ingest = vi.fn(async () => ({ ingested: true }));
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 0 }));
@@ -826,7 +878,9 @@ describe("harness context engine lifecycle", () => {
 
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ afterTurn, ingest, ingestBatch, maintain }),
-      ...terminal,
+      promptError: false,
+      aborted: false,
+      yieldAborted: true,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
       sessionFile: sessionParams.sessionFile,

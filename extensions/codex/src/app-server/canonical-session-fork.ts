@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessSessionForkParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -10,11 +10,8 @@ import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { readCodexRolloutSnapshot } from "../session-rollout-snapshot.js";
 import { codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { prepareCanonicalCodexFork } from "./canonical-fork-preparation.js";
-import {
-  claimCodexAppServerLiveThread,
-  hasCodexAppServerLiveThread,
-  type CodexAppServerLiveThreadOwnership,
-} from "./client-runtime.js";
+import { claimCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { checkCodexThreadAppAvailability } from "./plugin-thread-attestation.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
@@ -40,7 +37,7 @@ type Boundary = Extract<CodexUpstreamForkBoundaryResult, { ok: true }> & {
 
 /** Native history stays native; only the verified local display prefix is copied. */
 export async function forkCanonicalCodexSession(params: {
-  fork: AgentHarnessSessionForkParams;
+  fork: Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
   resolved: Boundary;
   sourceBinding: CodexAppServerThreadBinding;
   control: CodexSessionCatalogControl;
@@ -53,20 +50,20 @@ export async function forkCanonicalCodexSession(params: {
   const context = control.forkContext;
   if (!context?.localSessionsRoot || !resolved.canonical.thread.path) {
     throw new Error(
-      "Canonical Codex forks require the verified local rollout on its selected connection. Fork an original imported message instead.",
+      "Forking an OpenClaw Codex session requires the verified local rollout on its selected connection. Fork an original imported message instead.",
     );
   }
   const model = normalizeOptionalString(resolved.canonical.thread.model);
   const modelProvider = normalizeOptionalString(resolved.canonical.thread.modelProvider);
   if (!model || !modelProvider) {
     throw new Error(
-      "Codex did not report the canonical thread's model selection. Use Codex 0.153.0 or newer, or fork an original imported message instead.",
+      "Codex did not report the source thread's model selection. Use Codex 0.153.0 or newer, or fork an original imported message instead.",
     );
   }
   const sourceIdentity = sessionBindingIdentity({ ...fork.source, config });
   return bindingStore.withLease(sourceIdentity, async () => {
     if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-      throw new Error("Codex canonical source binding changed before initialization");
+      throw new Error("Codex source binding changed before initialization");
     }
     let freshThreadId: string | undefined;
     let ownership: CodexAppServerLiveThreadOwnership | undefined;
@@ -81,7 +78,7 @@ export async function forkCanonicalCodexSession(params: {
         initialEntry: { agentHarnessId: params.harnessRuntimeId, modelSelectionLocked: true },
         afterCreate: async (created) => {
           if (!created.initialization) {
-            throw new Error("Canonical Codex forks require host creation authority");
+            throw new Error("Forking an OpenClaw Codex session requires host creation authority");
           }
           const host = created.initialization;
           const initialization = prepareCodexSessionInitialization({
@@ -137,6 +134,7 @@ export async function forkCanonicalCodexSession(params: {
             },
           });
           const assertCurrent = () => {
+            fork.assertCurrent();
             initialization.assertCurrent();
             if (ownership && !subscriptionReleased) {
               ownership.assertCurrent();
@@ -150,7 +148,7 @@ export async function forkCanonicalCodexSession(params: {
           });
           assertCurrent();
           if (!sourceBinding.dynamicToolsFingerprint) {
-            throw new Error("The canonical source has no verified native catalog binding");
+            throw new Error("The source session has no verified native catalog binding");
           }
           const sourceCatalog = parseCodexNativeToolCatalog(
             snapshot.metadata,
@@ -173,7 +171,7 @@ export async function forkCanonicalCodexSession(params: {
           await resolved.canonical.assertUnchanged();
           assertCurrent();
           if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-            throw new Error("Codex canonical source binding changed during preparation");
+            throw new Error("Codex source binding changed during preparation");
           }
           assertCurrent();
           let raw: unknown;
@@ -200,19 +198,18 @@ export async function forkCanonicalCodexSession(params: {
           let response;
           try {
             response = assertCodexThreadForkResponse(raw);
+            if (
+              !response.thread.id.trim() ||
+              response.thread.id === sourceBinding.threadId ||
+              response.thread.id === fork.upstream.threadId ||
+              response.thread.forkedFromId !== sourceBinding.threadId ||
+              (await bindingStore.hasOtherThreadOwner(response.thread.id))
+            ) {
+              throw new Error("Codex fork returned an unsafe native thread identity");
+            }
           } catch (error) {
             control.retireConnection?.();
             throw error;
-          }
-          if (
-            !response.thread.id.trim() ||
-            response.thread.id === sourceBinding.threadId ||
-            response.thread.id === fork.upstream.threadId ||
-            response.thread.forkedFromId !== sourceBinding.threadId ||
-            (await bindingStore.hasOtherThreadOwner(response.thread.id))
-          ) {
-            control.retireConnection?.();
-            throw new Error("Codex fork returned an unsafe native thread identity");
           }
           freshThreadId = response.thread.id;
           ownership = await claimCodexAppServerLiveThread(context.client, freshThreadId);
@@ -229,7 +226,7 @@ export async function forkCanonicalCodexSession(params: {
             response.thread.modelProvider !== modelProvider
           ) {
             throw new Error(
-              "Codex fork did not preserve the exact canonical source and selected native model",
+              "Codex fork did not preserve the exact source session and selected native model",
             );
           }
           const turns = await listCodexUpstreamTurns(control, freshThreadId);
@@ -303,9 +300,9 @@ export async function forkCanonicalCodexSession(params: {
                 (index > 0 && item.effectiveParentId !== appended[index - 1]?.messageId),
             )
           ) {
-            throw new Error("The canonical Codex display prefix could not be copied completely");
+            throw new Error("The saved Codex display prefix could not be copied completely");
           }
-          initialization.link({
+          await initialization.linkAsync({
             sessionKey: created.key,
             agentId: created.agentId,
             catalogId: fork.upstream.catalogId,

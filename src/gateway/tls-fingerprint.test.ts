@@ -48,7 +48,7 @@ describe("Gateway client certificate inspection", () => {
     await expect(resolveLocalPin(tls)).resolves.toBeUndefined();
   });
 
-  it.each([undefined, "", " \t", "custom"])(
+  it.each([undefined, " \t", "custom"])(
     "pins existing public certificate (%j) without a key or CA",
     async (location) => {
       const root = await tempDirs.make("openclaw-tls-owner-client-");

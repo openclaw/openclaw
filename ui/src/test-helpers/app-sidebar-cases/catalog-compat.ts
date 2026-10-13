@@ -13,6 +13,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -35,6 +36,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
 
       const selection = context.agentSelection.state as {
@@ -51,6 +53,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "research",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();
@@ -79,6 +82,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
@@ -168,6 +172,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
@@ -243,6 +248,7 @@ describe("AppSidebar session catalog pagination", () => {
         const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
         gateway.publish({
           hello: {
+            auth: { role: "operator", scopes: ["operator.read"] },
             features: { methods: ["sessions.catalog.list"] },
           } as ApplicationGatewaySnapshot["hello"],
         });
@@ -289,6 +295,7 @@ describe("AppSidebar session catalog pagination", () => {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
+          auth: { role: "operator", scopes: ["operator.read"] },
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });

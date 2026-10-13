@@ -6,14 +6,18 @@ import {
   createWebSocketStream,
   WebSocketServer as NpmWebSocketServer,
 } from "../../../packages/gateway-client/src/websocket.js";
+import { rawDataByteLength, rawDataToString } from "../../infra/ws.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
 } from "../../shared/node-desktop-stream.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { isWorkerDesktopArdPassword } from "../../shared/worker-desktop-descriptor.js";
+import { hasExactOwnKeys } from "../../worker/protocol-record.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 
@@ -25,6 +29,7 @@ const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
+  /** Managed RFB password for VncAuth or ARD; never returned to a browser. */
   vncPassword?: string;
 };
 
@@ -56,28 +61,18 @@ type TicketNodeRegistry = Pick<
   "getForPairingGeneration" | "isConnectionCurrentPairingState"
 >;
 
-function rawDataBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
-
 function parseStreamMetadata(
   data: RawData,
   isBinary: boolean,
   kind: NodeStreamKind,
 ): NodeDesktopStreamMetadata | undefined {
-  const buffer = rawDataBuffer(data);
-  if (!isBinary || buffer.length === 0 || buffer.length > MAX_ATTACH_FRAME_BYTES) {
+  const length = rawDataByteLength(data);
+  if (!isBinary || length === 0 || length > MAX_ATTACH_FRAME_BYTES) {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
   let value: unknown;
   try {
-    value = JSON.parse(buffer.toString("utf8"));
+    value = JSON.parse(rawDataToString(data));
   } catch {
     throw new Error(`invalid node ${kind} attach metadata`);
   }
@@ -87,20 +82,18 @@ function parseStreamMetadata(
     }
     return undefined;
   }
-  if (!isRecord(value) || (value.auth !== "vnc-password" && value.auth !== "ard-account")) {
+  if (
+    !isRecord(value) ||
+    (value.auth !== "vnc-password" && value.auth !== "ard-account") ||
+    !hasExactOwnKeys(value, ["auth"], ["vncPassword"]) ||
+    (value.vncPassword !== undefined && typeof value.vncPassword !== "string") ||
+    (value.auth === "ard-account" &&
+      value.vncPassword !== undefined &&
+      !isWorkerDesktopArdPassword(value.vncPassword))
+  ) {
     throw new Error("invalid node desktop attach metadata");
   }
-  const keys = Object.keys(value);
-  if (keys.some((key) => key !== "auth" && key !== "vncPassword")) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.auth === "ard-account" && value.vncPassword !== undefined) {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;
+  const { vncPassword } = value;
   if (vncPassword) {
     registerSecretValueForRedaction(vncPassword);
   }
@@ -208,26 +201,21 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     attach: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => T,
   ) {
     const nowMs = now();
-    let resolve!: (stream: Duplex, metadata: NodeDesktopStreamMetadata | undefined) => void;
-    let reject!: (error: Error) => void;
-    const attached = new Promise<T>((resolvePromise, rejectPromise) => {
-      resolve = (stream, metadata) => {
-        try {
-          resolvePromise(attach(stream, metadata));
-        } catch (error) {
-          stream.destroy();
-          rejectPromise(error instanceof Error ? error : new Error(String(error)));
-        }
-      };
-      reject = rejectPromise;
-    });
-    void attached.catch(() => undefined);
+    const attached = createDeferredCore<T>();
+    void attached.promise.catch(() => undefined);
     const entry: TicketEntry = {
       kind,
       binding,
       expiresAtMs: nowMs + ttlMs,
-      resolve,
-      reject,
+      resolve(stream, metadata) {
+        try {
+          attached.resolve(attach(stream, metadata));
+        } catch (error) {
+          stream.destroy();
+          attached.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
+      reject: attached.reject,
       redeemed: false,
     };
     const { token: ticket, expiresAtMs } = tickets.mint(entry, { nowMs });
@@ -236,7 +224,7 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
       ticket,
       attachPath: `${kind === "desktop" ? NODE_DESKTOP_ATTACH_PATH : NODE_PORTAL_ATTACH_PATH}?ticket=${ticket}`,
       expiresAtMs,
-      attached,
+      attached: attached.promise,
       cancel() {
         rejectTicket(ticket, new Error(`node ${kind} stream ticket cancelled`));
       },
@@ -260,15 +248,14 @@ export function createNodeDesktopStreamBroker(deps: { ttlMs?: number; now?: () =
     registry: TicketNodeRegistry,
     binding: NodeDesktopStreamBinding,
   ): Promise<boolean> => {
-    const current = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    if (!current || current.connId !== binding.connId) {
-      return false;
-    }
-    if (!(await registry.isConnectionCurrentPairingState(binding.connId))) {
-      return false;
-    }
-    const rechecked = registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration);
-    return rechecked?.connId === binding.connId;
+    const hasCurrentConnection = () =>
+      registry.getForPairingGeneration(binding.nodeId, binding.pairingGeneration)?.connId ===
+      binding.connId;
+    return (
+      hasCurrentConnection() &&
+      (await registry.isConnectionCurrentPairingState(binding.connId)) &&
+      hasCurrentConnection()
+    );
   };
 
   async function handleUpgrade(

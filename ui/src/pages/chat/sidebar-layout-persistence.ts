@@ -47,7 +47,12 @@ export function updateSidebarSessionLayout(
           columns: previous.columns.map((column) => {
             const geometry = normalized.columns.find((candidate) => candidate.id === column.id);
             return geometry
-              ? { ...column, width: geometry.width, height: geometry.height }
+              ? {
+                  ...column,
+                  width: geometry.width,
+                  height: geometry.height,
+                  browserWidthPending: geometry.browserWidthPending,
+                }
               : column;
           }),
         }

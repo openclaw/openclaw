@@ -1,5 +1,6 @@
 /** Classifies systemd/systemctl unavailable errors into user-facing categories. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
@@ -10,7 +11,8 @@ export async function resolveUnavailableSystemdInspectionReason(
   deadline: number,
 ): Promise<ServiceInspectionReason> {
   const { execFileUtf8 } = await import("./exec-file.js");
-  const timeout = Math.floor(deadline - performance.now());
+  const now = getServiceInspectionClock();
+  const timeout = Math.floor(deadline - now());
   if (timeout <= 0) {
     return reason;
   }
@@ -34,13 +36,8 @@ export type SystemdUnavailableKind =
   | "user_bus_unavailable"
   | "generic_unavailable";
 
-// Normalizes platform command output before matching known systemd failure families.
-function normalizeDetail(detail?: string): string {
-  return normalizeLowercaseStringOrEmpty(detail);
-}
-
 export function isSystemctlMissingDetail(detail?: string): boolean {
-  const normalized = normalizeDetail(detail);
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("not found") ||
     normalized.includes("no such file or directory") ||
@@ -51,7 +48,7 @@ export function isSystemctlMissingDetail(detail?: string): boolean {
 }
 
 export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
-  const normalized = normalizeDetail(detail);
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("failed to connect to bus") ||
     normalized.includes("failed to connect to user scope bus") ||
@@ -66,7 +63,7 @@ export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
 }
 
 export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavailableKind | null {
-  const normalized = normalizeDetail(detail);
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   if (!normalized) {
     return null;
   }

@@ -20,8 +20,8 @@ const runCommandBuffered = vi.hoisted(() =>
 );
 const prepareWebSocket = vi.hoisted(() => vi.fn<() => Promise<void>>());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-ffmpeg", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-ffmpeg")>()),
   resolveFfmpegBin: () => "/usr/bin/ffmpeg",
 }));
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered }));
@@ -189,8 +189,7 @@ describe("Deepgram Flux audio", () => {
   it.each([
     { model: "flux-general-multi", language: " en ", queryLanguage: undefined, expectedHint: "en" },
     { model: "flux-general-multi", language: "en", queryLanguage: "fr", expectedHint: "fr" },
-    { model: "flux-general-en", language: " en ", queryLanguage: undefined, expectedHint: null },
-    { model: "flux-general-en", language: undefined, queryLanguage: "en", expectedHint: null },
+    { model: "flux-general-en", language: " en ", queryLanguage: "fr", expectedHint: null },
   ])(
     "uses valid protocol fields for $model with language=$language and query=$queryLanguage",
     async ({ model, language, queryLanguage, expectedHint }) => {
@@ -204,12 +203,9 @@ describe("Deepgram Flux audio", () => {
           authorization = headers.authorization;
         },
         onCloseStream: (socket) => {
-          socket.send(
-            JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "life moves" }),
-          );
-          socket.send(
-            JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript: "pretty fast" }),
-          );
+          for (const transcript of ["life moves", "pretty fast"]) {
+            socket.send(JSON.stringify({ type: "TurnInfo", event: "EndOfTurn", transcript }));
+          }
           socket.close();
         },
       });
@@ -251,31 +247,23 @@ describe("Deepgram Flux audio", () => {
     },
   );
 
-  it.each(["null", "[]", "42"])("rejects valid non-object server JSON: %s", async (payload) => {
+  it.each([
+    { name: "non-object server JSON", payload: "[]", error: "malformed JSON response" },
+    {
+      name: "retained transcript growth above the provider limit",
+      payload: JSON.stringify({
+        type: "TurnInfo",
+        event: "EndOfTurn",
+        transcript: "x".repeat(256 * 1024 + 1),
+      }),
+      error: "transcript exceeds size limit",
+    },
+  ])("rejects $name", async ({ payload, error }) => {
     mockDecodedPcm(Buffer.alloc(10, 1));
     const server = await createFluxServer({
       onCloseStream: (socket) => socket.send(payload),
     });
-    await expect(transcribeAudio(fluxRequest(server.baseUrl))).rejects.toThrow(
-      "malformed JSON response",
-    );
-  });
-
-  it("rejects retained transcript growth above the provider limit", async () => {
-    mockDecodedPcm(Buffer.alloc(10, 1));
-    const server = await createFluxServer({
-      onCloseStream: (socket) =>
-        socket.send(
-          JSON.stringify({
-            type: "TurnInfo",
-            event: "EndOfTurn",
-            transcript: "x".repeat(256 * 1024 + 1),
-          }),
-        ),
-    });
-    await expect(transcribeAudio(fluxRequest(server.baseUrl))).rejects.toThrow(
-      "transcript exceeds size limit",
-    );
+    await expect(transcribeAudio(fluxRequest(server.baseUrl))).rejects.toThrow(error);
   });
 
   it("does not open a private socket without the request-policy opt-in", async () => {

@@ -7,20 +7,12 @@ import {
 import { escapeRegExp } from "../../shared/regexp.js";
 import { findCodeRegions } from "../../shared/text/code-regions.js";
 
-const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
-const INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE = new RegExp(
+const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = "system-reminder|previous_response";
+const INTERNAL_RUNTIME_SCAFFOLDING_PATTERNS = [
   `<\\s*(${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>[\\s\\S]*?<\\s*\\/\\s*\\1\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE = new RegExp(
   `<\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*\\/\\s*>`,
-  "gi",
-);
-const INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE = new RegExp(
   `<\\s*\\/?\\s*(?:${INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN})\\b[^>]*>`,
-  "gi",
-);
+].map((pattern) => new RegExp(pattern, "gi"));
 const INTERNAL_RUNTIME_MARKER_LINE_PATTERNS = [
   "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>",
   "<<<END_UNTRUSTED_CHILD_RESULT>>>",
@@ -61,8 +53,8 @@ function isPromptDataHeaderLine(line: string): boolean {
 
 function isPromptDataTagLine(line: string, kind: "open" | "close"): boolean {
   const trimmed = line.trim().toLowerCase();
-  return PROMPT_DATA_TAG_NAMES.some((tagName) =>
-    kind === "open" ? trimmed === `<${tagName}>` : trimmed === `</${tagName}>`,
+  return PROMPT_DATA_TAG_NAMES.some(
+    (tagName) => trimmed === `<${kind === "close" ? "/" : ""}${tagName}>`,
   );
 }
 
@@ -72,35 +64,31 @@ function unwrapPromptDataWrapperLines(text: string): string {
     return text;
   }
   const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (isPromptDataHeaderLine(line) && isPromptDataTagLine(nextLine, "open")) {
-      changed = true;
-      continue;
-    }
-    if (isPromptDataTagLine(line, "open") || isPromptDataTagLine(line, "close")) {
-      changed = true;
-      continue;
-    }
-    output.push(line);
-  }
-  return changed ? output.join("\n") : text;
+  const output = lines.filter(
+    (line, index) =>
+      !(isPromptDataHeaderLine(line) && isPromptDataTagLine(lines[index + 1] ?? "", "open")) &&
+      !isPromptDataTagLine(line, "open") &&
+      !isPromptDataTagLine(line, "close"),
+  );
+  return output.length === lines.length ? text : output.join("\n");
 }
 
 export function stripInternalRuntimeScaffolding(text: string): string {
-  let stripped = stripInternalRuntimeContext(
-    unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(text))
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
-      .replace(INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, ""),
-    { preserveSurroundingWhitespace: true },
-  );
-  // Global replacement resets lastIndex, including between nested payload fields.
-  for (const pattern of INTERNAL_RUNTIME_MARKER_LINE_PATTERNS) {
-    stripped = stripped.replace(pattern, "");
+  // Removal and whitespace normalization cannot introduce a missing "<".
+  const hasAngleMarker = text.includes("<");
+  let stripped = text;
+  if (hasAngleMarker) {
+    stripped = unwrapPromptDataWrapperLines(stripInlineInternalRuntimeContextBlocks(stripped));
+    for (const pattern of INTERNAL_RUNTIME_SCAFFOLDING_PATTERNS) {
+      stripped = stripped.replace(pattern, "");
+    }
+  }
+  stripped = stripInternalRuntimeContext(stripped, { preserveSurroundingWhitespace: true });
+  if (hasAngleMarker) {
+    // Global replacement resets lastIndex, including between nested payload fields.
+    for (const pattern of INTERNAL_RUNTIME_MARKER_LINE_PATTERNS) {
+      stripped = stripped.replace(pattern, "");
+    }
   }
   return stripPlainTextToolCallBlocks(stripped, { resolveProtectedRanges: findCodeRegions });
 }

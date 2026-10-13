@@ -3,10 +3,25 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  prepareSqliteTargetFromSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each(["(multiple)", "  (multiple)  ", "stores/{agentId}/sessions.json", ""])(
+    "rejects non-concrete store selector %j before resolving or opening it",
+    async (storePath) => {
+      expect(() => resolveSqliteTargetFromSessionStorePath(storePath)).toThrow(
+        "Session storage requires a concrete store path",
+      );
+      await expect(prepareSqliteTargetFromSessionStorePath(storePath)).rejects.toThrow(
+        "Session storage requires a concrete store path",
+      );
+    },
+  );
+
   it("assigns a new exact SQLite locator to the configured default without caller capture", () => {
     const databasePath = path.resolve("tmp", "stores", "new-shared.sqlite");
 
@@ -160,6 +175,44 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       }).path,
     ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
   });
+
+  it.each([
+    { extension: "sqlite", registeredAgentId: "ops" },
+    { extension: "json", registeredAgentId: "main" },
+  ])(
+    "rejects inconclusive ownership for a $extension locator and retries after recovery",
+    ({ extension, registeredAgentId }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-inconclusive-session-owner-"));
+      const occupiedNames = Array.from("bcdefghijklmnopqrstuvwxyz0123456789");
+      for (const name of occupiedNames) {
+        fs.writeFileSync(path.join(root, name), "preserve");
+      }
+      const missingDirectory = path.join(root, "a");
+      const resolve = () =>
+        resolveSqliteTargetFromSessionStorePath(
+          path.join(missingDirectory, `shared.${extension}`),
+          {
+            agentId: "main",
+            defaultAgentId: "main",
+            registeredDatabases: [
+              { agentId: registeredAgentId, path: path.join(missingDirectory, "unrelated.sqlite") },
+            ],
+          },
+        );
+
+      expect(resolve).toThrow("Cannot determine whether database paths alias");
+      expect(fs.readdirSync(root).toSorted()).toEqual(occupiedNames.toSorted());
+      for (const name of occupiedNames) {
+        fs.unlinkSync(path.join(root, name));
+      }
+      expect(resolve()).toMatchObject({
+        agentId: "main",
+        ownerSource: "configured-default",
+        path: path.join(missingDirectory, "shared.sqlite"),
+      });
+      expect(fs.readdirSync(root)).toEqual([]);
+    },
+  );
 
   it("does not treat ambiguous suffix registration as ownership", () => {
     const storePath = path.join("tmp", "stores", "shared.json");

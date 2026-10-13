@@ -1,16 +1,12 @@
-// Mattermost plugin module owns monitor routing and delivery context helpers.
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
+import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import { resolveThreadSessionKeys } from "./monitor-helpers.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
-import {
-  evaluateMattermostNoVisibleReply,
-  formatMattermostNoVisibleReplyLog,
-} from "./no-visible-reply-diagnostic.js";
 import type { MattermostReplyDeliveryOutcome } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
 
@@ -25,12 +21,6 @@ export function shouldUpdateMattermostDraftToolProgress(
       account.streamingMode,
     )
   );
-}
-
-export function shouldSuppressMattermostDefaultToolProgressMessages(
-  account: Pick<ResolvedMattermostAccount, "streamingMode">,
-): boolean {
-  return account.streamingMode !== "off";
 }
 
 export function buildMattermostModelPickerSelectMessageSid(params: {
@@ -109,48 +99,26 @@ export function formatMattermostFinalDeliveryOutcomeLog(params: {
   accountId: string;
   agentId: string | undefined;
 }): string | undefined {
-  const violation = evaluateMattermostNoVisibleReply({
-    outcome: params.outcome,
-    payload: params.payload,
-  });
-  if (violation) {
-    return formatMattermostNoVisibleReplyLog({
-      violation,
-      to: params.to,
-      accountId: params.accountId,
-      agentId: params.agentId,
-    });
-  }
   if (params.outcome === "text" || params.outcome === "media") {
     return `delivered reply to ${params.to}`;
   }
+  if (params.outcome === "empty") {
+    // Detect dropped substantive payloads even when the agent run succeeded (#80501).
+    const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
+    const mediaUrlCount = countOutboundMedia(params.payload);
+    if (finalText.length > 0 || mediaUrlCount > 0) {
+      return (
+        `mattermost no-visible-reply: no-visible-reply-after-final-delivery` +
+        ` to=${params.to}` +
+        ` accountId=${params.accountId}` +
+        ` agentId=${params.agentId ?? "unknown"}` +
+        ` outcome=${params.outcome}` +
+        ` finalTextLength=${finalText.length}` +
+        ` mediaUrlCount=${mediaUrlCount}`
+      );
+    }
+  }
   return undefined;
-}
-
-function resolveMattermostEffectiveReplyToId(params: {
-  kind: ChatType;
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): string | undefined {
-  // Flat DMs never thread. Opted-in DMs use the same thread-root logic as rooms;
-  // replyToMode already reflects the effective per-chat-type mode.
-  if (params.kind === "direct" && params.replyToMode === "off") {
-    return undefined;
-  }
-  const threadRootId = normalizeOptionalString(params.threadRootId);
-  if (threadRootId) {
-    return threadRootId;
-  }
-  const postId = normalizeOptionalString(params.postId);
-  if (!postId) {
-    return undefined;
-  }
-  return params.replyToMode === "all" ||
-    params.replyToMode === "first" ||
-    params.replyToMode === "batched"
-    ? postId
-    : undefined;
 }
 
 export function resolveMattermostThreadSessionContext(params: {
@@ -160,15 +128,16 @@ export function resolveMattermostThreadSessionContext(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
-  const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
-    kind: params.kind,
-    postId: params.postId,
-    replyToMode: params.replyToMode,
-    threadRootId: params.threadRootId,
-  });
+  // Flat DMs never thread; rooms retain existing roots even when new replies are off.
+  const effectiveReplyToId =
+    params.kind === "direct" && params.replyToMode === "off"
+      ? undefined
+      : (normalizeOptionalString(params.threadRootId) ??
+        (params.replyToMode !== "off" ? normalizeOptionalString(params.postId) : undefined));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: params.baseSessionKey,
     threadId: effectiveReplyToId,
+    normalizeThreadId: (threadId) => threadId,
     // DM threads start fresh; room threads inherit their base session.
     parentSessionKey:
       effectiveReplyToId && params.kind !== "direct" ? params.baseSessionKey : undefined,

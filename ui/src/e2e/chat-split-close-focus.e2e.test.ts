@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -146,7 +147,8 @@ suite.define(() => {
         if (editable) {
           await homeComposer.fill("Home draft");
         }
-        const close = paneB.locator(".chat-pane__close-pane");
+        const layout = await openChatLayoutMenu(paneB);
+        const close = layout.getByRole("menuitem", { name: "Close pane", exact: true });
         await close.focus();
         expect(await close.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.screenshot({ path: path.join(suite.artifactDir, "before-close.png") });
@@ -159,7 +161,9 @@ suite.define(() => {
         await expect
           .poll(() => paneA.getAttribute("class"))
           .toContain("chat-pane-cache__pane--active");
-        await expect.poll(() => page.url()).toContain(`/chat/main/close-${surviving}`);
+        await expect
+          .poll(() => page.url())
+          .toContain(`/${composerVisible ? "chat" : "dashboard"}/main/close-${surviving}`);
         const focus = () =>
           page.evaluate(() => ({
             tag: document.activeElement?.tagName,
@@ -214,6 +218,7 @@ suite.define(() => {
           .toBe(editable && composerVisible ? "Draft A continuation" : "");
         expect.soft(observations.finalHomeDraft).toBe(editable ? "Home draft" : null);
         expect.soft(observations.methods.filter((method) => method === "chat.send")).toEqual([]);
+        expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
         expect.soft(errors).toEqual([]);
         expect.soft(afterClose.inChat).toBe(true);
         expect

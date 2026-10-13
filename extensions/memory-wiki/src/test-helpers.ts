@@ -22,6 +22,14 @@ import {
   type MemoryWikiPluginConfig,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
+import {
+  configureMemoryWikiImportRunStateStore,
+  createMemoryWikiImportRunStateStore,
+} from "./import-runs-state.js";
+import {
+  configureMemoryWikiSourceSyncStateStore,
+  createMemoryWikiSourceSyncStateStore,
+} from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const MEMORY_WIKI_TEST_HOME = "/Users/tester";
@@ -42,8 +50,7 @@ type MemoryWikiPluginApiHarness = {
   registerTool: ReturnType<typeof vi.fn>;
 };
 
-function createMemoryKeyedStore<T>() {
-  const values = new Map<string, T>();
+function createMemoryKeyedStore<T>(values = new Map<string, unknown>()) {
   return {
     async register(key: string, value: T) {
       values.set(key, value);
@@ -56,10 +63,10 @@ function createMemoryKeyedStore<T>() {
       return true;
     },
     async lookup(key: string) {
-      return values.get(key);
+      return values.get(key) as T | undefined;
     },
     async consume(key: string) {
-      const value = values.get(key);
+      const value = values.get(key) as T | undefined;
       values.delete(key);
       return value;
     },
@@ -71,7 +78,7 @@ function createMemoryKeyedStore<T>() {
         ([key, value]) =>
           ({
             key,
-            value,
+            value: value as T,
             createdAt: 0,
           }) satisfies PluginStateEntry<T>,
       );
@@ -148,6 +155,17 @@ function createMemoryBlobStore<T>() {
 export function createMemoryWikiTestHarness() {
   const tempWorkspaces: TempWorkspace[] = [];
   let compiledBlobStore = createMemoryBlobStore<unknown>();
+  const sourceSyncEntries = new Map<string, unknown>();
+  const importRunEntries = new Map<string, unknown>();
+
+  function configureStateStores(): void {
+    configureMemoryWikiSourceSyncStateStore(
+      createMemoryWikiSourceSyncStateStore(<T>() => createMemoryKeyedStore<T>(sourceSyncEntries)),
+    );
+    configureMemoryWikiImportRunStateStore(
+      createMemoryWikiImportRunStateStore(<T>() => createMemoryKeyedStore<T>(importRunEntries)),
+    );
+  }
 
   function configureCompiledCacheStore(): void {
     configureMemoryWikiCompiledCacheStore(
@@ -159,6 +177,10 @@ export function createMemoryWikiTestHarness() {
 
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
+    configureMemoryWikiSourceSyncStateStore(undefined);
+    configureMemoryWikiImportRunStateStore(undefined);
+    sourceSyncEntries.clear();
+    importRunEntries.clear();
     compiledBlobStore = createMemoryBlobStore<unknown>();
     await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
   });
@@ -166,6 +188,7 @@ export function createMemoryWikiTestHarness() {
   // openclaw-temp-dir: allow this shared harness couples workspace cleanup to cache and vault lifecycle.
   async function createTempDir(prefix: string): Promise<string> {
     configureCompiledCacheStore();
+    configureStateStores();
     const workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix,
@@ -181,6 +204,7 @@ export function createMemoryWikiTestHarness() {
     initialize?: boolean;
   }): Promise<MemoryWikiTestVault> {
     configureCompiledCacheStore();
+    configureStateStores();
     const rootDir =
       options?.rootDir ?? (await createTempDir(options?.prefix ?? "memory-wiki-test-"));
     const config = resolveMemoryWikiConfig(

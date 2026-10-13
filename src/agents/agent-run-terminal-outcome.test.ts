@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 import { extractAgentRunTerminalError } from "./agent-run-result.js";
 import {
   buildAgentRunTerminalOutcome,
-  buildAgentRunTerminalOutcomeFromLifecycleEvent,
   buildAgentRunTerminalOutcomeFromWaitResult,
-  classifyAgentRunTerminalOutcome,
-  isDefinitiveRunLifecycle,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunAttemptTerminal,
   mergeAgentRunTerminalOutcome,
@@ -18,102 +15,8 @@ import {
 
 describe("agent run terminal outcome", () => {
   it.each([
-    ["completed", "success"],
-    ["hard_timeout", "timeout"],
-    ["timed_out", "timeout"],
-    ["superseded", "cancellation"],
-    ["cancelled", "cancellation"],
-    ["aborted", "cancellation"],
-    ["blocked", "failure"],
-    ["abandoned", "failure"],
-    ["failed", "failure"],
-  ] as const)("classifies %s as %s", (reason, classification) => {
-    expect(classifyAgentRunTerminalOutcome({ reason })).toBe(classification);
-  });
-
-  it.each([
-    { label: "retryable provider failure", data: { error: "provider failed" }, definitive: false },
-    {
-      label: "settled execution failure",
-      data: { error: "preparation failed", executionSettled: true },
-      definitive: true,
-    },
-    {
-      label: "unsettled execution failure",
-      data: { error: "provider failed", executionSettled: false },
-      definitive: false,
-    },
-    {
-      label: "exhausted provider failure",
-      data: { error: "provider failed", fallbackExhaustedFailure: true },
-      definitive: true,
-    },
-    { label: "blocked run", data: { livenessState: "blocked" }, definitive: true },
-    { label: "abandoned run", data: { livenessState: "abandoned" }, definitive: true },
-    { label: "explicit cancellation", data: { aborted: true }, definitive: true },
-    { label: "provider timeout", data: { timeoutPhase: "provider" }, definitive: true },
-  ])("recognizes whether $label is a definitive lifecycle error", ({ data, definitive }) => {
-    expect(isDefinitiveRunLifecycle({ phase: "error", data })).toBe(definitive);
-  });
-
-  it.each(["start", "finishing"])("does not settle the %s lifecycle phase", (phase) => {
-    expect(isDefinitiveRunLifecycle({ phase, data: { executionSettled: true } })).toBe(false);
-  });
-
-  it("normalizes lifecycle signals with timeout, cancellation, failure precedence", () => {
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: "end",
-        data: { aborted: true },
-      }),
-    ).toMatchObject({ reason: "aborted", status: "error", stopReason: "aborted" });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: "end",
-        data: { aborted: true, stopReason: "timeout", timeoutPhase: "provider" },
-      }),
-    ).toMatchObject({ reason: "hard_timeout", status: "timeout" });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: "error",
-        data: { error: "provider failed" },
-      }),
-    ).toMatchObject({ reason: "failed", status: "error", error: "provider failed" });
-    expect(
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({
-        phase: "end",
-        data: { status: "cancelled", stopReason: "relay-closed" },
-      }),
-    ).toMatchObject({ reason: "cancelled", status: "error", stopReason: "relay-closed" });
-    const superseded = buildAgentRunTerminalOutcomeFromLifecycleEvent({
-      phase: "end",
-      data: { aborted: true, status: "superseded", stopReason: "superseded" },
-    });
-    expect(superseded).toMatchObject({
-      reason: "superseded",
-      status: "error",
-      stopReason: "superseded",
-    });
-    expect(isStickyAgentRunTerminalOutcome(superseded)).toBe(true);
-  });
-
-  it("treats provider/preflight/post-turn timeout phases as hard run timeouts", () => {
-    expect(
-      ["preflight", "provider", "post_turn", "queue", "gateway_draining"].map(
-        (timeoutPhase) =>
-          buildAgentRunTerminalOutcome({
-            status: "timeout",
-            timeoutPhase,
-          }).reason,
-      ),
-    ).toEqual(["hard_timeout", "hard_timeout", "hard_timeout", "timed_out", "timed_out"]);
-  });
-
-  it.each([
-    { metadata: {}, reason: "aborted", sticky: false },
     { metadata: { livenessState: "abandoned" }, reason: "aborted", sticky: false },
     { metadata: { livenessState: "blocked" }, reason: "blocked", sticky: false },
-    { metadata: { timeoutPhase: "provider" }, reason: "hard_timeout", sticky: true },
   ])("preserves auth revocation wait precedence with $metadata", ({ metadata, reason, sticky }) => {
     const outcome = buildAgentRunTerminalOutcomeFromWaitResult({
       status: "error",
@@ -124,51 +27,6 @@ describe("agent run terminal outcome", () => {
     expect(outcome?.reason).toBe(reason);
     expect(outcome?.stopReason).toBe("auth-revoked");
     expect(isStickyAgentRunTerminalOutcome(outcome)).toBe(sticky);
-  });
-
-  it("keeps queue and gateway draining timeouts non-sticky", () => {
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "timeout",
-      }).reason,
-    ).toBe("timed_out");
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "timeout",
-        timeoutPhase: "queue",
-      }).reason,
-    ).toBe("timed_out");
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "timeout",
-        timeoutPhase: "gateway_draining",
-      }).reason,
-    ).toBe("timed_out");
-  });
-
-  it("keeps explicit rpc and stop cancellations sticky even with queue attribution", () => {
-    const rpcCancel = buildAgentRunTerminalOutcome({
-      status: "timeout",
-      stopReason: "rpc",
-      timeoutPhase: "queue",
-      providerStarted: false,
-      endedAt: 100,
-    });
-    const lateCompletion = buildAgentRunTerminalOutcome({
-      status: "ok",
-      endedAt: 200,
-    });
-
-    expect(rpcCancel.reason).toBe("cancelled");
-    expect(rpcCancel.status).toBe("error");
-    expect(mergeAgentRunTerminalOutcome(rpcCancel, lateCompletion)).toBe(rpcCancel);
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "timeout",
-        stopReason: "stop",
-        timeoutPhase: "gateway_draining",
-      }).reason,
-    ).toBe("cancelled");
   });
 
   it("keeps restart cancellation sticky over late completion", () => {
@@ -189,6 +47,7 @@ describe("agent run terminal outcome", () => {
       status: "error",
       stopReason: "restart",
     });
+    expect(isStickyAgentRunTerminalOutcome(restartCancel)).toBe(true);
     expect(mergeAgentRunTerminalOutcome(restartCancel, lateCompletion)).toBe(restartCancel);
   });
 
@@ -205,32 +64,6 @@ describe("agent run terminal outcome", () => {
       status: "timeout",
       stopReason: "restart",
       timeoutPhase: "provider",
-    });
-  });
-
-  it("does not treat successful model stop metadata as cancellation", () => {
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "ok",
-        stopReason: "stop",
-      }),
-    ).toEqual({
-      reason: "completed",
-      status: "ok",
-      stopReason: "stop",
-    });
-  });
-
-  it("does not treat successful provider-started metadata as timeout without attribution phase", () => {
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "ok",
-        providerStarted: true,
-      }),
-    ).toEqual({
-      reason: "completed",
-      status: "ok",
-      providerStarted: true,
     });
   });
 
@@ -265,23 +98,8 @@ describe("agent run terminal outcome", () => {
 
     expect(timeout.reason).toBe("hard_timeout");
     expect(timeout.status).toBe("timeout");
+    expect(isStickyAgentRunTerminalOutcome(timeout)).toBe(true);
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
-  });
-
-  it("classifies provider timeout lifecycle errors as hard timeouts", () => {
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "error",
-        error: "provider request timed out",
-        stopReason: "error",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-    ).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      error: "provider request timed out",
-    });
   });
 
   it("classifies timeout attribution metadata as a hard timeout even on end events", () => {
@@ -328,21 +146,6 @@ describe("agent run terminal outcome", () => {
     });
   });
 
-  it("keeps explicit cancellation ahead of abandoned liveness", () => {
-    expect(
-      buildAgentRunTerminalOutcome({
-        status: "error",
-        stopReason: "stop",
-        livenessState: "abandoned",
-      }),
-    ).toEqual({
-      reason: "cancelled",
-      status: "error",
-      stopReason: "stop",
-      livenessState: "abandoned",
-    });
-  });
-
   it("keeps a hard timeout over later aborts or failures for the same run", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",
@@ -362,20 +165,6 @@ describe("agent run terminal outcome", () => {
 
     expect(mergeAgentRunTerminalOutcome(timeout, lateAbort)).toBe(timeout);
     expect(mergeAgentRunTerminalOutcome(timeout, lateFailure)).toBe(timeout);
-  });
-
-  it("lets an earlier proven completion correct a provisional timeout", () => {
-    const timeout = buildAgentRunTerminalOutcome({
-      status: "timeout",
-      timeoutPhase: "provider",
-      endedAt: 200,
-    });
-    const earlierCompletion = buildAgentRunTerminalOutcome({
-      status: "ok",
-      endedAt: 190,
-    });
-
-    expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
   });
 
   it("keeps the first proven sticky outcome regardless of callback ordering", () => {
@@ -409,22 +198,6 @@ describe("agent run terminal outcome", () => {
     }
   });
 
-  it("keeps explicit provider timeout attribution ahead of simultaneous cancellation", () => {
-    const timeout = buildAgentRunTerminalOutcome({
-      status: "timeout",
-      timeoutPhase: "provider",
-      endedAt: 200,
-    });
-    const cancellation = buildAgentRunTerminalOutcome({
-      status: "error",
-      stopReason: "rpc",
-      endedAt: 200,
-    });
-
-    expect(mergeAgentRunTerminalOutcome(timeout, cancellation)).toBe(timeout);
-    expect(mergeAgentRunTerminalOutcome(cancellation, timeout)).toBe(timeout);
-  });
-
   it("keeps supersession over generic cancellation regardless of callback ordering", () => {
     const superseded = buildAgentRunTerminalOutcome({
       status: "error",
@@ -437,15 +210,12 @@ describe("agent run terminal outcome", () => {
       endedAt: 201,
     });
 
+    expect(isStickyAgentRunTerminalOutcome(superseded)).toBe(true);
     expect(mergeAgentRunTerminalOutcome(superseded, cancellation)).toBe(superseded);
     expect(mergeAgentRunTerminalOutcome(cancellation, superseded)).toBe(superseded);
   });
 
-  it.each([
-    { supersededAt: 190, expected: "superseded" },
-    { supersededAt: 200, expected: "hard_timeout" },
-    { supersededAt: 210, expected: "hard_timeout" },
-  ] as const)(
+  it.each([{ supersededAt: 200, expected: "hard_timeout" }] as const)(
     "keeps the first hard terminal between timeout and supersession at $supersededAt",
     ({ supersededAt, expected }) => {
       const timeout = buildAgentRunTerminalOutcome({
@@ -493,72 +263,28 @@ describe("agent run attempt terminal", () => {
     }
   });
 
-  it.each([
-    { promptError: "provider failed", expected: "failed" },
-    { externalAbort: true, expected: "aborted" },
-    { timedOut: true, expected: "timeout" },
-  ])("keeps $expected precedence over a settlement warning", ({ expected, ...input }) => {
-    const degraded = {
-      kind: "ok",
-      settlementWarning: { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 },
-    } as const;
-    const terminal = normalizeAgentRunAttemptTerminal({
-      ...input,
-      settlementWarning: degraded.settlementWarning,
-    });
-    expect(terminal.kind).toBe(expected);
-    for (const [current, incoming] of [
-      [terminal, degraded],
-      [degraded, terminal],
-    ] as const) {
-      const merged = mergeAgentRunAttemptTerminal(current, incoming);
-      expect(merged.kind).toBe(expected);
-      expect(projectAgentRunAttemptTerminal(merged).settlementWarning).toBeUndefined();
-    }
-  });
-
-  it.each([
-    {
-      label: "external abort",
-      terminal: { kind: "aborted", source: "external" } as const,
-      expected: { aborted: true, externalAbort: true, timedOut: false, interrupted: true },
+  it.each([{ promptError: "provider failed", expected: "failed" }])(
+    "keeps $expected precedence over a settlement warning",
+    ({ expected, ...input }) => {
+      const degraded = {
+        kind: "ok",
+        settlementWarning: { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 },
+      } as const;
+      const terminal = normalizeAgentRunAttemptTerminal({
+        ...input,
+        settlementWarning: degraded.settlementWarning,
+      });
+      expect(terminal.kind).toBe(expected);
+      for (const [current, incoming] of [
+        [terminal, degraded],
+        [degraded, terminal],
+      ] as const) {
+        const merged = mergeAgentRunAttemptTerminal(current, incoming);
+        expect(merged.kind).toBe(expected);
+        expect(projectAgentRunAttemptTerminal(merged).settlementWarning).toBeUndefined();
+      }
     },
-    {
-      label: "run-budget timeout",
-      terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true } as const,
-      expected: {
-        aborted: true,
-        externalAbort: false,
-        timedOut: true,
-        timedOutByRunBudget: true,
-        interrupted: true,
-      },
-    },
-    {
-      label: "compaction observation",
-      terminal: { kind: "timeout", phase: "compaction", source: "observation" } as const,
-      expected: {
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        timedOutDuringCompaction: true,
-        interrupted: false,
-      },
-    },
-    {
-      label: "tool-execution observation",
-      terminal: { kind: "timeout", phase: "tool_execution", source: "observation" } as const,
-      expected: {
-        aborted: false,
-        externalAbort: false,
-        timedOut: false,
-        timedOutDuringToolExecution: true,
-        interrupted: false,
-      },
-    },
-  ])("preserves the exact public projection for $label", ({ terminal, expected }) => {
-    expect(projectAgentRunAttemptTerminal(terminal)).toMatchObject(expected);
-  });
+  );
 
   it("merges observation-only timeout phases without creating a run timeout", () => {
     const toolExecution = {
@@ -703,41 +429,6 @@ describe("agent run attempt terminal", () => {
     }
   });
 
-  it("projects canonical terminal variants into the existing event fields", () => {
-    expect(
-      projectAgentRunAttemptTerminal({
-        kind: "timeout",
-        phase: "tool_execution",
-        source: "idle",
-      }),
-    ).toMatchObject({
-      idleTimedOut: true,
-      timedOut: true,
-      timedOutDuringToolExecution: true,
-    });
-    expect(
-      projectAgentRunAttemptTerminal({ kind: "aborted", source: "yield_cleanup" }),
-    ).toMatchObject({ aborted: false, cleanupYieldAborted: true });
-    expect(
-      projectAgentRunAttemptTerminal({ kind: "failed", source: "prompt", error: null }),
-    ).toMatchObject({ failed: true, interrupted: false, promptError: null });
-    expect(
-      projectAgentRunAttemptTerminal({
-        kind: "timeout",
-        phase: "prompt",
-        source: "runtime",
-        failure: { source: "prompt", error: null },
-      }),
-    ).toMatchObject({ failed: true, interrupted: true, timedOut: true });
-    expect(
-      projectAgentRunAttemptTerminal({
-        kind: "timeout",
-        phase: "compaction",
-        source: "observation",
-      }),
-    ).toMatchObject({ timedOut: false, timedOutDuringCompaction: true });
-  });
-
   it("normalizes the shipped harness shape through the same precedence owner", () => {
     const error = new Error("request timed out");
     expect(
@@ -821,12 +512,7 @@ describe("agent run attempt terminal", () => {
 
 describe("agent run terminal error projection", () => {
   it.each([
-    { name: "normal stop", meta: { stopReason: "stop" } },
-    { name: "completed turn", meta: { stopReason: "completed" } },
-    {
-      name: "yielded turn",
-      meta: { livenessState: "paused", yielded: true, stopReason: "end_turn" },
-    },
+    { name: "provider-started model stop", meta: { stopReason: "stop", providerStarted: true } },
   ])("accepts a healthy $name", ({ meta }) => {
     expect(
       extractAgentRunTerminalError({

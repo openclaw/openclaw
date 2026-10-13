@@ -2,8 +2,15 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+
+/** Bun's native plugin resolver remains the owner even when Node hooks are available. */
+export function useNodeModuleHooks(): boolean {
+  return !process.versions.bun && typeof Module.registerHooks === "function";
+}
 
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
@@ -22,7 +29,7 @@ export function isPluginSourceModulePath(modulePath: string): boolean {
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
-type ResolveFilename = (
+export type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
   isMain: boolean,
@@ -174,12 +181,9 @@ function resolveCapturedPluginModule<T>(
   return undefined;
 }
 
-/** Captured parents retain their resolver while their instance's consumers drain. */
-export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
-  // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
-  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
-  if (!capturedModuleResolvers.installed) {
-    bun?.plugin({
+function installCapturedPluginModuleResolver(bun: BunPluginRuntime | undefined): void {
+  if (bun) {
+    bun.plugin({
       name: "openclaw-plugin-source-capture",
       setup(builder) {
         builder.onResolve(
@@ -194,39 +198,55 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
         );
       },
     });
+    return;
+  }
+
+  const previous = moduleWithResolver["_resolveFilename"]!;
+  moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
+    const filename = parent?.filename;
+    const target = filename
+      ? resolveCapturedPluginModule((owner) =>
+          owner.resolve(request, filename, () => previous(request, parent, isMain, options)),
+        )
+      : undefined;
+    return target ?? previous(request, parent, isMain, options);
+  };
+}
+
+function installCapturedPluginModuleLoader(bun: BunPluginRuntime): void {
+  bun.plugin({
+    name: "openclaw-plugin-source-jsx",
+    setup(builder) {
+      builder.onLoad(
+        {
+          filter: new RegExp(
+            `${PLUGIN_SOURCE_CAPTURE_PREFIX}[^/\\\\]+[/\\\\].*\\.[cm]?[jt]sx$`,
+            "u",
+          ),
+          namespace: "file",
+        },
+        ({ path: modulePath }) =>
+          resolveCapturedPluginModule((owner) => owner.load?.(modulePath)) ?? {
+            contents: fs.readFileSync(modulePath, "utf8"),
+            loader: modulePath.toLowerCase().endsWith(".jsx") ? "jsx" : "tsx",
+          },
+      );
+    },
+  });
+}
+
+/** Captured parents retain their resolver while their instance's consumers drain. */
+export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
+  // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
+  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+  if (!capturedModuleResolvers.installed) {
+    installCapturedPluginModuleResolver(bun);
     // Older Bun drops createRequire's ESM parent when this private hook is replaced.
     // Its public resolver above retains the importer without changing native resolution.
-    if (!bun) {
-      const previous = moduleWithResolver["_resolveFilename"]!;
-      moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
-        const filename = parent?.filename;
-        const target = filename
-          ? resolveCapturedPluginModule((owner) =>
-              owner.resolve(request, filename, () => previous(request, parent, isMain, options)),
-            )
-          : undefined;
-        return target ?? previous(request, parent, isMain, options);
-      };
-    }
     capturedModuleResolvers.installed = true;
   }
   if (binding.load && bun && !capturedModuleResolvers.loaderInstalled) {
-    bun.plugin({
-      name: "openclaw-plugin-source-jsx",
-      setup(builder) {
-        builder.onLoad(
-          {
-            filter: /openclaw-plugin-build-[^/\\]+[/\\].*\.[cm]?[jt]sx$/u,
-            namespace: "file",
-          },
-          ({ path: modulePath }) =>
-            resolveCapturedPluginModule((owner) => owner.load?.(modulePath)) ?? {
-              contents: fs.readFileSync(modulePath, "utf8"),
-              loader: modulePath.toLowerCase().endsWith(".jsx") ? "jsx" : "tsx",
-            },
-        );
-      },
-    });
+    installCapturedPluginModuleLoader(bun);
     capturedModuleResolvers.loaderInstalled = true;
   }
   capturedModuleResolvers.owners.add(binding);
@@ -238,6 +258,24 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
 /** True for file extensions Node can load through the native JS module loader. */
 export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
+}
+
+export function resolvePluginLoaderTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  const nativeExtension = [".js", ".mjs", ".cjs", ".json"].includes(
+    path.extname(modulePath).trim().toLowerCase(),
+  );
+  if (modulePath.replace(/\\/g, "/").includes("/dist/extensions/")) {
+    return nativeExtension;
+  }
+  return (
+    nativeExtension ||
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
 }
 
 function isMissingTargetModuleError(
@@ -252,11 +290,10 @@ function isMissingTargetModuleError(
 }
 
 function isSourceTransformFallbackError(error: unknown, modulePath: string): boolean {
-  if (!error || typeof error !== "object") {
+  if (!error || typeof error !== "object" || !("code" in error)) {
     return false;
   }
-  const candidate = error as { code?: unknown; message?: unknown };
-  const code = candidate.code;
+  const code = error.code;
   return (
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
@@ -264,7 +301,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
     code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
     code === "ERR_UNKNOWN_FILE_EXTENSION" ||
-    isMissingTargetModuleError(candidate, modulePath)
+    isMissingTargetModuleError(error, modulePath)
   );
 }
 
@@ -285,17 +322,12 @@ export function tryNativeRequireJavaScriptModule(
 export function tryNativeRequireModule(
   moduleSpecifier: string,
   options: {
-    allowWindows?: boolean;
     aliasMap?:
       | Record<string, string>
       | ((specifier: string, parent?: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
-    fallbackOnNativeError?: boolean;
   } = {},
 ): { ok: true; moduleExport: unknown } | { ok: false } {
-  if (process.platform === "win32" && options.allowWindows !== true) {
-    return { ok: false };
-  }
   const modulePath = toNativeRequirePath(moduleSpecifier);
   // A process-wide require retains evicted graphs through its parent's children.
   // Keep that parent scoped to this load so retired graphs can be collected.
@@ -307,21 +339,9 @@ export function tryNativeRequireModule(
   ) {
     return { ok: false };
   }
-  let resolvedPath: string;
+  let resolvedPath: string | undefined;
   try {
     resolvedPath = withNativeRequireAliases(options.aliasMap, () => require.resolve(modulePath));
-  } catch (error) {
-    const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
-    if (
-      isSourceTransformFallbackError(error, modulePath) ||
-      (options.fallbackOnMissingDependency === true &&
-        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
-    ) {
-      return { ok: false };
-    }
-    throw error;
-  }
-  try {
     // Requiring the resolved target could apply a second alias to the same request.
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => require(modulePath));
     nativeModuleLoadFailures.delete(resolvedPath);
@@ -329,15 +349,23 @@ export function tryNativeRequireModule(
   } catch (error) {
     const code = error && typeof error === "object" ? Reflect.get(error, "code") : undefined;
     if (
+      resolvedPath !== undefined &&
       nativeModuleLoadFailures.has(resolvedPath) &&
       (code === "ERR_REQUIRE_ESM_RACE_CONDITION" || code === "ERR_INTERNAL_ASSERTION")
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath) || options.fallbackOnNativeError) {
+    if (
+      isSourceTransformFallbackError(error, modulePath) ||
+      (resolvedPath === undefined &&
+        options.fallbackOnMissingDependency === true &&
+        (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND"))
+    ) {
       return { ok: false };
     }
-    nativeModuleLoadFailures.set(resolvedPath, error);
+    if (resolvedPath !== undefined) {
+      nativeModuleLoadFailures.set(resolvedPath, error);
+    }
     throw error;
   }
 }
@@ -382,25 +410,47 @@ function withNativeRequireAliases<T>(
   const resolveAlias =
     typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
-  const esmHooks = moduleWithResolver.registerHooks?.({
-    resolve(specifier, context, nextResolve) {
-      const parent = context.parentURL?.startsWith("file:")
-        ? fileURLToPath(context.parentURL)
-        : undefined;
-      const aliasTarget = resolveAlias(specifier, parent);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
-      }
-      return nextResolve(specifier, context);
-    },
-  });
+  const esmHooks = useNodeModuleHooks()
+    ? Module.registerHooks({
+        resolve(specifier, context, nextResolve) {
+          const parent = context.parentURL?.startsWith("file:")
+            ? fileURLToPath(context.parentURL)
+            : undefined;
+          const aliasTarget = resolveAlias(specifier, parent);
+          if (aliasTarget) {
+            return { shortCircuit: true, url: pathToFileURL(aliasTarget).href };
+          }
+          try {
+            return nextResolve(specifier, context);
+          } catch (error) {
+            // Compiled workers can load source SDKs without a TypeScript resolver.
+            // Keep the native graph while resolving its emitted JavaScript suffixes.
+            if (
+              parent &&
+              isPluginSourceModulePath(parent) &&
+              specifier.startsWith(".") &&
+              /\.[cm]?js$/u.test(specifier) &&
+              hasErrnoCode(error, "ERR_MODULE_NOT_FOUND")
+            ) {
+              const sourceUrl = new URL(
+                specifier.replace(/\.([cm]?)js$/u, ".$1ts"),
+                context.parentURL,
+              );
+              if (fs.existsSync(fileURLToPath(sourceUrl))) {
+                return nextResolve(sourceUrl.href, context);
+              }
+            }
+            throw error;
+          }
+        },
+      })
+    : undefined;
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {
-      return aliasTarget;
+      // Callers may pass Jiti alias maps (forward slashes on Windows). Bun keys native
+      // modules by this filename, so another spelling loads a second SDK instance.
+      return path.normalize(aliasTarget);
     }
     return originalResolveFilename(request, parent, isMain, options);
   }) satisfies ResolveFilename;

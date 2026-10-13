@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
-import { resolveCompactionProviderStream } from "./embedded-agent-runner/compaction-diagnostics.js";
 import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import {
   attachModelProviderLocalService,
@@ -13,7 +12,7 @@ import { registerProviderStreamForModel } from "./provider-stream.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 const { fetchWithSsrFGuard, prepare, providerStream, reconcile, runtimeHandle } = vi.hoisted(() => {
-  const prepareMock = vi.fn(async () => undefined);
+  const prepareMock = vi.fn(async (_auth?: { mode: string; authFlow?: string }) => undefined);
   const reconcileMock = vi.fn(async () => undefined);
   return {
     fetchWithSsrFGuard: vi.fn(),
@@ -25,9 +24,15 @@ const { fetchWithSsrFGuard, prepare, providerStream, reconcile, runtimeHandle } 
       modelId: "test-model",
       plugin: {
         reconcileLocalService: reconcileMock,
-        wrapStreamFn: ({ streamFn }: { streamFn: typeof providerStream }) => {
+        wrapStreamFn: ({
+          streamFn,
+          auth,
+        }: {
+          streamFn: typeof providerStream;
+          auth?: { mode: string; authFlow?: string };
+        }) => {
           return async (...args: Parameters<typeof providerStream>) => {
-            await prepareMock();
+            await prepareMock(auth);
             return streamFn(...args);
           };
         },
@@ -97,7 +102,8 @@ describe("provider stream lifecycle registration", () => {
       llmRuntime,
     );
 
-    const streamFn = registerProviderStreamForModel({ model, wrapProviderStream: true });
+    const auth = { mode: "oauth", authFlow: "test-subscription" };
+    const streamFn = registerProviderStreamForModel({ model, wrapProviderStream: true, auth });
     expect(streamFn).toBeTypeOf("function");
     expect(apiRegistry.getApiProvider("test-lifecycle-provider")).toBeDefined();
     await streamFn?.(model, {} as never, {});
@@ -105,6 +111,7 @@ describe("provider stream lifecycle registration", () => {
       reconcile,
     );
     expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledWith(auth);
     expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
       providerStream.mock.invocationCallOrder[0]!,
     );
@@ -162,10 +169,10 @@ describe("provider stream lifecycle registration", () => {
       },
     );
     expect(apiRegistry.getApiProvider("ollama")).toBeUndefined();
-    const streamFn = resolveCompactionProviderStream({
-      effectiveModel: model,
+    const streamFn = registerProviderStreamForModel({
+      model,
       agentDir: "/tmp/test-agent",
-      effectiveWorkspace: "/tmp/test-workspace",
+      workspaceDir: "/tmp/test-workspace",
       apiRegistry,
     });
 

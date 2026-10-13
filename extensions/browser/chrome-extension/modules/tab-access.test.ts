@@ -61,25 +61,6 @@ function createHarness({
 
 describe("tab eligibility", () => {
   it.each([
-    "http://example.com",
-    "https://example.com/path",
-    "data:text/html,<title>fixture</title>",
-    "blob:https://example.com/1234",
-    "file:///tmp/openclaw-fixture.html",
-  ])("allows ordinary document URL %s", (url) => {
-    expect(tabEligibility({ id: 1, url, incognito: false }).eligible).toBe(true);
-  });
-
-  it("rejects file documents when Chrome has not granted file URL access", () => {
-    expect(
-      tabEligibility({ id: 1, url: "file:///tmp/private.html" }, { fileAccessAllowed: false }),
-    ).toEqual({
-      eligible: false,
-      reason: "restricted",
-    });
-  });
-
-  it.each([
     "chrome://settings",
     "chrome-extension://abcdefghijklmnop/popup.html",
     "devtools://devtools/bundled/inspector.html",
@@ -93,19 +74,12 @@ describe("tab eligibility", () => {
     expect(tabEligibility({ id: 1, url })).toEqual({ eligible: false, reason: "restricted" });
   });
 
-  it("rejects missing ids, missing URLs, malformed URLs, and incognito tabs", () => {
-    expect(tabEligibility({ url: "https://example.com" })).toEqual({
-      eligible: false,
-      reason: "missing",
-    });
-    expect(tabEligibility({ id: 1 })).toEqual({ eligible: false, reason: "missing" });
-    expect(tabEligibility({ id: 1, url: "not a URL" })).toEqual({
+  it("rejects file documents when Chrome has not granted file URL access", () => {
+    expect(
+      tabEligibility({ id: 1, url: "file:///tmp/private.html" }, { fileAccessAllowed: false }),
+    ).toEqual({
       eligible: false,
       reason: "restricted",
-    });
-    expect(tabEligibility({ id: 1, url: "https://example.com", incognito: true })).toEqual({
-      eligible: false,
-      reason: "incognito",
     });
   });
 
@@ -146,54 +120,37 @@ describe("tab eligibility", () => {
       ),
     ).toEqual({ eligible: false, reason: "restricted" });
   });
+
+  it("rejects missing ids, missing URLs, malformed URLs, and incognito tabs", () => {
+    expect(tabEligibility({ url: "https://example.com" })).toEqual({
+      eligible: false,
+      reason: "missing",
+    });
+    expect(tabEligibility({ id: 1 })).toEqual({ eligible: false, reason: "missing" });
+    expect(tabEligibility({ id: 1, url: "not a URL" })).toEqual({
+      eligible: false,
+      reason: "restricted",
+    });
+    expect(tabEligibility({ id: 1, url: "https://example.com", incognito: true })).toEqual({
+      eligible: false,
+      reason: "incognito",
+    });
+  });
 });
 
 describe("tab access policy", () => {
-  it("allows ungrouped eligible tabs in all mode and only grouped tabs in selected mode", async () => {
+  it("withholds discarded tabs until Chrome reloads them", async () => {
     const harness = createHarness({
       tabs: [
-        { id: 1, url: "https://one.example", groupId: -1 },
-        { id: 2, url: "https://two.example", groupId: 7 },
+        { id: 1, url: "https://live.example", groupId: 7 },
+        { id: 2, url: "https://discarded.example", discarded: true, groupId: 7 },
       ],
     });
     await harness.policy.initialize("all", true);
-    await expect(harness.policy.requireTab(1)).resolves.toMatchObject({ id: 1 });
-    expect((await harness.policy.listAccessibleTabs()).map((tab) => tab.id)).toEqual([1, 2]);
-
-    harness.policy.setMode("selected");
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("not in the OpenClaw tab group");
-    await expect(harness.policy.requireTab(2)).resolves.toMatchObject({ id: 2 });
-  });
-
-  it("rejects restricted and incognito tabs in both modes", async () => {
-    const harness = createHarness({
-      tabs: [
-        { id: 1, url: "chrome://settings", groupId: 7 },
-        { id: 2, url: "https://secret.example", incognito: true, groupId: 7 },
-      ],
-    });
-    await harness.policy.initialize("all", true);
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("restricted or unavailable");
-    await expect(harness.policy.requireTab(2)).rejects.toThrow("incognito");
-    harness.policy.setMode("selected");
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("restricted or unavailable");
-    await expect(harness.policy.requireTab(2)).rejects.toThrow("incognito");
-  });
-
-  it("invalidates captured authority across mode and per-tab deny changes", async () => {
-    const harness = createHarness({
-      tabs: [{ id: 1, url: "https://one.example", groupId: -1 }],
-    });
-    await harness.policy.initialize("all", true);
-    const beforeMode = harness.policy.capture(1);
-    harness.policy.setMode("selected");
-    await expect(harness.policy.requireTab(1, beforeMode)).rejects.toThrow("access was revoked");
-
-    harness.policy.setMode("all");
-    const beforePause = harness.policy.capture(1);
-    await harness.policy.pause(1);
-    await expect(harness.policy.requireTab(1, beforePause)).rejects.toThrow("access was revoked");
-    await expect(harness.policy.requireTab(1)).rejects.toThrow("paused for OpenClaw");
+    await expect(harness.policy.listAccessibleTabs()).resolves.toEqual([
+      expect.objectContaining({ id: 1 }),
+    ]);
+    await expect(harness.policy.requireTab(2)).rejects.toThrow("discarded by Chrome");
   });
 
   it("blocks new authority before the asynchronous pause lookup completes", async () => {

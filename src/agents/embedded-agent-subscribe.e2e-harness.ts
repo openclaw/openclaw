@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;
@@ -25,15 +26,25 @@ export function createStubSessionHarness(): {
   session: EmbeddedAgentSession;
   emit: (evt: unknown) => void;
 } {
-  let handler: ((evt: unknown) => void) | undefined;
+  let handlers: Array<(evt: unknown) => void> = [];
   const session = {
+    sessionManager: { [sessionManagerReadTranscriptStart]: () => null },
     subscribe: (fn: (evt: unknown) => void) => {
-      handler = fn;
-      return () => {};
+      handlers = [...handlers, fn];
+      return () => {
+        handlers = handlers.filter((handler) => handler !== fn);
+      };
     },
   } as unknown as EmbeddedAgentSession;
 
-  return { session, emit: (evt: unknown) => handler?.(evt) };
+  return {
+    session,
+    emit: (evt: unknown) => {
+      for (const handler of handlers) {
+        handler(evt);
+      }
+    },
+  };
 }
 
 export function createSubscribedSessionHarness(

@@ -27,6 +27,29 @@ import { createRetiredModelRefRepairResolver } from "./doctor/shared/retired-mod
 import { repairRetiredSessionModelRef } from "./doctor/shared/retired-session-model-repair.js";
 import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
 
+async function seedCronModel(id: string, model: string) {
+  const storePath = resolveCronJobsStorePath();
+  await saveCronJobsStore(storePath, {
+    version: 1,
+    jobs: [
+      {
+        id,
+        agentId: "main",
+        name: "Synthetic reminder",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        state: {},
+        payload: { kind: "agentTurn", message: "Synthetic reminder", model },
+      },
+    ],
+  });
+  return storePath;
+}
+
 describe("doctor retirement repair ordering", () => {
   it("retains a pinned session when clearing would keep the exact retired model account", async () => {
     const { cfg, state } = await fixture("api-key");
@@ -51,29 +74,7 @@ describe("doctor retirement repair ordering", () => {
         },
       );
     }
-    const cronStore = resolveCronJobsStorePath();
-    await saveCronJobsStore(cronStore, {
-      version: 1,
-      jobs: [
-        {
-          id: "clear-cron-pin",
-          agentId: "main",
-          name: "Synthetic clearing reminder",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          state: {},
-          payload: {
-            kind: "agentTurn",
-            message: "Synthetic reminder",
-            model: `${retiredRef}@chatgpt`,
-          },
-        },
-      ],
-    });
+    const cronStore = await seedCronModel("clear-cron-pin", `${retiredRef}@chatgpt`);
     const configRepair = repairStaleAgentModelRefs(cfg, {
       env: state.env,
       pluginProviderIds: new Set(["openai"]),
@@ -146,29 +147,7 @@ describe("doctor retirement repair ordering", () => {
           },
         );
       }
-      const cronStore = resolveCronJobsStorePath();
-      await saveCronJobsStore(cronStore, {
-        version: 1,
-        jobs: [
-          {
-            id: "pinned-policy",
-            agentId: "main",
-            name: "Synthetic policy reminder",
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            state: {},
-            payload: {
-              kind: "agentTurn",
-              message: "Synthetic reminder",
-              model: `${retiredRef}@chatgpt`,
-            },
-          },
-        ],
-      });
+      const cronStore = await seedCronModel("pinned-policy", `${retiredRef}@chatgpt`);
       const repair = repairStaleAgentModelRefs(cfg, {
         env: state.env,
         pluginProviderIds: new Set(["openai"]),
@@ -267,29 +246,10 @@ describe("doctor retirement repair ordering", () => {
         authProfileOverrideSource: "user",
       },
     );
-    const cronStorePath = resolveCronJobsStorePath();
-    await saveCronJobsStore(cronStorePath, {
-      version: 1,
-      jobs: [
-        {
-          id: "retired-ordering",
-          agentId: "main",
-          name: "Synthetic ordering reminder",
-          enabled: true,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "every", everyMs: 60000, anchorMs: 1 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          state: {},
-          payload: {
-            kind: "agentTurn",
-            message: "Synthetic reminder",
-            model: profile === "platform" ? `${rawRef}@platform` : rawRef,
-          },
-        },
-      ],
-    });
+    const cronStorePath = await seedCronModel(
+      "retired-ordering",
+      profile === "platform" ? `${rawRef}@platform` : rawRef,
+    );
     const repair = repairStaleAgentModelRefs(cfg, {
       env: state.env,
       pluginProviderIds: new Set(["openai", "anthropic"]),
@@ -436,7 +396,7 @@ describe("doctor retirement owner scope", () => {
         },
       };
       const result = repair(config);
-      const expected = scenario === "native" ? "personal/grok-4.6" : ref;
+      const expected = scenario === "native" ? "personal/grok-4.7" : ref;
       expect(result.config.agents?.defaults?.model).toEqual({
         primary: `${expected}@personal:fixture`,
       });
@@ -455,41 +415,88 @@ describe("doctor retirement owner scope", () => {
     },
   );
 
-  it("repairs native defaults and subagents with only an environment API key", async () => {
-    const { cfg, state } = await nativeFixture();
-    await state.writeAuthProfiles({ version: 1, profiles: {} });
-    delete cfg.models;
-    delete cfg.auth;
-    cfg.agents!.defaults!.subagents = { model: "XAI/auto" };
-    const env = { ...state.env, XAI_API_KEY: "synthetic-env-xai-key" };
-    const repair = (config: OpenClawConfig) =>
-      repairStaleAgentModelRefs(config, {
-        env,
-        pluginProviderIds: new Set(["xai"]),
-        persistedProviderIdsByAgentId: new Map(),
+  it.each(["environment", "configured", "implicit-account", "pinned-fallback"] as const)(
+    "repairs native xAI selections while preserving policy and unresolved pins (%s)",
+    async (scenario) => {
+      const { cfg, state } = await nativeFixture();
+      if (scenario === "environment" || scenario === "implicit-account") {
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+        delete cfg.auth!.order;
+      }
+      if (scenario === "environment") {
+        delete cfg.models;
+        delete cfg.auth;
+        cfg.agents!.defaults!.subagents = { model: "XAI/auto" };
+      }
+      if (scenario === "pinned-fallback") {
+        cfg.agents!.defaults!.model = {
+          primary: "Grok",
+          fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],
+        };
+        cfg.agents!.defaults!.heartbeat = { model: "xai/grok-4.3", every: "30m" };
+        cfg.agents!.entries!.main = { model: "xai/auto@xai:missing" };
+      }
+      const env =
+        scenario === "environment"
+          ? { ...state.env, XAI_API_KEY: "synthetic-env-xai-key" }
+          : state.env;
+      const repair = (config: OpenClawConfig) =>
+        repairStaleAgentModelRefs(config, {
+          env,
+          pluginProviderIds: new Set(["xai"]),
+          persistedProviderIdsByAgentId: new Map(),
+        });
+
+      const result = repair(cfg);
+      expect(
+        resolveDefaultModelForAgent({
+          cfg: result.config,
+          ...(scenario === "pinned-fallback" ? {} : { agentId: "main" }),
+        }),
+      ).toEqual({
+        provider: "xai",
+        model: "grok-4.7",
       });
-
-    const result = repair(cfg);
-    expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
-      provider: "xai",
-      model: "grok-4.6",
-    });
-    expect(result.config.agents?.defaults?.subagents?.model).toBe("xai/grok-4.6");
-    expect(result.config.agents?.defaults?.models).toEqual({
-      "xai/grok-4.6": { alias: "Grok", params: { temperature: 0.25 } },
-    });
-    expect(result.config.models).toBeUndefined();
-    expect(result.warnings).toEqual([]);
-    const repeated = repair(result.config);
-    expect(repeated.config).toEqual(result.config);
-    expect(repeated.changes).toEqual([]);
-    expect(repeated.warnings).toEqual([]);
-
-    const resolve = createRetiredModelRefRepairResolver({ cfg, env });
-    expect(resolve({ modelRef: "xai/auto@xai:missing", agentId: "main" })).toEqual({
-      kind: "unchanged",
-    });
-  });
+      expect(result.config.agents?.defaults?.model).toMatchObject({
+        fallbacks:
+          scenario === "pinned-fallback"
+            ? ["xai/auto@xai:missing", "xai/grok-4.3"]
+            : ["xai/grok-4.3"],
+      });
+      expect(result.config.agents?.defaults?.models).toEqual({
+        "xai/grok-4.7": { alias: "Grok", params: { temperature: 0.25 } },
+      });
+      expect(result.config.models).toEqual(cfg.models);
+      expect(cfg.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+      if (scenario === "configured") {
+        expect(result.config.agents?.defaults?.modelPolicy?.allow).toEqual([
+          "xai/grok-4.7",
+          "xai/grok-4.3",
+        ]);
+      }
+      if (scenario === "pinned-fallback") {
+        expect(result.config.agents?.entries?.main).toEqual(cfg.agents?.entries?.main);
+        expect(result.config.agents?.defaults?.heartbeat).toEqual(cfg.agents?.defaults?.heartbeat);
+        expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
+      } else {
+        expect(result.warnings).toEqual([]);
+      }
+      const repeated = repair(result.config);
+      expect(repeated.config).toEqual(result.config);
+      expect(repeated.changes).toEqual([]);
+      if (scenario === "environment" || scenario === "configured") {
+        expect(repeated.warnings).toEqual([]);
+      }
+      if (scenario === "environment") {
+        expect(result.config.agents?.defaults?.subagents?.model).toBe("xai/grok-4.7");
+        expect(result.config.models).toBeUndefined();
+        const resolve = createRetiredModelRefRepairResolver({ cfg, env });
+        expect(resolve({ modelRef: "xai/auto@xai:missing", agentId: "main" })).toEqual({
+          kind: "unchanged",
+        });
+      }
+    },
+  );
 
   it("retains env-only model selections when native catalog ownership is ambiguous", async () => {
     const { cfg, state } = await nativeFixture();
@@ -524,53 +531,34 @@ describe("doctor retirement owner scope", () => {
     expect(warnings.join("\n")).toContain("authentication route is unavailable");
   });
 
-  it("does not infer an API-key transport for an account with an unknown OAuth endpoint", async () => {
-    const { cfg, state, repair } = await nativeFixture();
-    delete cfg.models;
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "xai:fixture": {
-          provider: "xai",
-          type: "oauth",
-          access: "synthetic-access",
-          refresh: "synthetic-refresh",
-          expires: 9_999_999_999_999,
-        },
-      },
-    });
+  it.each(["missing-ordered-account", "unknown-oauth-endpoint"])(
+    "retains selections when the native authentication route is unavailable (%s)",
+    async (scenario) => {
+      const { cfg, state, repair } = await nativeFixture();
+      if (scenario === "missing-ordered-account") {
+        await state.writeAuthProfiles({ version: 1, profiles: {} });
+      } else {
+        delete cfg.models;
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "xai:fixture": {
+              provider: "xai",
+              type: "oauth",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: 9_999_999_999_999,
+            },
+          },
+        });
+      }
 
-    const result = repair(cfg);
-    expect(result.config).toEqual(cfg);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
-  });
-
-  it("moves Grok and its policy to the successor when its only route is native xAI", async () => {
-    const { cfg, repair } = await nativeFixture();
-    const result = repair(cfg);
-
-    expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
-      provider: "xai",
-      model: "grok-4.6",
-    });
-    expect(result.config.agents?.defaults?.model).toMatchObject({
-      fallbacks: ["xai/grok-4.3"],
-    });
-    expect(result.config.agents?.defaults?.models).toEqual({
-      "xai/grok-4.6": { alias: "Grok", params: { temperature: 0.25 } },
-    });
-    expect(result.config.agents?.defaults?.modelPolicy?.allow).toEqual([
-      "xai/grok-4.6",
-      "xai/grok-4.3",
-    ]);
-    expect(result.config.models).toEqual(cfg.models);
-    expect(cfg.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
-    const repeated = repair(result.config);
-    expect(repeated.config).toEqual(result.config);
-    expect(repeated.changes).toEqual([]);
-    expect(repeated.warnings).toEqual([]);
-  });
+      const result = repair(cfg);
+      expect(result.config).toEqual(cfg);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
+    },
+  );
 
   it.each(["provider", "model"] as const)(
     "keeps Grok on an explicit custom %s endpoint under the xAI provider",
@@ -599,34 +587,6 @@ describe("doctor retirement owner scope", () => {
     },
   );
 
-  it.each([false, true])(
-    "respects explicit account order (%s) when declared API-key credentials are absent",
-    async (hasExplicitOrder) => {
-      const { cfg, state, repair } = await nativeFixture();
-      await state.writeAuthProfiles({ version: 1, profiles: {} });
-      if (!hasExplicitOrder) {
-        delete cfg.auth!.order;
-      }
-      const result = repair(cfg);
-
-      if (hasExplicitOrder) {
-        expect(result.config).toEqual(cfg);
-        expect(result.changes).toEqual([]);
-        expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
-      } else {
-        expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
-          provider: "xai",
-          model: "grok-4.6",
-        });
-        expect(result.config.agents?.defaults?.model).toMatchObject({
-          fallbacks: ["xai/grok-4.3"],
-        });
-        expect(result.config.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
-        expect(result.warnings).toEqual([]);
-      }
-    },
-  );
-
   it("keeps a missing session account pinned despite an available native xAI account", async () => {
     const { cfg, state } = await nativeFixture();
     const entry: SessionEntry = {
@@ -642,37 +602,11 @@ describe("doctor retirement owner scope", () => {
     const warnings: string[] = [];
     const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env, warnings });
 
-    expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", warnings)).toBe(
+    expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.7", warnings)).toBe(
       false,
     );
     expect(entry).toEqual(original);
     expect(warnings).toEqual([expect.stringContaining("authentication route is unavailable")]);
-  });
-
-  it("repairs the native selection while preserving current and unresolved pinned choices", async () => {
-    const { cfg, repair } = await nativeFixture();
-    cfg.agents!.defaults!.model = {
-      primary: "Grok",
-      fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],
-    };
-    cfg.agents!.defaults!.heartbeat = { model: "xai/grok-4.3", every: "30m" };
-    cfg.agents!.entries!.main = { model: "xai/auto@xai:missing" };
-    const result = repair(cfg);
-
-    expect(resolveDefaultModelForAgent({ cfg: result.config })).toEqual({
-      provider: "xai",
-      model: "grok-4.6",
-    });
-    expect(result.config.agents?.defaults?.model).toMatchObject({
-      fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],
-    });
-    expect(result.config.agents?.entries?.main).toEqual(cfg.agents?.entries?.main);
-    expect(result.config.agents?.defaults?.heartbeat).toEqual(cfg.agents?.defaults?.heartbeat);
-    expect(result.config.models).toEqual(cfg.models);
-    expect(result.warnings.join("\n")).toContain("authentication route is unavailable");
-    const repeated = repair(result.config);
-    expect(repeated.config).toEqual(result.config);
-    expect(repeated.changes).toEqual([]);
   });
 
   it("preserves a shared alias when another physical route still accepts its old model", async () => {

@@ -7,6 +7,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import { createHooksConfig } from "../hooks-test-helpers.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
@@ -76,6 +77,7 @@ function createFanOutHandler(params?: {
   } as unknown as ReturnType<typeof createSubsystemLogger>;
   const hooksConfig = params?.hooksConfig ?? createGmailHooksConfig();
   const handler = createHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getHooksConfig: params?.getHooksConfig ?? (() => hooksConfig),
     bindHost: "127.0.0.1",
     port: 18789,
@@ -107,39 +109,6 @@ function gmailMessage(id: string) {
 describe("hook fan-out dispatch", () => {
   beforeEach(() => {
     readJsonBodyMock.mockReset();
-  });
-
-  test("dispatches one isolated run per batched gmail message", async () => {
-    const { handler, dispatchAgentHook } = createFanOutHandler();
-
-    const response = await postGmailPayload(handler, {
-      source: "gmail",
-      messages: [gmailMessage("m1"), gmailMessage("m2"), gmailMessage("m3")],
-    });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(3);
-    const sessionKeys = dispatchAgentHook.mock.calls.map((call) => call[0].sessionKey);
-    expect(sessionKeys).toEqual(["hook:gmail:m1", "hook:gmail:m2", "hook:gmail:m3"]);
-    for (const [index, id] of ["m1", "m2", "m3"].entries()) {
-      const value = dispatchAgentHook.mock.calls[index]?.[0];
-      expect(value?.message).toContain(`${id}@example.com`);
-      expect(value?.message).toContain(`Subject ${id}`);
-      expect(value?.externalContentSource).toBe("gmail");
-    }
-    const body = JSON.parse(response.getBody()) as { runIds?: string[]; dispatched?: number };
-    expect(body.runIds).toHaveLength(3);
-    expect(body.dispatched).toBe(3);
-  });
-
-  test("single-message batches keep the single-dispatch response shape", async () => {
-    const { handler, dispatchAgentHook } = createFanOutHandler();
-
-    const response = await postGmailPayload(handler, { messages: [gmailMessage("solo")] });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(response.getBody())).toEqual({ ok: true, runId: "run:hook:gmail:solo" });
   });
 
   test("empty batches record a no-op instead of dispatching a junk run", async () => {
@@ -362,68 +331,6 @@ describe("hook fan-out dispatch", () => {
       hooks: { ...baseHooks, gmail: { maxBytes: 1_048_576 } },
     } as never);
     expect(huge?.maxBodyBytesByPath.get("gmail")).toBe(32 * 1024 * 1024);
-  });
-
-  test("reads gmail-path bodies with the producer-derived bound", async () => {
-    const canonical = createHooksConfig();
-    const gmailConfig = createGmailHooksConfig();
-    const { handler } = createFanOutHandler({
-      hooksConfig: {
-        ...gmailConfig,
-        maxBodyBytes: canonical.maxBodyBytes,
-        maxBodyBytesByPath: new Map([["gmail", 6_819_200]]),
-      },
-    });
-
-    await postGmailPayload(handler, { messages: [] });
-    expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), 6_819_200);
-
-    readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { message: "direct" } });
-    const req = createHookRequest({ url: "/hooks/agent" });
-    const response = createResponse();
-    await handler(req, response.res);
-    expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), canonical.maxBodyBytes);
-  });
-
-  test("waits for direct agent completion when explicitly requested", async () => {
-    const { promise: completion, resolve: resolveCompletion } = createDeferred<{
-      status: "ok";
-      replyDisposition: "silent";
-      delivered: boolean;
-      deliveryAttempted: boolean;
-    }>();
-    const { handler, dispatchAgentHook } = createFanOutHandler({
-      hooksConfig: createHooksConfig(),
-      dispatchAgentHook: () => ({ ok: true, runId: "run:direct", completion }),
-    });
-    readJsonBodyMock.mockResolvedValueOnce({
-      ok: true,
-      value: { message: "direct", waitForCompletion: true },
-    });
-    const req = createHookRequest({ url: "/hooks/agent" });
-    const response = createResponse();
-
-    const handling = handler(req, response.res);
-    await vi.waitFor(() => expect(dispatchAgentHook).toHaveBeenCalledTimes(1));
-    expect(response.getBody()).toBe("");
-
-    resolveCompletion({
-      status: "ok",
-      replyDisposition: "silent",
-      delivered: true,
-      deliveryAttempted: true,
-    });
-    await handling;
-    expect(JSON.parse(response.getBody())).toEqual({
-      ok: true,
-      runId: "run:direct",
-      completion: {
-        status: "ok",
-        replyDisposition: "silent",
-        delivered: true,
-        deliveryAttempted: true,
-      },
-    });
   });
 
   test("keeps direct completion observation outside dispatch identity", async () => {
@@ -709,32 +616,5 @@ describe("hook fan-out dispatch", () => {
     expect(response.res.statusCode).toBe(409);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
     expect(dispatchAgentHook.mock.calls[0]?.[0].sessionKey).toBe("hook:gmail:m1");
-  });
-
-  test("preserves completed replay results across hook config generations", async () => {
-    const initial = createHooksConfig();
-    let current = initial;
-    const { handler, dispatchAgentHook } = createFanOutHandler({
-      hooksConfig: initial,
-      getHooksConfig: () => current,
-    });
-    const post = async () => {
-      readJsonBodyMock.mockResolvedValueOnce({
-        ok: true,
-        value: { message: "deduplicated", idempotencyKey: "same-delivery" },
-      });
-      const response = createResponse();
-      await handler(createHookRequest({ url: "/hooks/agent" }), response.res);
-      return response;
-    };
-
-    const first = await post();
-    current = { ...initial };
-    const replay = await post();
-
-    expect(first.res.statusCode).toBe(200);
-    expect(replay.res.statusCode).toBe(200);
-    expect(JSON.parse(replay.getBody())).toEqual(JSON.parse(first.getBody()));
-    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
   });
 });

@@ -4,6 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
  */
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+
+export const preparedTalkSessionProjection = createSessionRowProjectionFixture({
+  cfg: {},
+  store: {},
+});
 
 /** Minimal successful speech-provider response shape used by talk.speak tests. */
 export type TalkSpeakTestPayload = {

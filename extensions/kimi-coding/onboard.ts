@@ -12,16 +12,12 @@ import {
 export const KIMI_MODEL_REF = `kimi/${KIMI_CODING_DEFAULT_MODEL_ID}`;
 export const KIMI_CODING_MODEL_REF = KIMI_MODEL_REF;
 
-function resolveKimiCodingDefaultModel() {
-  return buildKimiCodingProvider().models.find(
-    (model) => model.id === KIMI_CODING_DEFAULT_MODEL_ID,
-  );
-}
-
-const kimiCodingPresetAppliers = createDefaultModelsPresetAppliers({
+export const { applyConfig: applyKimiCodeConfig } = createDefaultModelsPresetAppliers({
   primaryModelRef: KIMI_MODEL_REF,
   resolveParams: (cfg: OpenClawConfig) => {
-    const defaultModel = resolveKimiCodingDefaultModel();
+    const defaultModel = buildKimiCodingProvider().models.find(
+      ({ id }) => id === KIMI_CODING_DEFAULT_MODEL_ID,
+    );
     if (!defaultModel) {
       return null;
     }
@@ -35,7 +31,3 @@ const kimiCodingPresetAppliers = createDefaultModelsPresetAppliers({
     };
   },
 });
-
-export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return kimiCodingPresetAppliers.applyConfig(cfg);
-}

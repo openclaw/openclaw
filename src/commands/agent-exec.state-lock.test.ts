@@ -1,136 +1,117 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   recordAgentCleanupFailure,
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
-import { agentExecCommand } from "./agent-exec.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
+import type { RuntimeEnv } from "../runtime.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  withOpenClawAgentDatabaseAsync,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function successResult() {
-  return {
-    payloads: [{ text: "done" }],
-    meta: {
-      durationMs: 1,
-      agentMeta: { sessionId: "session-result", provider: "openai", model: "gpt-5.6-sol" },
-    },
-  };
-}
-
-function createGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
+const acquireStateLock = embeddedStateLock.acquireEmbeddedStateLock;
+const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+afterEach(() => vi.restoreAllMocks());
+const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
+function stateFixture() {
+  const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
+  const lockDir = path.join(stateDir, "gateway-locks");
+  const lockOptions = {
     allowInTests: true,
     env: {
       ...process.env,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_STATE_DIR: stateDir,
     },
-    lockDir: path.join(stateDir, "gateway-locks"),
+    lockDir,
     timeoutMs: 100,
-    ...overrides,
+    readProcessStartTime: () => 123_456,
   };
+  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
+    acquireStateLock({ ...params, options: lockOptions }),
+  );
+  return { stateDir, lockOptions, lockPath: path.join(lockDir, "gateway.state.lock") };
 }
-
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-  };
+async function expectLock(lockPath: string) {
+  expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
+    pid: process.pid,
+    role: "agent-embedded",
+  });
 }
 
 describe("agent exec retained-state ownership", () => {
   it.each([false, true])(
-    "retains state after uncertain runtime cleanup (retained=%s)",
+    "preserves state after uncertain runtime cleanup (retained: %s)",
     async (retained) => {
-      const root = tempDirs.make("openclaw-agent-exec-uncertain-cleanup-");
-      const lockOptions = createGatewayLockOptions(root);
+      const fixture = retained ? stateFixture() : undefined;
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
       const cleanupScope = createAgentCleanupScope();
-      let runStateDir: string | undefined;
+      let stateDir = "";
       try {
         const result = await cleanupScope.run(() =>
-          agentExecCommand("inspect", retained ? { stateDir: root } : {}, createTestRuntime(), {
-            gatewayLockOptions: lockOptions,
-            runAgent: async () => {
-              runStateDir = process.env.OPENCLAW_STATE_DIR;
-              if (!runStateDir) {
-                throw new Error("Expected the command's state directory");
-              }
-              await fs.writeFile(path.join(runStateDir, "owned-work"), "still owned");
+          runAgentExecWithMock(
+            "inspect",
+            fixture ? { stateDir: fixture.stateDir } : {},
+            createTestRuntime(),
+            async () => {
+              stateDir = process.env.OPENCLAW_STATE_DIR!;
+              await fs.writeFile(path.join(stateDir, "owned-work"), "still owned");
               recordAgentCleanupFailure();
-              return successResult();
+              return success();
             },
-          }),
+          ),
         );
-        expect.soft(result.exitCode).toBe(1);
-        expect.soft(cleanupScope.outcome).toBe("uncertain");
-        expect.soft(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-        expect(runStateDir).toBeDefined();
-        await expect(fs.readFile(path.join(runStateDir!, "owned-work"), "utf8")).resolves.toBe(
+        expect(result.exitCode).toBe(1);
+        expect(cleanupScope.outcome).toBe("uncertain");
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+        if (fixture) {
+          await expectLock(fixture.lockPath);
+        }
+        await expect(fs.readFile(path.join(stateDir, "owned-work"), "utf8")).resolves.toBe(
           "still owned",
         );
-        if (retained) {
-          const owner = JSON.parse(
-            await fs.readFile(path.join(lockOptions.lockDir!, "gateway.state.lock"), "utf8"),
-          );
-          expect(owner).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-        }
       } finally {
-        if (!retained && runStateDir) {
-          await fs.rm(runStateDir, { recursive: true, force: true });
+        if (stateDir) {
+          await fs.rm(stateDir, { recursive: true, force: true });
         }
       }
     },
   );
 
   it("refuses a state directory owned by a live Gateway", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-gateway-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir, {
-      readProcessStartTime: () => 123_456,
-    });
+    const { stateDir, lockOptions } = stateFixture();
     const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-    expect(gatewayLock).not.toBeNull();
     if (!gatewayLock) {
       throw new Error("Expected live Gateway fixture lock");
     }
-    const runAgent = vi.fn(async () => successResult());
+    const runAgent = vi.fn(async () => success());
     const runtime = createTestRuntime();
-    const { error } = runtime;
-
     try {
-      const result = await agentExecCommand("inspect", { stateDir }, runtime, {
-        gatewayLockOptions: lockOptions,
-        runAgent,
-      });
+      const result = await runAgentExecWithMock("inspect", { stateDir }, runtime, runAgent);
       expect(result.exitCode).toBe(1);
       expect(runAgent).not.toHaveBeenCalled();
-      expect(error).toHaveBeenCalledWith(
+      expect(runtime.error).toHaveBeenCalledWith(
         `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Omit --state-dir to use isolated temporary state, or stop the Gateway first (openclaw gateway stop).`,
       );
     } finally {
@@ -139,56 +120,132 @@ describe("agent exec retained-state ownership", () => {
   });
 
   it("holds and releases the embedded state lock around the run", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-lock-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir);
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-
-    await agentExecCommand("inspect", { stateDir }, createTestRuntime(), {
-      gatewayLockOptions: lockOptions,
-      runAgent: vi.fn(async () => {
-        const payload = JSON.parse(await fs.readFile(stateLockPath, "utf8")) as {
-          pid?: number;
-          role?: string;
-        };
-        expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-        return successResult();
-      }),
-    });
-
-    await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const { stateDir, lockPath } = stateFixture();
+    await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { stateDir },
+      createTestRuntime(),
+      async () => {
+        await expectLock(lockPath);
+        return success();
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    expect((await fs.readdir(stateDir)).toSorted()).toEqual(["gateway-locks", "keep.txt", "tmp"]);
   });
 
   it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-signal-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir);
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-    const signals = createSignalProcess();
+    const { stateDir, lockPath } = stateFixture();
+    const signals = new EventEmitter();
+    const entered = createDeferred();
     const runtime = createTestRuntime();
-    const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
+    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
+      createSignalBridge(signals),
+    );
+    const run = runAgentExecWithMock("inspect", { stateDir }, runtime, async (opts) => {
       const signal = opts.abortSignal as AbortSignal;
-      return await new Promise<ReturnType<typeof successResult>>((_, reject) => {
+      const pending = new Promise<never>((_, reject) => {
         signal.addEventListener(
           "abort",
-          () => {
-            const error = new Error("agent exec aborted");
-            error.name = "AbortError";
-            reject(error);
-          },
+          () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
           { once: true },
         );
       });
+      entered.resolve();
+      return pending;
     });
-
-    const run = agentExecCommand("inspect", { stateDir }, runtime, {
-      gatewayLockOptions: lockOptions,
-      process: signals.processLike,
-      runAgent,
-    });
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+    await Promise.race([
+      entered.promise,
+      run.then(() => {
+        throw new Error("Run ended before signal admission");
+      }),
+    ]);
     signals.emit("SIGTERM");
     await run;
-
-    await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
   });
+});
+
+it("closes temporary databases before removal and preserves independent handles", async () => {
+  const independentRoot = tempDirs.make("openclaw-agent-exec-independent-");
+  const independent = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: independentRoot },
+  });
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  let runStateDir: string | undefined;
+  let agentPath: string | undefined;
+  let statePath: string | undefined;
+  const handles: DatabaseSync[] = [];
+  const remove = fs.rm.bind(fs);
+  const removed = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+    if (pathname === runStateDir) {
+      // Refuse the destructive step if the command has not settled native ownership.
+      expect(handles).toHaveLength(2);
+      expect(handles.every((handle) => !handle.isOpen)).toBe(true);
+      expect(independent.db.isOpen).toBe(true);
+    }
+    await remove(pathname, options);
+  });
+  try {
+    const result = await runAgentExecWithMock(
+      "inspect",
+      { authEnvOnly: true },
+      runtime,
+      async () => {
+        runStateDir = process.env.OPENCLAW_STATE_DIR;
+        const shared = openOpenClawStateDatabase();
+        handles.push(shared.db);
+        statePath = shared.path;
+        await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
+          handles.push(database.db);
+          agentPath = database.path;
+        });
+        const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
+        const sessionKey = "agent:main:exec-cleanup";
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId: "exec-cleanup", updatedAt: 1 },
+        );
+        const deletion = await deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+        });
+        expect(deletion.deleted).toBe(true);
+        await registerSqliteAuditRecordAsync(
+          { scope: "agent-exec-cleanup", maxEntries: 1 },
+          { key: "completed", value: "synthetic", createdAt: 1 },
+        );
+        expect(
+          createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
+        ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
+        return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+    expect(runStateDir).toBeDefined();
+    await expect(fs.stat(runStateDir!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(independent.db.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
+  } finally {
+    removed.mockRestore();
+    if (agentPath) {
+      await closeOpenClawAgentDatabaseByPathAsync(agentPath);
+    }
+    if (statePath) {
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
+    }
+    await closeOpenClawStateDatabaseByPathAsync(independent.path);
+    if (runStateDir) {
+      await remove(runStateDir, { recursive: true, force: true });
+    }
+  }
 });

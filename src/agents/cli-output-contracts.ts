@@ -5,6 +5,7 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -44,6 +45,8 @@ export type CliTerminalInterruption = {
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
+  /** Completed result boundaries, retained for independent delivery and retry. */
+  textParts?: string[];
   rawText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
@@ -112,6 +115,9 @@ export type CliToolUseStartDelta = {
   args: Record<string, unknown>;
 };
 
+/** Counts-only progress while CLI tool arguments are still being generated. */
+export type CliToolInputDelta = LiveEditDiffProgress;
+
 /** Tool-call result event reconstructed from CLI stream output. */
 export type CliToolResultDelta = {
   toolCallId: string;
@@ -126,10 +132,12 @@ export type CliJsonlStreamingParserOptions = {
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onCompletedReply?: (text: string, assistantMessageIndex: number) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
@@ -139,4 +147,6 @@ export type CliJsonlStreamingParserOptions = {
   onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
 };

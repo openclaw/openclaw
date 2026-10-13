@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
@@ -29,9 +33,7 @@ it("resolves a Groq manifest model from a global external install during setup",
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
-  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints[0], (prefix) =>
-    tempDirs.make(prefix),
-  );
+  const sdkHost = createCompiledSdkHost(groqSetupSdkEntrypoints, (prefix) => tempDirs.make(prefix));
   await withOpenClawTestState(
     {
       label: "groq-external-setup",
@@ -45,7 +47,11 @@ it("resolves a Groq manifest model from a global external install during setup",
     },
     async (state) => {
       const pluginDir = state.statePath("extensions", "groq");
-      await fs.cp(path.join(process.cwd(), "extensions", "groq"), pluginDir, { recursive: true });
+      // This fixture owns its SDK peer; checkout dependency directories may be borrowed links.
+      await fs.cp(path.join(process.cwd(), "extensions", "groq"), pluginDir, {
+        recursive: true,
+        filter: (source) => path.basename(source) !== "node_modules",
+      });
       // The changed-node job uses a sparse checkout, so untouched package files
       // such as the runtime entry may not be present. Keep this external package
       // fixture self-contained while retaining the real Groq manifest and
@@ -128,6 +134,8 @@ export default defineSingleProviderPluginEntry({
       await fs.symlink(hostRoot, path.join(pluginDir, "node_modules", "openclaw"), "junction");
       const config = { plugins: { entries: { groq: { enabled: true } } } };
       await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config, config);
+      onTestFinished(clearRuntimeConfigSnapshot);
       await seedInstalledPluginIndex(
         {
           groq: {

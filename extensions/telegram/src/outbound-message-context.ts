@@ -1,4 +1,3 @@
-// Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -39,91 +38,8 @@ type TelegramOutboundPromptContextAccount = {
   bot?: { first_name?: string; username?: string };
 };
 
-type TelegramOutboundGroupHistoryRecord = {
-  chatId: string | number;
-  messageId: number;
-  text?: string;
-  threadSpec?: TelegramThreadSpec;
-  timestamp?: number;
-};
-
-type TelegramOutboundGroupHistoryRecorder = (record: TelegramOutboundGroupHistoryRecord) => void;
-
-const outboundGroupHistoryRecorders = new Map<string, TelegramOutboundGroupHistoryRecorder>();
-
-export function registerTelegramOutboundGroupHistoryRecorder(params: {
-  accountId: string;
-  recorder: TelegramOutboundGroupHistoryRecorder;
-}): () => void {
-  outboundGroupHistoryRecorders.set(params.accountId, params.recorder);
-  return () => {
-    if (outboundGroupHistoryRecorders.get(params.accountId) === params.recorder) {
-      outboundGroupHistoryRecorders.delete(params.accountId);
-    }
-  };
-}
-
-function resolveOutboundCacheMessageTimestamp(
-  msg: TelegramOutboundPromptContextMessage,
-): number | undefined {
-  if (
-    typeof msg.openclaw_prompt_context_timestamp_ms === "number" &&
-    Number.isFinite(msg.openclaw_prompt_context_timestamp_ms)
-  ) {
-    return msg.openclaw_prompt_context_timestamp_ms;
-  }
-  return typeof msg.date === "number" && Number.isFinite(msg.date) ? msg.date * 1000 : undefined;
-}
-
 function inferTelegramChatType(chatId: string | number): "private" | "supergroup" {
   return String(chatId).startsWith("-") ? "supergroup" : "private";
-}
-
-function buildOutboundCacheMessage(params: {
-  account: TelegramOutboundPromptContextAccount;
-  chatId: string | number;
-  message: TelegramOutboundPromptContextMessage;
-  messageId: number;
-  botUserId?: number;
-  text?: string;
-  messageThreadId?: number;
-  promptContextTimestampMs?: number;
-}): TelegramOutboundPromptContextMessage {
-  const chat = params.message.chat ?? {};
-  const text = params.message.text ?? params.message.caption ?? params.text;
-  const rawSender = params.message.from;
-  const stableSender = params.message.sender_chat ? undefined : rawSender;
-  const selfSenderName = buildTelegramSelfSenderName(
-    params.account.name,
-    params.account.bot ?? stableSender,
-  );
-  return {
-    ...params.message,
-    message_id: params.messageId,
-    ...(params.promptContextTimestampMs !== undefined
-      ? { openclaw_prompt_context_timestamp_ms: params.promptContextTimestampMs }
-      : {}),
-    date:
-      typeof params.message.date === "number" && Number.isFinite(params.message.date)
-        ? params.message.date
-        : Math.floor(Date.now() / 1000),
-    chat: {
-      id: chat.id ?? params.chatId,
-      type: chat.type ?? inferTelegramChatType(params.chatId),
-      ...(chat.title ? { title: chat.title } : {}),
-      ...(chat.username ? { username: chat.username } : {}),
-    },
-    // Every message entering here came from this bot. Keep only Telegram's real
-    // id/username; sender_chat uses a synthetic compatibility user.
-    from: {
-      id: params.message.sender_chat ? 0 : (stableSender?.id ?? params.botUserId ?? 0),
-      is_bot: true,
-      first_name: selfSenderName,
-      ...(stableSender?.username ? { username: stableSender.username } : {}),
-    },
-    ...(text ? { text } : {}),
-    ...(params.messageThreadId !== undefined ? { message_thread_id: params.messageThreadId } : {}),
-  };
 }
 
 export async function recordOutboundMessageForPromptContext(params: {
@@ -141,8 +57,6 @@ export async function recordOutboundMessageForPromptContext(params: {
   promptContextProjection?: TelegramPromptContextProjection;
   /** Pre-resolved account owner from the active Telegram runtime. */
   ownerAgentId?: string;
-  /** Edits refresh an existing cache entry without inserting another self-history turn. */
-  recordGroupHistory?: boolean;
 }): Promise<boolean> {
   try {
     const providerObservedThread = resolveTelegramProviderObservedThreadSpec({
@@ -150,10 +64,41 @@ export async function recordOutboundMessageForPromptContext(params: {
       successfulSendThread: params.successfulSendThread,
     });
     const messageThreadId = providerObservedThread?.id ?? params.messageThreadId;
-    const cacheMessage = buildOutboundCacheMessage({
-      ...params,
-      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
-    });
+    const chat = params.message.chat ?? {};
+    const text = params.message.text ?? params.message.caption ?? params.text;
+    const rawSender = params.message.from;
+    const stableSender = params.message.sender_chat ? undefined : rawSender;
+    const selfSenderName = buildTelegramSelfSenderName(
+      params.account.name,
+      params.account.bot ?? stableSender,
+    );
+    const cacheMessage: TelegramOutboundPromptContextMessage = {
+      ...params.message,
+      message_id: params.messageId,
+      ...(params.promptContextTimestampMs !== undefined
+        ? { openclaw_prompt_context_timestamp_ms: params.promptContextTimestampMs }
+        : {}),
+      date:
+        typeof params.message.date === "number" && Number.isFinite(params.message.date)
+          ? params.message.date
+          : Math.floor(Date.now() / 1000),
+      chat: {
+        id: chat.id ?? params.chatId,
+        type: chat.type ?? inferTelegramChatType(params.chatId),
+        ...(chat.title ? { title: chat.title } : {}),
+        ...(chat.username ? { username: chat.username } : {}),
+      },
+      // Every message entering here came from this bot. Keep only Telegram's real
+      // id/username; sender_chat uses a synthetic compatibility user.
+      from: {
+        id: params.message.sender_chat ? 0 : (stableSender?.id ?? params.botUserId ?? 0),
+        is_bot: true,
+        first_name: selfSenderName,
+        ...(stableSender?.username ? { username: stableSender.username } : {}),
+      },
+      ...(text ? { text } : {}),
+      ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
+    };
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(
         resolveStorePath(params.cfg.session?.store, {
@@ -170,6 +115,7 @@ export async function recordOutboundMessageForPromptContext(params: {
       accountId: params.account.accountId,
       chatId: params.chatId,
       msg: cacheMessage as Message,
+      historyEligible: true,
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
       ...(params.promptContextProjection
         ? { promptContextProjection: params.promptContextProjection }
@@ -177,19 +123,12 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(messageThreadId !== undefined ? { threadId: messageThreadId } : {}),
     });
-    if (params.recordGroupHistory !== false) {
-      const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
-      const threadSpec = providerObservedThread ?? params.successfulSendThread;
-      outboundGroupHistoryRecorders.get(params.account.accountId)?.({
-        chatId: params.chatId,
-        messageId: params.messageId,
-        text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
-        ...(threadSpec ? { threadSpec } : {}),
-        ...(timestamp !== undefined ? { timestamp } : {}),
-      });
-    }
     return true;
   } catch (error) {
+    const chatType = params.message.chat?.type ?? inferTelegramChatType(params.chatId);
+    if (chatType === "group" || chatType === "supergroup") {
+      throw error;
+    }
     logVerbose(`telegram: failed to record outbound message context: ${String(error)}`);
     return false;
   }

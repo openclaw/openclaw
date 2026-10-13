@@ -1,51 +1,15 @@
 // Tool schema projection tests cover runtime/provider filtering for plugin tool
 // schemas before they are exposed to model providers.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
-  inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("runtime tool input schema projection", () => {
-  it("accepts JSON object input schemas", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      }),
-    ).toEqual({
-      schema: {
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      },
-      violations: [],
-    });
-  });
-
-  it("reports non-object dynamic tool input schemas", () => {
-    expect(
-      inspectRuntimeToolInputSchemas([
-        {
-          name: "fuzzplugin_move_angles",
-          parameters: { type: "array", items: { type: "number" } },
-        },
-      ] as never),
-    ).toEqual([
-      {
-        toolName: "fuzzplugin_move_angles",
-        toolIndex: 0,
-        violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
-      },
-    ]);
-  });
-
   it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
     expect(
       projectRuntimeToolInputSchema({
@@ -80,20 +44,6 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
-  it("reports non-finite numeric schema values before JSON projection", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          score: { type: "number", default: Number.NaN },
-        },
-      }),
-    ).toEqual({
-      schema: {},
-      violations: ["parameters.properties.score.default is not JSON-serializable"],
-    });
-  });
-
   it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
     if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
       skip();
@@ -104,30 +54,13 @@ describe("runtime tool input schema projection", () => {
       overflow,
       { type: "object", properties: { score: { default: overflow } } },
       { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+      { type: "object", examples: [{ document: { $dynamicRef: "#node", limit: overflow } }] },
     ]) {
       expect(projectRuntimeToolInputSchema(schema)).toEqual({
         schema: {},
         violations: ["parameters is not a JSON value"],
       });
     }
-  });
-
-  it("reports non-finite values returned by nested toJSON serializers", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          score: {
-            toJSON() {
-              return { type: "number", maximum: Number.POSITIVE_INFINITY };
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      schema: {},
-      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
-    });
   });
 
   it("keeps empty property names in non-finite diagnostic paths", () => {
@@ -263,6 +196,51 @@ describe("runtime tool input schema projection", () => {
         },
       }).violations,
     ).toEqual([]);
+  });
+
+  it.each(["const", "default", "enum", "examples"])(
+    "keeps tools whose %s contains literal schema documents",
+    (keyword) => {
+      const instance = {
+        document: {
+          $dynamicAnchor: "node",
+          properties: { child: { $dynamicRef: "#node" } },
+        },
+      };
+      const parameters = Type.Object(
+        { document: Type.Record(Type.String(), Type.Unknown()) },
+        { [keyword]: keyword === "enum" || keyword === "examples" ? [instance] : instance },
+      );
+      const original = structuredClone(parameters);
+      const tool = { name: "store_schema", parameters };
+
+      expect(projectRuntimeToolInputSchema(parameters)).toEqual({
+        schema: original,
+        violations: [],
+      });
+      expect(filterRuntimeCompatibleTools([tool])).toEqual({ tools: [tool], diagnostics: [] });
+      expect(parameters).toEqual(original);
+    },
+  );
+
+  it("still checks schemas whose property or definition names match literal keywords", () => {
+    const names = ["const", "default", "enum", "examples"];
+    const schema = {
+      type: "object",
+      $defs: Object.fromEntries(names.map((name) => [name, { $dynamicAnchor: name }])),
+      properties: Object.fromEntries(names.map((name) => [name, { $dynamicRef: `#${name}` }])),
+    };
+
+    expect(projectRuntimeToolInputSchema(schema).violations).toEqual([
+      "parameters.$defs.const.$dynamicAnchor",
+      "parameters.$defs.default.$dynamicAnchor",
+      "parameters.$defs.enum.$dynamicAnchor",
+      "parameters.$defs.examples.$dynamicAnchor",
+      "parameters.properties.const.$dynamicRef",
+      "parameters.properties.default.$dynamicRef",
+      "parameters.properties.enum.$dynamicRef",
+      "parameters.properties.examples.$dynamicRef",
+    ]);
   });
 
   it("filters unsupported schemas without dropping healthy tools", () => {

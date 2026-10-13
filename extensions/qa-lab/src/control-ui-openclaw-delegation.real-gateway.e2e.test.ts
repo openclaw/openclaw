@@ -61,12 +61,6 @@ suite.define(() => {
       const repoRoot = process.cwd();
       const runtime = await owner.start({
         repoRoot,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-          cwd: repoRoot,
-          usePackagedPlugins: true,
-        },
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
@@ -370,13 +364,6 @@ const fullAccessSuite = createControlUiE2eSuite({
       const repoRoot = process.cwd();
       fullAccessRuntime = await fullAccessOwner.start({
         repoRoot,
-        // The isolated HOME must not make the development launcher rebuild the checkout.
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
-          cwd: repoRoot,
-          usePackagedPlugins: true,
-        },
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
@@ -528,6 +515,19 @@ fullAccessSuite.define(() => {
               expect(loggingLevel(savedConfig)).toBe("info");
               const configSnapshot = await gateway.call("config.get", {});
               expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
+              const finalMessage =
+                isRecord(history) && Array.isArray(history.messages)
+                  ? history.messages.findLast(
+                      (message) => isRecord(message) && message.role === "assistant",
+                    )
+                  : undefined;
+              const finalMeta = isRecord(finalMessage) ? finalMessage["__openclaw"] : undefined;
+              const finalEntryId = isRecord(finalMeta) ? finalMeta.id : undefined;
+              if (typeof finalEntryId !== "string") {
+                throw new Error("chat.history returned no persisted assistant entry id");
+              }
+              // History replaces the live final and its work-group key. Expand the persisted row.
+              await page.locator(`.chat-bubble[data-entry-id="${finalEntryId}"]`).waitFor();
               const workSummary = page
                 .locator(".chat-work-group > .chat-activity-group__summary")
                 .first();

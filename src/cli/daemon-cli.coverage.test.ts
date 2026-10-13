@@ -1,4 +1,5 @@
 // Daemon CLI coverage tests cover daemon command branches and output behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,10 @@ const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
 const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn(async (_opts?: unknown) => ({
   auth: {},
 }));
-const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => ({
+  services: [],
+  errors: [],
+}));
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free",

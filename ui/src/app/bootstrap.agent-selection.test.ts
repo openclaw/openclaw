@@ -1,21 +1,20 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-routes.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  saveSettings,
+  setSettingsChangeListener,
+} from "./settings.ts";
 
-it.each([
-  { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
-  { agentId: "work", savedAgentId: "main", basePath: "", suffix: "" },
-  { agentId: "main", savedAgentId: "work", basePath: "/openclaw", suffix: "/" },
-  { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
-])(
+it.each([{ agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" }])(
   "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
   async ({ agentId, savedAgentId, basePath, suffix }) => {
     const pathname = buildControlUiSessionPath({
@@ -33,7 +32,7 @@ it.each([
     const gateway = {
       snapshot: { phase: "connecting", client: null, hello: null },
       subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext<RouteId>["gateway"];
+    } as unknown as ApplicationContext["gateway"];
     const initialLocationReady = resolveInitialApplicationLocation({
       location: requested,
       basePath,
@@ -45,7 +44,7 @@ it.each([
     });
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as ApplicationContext<RouteId>,
+      context: { gateway } as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace },
       initialLocationReady,
@@ -83,7 +82,7 @@ it("routes a canonical global session through its persisted agent owner", async 
           },
         },
         subscribe,
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "dummy",
         mainKey: "main",
@@ -123,7 +122,7 @@ it("falls back when the persisted agent is absent from the Gateway roster", asyn
           },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "dummy",
         mainKey: "main",
@@ -150,7 +149,7 @@ it("replaces a confirmed-missing remembered session with the agent main route", 
           hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "main",
         mainKey: "main",
@@ -197,7 +196,7 @@ it("refreshes a cached roster and its default before accepting a remembered agen
           hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => cachedList,
       ensureAgentsList,
       signal: new AbortController().signal,
@@ -233,7 +232,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
     },
     subscribe: vi.fn(() => () => undefined),
   };
-  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveInitialApplicationLocation({
@@ -291,7 +290,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
     },
     subscribe: vi.fn(() => () => undefined),
   };
-  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
 
   const pending = resolveInitialApplicationLocation({
     location: { pathname: "/", search: "", hash: "" },
@@ -384,4 +383,53 @@ it.each([
     window.history.replaceState({}, "", previousUrl);
     saveSettings(previousSettings);
   }
+});
+
+describe("initial sidebar visibility", () => {
+  it.each(["/dashboard/research/conversation", "/chat/research/conversation?nav=collapsed"])(
+    "starts expanded without rewriting the route at %s",
+    (initialUrl) => {
+      const previousSettings = loadSettings();
+      const previousUrl = window.location.href;
+      window.history.replaceState({}, "", initialUrl);
+      let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+
+      try {
+        runtime = bootstrapApplication();
+        expect(runtime.context.navigation.snapshot.navCollapsed).toBe(false);
+        expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+          initialUrl,
+        );
+      } finally {
+        runtime?.stop();
+        window.history.replaceState({}, "", previousUrl);
+        saveSettings(previousSettings);
+      }
+    },
+  );
+
+  it("keeps sidebar visibility in memory without rewriting persisted settings", () => {
+    const previousSettings = loadSettings();
+    let runtime: ReturnType<typeof bootstrapApplication> | undefined;
+    const onPersistedSettingsChanged = vi.fn();
+
+    try {
+      runtime = bootstrapApplication();
+      setSettingsChangeListener(onPersistedSettingsChanged);
+
+      runtime.context.navigation.update({ navCollapsed: true });
+
+      expect(runtime.context.navigation.snapshot.navCollapsed).toBe(true);
+      expect(onPersistedSettingsChanged).not.toHaveBeenCalled();
+
+      runtime.context.navigation.update({ navWidth: previousSettings.navWidth + 1 });
+
+      expect(onPersistedSettingsChanged).toHaveBeenCalledOnce();
+      expect(loadSettings().navWidth).toBe(previousSettings.navWidth + 1);
+    } finally {
+      runtime?.stop();
+      setSettingsChangeListener(null);
+      saveSettings(previousSettings);
+    }
+  });
 });

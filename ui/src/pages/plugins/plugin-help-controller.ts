@@ -1,25 +1,24 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginDiscoveryDetailResult,
+  PluginListResult,
+  PluginsInspectResult,
+} from "../../lib/plugins/index.ts";
 import {
   publishPluginHelpContext,
   createPluginHelpRequest,
   type PluginHelpReference,
 } from "../custodian/plugin-help.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import type { PluginSettingsField } from "./settings-editor.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 
 /** The page publishes its loaded selection; the existing Ask store owns conversation state. */
-export class PluginHelpController implements ReactiveController {
+export class PluginHelpController {
   private context?: ApplicationContext;
   private plugin?: PluginHelpReference;
   private release?: () => void;
-
-  constructor(host: ReactiveControllerHost) {
-    host.addController(this);
-  }
 
   get available(): boolean {
     return this.plugin !== undefined;
@@ -29,7 +28,11 @@ export class PluginHelpController implements ReactiveController {
     context: ApplicationContext;
     connected: boolean;
     result: PluginListResult | null;
-    detail: { pluginId: string } | null;
+    detail: {
+      pluginId: string;
+      inspection?: PluginsInspectResult | null;
+      catalog?: PluginDiscoveryDetailResult;
+    } | null;
     catalogDetail: { result: PluginDiscoveryDetailResult | null } | null;
     installedDetailTab: InstalledPluginDetailTab;
   }): void {
@@ -41,15 +44,35 @@ export class PluginHelpController implements ReactiveController {
     const installed = model.result?.plugins.find(
       (plugin) => plugin.installed && plugin.id === model.detail?.pluginId,
     );
-    const catalog = model.catalogDetail?.result;
+    const catalog = model.detail?.catalog ?? model.catalogDetail?.result;
     const catalogPluginId = catalog?.plugin.local.pluginId ?? catalog?.detail.packageName;
+    const declared = catalog
+      ? {
+          tools: catalog.detail.contracts?.tools,
+          providers: catalog.detail.providers,
+          channels: catalog.detail.channels,
+          contracts: catalog.detail.contracts
+            ? Object.entries(catalog.detail.contracts)
+                .filter(([family]) => family !== "tools")
+                .flatMap(([family, ids]) => ids.map((id) => `${family}: ${id}`))
+            : undefined,
+          skills: catalog.detail.skills.map((skill) => skill.name),
+          mcpServers: catalog.detail.mcpServers,
+        }
+      : undefined;
     this.plugin =
       model.connected &&
       canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")
         ? installed
-          ? { id: installed.id, name: installed.name }
+          ? {
+              id: installed.id,
+              name: installed.name,
+              declared:
+                model.detail?.inspection?.declared ??
+                (installed.catalogId === catalog?.plugin.id ? declared : undefined),
+            }
           : catalog && catalogPluginId
-            ? { id: catalogPluginId, name: catalog.plugin.catalog.name }
+            ? { id: catalogPluginId, name: catalog.plugin.catalog.name, declared }
             : undefined
         : undefined;
     if (!this.plugin) {
@@ -84,7 +107,7 @@ export class PluginHelpController implements ReactiveController {
     };
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.release?.();
     this.release = undefined;
     this.plugin = undefined;

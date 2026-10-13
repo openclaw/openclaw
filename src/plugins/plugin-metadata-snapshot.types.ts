@@ -9,6 +9,7 @@ import type {
   PluginManifestModelIdNormalizationProvider,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
+  PluginManifestSetupProvider,
 } from "./manifest-types.js";
 import type {
   PluginRegistrySnapshotDiagnostic,
@@ -28,6 +29,13 @@ export type PluginProviderAuthAliasCandidate = {
   order: number;
 };
 
+export type PluginProviderAuthContribution = {
+  plugin: PluginManifestRecord;
+  envProviders: readonly PluginManifestSetupProvider[];
+  evidenceProviders: readonly PluginManifestSetupProvider[];
+  fallbackProviderRefs: readonly string[];
+};
+
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
   channelAccountKeyPolicies?: ReadonlyMap<string, ChannelAccountKeyPolicy>;
@@ -40,6 +48,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   contracts: ReadonlyMap<string, readonly string[]>;
   /** Empty views must not fall through to process-current model normalization policies. */
   modelIdNormalizationPolicies: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
+  providerAuthContributions: readonly PluginProviderAuthContribution[];
   providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
@@ -83,6 +92,20 @@ export type PluginMetadataRegistryView = Pick<
   "index" | "manifestRegistry" | "discovery" | "workspaceDir"
 > &
   Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
+
+/** Acquired workspace facts before the fleet publishes one immutable snapshot. */
+export type PluginMetadataSnapshotInput = Pick<
+  PluginMetadataSnapshot,
+  | "policyHash"
+  | "workspaceDir"
+  | "index"
+  | "registryIndex"
+  | "registrySource"
+  | "registryDiagnostics"
+  | "manifestRegistry"
+  | "discovery"
+  | "metrics"
+>;
 
 export type PluginMetadataManifestView = Pick<
   PluginMetadataSnapshot,

@@ -10,7 +10,7 @@ import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   broadcastSetupHandoffCompletion,
@@ -25,7 +25,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 

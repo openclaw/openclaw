@@ -16,14 +16,19 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  resetGeneratedMediaTaskActivityForTests,
+  admitMediaHandle,
+} from "../media-generation-activity.test-support.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
   imageGenerationTaskLifecycle,
@@ -270,11 +275,15 @@ async function prepareSnapshot(
     prepared.pluginGeneration,
     catalog,
     {
+      initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
       isCurrent: () => true,
       withRefreshStatus: (value) => value,
       readFullModelCatalog: () => catalog.modelCatalog,
+      refreshExpiredModelCatalog: () => {},
+      recheckNativeLogin: () => {},
       readPublishedModels: () => undefined,
       loadFullModelCatalog: async () => catalog.modelCatalog,
+      loadNativeModelCatalog: async () => catalog.modelCatalog,
       loadAuth: async () => {
         throw new Error("The synthetic media provider does not request model credentials");
       },
@@ -286,6 +295,7 @@ async function prepareSnapshot(
 afterEach(() => {
   vi.restoreAllMocks();
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
 });
@@ -304,6 +314,79 @@ describe.each(["image", "music", "video"] as const)(
       music: musicGenerationTaskLifecycle,
       video: videoGenerationTaskLifecycle,
     }[kind];
+    it("waits for the captured workspace before reading a generation reference", async () => {
+      const fixture = createNativeFixture(kind, true);
+      const waiting = createDeferredCore();
+      const ready = createDeferredCore();
+      try {
+        await fixture.withEnvironment(async () => {
+          useNoBundledPlugins();
+          const first = await acquirePluginRegistryForInspection({ config: fixture.config });
+          const prepared = await prepareSnapshot(fixture, first.registry);
+          const sessionKey = "agent:main:discord:direct:synthetic-media";
+          const referencePath = path.join(fixture.dir, "pending-reference.png");
+          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
+            taskId: "workspace-reference-task",
+            detach: true,
+            runId: "workspace-reference-run",
+            requesterSessionKey: sessionKey,
+            taskLabel: "Synthetic workspace reference",
+          });
+          const schedule = vi.fn();
+          const readReference = vi.spyOn(webMedia, "loadWebMedia");
+          const tool = await runWithAgentWorkspaceReadiness(
+            {
+              sessionKey,
+              waitUntilReady: () => {
+                waiting.resolve();
+                return ready.promise;
+              },
+              assertCurrent: () => {},
+            },
+            async () =>
+              createTool({
+                config: fixture.config,
+                agentDir: prepared.snapshot.agentDir,
+                workspaceDir: fixture.dir,
+                preparedModelRuntime: prepared.snapshot,
+                agentSessionKey: sessionKey,
+                scheduleBackgroundWork: schedule,
+              }),
+          );
+          const outcome = tool!.execute("workspace-reference", {
+            prompt: "Use the synthetic workspace reference",
+            image: referencePath,
+          });
+          try {
+            await Promise.race([
+              waiting.promise,
+              outcome.then(() => {
+                throw new Error("Media preflight finished before workspace readiness");
+              }),
+            ]);
+            expect(readReference).not.toHaveBeenCalled();
+            expect(createTask).not.toHaveBeenCalled();
+            const inline = await tool!.execute("inline-reference", {
+              prompt: "Use an inline reference while the workspace is pending",
+              image: `data:image/png;base64,${png.toString("base64")}`,
+            });
+            expect(inline.details).toMatchObject({ status: "started" });
+            fs.writeFileSync(referencePath, png);
+            ready.resolve();
+            expect((await outcome).details).toMatchObject({ status: "started" });
+            expect(readReference).toHaveBeenCalledOnce();
+            expect(schedule).toHaveBeenCalledTimes(2);
+          } finally {
+            ready.resolve();
+            await outcome.catch(() => {});
+            await first.release();
+            await prepared.release();
+          }
+        });
+      } finally {
+        fixture.cleanup();
+      }
+    });
     it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
       "refuses preflight work when the prepared owner releases during %s",
       async (pause) => {
@@ -318,8 +401,9 @@ describe.each(["image", "music", "video"] as const)(
             fs.writeFileSync(referencePath, png);
             const prepared = await prepareSnapshot(fixture, first.registry);
             const { snapshot } = prepared;
-            const createTask = vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
+            const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
               taskId: "preflight-image-task",
+              detach: true,
               runId: "preflight-image-run",
               requesterSessionKey: "agent:main:discord:direct:synthetic-media",
               taskLabel: "Synthetic media edit",
@@ -335,21 +419,24 @@ describe.each(["image", "music", "video"] as const)(
                 }
                 return loadReference(...args);
               });
-            const readTasks = taskRuntime.listFreshTasksForOwnerKey;
+            const lookup = {
+              image: "findDuplicateGuardImageGenerationTaskForSession",
+              music: "findDuplicateGuardMusicGenerationTaskForSession",
+              video: "findDuplicateGuardVideoGenerationTaskForSession",
+            } as const;
+            const readTasks = taskRuntime[lookup[kind]];
             let lookups = 0;
-            vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockImplementation(
-              async (ownerKey) => {
-                const tasks = await readTasks(ownerKey);
-                if (
-                  pause !== "reference loading" &&
-                  ++lookups === (pause === "request lookup" ? 1 : 2)
-                ) {
-                  preflightPaused.resolve();
-                  await resumePreflight.promise;
-                }
-                return tasks;
-              },
-            );
+            vi.spyOn(taskRuntime, lookup[kind]).mockImplementation(async (ownerKey, options) => {
+              const tasks = await readTasks(ownerKey, options);
+              if (
+                pause !== "reference loading" &&
+                ++lookups === (pause === "request lookup" ? 1 : 2)
+              ) {
+                preflightPaused.resolve();
+                await resumePreflight.promise;
+              }
+              return tasks;
+            });
             const tool = createTool({
               config: {
                 ...fixture.config,
@@ -438,13 +525,16 @@ describe.each(["image", "music", "video"] as const)(
             );
             const connection = fixture.connections[0]!;
             const sessionKey = "agent:main:discord:direct:synthetic-media";
-            vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
-              taskId: "image-resource-task",
-              runId: "image-resource-run",
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              taskLabel: "Synthetic media resource proof",
-            });
+            vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+              admitMediaHandle({
+                taskId: "image-resource-task",
+                detach: true,
+                runId: "image-resource-run",
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "main",
+                taskLabel: "Synthetic media resource proof",
+              }),
+            );
             vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
             const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
             const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});

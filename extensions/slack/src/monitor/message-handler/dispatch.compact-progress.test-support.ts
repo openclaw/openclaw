@@ -1,5 +1,66 @@
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 
+export type SlackReplyOptionEvent =
+  | {
+      kind: "item";
+      itemId?: string;
+      toolCallId?: string;
+      itemKind?: string;
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+      phase?: string;
+      status?: string;
+      meta?: string;
+    }
+  | {
+      kind: "tool_start";
+      itemId?: string;
+      toolCallId?: string;
+      name: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
+    }
+  | {
+      kind: "patch";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
+      summary?: string;
+    }
+  | {
+      kind: "command_output";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      explanation?: string;
+      status?: string;
+      exitCode?: number | null;
+    }
+  | {
+      kind: "plan";
+      phase?: string;
+      explanation?: string;
+      explanationFormat?: "plain";
+      steps: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
+    }
+  | { kind: "concurrent_items"; progressTexts: string[] }
+  | { kind: "partial"; text: string }
+  | { kind: "assistant_start" }
+  | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
+  | { kind: "reasoning_end" }
+  | { kind: "checkpoint"; run: () => Promise<void> }
+  | ({ kind: "approval" } & Parameters<NonNullable<GetReplyOptions["onApprovalEvent"]>>[0]);
+
 /** A model preamble stays visible while successful and failed work continues. */
 export async function emitCompactProgressScenario(reply: GetReplyOptions) {
   await reply.onPlanUpdate?.({

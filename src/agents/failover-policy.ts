@@ -1,7 +1,7 @@
 /**
  * Shared failover policy helpers for auth profile cooldown probing.
  */
-import type { FailoverReason } from "./embedded-agent-helpers.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 /** Returns true when a failed model can be probed during cooldown. */
 export function shouldAllowCooldownProbeForReason(

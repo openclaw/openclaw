@@ -14,7 +14,6 @@ export type ToastOptions = {
   message: string | TemplateResult;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
-  anchorTopOffset?: number;
   /** Bottom placement suits settings feedback without covering the page heading. */
   placement?: "top" | "bottom";
   icon?: TemplateResult;
@@ -35,7 +34,11 @@ function resolveToastAnchorRect(anchor: Element | undefined) {
 }
 
 function activeModalToastLayer() {
-  return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
+  const owner = [...(document.openClawModalLayers ?? [])]
+    .findLast((candidate) => candidate.isConnected)
+    ?.closest("openclaw-modal-dialog");
+  const container = owner?.getOverlayContainer();
+  return owner && container ? { owner, container } : undefined;
 }
 
 function restingToastLayer() {
@@ -84,8 +87,8 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (this.isConnected) {
       return;
     }
-    const target = activeModalToastLayer() ?? restingToastLayer();
-    if (this.parentElement?.localName === "openclaw-modal-dialog" && target) {
+    const target = activeModalToastLayer()?.container ?? restingToastLayer();
+    if (this.closest("openclaw-modal-dialog") && target) {
       target.append(this);
     } else {
       this.dismiss("disconnected");
@@ -135,13 +138,11 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   private clearDismissTimer() {
-    if (this.dismissTimer !== null) {
-      globalThis.clearTimeout(this.dismissTimer);
-      this.dismissTimer = null;
-    }
-    if (this.exitTimer !== null) {
-      globalThis.clearTimeout(this.exitTimer);
-      this.exitTimer = null;
+    for (const key of ["dismissTimer", "exitTimer"] as const) {
+      if (this[key] !== null) {
+        globalThis.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -204,7 +205,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           anchorRect
             ? {
                 "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
-                "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
+                "--app-toast-anchor-top": `${anchorRect.top}px`,
                 "--app-toast-anchor-width": `${anchorRect.width}px`,
               }
             : {},
@@ -287,16 +288,18 @@ export function showToast(options: ToastOptions): boolean {
     return false;
   }
   const modal = activeModalToastLayer();
-  if (modal && host.parentElement !== modal) {
-    modal.append(host);
+  if (modal && host.parentElement !== modal.container) {
+    modal.container.append(host);
     const handoff = (event: Event) => {
-      if (event.target !== modal) {
+      if (event.target !== modal.owner) {
         return;
       }
-      modal.removeEventListener("wa-after-hide", handoff);
-      queueMicrotask(() => (activeModalToastLayer() ?? restingToastLayer())?.append(host));
+      modal.owner.removeEventListener("wa-after-hide", handoff);
+      queueMicrotask(() =>
+        (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
+      );
     };
-    modal.addEventListener("wa-after-hide", handoff);
+    modal.owner.addEventListener("wa-after-hide", handoff);
   }
   host.show(options);
   return true;

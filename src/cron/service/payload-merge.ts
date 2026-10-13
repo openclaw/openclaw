@@ -11,7 +11,8 @@ function applyToolsAllowPatch(
   existing?: CronPayloadToolAllow,
 ): void {
   if (Array.isArray(patch.toolsAllow)) {
-    payload.toolsAllow = patch.toolsAllow;
+    const toolsAllow = patch.toolsAllow;
+    payload.toolsAllow = toolsAllow;
     // Same-kind edits keep the marker whenever the default-stamped list is
     // unchanged — even when the patch omits toolsAllowIsDefault, because the
     // cron tool's model-facing schema never sends it. Dropping the marker on an
@@ -20,7 +21,10 @@ function applyToolsAllowPatch(
     // runtime toolsAllow. Kind replacements (no existing payload) still require
     // the cron-tool-stamped marker on the patch itself.
     const existingDefaultUnchanged =
-      existing?.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch);
+      existing?.toolsAllowIsDefault === true &&
+      Array.isArray(existing.toolsAllow) &&
+      existing.toolsAllow.length === toolsAllow.length &&
+      existing.toolsAllow.every((toolName, index) => toolName === toolsAllow[index]);
     const installsDefault =
       patch.toolsAllowIsDefault === true && existing?.toolsAllowIsDefault !== true;
     const keepDefaultMarker = existingDefaultUnchanged || installsDefault;
@@ -33,19 +37,6 @@ function applyToolsAllowPatch(
     delete payload.toolsAllow;
     delete payload.toolsAllowIsDefault;
   }
-}
-
-function toolsAllowEqual(
-  left: Pick<CronPayloadToolAllow, "toolsAllow">,
-  right: Pick<CronPayloadToolAllowPatch, "toolsAllow">,
-): boolean {
-  const rightToolsAllow = right.toolsAllow;
-  return (
-    Array.isArray(left.toolsAllow) &&
-    Array.isArray(rightToolsAllow) &&
-    left.toolsAllow.length === rightToolsAllow.length &&
-    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
-  );
 }
 
 export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

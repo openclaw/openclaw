@@ -41,7 +41,14 @@ export async function loadDesktopEnvironments(
     isCurrent: () => boolean;
     recoverToPicker: boolean;
   },
-): Promise<{ environments: EnvironmentSummary[]; selectedSource: string | undefined } | undefined> {
+): Promise<
+  | {
+      environments: EnvironmentSummary[];
+      selectedSource: string | undefined;
+      pendingSource?: string;
+    }
+  | undefined
+> {
   const selectedTarget = await options.target;
   if (!options.isCurrent()) {
     return undefined;
@@ -49,6 +56,20 @@ export async function loadDesktopEnvironments(
   let environments = await requestDesktopEnvironments(client, selectedTarget);
   if (!options.isCurrent()) {
     return undefined;
+  }
+  const selectedEnvironment = environments.find((environment) => environment.id === selectedTarget);
+  if (selectedEnvironment?.status === "starting") {
+    return {
+      environments: [selectedEnvironment],
+      selectedSource: undefined,
+      pendingSource: selectedEnvironment.id,
+    };
+  }
+  if (
+    selectedEnvironment?.status === "error" ||
+    (!options.recoverToPicker && selectedEnvironment && selectedEnvironment.status !== "available")
+  ) {
+    throw new Error(selectedEnvironment.worker?.error ?? "Desktop environment is unavailable");
   }
   if (
     options.recoverToPicker &&
@@ -63,7 +84,10 @@ export async function loadDesktopEnvironments(
   }
   return {
     selectedSource: environments.find(
-      (environment) => environment.id === selectedTarget && environment.desktop === true,
+      (environment) =>
+        environment.id === selectedTarget &&
+        environment.status === "available" &&
+        environment.desktop === true,
     )?.id,
     environments: environments.filter((environment) => environment.desktop === true),
   };

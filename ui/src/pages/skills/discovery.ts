@@ -1,6 +1,6 @@
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { clawHubSkillRef, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
+import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 
 export type SkillDiscoveryEntry = {
   id: string;
@@ -54,7 +54,7 @@ export function skillDiscoveryEntries(params: {
   }
   const remoteIds = new Set<string>();
   for (const remote of params.results) {
-    const reference = clawHubSkillRef(remote);
+    const reference = remote.installRef;
     const identity = `${remote.registry}\n${reference}`;
     if (remoteIds.has(identity)) {
       continue;

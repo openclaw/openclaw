@@ -67,8 +67,11 @@ function stringifyField(value: unknown, maxLength?: number): string | undefined 
 
 function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderErrorProjection {
   const error = asOptionalRecord(snapshot);
-  const nestedError = asOptionalRecord(error?.error);
   const response = asOptionalRecord(error?.response);
+  const nestedError =
+    asOptionalRecord(error?.error) ??
+    asOptionalRecord(response?.error) ??
+    asOptionalRecord(asOptionalRecord(error?.payload)?.error);
   const status = [error?.status, error?.statusCode, response?.status, response?.statusCode].find(
     (value): value is number => typeof value === "number" && Number.isFinite(value),
   );
@@ -88,12 +91,7 @@ function buildProjection(snapshot: unknown, signal?: AbortSignal): ProviderError
         body ??
         stringifyField(snapshot, MAX_ERROR_BODY_LENGTH) ??
         "Unknown provider error");
-  if (
-    status !== undefined &&
-    !body &&
-    originalMessage &&
-    !originalMessage.startsWith(String(status))
-  ) {
+  if (status !== undefined && originalMessage && !originalMessage.startsWith(String(status))) {
     errorMessage = `${status}: ${errorMessage}`;
   }
   const metadata = asOptionalRecord(nestedError?.metadata);

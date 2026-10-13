@@ -1,4 +1,3 @@
-/** Windows Task Scheduler installer, startup fallback, and lifecycle controls. */
 export {
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,
@@ -16,5 +15,4 @@ export {
   isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
-  readWindowsStartupFallbackRuntimeForUpdate,
 } from "./schtasks-runtime.js";

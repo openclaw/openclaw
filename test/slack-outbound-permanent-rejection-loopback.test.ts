@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../src/infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../src/infra/outbound/delivery-queue-media-staging.js";
 
 const CLASSIFIED_CODES = ["messages_tab_disabled", "account_inactive"] as const;
@@ -211,17 +211,6 @@ describe("Slack permanent rejections over real Web API transport", () => {
             }),
           });
           expect(loopback.requests).toHaveLength(CLASSIFIED_CODES.length);
-
-          console.log(
-            `[slack permanent-rejection proof] ${JSON.stringify({
-              queueTerminal: "failed",
-              restartReplayCount: 0,
-              providerStatus: 200,
-              classifiedCodes: CLASSIFIED_CODES,
-              classification: "typed non-retryable",
-              transport: "@slack/web-api HTTP to 127.0.0.1:<redacted>",
-            })}`,
-          );
         } finally {
           closeOpenClawAgentDatabasesForTest();
           closeOpenClawStateDatabaseForTest();

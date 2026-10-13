@@ -38,7 +38,7 @@ describe("memory recall metadata", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, '[]', 2)`,
+         VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, X'', 2)`,
       );
       const insertMetadata = db.prepare(
         `INSERT INTO memory_index_chunk_recall_metadata
@@ -125,7 +125,7 @@ describe("memory recall metadata", () => {
         const insertChunk = db.prepare(
           `INSERT INTO memory_index_chunks
            (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, '[]', 2)`,
+           VALUES (?, 'MEMORY.md', 1, 1, 'h', 'm', ?, X'', 2)`,
         );
         const insertMetadata = db.prepare(
           `INSERT INTO memory_index_chunk_recall_metadata
@@ -207,6 +207,7 @@ describe("memory recall metadata", () => {
           .all()
           .map((row) => (row as { name: string }).name),
       ).toEqual([
+        "chunk_rowid",
         "id",
         "path",
         "source",
@@ -221,7 +222,7 @@ describe("memory recall metadata", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'm', ?, '[]', 2)`,
+         VALUES (?, ?, ?, ?, ?, 'm', ?, X'', 2)`,
       );
       const insertMetadata = db.prepare(
         `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}

@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createCodexPluginThreadConfigStartupProvider,
-  resolveCodexPluginThreadConfigStartupPolicy,
-} from "./plugin-thread-config-deadline.js";
+import { resolveCodexPluginThreadConfigStartupPolicy } from "./plugin-thread-config-deadline.js";
 import {
   buildPluginAppPolicyContext,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import {
   buildLegacyScheduledCodexAppRecoveryPrompt,
   buildScheduledCodexAppAuthorityInputFingerprint,
@@ -15,6 +13,7 @@ import {
   readCurrentCodexScheduledAppPolicy,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { scheduledAppApprovalPolicyCases } from "./scheduled-app-authority.test-support.js";
 import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 
 function policyContext() {
@@ -278,6 +277,55 @@ describe("scheduled Codex app authority", () => {
     );
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(statusPage).toBe(2);
+  });
+
+  it("keeps the capture deadline monotonic when the wall clock rewinds", async () => {
+    const budgetMs = 5_000;
+    let wallClockReads = 0;
+    const performanceNowSpy = vi.spyOn(performance, "now").mockReturnValue(500);
+    // Rewind after deadline creation while elapsed time stays fixed.
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (wallClockReads++ === 0 ? 500 : 500 - 90_000));
+    const capturedTimeoutMs: number[] = [];
+    const request = vi.fn(
+      async (method: string, _requestParams: unknown, options: { timeoutMs?: number } = {}) => {
+        if (method === "app/installed") {
+          capturedTimeoutMs.push(options.timeoutMs ?? -1);
+          return { apps: [] };
+        }
+        if (method === "config/read") {
+          return { config: {} };
+        }
+        if (method === "mcpServerStatus/list") {
+          return { data: [], nextCursor: null };
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    );
+
+    try {
+      await expect(
+        captureScheduledCodexAppAuthority({
+          client: { request } as never,
+          threadId: "thread-rewind",
+          policyContext: policyContext(),
+          auth: {
+            kind: "prepared-profile",
+            profileId: "openai:work",
+            accountId: "acct-1",
+          },
+          timeoutMs: budgetMs,
+        }),
+      ).resolves.toBeUndefined();
+      expect(capturedTimeoutMs.length).toBeGreaterThan(0);
+      for (const timeoutMs of capturedTimeoutMs) {
+        expect(timeoutMs).toBe(budgetMs);
+      }
+    } finally {
+      performanceNowSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("maps a real app-server request timeout to the no-save creator diagnostic", async () => {
@@ -694,57 +742,60 @@ describe("scheduled Codex app authority", () => {
     },
   );
 
-  it.each([
-    { name: "global default", app: {}, expected: "prompt" },
-    {
-      name: "app default over global default",
-      app: { default_tools_approval_mode: "writes" },
-      expected: "writes",
-    },
-    {
-      name: "tool override over app default",
-      app: {
-        default_tools_approval_mode: "prompt",
-        tools: { edit: { approval_mode: "approve" } },
-      },
-      expected: "approve",
-    },
-  ])("preserves approval $name during capture and continuation", async ({ app, expected }) => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/installed") {
-        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
-      }
-      if (method === "config/read") {
+  it.each(scheduledAppApprovalPolicyCases)(
+    "preserves approval $name during capture and continuation",
+    async ({ app, expected, toolMetadata }) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "app/installed") {
+          return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+        }
+        if (method === "config/read") {
+          return {
+            config: {
+              apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
+            },
+          };
+        }
         return {
-          config: {
-            apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
-          },
+          data: [
+            {
+              name: "codex_apps",
+              tools: {
+                edit: { title: "Edit event", _meta: { connector_id: "calendar", ...toolMetadata } },
+              },
+            },
+          ],
+          nextCursor: null,
         };
-      }
-      return {
-        data: [{ name: "codex_apps", tools: { edit: { _meta: { connector_id: "calendar" } } } }],
-        nextCursor: null,
-      };
-    });
-    const captured = await captureScheduledCodexAppAuthority({
-      client: { request } as never,
-      threadId: "thread-final",
-      policyContext: policyContext(),
-      auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
-    });
-    expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
+      });
+      const captured = await captureScheduledCodexAppAuthority({
+        client: { request } as never,
+        threadId: "thread-final",
+        policyContext: policyContext(),
+        auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
+      });
+      expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
 
-    const config = threadConfig();
-    config.policyContext = policyContext();
-    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
-      config,
-      authority(),
-      await readCurrentCodexScheduledAppPolicy({ request }),
-    );
-    expect(intersected.configPatch).toMatchObject({
-      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
-    });
-  });
+      const config = threadConfig();
+      config.policyContext = policyContext();
+      const currentPolicy = await readCurrentCodexScheduledAppPolicy({ request });
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        authority(),
+        currentPolicy,
+      );
+      expect(intersected.configPatch).toMatchObject({
+        apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      });
+      const relaxed = intersectCodexPluginThreadConfigWithScheduledAuthority(config, captured, {
+        ...currentPolicy,
+        config: { apps: { calendar: { default_tools_approval_mode: "approve" } } },
+      });
+      expect(relaxed.configPatch).toMatchObject({
+        apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      });
+    },
+  );
 
   it("removes tools missing from current inventory and rotates the fingerprint", () => {
     const full = intersectCodexPluginThreadConfigWithScheduledAuthority(
@@ -917,15 +968,14 @@ describe("scheduled Codex app authority", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const provider = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: "scheduled-input",
-      enabledPluginConfigKeys: [],
-      policy: undefined,
+    const provider = preparePluginThreadConfigForTest(
+      {},
+      "account-1",
+      authority(),
+    )({
       requestTimeoutMs: 400,
       signal: new AbortController().signal,
-      pluginConfig: {},
       client: { request } as never,
-      appCacheKey: "account-1",
       scheduledRuntimeAuthority: authority(),
     });
     const startedAt = Date.now();
@@ -963,15 +1013,14 @@ describe("scheduled Codex app authority", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const provider = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: "scheduled-input",
-      enabledPluginConfigKeys: [],
-      policy: undefined,
+    const provider = preparePluginThreadConfigForTest(
+      {},
+      "account-1",
+      authority(),
+    )({
       requestTimeoutMs: 2_000,
       signal: new AbortController().signal,
-      pluginConfig: {},
       client: { request } as never,
-      appCacheKey: "account-1",
       scheduledRuntimeAuthority: authority(),
     });
 

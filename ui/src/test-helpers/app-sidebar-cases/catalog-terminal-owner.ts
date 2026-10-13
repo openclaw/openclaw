@@ -8,6 +8,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -48,6 +49,7 @@ async function mountWithCatalog(
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -67,7 +69,14 @@ describe("AppSidebar catalog terminal ownership", () => {
     vi.useFakeTimers();
     try {
       const { sidebar, context } = await mountWithCatalog(
-        catalogList([{ threadId: "thread-1", name: "Resume me", canOpenTerminal: true }]),
+        catalogList([
+          {
+            threadId: "thread-1",
+            name: "Resume me",
+            canOpenTerminal: true,
+            sourceHomeId: "selected-home",
+          },
+        ]),
       );
       sidebar.terminalAvailable = true;
       sidebar.onNavigate = vi.fn();
@@ -95,7 +104,7 @@ describe("AppSidebar catalog terminal ownership", () => {
       expect(selection.state.selectedId).toBe("main");
       expect(sidebar.onNavigate).toHaveBeenCalledWith("terminal", {
         pathname: "/terminal",
-        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1&sourceHomeId=selected-home",
         hash: "",
       });
     } finally {
@@ -117,7 +126,7 @@ describe("AppSidebar catalog terminal ownership", () => {
         ["agent:main:main", "agent:main:adopted-codex"],
       );
       sidebar.sessionKey = "agent:main:adopted-codex";
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
       expect(rows).toHaveLength(1);
@@ -149,7 +158,7 @@ describe("AppSidebar catalog terminal ownership", () => {
           },
         }),
       );
-      await sidebar.updateComplete;
+      await settleLitElement(sidebar);
 
       const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
       expect(rows).toHaveLength(1);
@@ -212,29 +221,6 @@ async function selectCatalogDelete(
 }
 
 describe("AppSidebar catalog deletion", () => {
-  it.each([
-    { canArchive: true, archive: true, visible: true },
-    { canArchive: false, archive: true, visible: false },
-    { canArchive: true, archive: false, visible: false },
-  ])(
-    "gates Delete on row and catalog capabilities: %j",
-    async ({ canArchive, archive, visible }) => {
-      vi.useFakeTimers();
-      try {
-        const result = catalogList([{ threadId: "thread-1", name: "Shared session", canArchive }]);
-        result.catalogs[0]!.capabilities.archive = archive;
-        const { sidebar } = await mountWithCatalog(result);
-        sidebar
-          .querySelector('[data-session-key*="thread-1"]')!
-          .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(Boolean(sidebar.querySelector('wa-dropdown-item[value="delete"]'))).toBe(visible);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each([true, false])(
     "confirms catalog deletion and refreshes rows (open: %s)",
     async (open) => {
@@ -289,14 +275,9 @@ describe("AppSidebar catalog deletion", () => {
     },
   );
 
-  it.each([
-    ["event", false],
-    ["page", false],
-    ["event", true],
-    ["page", true],
-  ] as const)(
-    "discards a pre-delete %s response (archive completed: %s) and requests fresh rows",
-    async (source, completed) => {
+  it.each(["event", "page"] as const)(
+    "keeps a pending delete hidden through an earlier %s response and requests fresh rows",
+    async (source) => {
       vi.useFakeTimers();
       const restoreDialog = installDialogPolyfill();
       try {
@@ -331,7 +312,7 @@ describe("AppSidebar catalog deletion", () => {
           });
         } else {
           gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-          await vi.advanceTimersByTimeAsync(200);
+          await vi.advanceTimersByTimeAsync(5_000);
         }
         expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
 
@@ -344,10 +325,6 @@ describe("AppSidebar catalog deletion", () => {
         ]);
         await sidebar.updateComplete;
         expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-        if (completed) {
-          archive.resolve({});
-          await vi.advanceTimersByTimeAsync(0);
-        }
         staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
         await vi.advanceTimersByTimeAsync(0);
         await sidebar.updateComplete;

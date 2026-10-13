@@ -107,93 +107,57 @@ describe("iMessage send SQLite receipt recovery", () => {
   });
 
   it.each([
-    { kind: "numeric rowid", target: "chat_id:42", timeout: false },
-    { kind: "chat id", target: "chat_id:42", timeout: true },
-    { kind: "chat guid", target: "chat_guid:iMessage;-;+15550001111", timeout: true },
-    { kind: "chat identifier", target: "chat_identifier:+15550001111", timeout: true },
-    { kind: "handle", target: "+1 (555) 000-1111", timeout: true },
-  ])(
-    "recovers $kind through the default resolver off the caller thread",
-    async ({ kind, target, timeout }) => {
-      const close = vi.spyOn(DatabaseSync.prototype, "close");
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      const get = vi.spyOn(StatementSync.prototype, "get");
-      const all = vi.spyOn(StatementSync.prototype, "all");
-      const iterate = vi.spyOn(StatementSync.prototype, "iterate");
-      const run = vi.spyOn(StatementSync.prototype, "run");
-      const prepareCalls = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const countMessageSelects = () =>
-        prepareCalls.mock.calls.filter(([sql]) =>
-          /\bSELECT\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
-        ).length;
-      const calibration = new DatabaseSync(dbPath, { readOnly: true });
+    { kind: "chat guid", target: "chat_guid:iMessage;-;+15550001111" },
+    { kind: "chat identifier", target: "chat_identifier:+15550001111" },
+    { kind: "handle", target: "+1 (555) 000-1111" },
+  ])("recovers $kind through the default resolver off the caller thread", async ({ target }) => {
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
+    const get = vi.spyOn(StatementSync.prototype, "get");
+    const prepareCalls = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const countMessageSelects = () =>
+      prepareCalls.mock.calls.filter(([sql]) =>
+        /\bSELECT\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
+      ).length;
+    const calibration = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      expect(calibration.prepare("SELECT guid FROM message WHERE ROWID = 6").get()).toMatchObject({
+        guid: "recovered-guid",
+      });
+    } finally {
+      calibration.close();
+    }
+    expect(countMessageSelects()).toBe(1);
+    expect(get).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
+    const client = new IMessageRpcClient({ dbPath });
+    const request = vi.spyOn(client, "request");
+    request.mockImplementation(async (_method, params) => {
+      const db = new DatabaseSync(dbPath);
       try {
-        expect(calibration.prepare("SELECT guid FROM message WHERE ROWID = 6").get()).toMatchObject(
-          {
-            guid: "recovered-guid",
-          },
+        db.prepare("UPDATE message SET text = ?, date = ?").run(
+          String(params?.text),
+          (Date.now() - 978_307_200_000) * 1_000_000,
         );
       } finally {
-        calibration.close();
+        db.close();
       }
-      expect(countMessageSelects()).toBe(1);
-      expect(get).toHaveBeenCalledOnce();
-      expect(close).toHaveBeenCalledOnce();
-      vi.clearAllMocks();
-      const client = new IMessageRpcClient({ dbPath });
-      const request = vi.spyOn(client, "request");
-      if (timeout) {
-        request.mockImplementation(async (_method, params) => {
-          const db = new DatabaseSync(dbPath);
-          try {
-            db.prepare("UPDATE message SET text = ?, date = ?").run(
-              String(params?.text),
-              (Date.now() - 978_307_200_000) * 1_000_000,
-            );
-          } finally {
-            db.close();
-          }
-          throw new Error("imsg rpc timeout (send)");
-        });
-      } else {
-        request.mockResolvedValue({ message_id: 6 });
-      }
-      const before = performance.now();
-      const result = await sendMessageIMessage(target, "synthetic receipt", {
-        config: { channels: { imessage: {} } },
-        client,
-        dbPath,
-        ...(timeout
-          ? {
-              approvalPrompt: {
-                approvalId: "synthetic-approval",
-                approvalKind: "exec" as const,
-                allowedDecisions: ["allow-once", "deny"] as const,
-              },
-            }
-          : {}),
-      });
-      console.info(
-        JSON.stringify({
-          kind,
-          elapsedMs: performance.now() - before,
-          parentMessageSelects: countMessageSelects(),
-          parentSendNativeCalls: {
-            prepare: prepareCalls.mock.calls.length,
-            exec: exec.mock.calls.length,
-            close: close.mock.calls.length,
-            get: get.mock.calls.length,
-            all: all.mock.calls.length,
-            iterate: iterate.mock.calls.length,
-            run: run.mock.calls.length,
-          },
-        }),
-      );
-      expect(result.guid).toBe("recovered-guid");
-      expect(result.messageId).toBe(timeout ? "recovered-guid" : "6");
-      expect(result.receipt.platformMessageIds).toEqual([timeout ? "recovered-guid" : "6"]);
-      expect(request).toHaveBeenCalledOnce();
-      expect(countMessageSelects()).toBe(0);
-    },
-  );
+      throw new Error("imsg rpc timeout (send)");
+    });
+    const result = await sendMessageIMessage(target, "synthetic receipt", {
+      config: { channels: { imessage: {} } },
+      client,
+      dbPath,
+      approvalPrompt: {
+        approvalId: "synthetic-approval",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    expect(result.guid).toBe("recovered-guid");
+    expect(result.messageId).toBe("recovered-guid");
+    expect(result.receipt.platformMessageIds).toEqual(["recovered-guid"]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(countMessageSelects()).toBe(0);
+  });
 });

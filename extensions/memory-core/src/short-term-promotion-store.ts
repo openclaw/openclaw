@@ -96,20 +96,13 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
-  raw: unknown,
+export async function readPhaseSignalStore(
+  workspaceDir: string,
   nowIso: string,
-): ShortTermPhaseSignalStore {
-  const record = asNullableRecord(raw);
-  if (!record) {
-    return emptyPhaseSignalStore(nowIso);
-  }
-  const entriesRaw = asNullableRecord(record?.entries);
-  if (!entriesRaw) {
-    return emptyPhaseSignalStore(nowIso);
-  }
+): Promise<ShortTermPhaseSignalStore> {
+  const record = await readShortTermStore(workspaceDir, "phase", nowIso);
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
-  for (const [mapKey, value] of Object.entries(entriesRaw)) {
+  for (const [mapKey, value] of Object.entries(record.entries)) {
     const entry = asNullableRecord(value);
     if (!entry) {
       continue;
@@ -137,16 +130,6 @@ export function normalizeShortTermPhaseSignalStore(
     updatedAt: readNonBlankString(record.updatedAt) ?? nowIso,
     entries,
   };
-}
-
-export async function readPhaseSignalStore(
-  workspaceDir: string,
-  nowIso: string,
-): Promise<ShortTermPhaseSignalStore> {
-  return normalizeShortTermPhaseSignalStore(
-    await readShortTermStore(workspaceDir, "phase", nowIso),
-    nowIso,
-  );
 }
 
 export async function writePhaseSignalStore(

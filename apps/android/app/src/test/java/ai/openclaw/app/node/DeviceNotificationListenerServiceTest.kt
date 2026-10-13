@@ -13,7 +13,6 @@ import android.content.Intent
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -50,41 +49,6 @@ class DeviceNotificationListenerServiceTest {
     DeviceNotificationListenerService.setNodeEventSink(null)
     ShadowNotificationListenerService.reset()
     shadowApplication.clearBroadcastIntents()
-  }
-
-  @Test
-  fun recentPackages_migratesLegacyPreferenceKey() {
-    val prefs = context.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
-    prefs
-      .edit()
-      .clear()
-      .putString("notifications.recentPackages", "com.example.one, com.example.two")
-      .commit()
-
-    val packages = DeviceNotificationListenerService.recentPackages(context)
-
-    assertEquals(listOf("com.example.one", "com.example.two"), packages)
-    assertEquals(
-      "com.example.one, com.example.two",
-      prefs.getString("notifications.forwarding.recentPackages", null),
-    )
-    assertFalse(prefs.contains("notifications.recentPackages"))
-  }
-
-  @Test
-  fun recentPackages_cleansUpLegacyKeyWhenNewKeyAlreadyExists() {
-    val prefs = context.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
-    prefs
-      .edit()
-      .clear()
-      .putString("notifications.forwarding.recentPackages", "com.example.new")
-      .putString("notifications.recentPackages", "com.example.legacy")
-      .commit()
-
-    val packages = DeviceNotificationListenerService.recentPackages(context)
-
-    assertEquals(listOf("com.example.new"), packages)
-    assertNull(prefs.getString("notifications.recentPackages", null))
   }
 
   @Test

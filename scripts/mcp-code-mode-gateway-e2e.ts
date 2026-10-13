@@ -1,4 +1,3 @@
-// Mcp Code Mode Gateway E2E script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -16,14 +15,17 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
 import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
   type McpCodeModeMentions,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
 import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "./lib/bounded-response.mjs";
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -56,9 +58,7 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       timeoutPromise,
     ]);
     const text = await readBoundedResponseText(response, url, 1024 * 1024, {
-      createTooLargeError(message: string) {
-        return Object.assign(new Error(message), { code: "ETOOBIG" });
-      },
+      createTooLargeError: createBoundedResponseTooLargeError,
       formatTooLargeMessage(targetUrl: string, byteLimit: number) {
         return `HTTP response from ${targetUrl} exceeded ${byteLimit} bytes`;
       },
@@ -89,14 +89,6 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       toolSearchPollution: 'catalog.search("lookup note"',
     },
   });
-}
-
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    deleteTestEnvValue(key);
-  } else {
-    setTestEnvValue(key, value);
-  }
 }
 
 async function writeConfig(params: {
@@ -175,11 +167,11 @@ async function writeConfig(params: {
 async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
-  const previousEnv = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-    testFast: process.env.OPENCLAW_TEST_FAST,
-  };
+  const previousEnv = captureEnv([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_TEST_FAST",
+  ]);
   let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   try {
@@ -276,9 +268,7 @@ async function main() {
     await server?.close({ reason: "mcp code-mode gateway e2e complete" });
     await provider?.stop();
     resetConfigRuntimeState();
-    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.stateDir);
-    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.configPath);
-    restoreEnvValue("OPENCLAW_TEST_FAST", previousEnv.testFast);
+    previousEnv.restore();
     if (!keep) {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

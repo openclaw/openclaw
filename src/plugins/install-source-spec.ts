@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { shortenHomePath } from "../utils.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 
 export function resolveFileNpmSpecToLocalPath(
   raw: string,
 ): { ok: true; path: string } | { ok: false; error: string } | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
+  if (!trimmed.toLowerCase().startsWith("file:")) {
     return null;
   }
   const rest = trimmed.slice("file:".length);
@@ -34,7 +34,7 @@ export function resolveFileNpmSpecToLocalPath(
 
 export function parseNpmPrefixSpec(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
+  if (!trimmed.toLowerCase().startsWith("npm:")) {
     return null;
   }
   return trimmed.slice("npm:".length).trim();
@@ -42,7 +42,7 @@ export function parseNpmPrefixSpec(raw: string): string | null {
 
 export function parseNpmPackPrefixPath(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm-pack:")) {
+  if (!trimmed.toLowerCase().startsWith("npm-pack:")) {
     return null;
   }
   return trimmed.slice("npm-pack:".length).trim();
@@ -85,6 +85,7 @@ export function isSourceCheckoutBundledPath(localPath: string): boolean {
 
 export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
+  pin?: boolean;
   findBundledSource: BundledLookup;
 }): { bundledSource: BundledPluginSource; warning: string } | null {
   // Bundled plugin ids win before npm lookup so local official plugins do not hit the registry.
@@ -123,8 +124,16 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
     return null;
   }
   // Bare IDs already selected local source above. Npm package requests must not
-  // persist disposable source-checkout build output; packaged bundles remain image-owned.
-  if (isSourceCheckoutBundledPath(bundledSource.localPath)) {
+  // persist disposable source-checkout build output. Explicit registry choices
+  // also bypass development image copies; release bundles remain image-owned.
+  if (
+    isSourceCheckoutBundledPath(bundledSource.localPath) ||
+    ((params.pin || parsedNpmSpec.selector) &&
+      isBundledPluginInsideDevSourceRoot({
+        rootDir: bundledSource.localPath,
+        env: process.env,
+      }))
+  ) {
     return null;
   }
   return {

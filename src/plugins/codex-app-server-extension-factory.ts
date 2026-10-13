@@ -1,4 +1,3 @@
-// Builds Codex app-server extension factories from active plugin registries.
 import { getActivePluginRegistry } from "./runtime.js";
 
 /** Runtime id used by Codex app-server extension factories. */

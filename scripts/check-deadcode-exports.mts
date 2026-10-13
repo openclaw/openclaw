@@ -78,13 +78,11 @@ export function parseKnipCompactUnusedExportsResult(output: string) {
   return { entries: uniqueSorted(entries), sawExportSection };
 }
 
-/** Parses compact Knip export sections into one path-and-symbol entry per finding. */
 export function parseKnipCompactUnusedExports(output: string) {
   return parseKnipCompactUnusedExportsResult(output).entries;
 }
 
-/** Rejects every unused export reported by Knip. */
-export function checkUnusedExports(output: string) {
+function checkUnusedExports(output: string) {
   const entries = parseKnipCompactUnusedExports(output);
   return {
     ok: entries.length === 0,

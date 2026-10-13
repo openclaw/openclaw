@@ -5,7 +5,8 @@ import {
   runWithGatewayToolCleanupContext,
 } from "../../agents/tools/in-process-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../config/sessions/session-entry-current-check.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -28,26 +29,35 @@ export async function cleanupFailedAcpSpawn(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const assertCurrent = () => {
-    const current = loadSessionEntry({
+  let source: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>> | undefined;
+  const assertCurrent = async () => {
+    if (!source) {
+      throw new Error(`ACP provisional session ${params.sessionKey} changed before cleanup.`);
+    }
+    await source.assertCurrent();
+  };
+  let deletionStarted = false;
+  let deletionExecution: Promise<void> | undefined;
+  const cancellation = new AbortController();
+  try {
+    source = await captureSessionEntryCurrentCheckAsyncInternal({
       storePath,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-      clone: false,
+      fields: ["sessionId", "lifecycleRevision"],
+      expected: { sessionId, lifecycleRevision },
+      errorMessage: `ACP provisional session ${params.sessionKey} changed before cleanup.`,
     });
-    if (current?.sessionId !== sessionId || current?.lifecycleRevision !== lifecycleRevision) {
-      throw new Error(`ACP provisional session ${params.sessionKey} changed before cleanup.`);
-    }
-  };
-  let deletionStarted = false;
-  const cancellation = new AbortController();
-  try {
     await runWithGatewayToolCleanupContext(async () => {
-      assertCurrent();
       const context = getInProcessGatewayToolContext();
       if (!context) {
         throw new Error("ACP provisional cleanup Gateway is unavailable.");
       }
+      const assertCleanupCurrent = (assertSource: () => void) => {
+        cancellation.signal.throwIfAborted();
+        context.requestEntryLifetime?.signal.throwIfAborted();
+        assertSource();
+      };
       await callInProcessGatewayTool(
         "sessions.delete",
         {
@@ -61,13 +71,18 @@ export async function cleanupFailedAcpSpawn(params: {
         // New /acp rows can have no revision yet. The private guard preserves
         // exact absence as well as recorded revisions throughout deletion.
         {
-          sessionMutationCommitGuard: () => {
-            cancellation.signal.throwIfAborted();
-            context.requestEntryLifetime?.signal.throwIfAborted();
-            assertCurrent();
-            // The router calls this after lazy preparation, before handler entry.
-            deletionStarted = true;
+          onExecution: (execution) => {
+            deletionExecution = execution;
           },
+          sessionMutationCommitGuard: composeSessionSourceAssertion(
+            [source!.source],
+            (assertSource) => {
+              assertCleanupCurrent(assertSource);
+              // The router calls this after lazy preparation, before handler entry.
+              deletionStarted = true;
+            },
+            { preparedCheck: assertCleanupCurrent },
+          ),
           signal: cancellation.signal,
           timeoutMs: 10_000,
         },
@@ -81,11 +96,11 @@ export async function cleanupFailedAcpSpawn(params: {
       cancellation.abort(error);
     }
     if (!deletionStarted && params.closeRuntimeOnFailure) {
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("acp-spawn-cleanup", {
         scope: storePath,
         identities: [params.sessionKey, sessionId],
         run: async () => {
-          assertCurrent();
+          await assertCurrent();
           await params.closeRuntimeOnFailure!();
         },
       }).catch((releaseError: unknown) => {
@@ -96,5 +111,14 @@ export async function cleanupFailedAcpSpawn(params: {
       });
     }
     logVerbose(`acp-spawn: provisional session cleanup failed: ${String(error)}`);
+  } finally {
+    try {
+      if (deletionStarted) {
+        // The response deadline does not cancel an admitted session mutation.
+        await deletionExecution;
+      }
+    } finally {
+      source?.release();
+    }
   }
 }

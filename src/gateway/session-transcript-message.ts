@@ -1,15 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { readChatHistoryReplyMessageId } from "./server-methods/chat-history-reply-messages.js";
 import {
   attachOpenClawTranscriptMeta,
   readTranscriptMessageIdempotencyKey,
 } from "./session-transcript-entry-message.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 export type SessionMessageProjectionState = {
   assistantErrorPending: boolean;
@@ -26,23 +30,29 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
+  toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
   messageSeq?: number;
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
+  resolveCronJobName?: (jobId: string) => string | undefined;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
 }): {
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
   requiresHistoryReset?: true;
+  deferredAssistantError?: true;
 } {
   const idempotencyKey = readTranscriptMessageIdempotencyKey(params.message);
   const senderIsOwner = readTranscriptMessageSenderIsOwner(params.message);
+  const messageRunId = readSessionTranscriptRunId(params.message) ?? params.runId;
   const rawMessage = attachOpenClawTranscriptMeta(params.message, {
+    ...(messageRunId ? { runId: messageRunId } : {}),
     // Placement comes from the selected reader snapshot, never persisted/imported metadata.
     transcriptPosition: params.transcriptPosition,
     ...(params.messageId ? { id: params.messageId } : {}),
@@ -52,10 +62,15 @@ export function projectSessionMessagePayload(params: {
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
+        subagentCoordination: params.subagentCoordination,
+        resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        toolResultMaxChars: params.toolResultMaxChars,
+        activity: false,
       })
     : undefined;
   if (
+    (historyProjection && historyProjection.messages.length > 1) ||
     historyProjection?.messages.some(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     )
@@ -79,10 +94,19 @@ export function projectSessionMessagePayload(params: {
         ? projectChatDisplayMessagesWithState([rawMessage], {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
+            activity: false,
+            toolResultMaxChars: params.toolResultMaxChars,
+            subagentCoordination: params.subagentCoordination,
+            resolveCronJobName: params.resolveCronJobName,
           })
         : {
-            messages: [projectChatDisplayMessage(rawMessage)],
-            assistantErrorPending: false,
+            messages: [
+              projectChatDisplayMessage(rawMessage, {
+                subagentCoordination: params.subagentCoordination,
+                resolveCronJobName: params.resolveCronJobName,
+              }),
+            ],
+            assistantErrorPending: isPendingAssistantError(rawMessage),
             turnBoundaryPending: false,
           };
   const projectionState = {
@@ -91,17 +115,26 @@ export function projectSessionMessagePayload(params: {
   };
   const message = projected.messages[0];
   if (!message) {
-    return { projectionState };
+    return {
+      projectionState,
+      ...(isPendingAssistantError(rawMessage) ? { deferredAssistantError: true as const } : {}),
+    };
+  }
+  if (readChatHistoryReplyMessageId(message)) {
+    // The page owner resolves quoted originals once, with visibility and payload bounds.
+    return { projectionState, requiresHistoryReset: true };
   }
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??
     createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const projectedMessage = projectCurrentUserProfile(message);
+  params.subagentCoordination?.assertCurrent?.();
   return {
     payload: {
       sessionKey: params.sessionKey,
       ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      message: projectCurrentUserProfile(message),
+      message: projectedMessage,
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,

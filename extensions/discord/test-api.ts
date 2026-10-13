@@ -1,5 +1,6 @@
 // Discord test API exposes transcript-provider fixtures without deep extension imports.
-export { createDiscordDraftPreviewController } from "./src/monitor/message-handler.draft-preview.js";
+export const loadDiscordDraftPreview = () =>
+  import("./src/monitor/message-handler.draft-preview.js");
 export { RequestClient } from "./src/internal/discord.js";
 export {
   discordVoiceTranscriptsSourceProvider,

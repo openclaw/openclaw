@@ -16,7 +16,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
 import type { Message } from "../llm/types.js";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { isProjectedForwardedMessage } from "./chat-display-projection.helpers.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
@@ -41,7 +42,7 @@ describeLive("cron tool allowlists through live harnesses", () => {
         name: `cron-tools-${runtime}`,
         env: {
           ...Object.fromEntries(
-            listKnownProviderAuthEnvVarNames().map((name) => [name, undefined]),
+            listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
           OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
@@ -172,25 +173,41 @@ describeLive("cron tool allowlists through live harnesses", () => {
               JSON.stringify({ sessionKey: `agent:probe:cron:${job.id}`, limit: 100 }),
             ])) as {
               sessionId: string;
-              messages: Message[];
+              messages: Array<Message | { role: "assistant"; content: string }>;
               sessionInfo: { agentRuntime?: { id: string } };
             };
             expect(completed.run.sessionId).toBeTypeOf("string");
             expect(history.sessionId).toBe(completed.run.sessionId);
             expect(history.sessionInfo.agentRuntime?.id).toBe(runtime);
-            const assistants = history.messages.filter((message) => message.role === "assistant");
+            const assistants = history.messages.filter(
+              (message) =>
+                message.role === "assistant" && !isProjectedForwardedMessage({ ...message }),
+            );
             const calls = assistants.flatMap((message) =>
-              message.content.filter((block) => block.type === "toolCall"),
+              Array.isArray(message.content)
+                ? message.content.filter((block) => block.type === "toolCall")
+                : [],
             );
             const results = history.messages.filter((message) => message.role === "toolResult");
             expect(assistants.length, JSON.stringify(history)).toBeGreaterThan(0);
             if (cap === "") {
-              expect(calls).toEqual([]);
-              expect(results).toEqual([]);
+              // Codex model metadata (`tool_mode: code_mode_only`) outranks the thread's
+              // `features.code_mode=false`, so Codex always registers `exec`/`wait` with an
+              // empty nested catalog. Allow only those inert probes; any other tool is a leak.
+              const inertProbes = new Set(runtime === "codex" ? ["exec", "wait"] : []);
+              expect(calls.filter((call) => !inertProbes.has(call.name))).toEqual([]);
+              expect(results.filter((result) => !inertProbes.has(result.toolName))).toEqual([]);
+              expect(JSON.stringify(results)).not.toContain(marker);
               expect(JSON.stringify(assistants)).not.toContain(marker);
-              expect(
-                extractNonEmptyAssistantText(assistants.flatMap((message) => message.content)),
-              ).toBe("NO_TOOLS");
+              const assistantText = assistants
+                .map((message) =>
+                  typeof message.content === "string"
+                    ? message.content.trim()
+                    : extractNonEmptyAssistantText(message.content),
+                )
+                .filter(Boolean)
+                .join(" ");
+              expect(assistantText).toBe("NO_TOOLS");
             } else {
               const toolName = cap === "bash" ? "exec" : "read";
               const call = calls.find((entry) => entry.name === toolName);

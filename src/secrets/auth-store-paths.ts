@@ -1,4 +1,3 @@
-/** Discovers auth-profile store paths that may contain secret refs. */
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
@@ -11,7 +10,6 @@ export type AuthProfileStoreTarget =
   | { kind: "shared"; path: string; env: NodeJS.ProcessEnv; stateDir: string }
   | { kind: "agent"; path: string; agentDir: string };
 
-/** Lists canonical auth-profile databases that may contain SecretRefs. */
 export function listAuthProfileStoreTargets(
   config: OpenClawConfig,
   stateDir: string,

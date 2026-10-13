@@ -1,12 +1,18 @@
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { TLSSocket } from "node:tls";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
+import { registerManagedProxyGatewayLoopbackBypass } from "../infra/net/proxy/proxy-lifecycle.js";
 
 const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 1024;
+const directHttpAgent = new HttpAgent({ keepAlive: false });
+// Do not reuse sockets or TLS sessions: certificate renewal must expose the
+// listener's current certificate to the pin check on every local probe.
+const directHttpsAgent = new HttpsAgent({ keepAlive: false, maxCachedSessions: 0 });
 
-export type GatewayHttpProbeResponse = {
+type GatewayHttpProbeResponse = {
   statusCode: number;
   body: string;
   tlsFingerprint?: string;
@@ -20,7 +26,7 @@ type GatewayLocalProbeTarget = {
 export type ConfiguredGatewayLocalProbe = {
   requestHttp(params: {
     host: string;
-    pathname: "/healthz" | "/readyz";
+    pathname: "/healthz" | "/readyz" | "/startupz";
     port: number;
     timeoutMs: number;
     signal?: AbortSignal;
@@ -31,13 +37,13 @@ export type ConfiguredGatewayLocalProbe = {
   ): Promise<GatewayLocalProbeTarget | null>;
 };
 
-export function normalizeGatewayHttpProbeHost(host: string): string {
+function normalizeGatewayHttpProbeHost(host: string): string {
   return host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
 }
 
-export async function requestGatewayLocalHttpProbe(params: {
+async function requestGatewayLocalHttpProbe(params: {
   host: string;
-  pathname: "/healthz" | "/readyz";
+  pathname: "/healthz" | "/readyz" | "/startupz";
   port: number;
   timeoutMs: number;
   tlsFingerprints?: readonly string[];
@@ -58,19 +64,32 @@ export async function requestGatewayLocalHttpProbe(params: {
       resolve(result);
     };
     const pins = params.tlsFingerprints?.map(normalizeTlsFingerprint);
+    const host = normalizeGatewayHttpProbeHost(params.host);
+    const protocol = pins ? "https" : "http";
+    const authority = host.includes(":") ? `[${host}]` : host;
+    const targetUrl = `${protocol}://${authority}:${params.port}${params.pathname}`;
+    registerManagedProxyGatewayLoopbackBypass(targetUrl);
+    const proxyAgent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl,
+      protocol,
+      agentOptions: { keepAlive: false, maxCachedSessions: 0 },
+    });
     const request = pins ? httpsRequest : httpRequest;
     const req = request(
       {
-        hostname: normalizeGatewayHttpProbeHost(params.host),
+        hostname: host,
         port: params.port,
         path: params.pathname,
         method: "GET",
         timeout: params.timeoutMs,
+        // agent:false reconstructs the global agent without its required proxy
+        // options. Select an explicit agent without overriding loopback policy.
+        agent: proxyAgent ?? (pins ? directHttpsAgent : directHttpAgent),
         ...(params.signal ? { signal: params.signal } : {}),
         // Self-signed local Gateway certificates are trusted only by the exact
         // configured pin below; never accept them on ordinary HTTPS requests.
-        // A reused socket still carries its old certificate after listener renewal.
-        ...(pins ? { rejectUnauthorized: false, agent: false } : {}),
+        ...(pins ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
         let tlsFingerprint: string | undefined;
@@ -118,6 +137,7 @@ export async function requestGatewayLocalHttpProbe(params: {
     req.once("error", () => {
       finish(null);
     });
+    req.once("close", () => proxyAgent?.destroy());
     req.end();
   });
   params.signal?.throwIfAborted();

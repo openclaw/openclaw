@@ -10,6 +10,7 @@ import { expect, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
 import {
   isJsonObject,
   type CodexConfigReadResponse,
@@ -21,6 +22,17 @@ import {
   type CodexAppServerClientFactory,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
+
+/** Synthetic transports declare their own trust and proxy profile, never the host's. */
+export function stubCodexInferenceTransportEnv(): void {
+  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    vi.stubEnv(key, undefined);
+    vi.stubEnv(key.toLowerCase(), undefined);
+  }
+}
 
 /** Minimal deterministic host terminal observer for Codex harness tests. */
 export function createCodexTestToolTerminalObserver(): NonNullable<
@@ -97,6 +109,20 @@ export function adaptCodexTestClientFactory(
     );
 }
 
+export function createCodexTestOAuthProfile(accountId: string) {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+  ).toString("base64url");
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: `e30.${payload}.test-signature`,
+    refresh: "synthetic-refresh-token",
+    expires: Date.now() + 60_000,
+    accountId,
+  };
+}
+
 /** Builds a representative Codex-capable model fixture for app-server tests. */
 export function createCodexTestModel(provider = "openai", input = ["text"]): Model {
   return {
@@ -144,11 +170,16 @@ export async function waitForHarnessRequest(
   return { id: request.id, params: request.params };
 }
 
+export function withoutCodexSkillDiscovery(methods: string[]): string[] {
+  return methods.filter((method) => method !== "skills/list");
+}
+
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
 export function createClientHarness(
   options: {
     autoEmitExit?: boolean;
     maxFrameBytes?: number;
+    onWriteCallback?: (callback: (error?: Error | null) => void) => void;
     onWrite?: (line: string, send: (message: unknown) => void) => void;
   } = {},
 ) {
@@ -176,7 +207,11 @@ export function createClientHarness(
   const stdin = new Writable({
     write(chunk, _encoding, callback) {
       writes.push(chunk.toString());
-      callback();
+      if (options.onWriteCallback) {
+        options.onWriteCallback(callback);
+      } else {
+        callback();
+      }
       writeEvents.emit("write");
       options.onWrite?.(chunk.toString(), (message) =>
         stdout.write(`${JSON.stringify(message)}\n`),
@@ -247,7 +282,7 @@ export function createClientHarness(
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error(`Timed out waiting for app-server harness write ${index}`));
-        }, 1_000);
+        }, 5_000);
         writeEvents.on("write", onWrite);
       });
     },
@@ -266,9 +301,11 @@ export function createCodexInferenceReadResponses() {
   return {
     "config/read": { config: {}, origins: {}, layers: [] },
     "account/read": { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+    "skills/list": { data: [] },
   } satisfies {
     "config/read": CodexConfigReadResponse;
     "account/read": CodexGetAccountResponse;
+    "skills/list": CodexSkillsListResponse;
   };
 }
 
@@ -284,7 +321,9 @@ export function createInferenceReadyClientHarness(
       if (
         isJsonObject(request) &&
         request.id !== undefined &&
-        (request.method === "config/read" || request.method === "account/read")
+        (request.method === "config/read" ||
+          request.method === "account/read" ||
+          request.method === "skills/list")
       ) {
         send({ id: request.id, result: reads[request.method] });
       } else {

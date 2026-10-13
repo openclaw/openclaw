@@ -1,4 +1,3 @@
-// Telegram plugin module implements polling liveness behavior.
 import { formatDurationPrecise } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -31,7 +30,7 @@ export class TelegramPollingLivenessTracker {
     this.#lastStallCheckMonotonicAt = monotonicNow;
   }
 
-  noteGetUpdatesStarted(payload: unknown, at = this.#now()) {
+  noteGetUpdatesStarted(payload: { offset: number | null }, at = this.#now()) {
     const startedMonotonicAt = this.#monotonicNow();
     this.#retryAfterUntilMonotonicAt = null;
     this.#lastGetUpdatesActivityMonotonicAt = startedMonotonicAt;
@@ -39,7 +38,7 @@ export class TelegramPollingLivenessTracker {
     this.#lastGetUpdatesStartedMonotonicAt = startedMonotonicAt;
     this.#lastGetUpdatesFinishedAt = null;
     this.#lastGetUpdatesDurationMs = null;
-    this.#lastGetUpdatesOffset = resolveGetUpdatesOffset(payload);
+    this.#lastGetUpdatesOffset = payload.offset;
     this.#inFlightGetUpdates += 1;
     this.#lastGetUpdatesOutcome = "started";
     this.#lastGetUpdatesError = null;
@@ -131,12 +130,4 @@ export class TelegramPollingLivenessTracker {
         ? null
         : finishedMonotonicAt - this.#lastGetUpdatesStartedMonotonicAt;
   }
-}
-
-function resolveGetUpdatesOffset(payload: unknown): number | null {
-  if (!payload || typeof payload !== "object" || !("offset" in payload)) {
-    return null;
-  }
-  const offset = (payload as { offset?: unknown }).offset;
-  return typeof offset === "number" ? offset : null;
 }

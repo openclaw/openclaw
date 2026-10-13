@@ -1,13 +1,7 @@
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
+import { supportedSpawnModelChoice } from "./subagent-spawn.test-helpers.js";
 
-vi.mock("./subagent-spawn-deps.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-spawn-deps.js")>();
-  const { supportedSpawnModelChoice } = await import("./subagent-spawn.test-helpers.js");
-  return {
-    ...actual,
-    getSubagentSpawnDeps: () => ({
-      ...actual.getSubagentSpawnDeps(),
-      prepareModelChoice: supportedSpawnModelChoice,
-    }),
-  };
+beforeEach(async () => {
+  const spawnRuntime = await import("./subagent-spawn.runtime.js");
+  vi.spyOn(spawnRuntime, "prepareModelChoice").mockImplementation(supportedSpawnModelChoice);
 });

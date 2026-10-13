@@ -3,6 +3,8 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
+  createInspectorProfileCapture,
+  createNativeCpuProfileCapture,
   DIAGNOSTIC_PROFILE_MAX_BYTES,
   ProfileFailure,
   sanitizeDiagnosticProfileFrame,
@@ -13,7 +15,11 @@ const INTERVAL_MICROS = 10_000;
 const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
 
-function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) {
+function sanitizeProfile(
+  profile: Profiler.Profile,
+  packageRoot: string | null,
+  { startBlockedMs }: { startBlockedMs: number },
+) {
   assertProfile(
     Array.isArray(profile.nodes) &&
       profile.nodes.length > 0 &&
@@ -83,6 +89,7 @@ function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) 
   const result = {
     requestedDurationMs: DURATION_MS,
     actualDurationMs: (profile.endTime - profile.startTime) / 1_000,
+    startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
     redactedNodeCount,
@@ -100,7 +107,7 @@ function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) 
   return result;
 }
 
-/** Captures the main isolate's CPU samples through the shared inspector owner. */
+/** Captures CPU samples through Node's shared native profiler or Bun's inspector. */
 export function captureDiagnosticCpuProfile(options: {
   signal: AbortSignal;
   hasAuthority: () => boolean;
@@ -108,13 +115,18 @@ export function captureDiagnosticCpuProfile(options: {
   return captureDiagnosticProfile({
     ...options,
     durationMs: DURATION_MS,
-    setup: async (session) => {
-      await session.post("Profiler.enable");
-      await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
-    },
-    start: (session) => session.post("Profiler.start"),
-    stop: (session) => session.post("Profiler.stop"),
-    disable: (session) => session.post("Profiler.disable"),
+    create: (inspector) =>
+      process.versions.bun
+        ? createInspectorProfileCapture(inspector, {
+            setup: async (session) => {
+              await session.post("Profiler.enable");
+              await session.post("Profiler.setSamplingInterval", { interval: INTERVAL_MICROS });
+            },
+            start: (session) => session.post("Profiler.start"),
+            stop: (session) => session.post("Profiler.stop"),
+            disable: (session) => session.post("Profiler.disable"),
+          })
+        : createNativeCpuProfileCapture(INTERVAL_MICROS),
     sanitize: sanitizeProfile,
   });
 }

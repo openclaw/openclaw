@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Transferable } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorktreeRepositoryError } from "../agents/worktrees/errors.js";
+import { GitCommandTimeoutError } from "./git-exec.js";
 import {
   GIT_WORKER_HOST_BATCH_LIMIT,
   type GitWorkerEffect,
@@ -13,7 +14,7 @@ import {
   type GitWorkerHostRequest,
   type GitWorkerReply,
 } from "./git-worker-contract.js";
-import type { WorkerTaskChannel } from "./worker-task-pool.js";
+import type { WorkerTaskChannel } from "./worker-task-server.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type PendingHostRequest = {
@@ -24,6 +25,7 @@ type PendingHostRequest = {
 };
 type GitWorkerContext = {
   channel: WorkerTaskChannel;
+  filesystemRefs: string | undefined;
   pending: PendingHostRequest[];
   drain?: Promise<void>;
   closed: boolean;
@@ -48,7 +50,9 @@ export function restoreGitWorkerFailure(failure: GitWorkerFailure): Error {
   const error =
     failure.name === "WorktreeRepositoryError"
       ? new WorktreeRepositoryError(failure.message)
-      : new Error(failure.message);
+      : failure.name === "GitCommandTimeoutError"
+        ? new GitCommandTimeoutError(failure.message)
+        : new Error(failure.message);
   error.name = failure.name;
   if (failure.code !== undefined) {
     Object.assign(error, { code: failure.code });
@@ -63,11 +67,20 @@ export function hasGitWorkerContext(): boolean {
   return context.getStore() !== undefined;
 }
 
+export function gitFilesystemEnvironmentRevision(): string | undefined {
+  return context.getStore()?.filesystemRefs;
+}
+
+export function canReadGitFilesystemRefs(): boolean {
+  return gitFilesystemEnvironmentRevision() !== undefined;
+}
+
 export async function withGitWorkerContext<T>(
   channel: WorkerTaskChannel,
   operation: () => Promise<T>,
+  filesystemRefs?: string,
 ): Promise<T> {
-  const state: GitWorkerContext = { channel, pending: [], closed: false };
+  const state: GitWorkerContext = { channel, filesystemRefs, pending: [], closed: false };
   return await context.run(state, async () => {
     try {
       return await operation();

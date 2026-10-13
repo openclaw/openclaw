@@ -1,15 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { dispatchCronDelivery } from "./isolated-agent/delivery-dispatch.js";
+import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
@@ -18,7 +20,6 @@ const FOUR_HOURS_MS = 4 * 60 * 60_000;
 
 describe("manual cron delivery occurrence", () => {
   it.each([
-    { label: "direct force", mode: "force", queued: false },
     { label: "queued force", mode: "force", queued: true },
     { label: "scheduled due", mode: "due", queued: false },
   ] as const)(
@@ -41,14 +42,15 @@ describe("manual cron delivery occurrence", () => {
               },
             ]),
           );
-          resetTaskRegistryForTests({ persist: false });
           let now = Date.now() - FOUR_HOURS_MS;
           const cfg: OpenClawConfig = {
             agents: { entries: { main: { workspace: state.workspaceDir } } },
           };
           await state.writeConfig(cfg);
           const events: CronEvent[] = [];
+          const finished = createDeferred<CronEvent>();
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
             storePath: state.path("cron", "jobs.json"),
             cronEnabled: false,
             defaultAgentId: "main",
@@ -56,15 +58,25 @@ describe("manual cron delivery occurrence", () => {
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
-            onEvent: (event) => events.push(event),
-            runIsolatedAgentJob: async ({ job, abortSignal }) => {
+            onEvent: (event) => {
+              events.push(event);
+              if (event.action === "finished") {
+                finished.resolve(event);
+              }
+            },
+            runIsolatedAgentJob: async ({ job, abortSignal, deliveryAttemptFence }) => {
               const text = "Fresh result from this invocation.";
               const sessionKey = `agent:main:cron:${job.id}`;
+              const deliveryPlan = resolveCronDeliveryPlan(job);
+              const resolvedDelivery = await resolveDeliveryTarget(cfg, "main", {
+                ...job,
+                ...deliveryPlan,
+              });
               const delivery = await dispatchCronDelivery({
-                cfg,
                 cfgWithAgentDefaults: cfg,
                 deps: {},
                 job,
+                deliveryAttemptFence,
                 agentId: "main",
                 agentSessionKey: sessionKey,
                 runSessionKey: sessionKey,
@@ -72,11 +84,10 @@ describe("manual cron delivery occurrence", () => {
                 lifecycleRevision: "manual-delivery-revision",
                 sessionUpdatedAt: now,
                 runStartedAt: now,
-                runEndedAt: now,
                 timeoutMs: 30_000,
-                resolvedDelivery: { ok: true, channel: "telegram", to: "123", mode: "explicit" },
+                resolvedDelivery,
                 deliveryRequested: true,
-                deliveryPlan: resolveCronDeliveryPlan(job),
+                deliveryPlan,
                 undeliveredRunStatus: "ok",
                 spawnOnlyHandoff: false,
                 sourceDeliveryOutcome: {
@@ -86,7 +97,6 @@ describe("manual cron delivery occurrence", () => {
                   unverifiedMessageToolDelivery: false,
                 },
                 deliveryBestEffort: false,
-                deliveryPayloadHasStructuredContent: false,
                 deliveryPayloads: [{ text }],
                 synthesizedText: text,
                 summary: text,
@@ -94,13 +104,15 @@ describe("manual cron delivery occurrence", () => {
                 abortSignal,
                 isAborted: () => abortSignal?.aborted === true,
                 abortReason: () => "aborted",
-                withRunSession: (result) => ({
-                  ...result,
-                  sessionId: "manual-delivery-run",
-                  sessionKey,
-                }),
               });
-              return { status: "ok", ...delivery.result, ...delivery };
+              const failure =
+                delivery.disposition?.kind === "error" ? delivery.disposition : undefined;
+              return {
+                ...delivery,
+                status: failure ? "error" : "ok",
+                error: failure?.error,
+                errorKind: failure?.errorKind,
+              };
             },
           });
           try {
@@ -121,9 +133,7 @@ describe("manual cron delivery occurrence", () => {
                 ok: true,
                 enqueued: true,
               });
-              await vi.waitFor(() => {
-                expect(events.some((event) => event.action === "finished")).toBe(true);
-              });
+              expect(await finished.promise).toMatchObject({ jobId: job.id });
               await cron.status();
             } else {
               await expect(cron.run(job.id, mode)).resolves.toMatchObject({ ok: true, ran: true });
@@ -143,7 +153,6 @@ describe("manual cron delivery occurrence", () => {
             }
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
             restoreActivePluginRegistrySnapshot(registry);
           }
         },

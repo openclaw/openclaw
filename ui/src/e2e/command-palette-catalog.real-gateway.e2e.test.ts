@@ -2,14 +2,21 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiInitialRoster,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -21,6 +28,7 @@ const models = (id: string) => [
   { id, name: id },
 ];
 let instance: OpenClawTestInstance;
+let readback: GatewayClient;
 let providerMode: "ready" | "failed" | "empty" = "ready";
 let providerModel = "refresh-fixture:latest";
 const providerTraffic: Array<{ path: string; status: number }> = [];
@@ -69,10 +77,10 @@ const suite = createControlUiE2eSuite({
               model: "fixture/anchor",
               modelPolicy: { allow: ["fixture/*", "ollama/*"] },
             },
-            list: [
-              { id: "main", identity: { name: "Main fixture" } },
-              { id: "reviewer", identity: { name: "Reviewer fixture" } },
-            ],
+            entries: {
+              main: { identity: { name: "Main fixture" } },
+              reviewer: { identity: { name: "Reviewer fixture" } },
+            },
           },
           models: {
             catalogRefresh: { enabled: false },
@@ -91,9 +99,33 @@ const suite = createControlUiE2eSuite({
       });
       try {
         await instance.startGateway();
+        readback = await acquireGatewayTestClient(
+          {
+            url: instance.url,
+            token: instance.gatewayToken,
+            env: instance.env,
+            clientName: "cli",
+            mode: "cli",
+            scopes: ["operator.read"],
+            deviceIdentity: null,
+            deviceAuthScope: instance.url,
+            sharedStateMode: "read-only",
+            requestTimeoutMs: 30_000,
+          },
+          {
+            timeoutMs: 10_000,
+            timeoutMessage: "Catalog readback client did not connect",
+            closeMessage: "Catalog readback client closed during connect",
+          },
+        );
         return {
           baseUrl: `http://127.0.0.1:${instance.port}/`,
-          close: () => runQaGatewayFixture(() => instance.cleanup(), closeProvider),
+          close: () =>
+            runQaGatewayFixture(
+              () => readback.stopAndWait(),
+              () => instance.cleanup(),
+              closeProvider,
+            ),
         };
       } catch (error) {
         await instance.cleanup();
@@ -116,18 +148,13 @@ suite.define(() => {
     const assets: Array<Promise<{ path: string; sha256: string }>> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
     const publish = async () => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        "models.list",
-        "--json",
-        "--timeout",
-        "30000",
-        "--params",
-        JSON.stringify({ agentId: "main", view: "configured", refresh: true }),
-      ]);
-      expect(result.code, result.stderr).toBe(0);
-      return requireRecord(JSON.parse(result.stdout));
+      return requireRecord(
+        await readback.request("models.list", {
+          agentId: "main",
+          view: "configured",
+          refresh: true,
+        }),
+      );
     };
     const handoff = await instance.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
@@ -370,21 +397,16 @@ suite.define(() => {
     }
   }, 120_000);
 
-  it("shows actual acquisition failures in Automations and model search without losing compatible rows", async () => {
+  it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
     const outcomes: unknown[] = [];
     const refresh = async () => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        "models.list",
-        "--json",
-        "--timeout",
-        "30000",
-        "--params",
-        JSON.stringify({ agentId: "main", view: "configured", refresh: true }),
-      ]);
-      expect(result.code, result.stderr).toBe(0);
-      const payload = requireRecord(JSON.parse(result.stdout));
+      const payload = requireRecord(
+        await readback.request("models.list", {
+          agentId: "main",
+          view: "configured",
+          refresh: true,
+        }),
+      );
       outcomes.push(payload);
       return payload;
     };
@@ -428,10 +450,9 @@ suite.define(() => {
         });
         await model.waitFor({ state: "visible" });
         expect(await model.count()).toBe(1);
-        await page
-          .locator(".cmd-palette")
-          .getByText(warning, { exact: true })
-          .waitFor({ state: "visible" });
+        expect(await page.locator(".cmd-palette").getByText(warning, { exact: true }).count()).toBe(
+          0,
+        );
         if (captureEnabled) {
           await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
         }
@@ -456,7 +477,7 @@ suite.define(() => {
             providerTraffic,
             outcomes,
             automationsWarning: true,
-            paletteWarning: true,
+            paletteWarning: false,
             retainedModelCount: 1,
             successfulEmptyClearedModelAndWarnings: true,
           }),
@@ -483,18 +504,41 @@ suite.define(() => {
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
-    const publish = async (id: string) => {
-      const args = [
-        "config",
-        "set",
-        "models.providers.fixture.models",
-        JSON.stringify(models(id)),
-        "--strict-json",
-        "--replace",
-      ];
-      const result = await instance.cli(args);
-      commands.push({ args, ...result });
-      expect(result.code, result.stderr).toBe(0);
+    const publish = async (page: Page, id: string) => {
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        const publication = await applicationHandle.evaluateHandle((application) => {
+          const observed = { committed: false };
+          const stop = application.gateway.subscribeEvents((event) => {
+            if (event.event === "config.changed") {
+              observed.committed = true;
+            }
+          });
+          return { observed, stop };
+        });
+        const args = [
+          "config",
+          "set",
+          "models.providers.fixture.models",
+          JSON.stringify(models(id)),
+          "--strict-json",
+          "--replace",
+        ];
+        try {
+          const result = await instance.cli(args);
+          commands.push({ args, ...result });
+          expect(result.code, result.stderr).toBe(0);
+          // Runtime rows can arrive before this accepted-config event retires them.
+          await expect
+            .poll(() => publication.evaluate(({ observed }) => observed.committed))
+            .toBe(true);
+        } finally {
+          await publication.evaluate(({ stop }) => stop());
+          await publication.dispose();
+        }
+      } finally {
+        await applicationHandle.dispose();
+      }
     };
     try {
       await suite.withPage(
@@ -543,6 +587,8 @@ suite.define(() => {
           });
           await page.goto(browserUrl);
           await waitForControlUiGatewayReady(page);
+          // The handshake can precede the lazy shell and its shortcut listener.
+          await waitForControlUiInitialRoster(page);
           await page.keyboard.press("ControlOrMeta+K");
           const input = page.locator(".cmd-palette__input");
           await input.fill("palette-");
@@ -558,7 +604,7 @@ suite.define(() => {
           if (captureEnabled) {
             await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
           }
-          await publish("palette-published");
+          await publish(page, "palette-published");
           await expect.poll(() => published.count()).toBe(1);
           expect(await retiring.count()).toBe(0);
           if (captureEnabled) {
@@ -566,7 +612,14 @@ suite.define(() => {
           }
 
           rejectCatalogReplies = true;
-          await publish("palette-held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          providerModel = "read-failure-fixture:latest";
+          const refreshParams = { agentId: "main", view: "configured", refresh: true };
+          commands.push({
+            method: "models.list",
+            params: refreshParams,
+            result: await readback.request("models.list", refreshParams),
+          });
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });
@@ -576,6 +629,7 @@ suite.define(() => {
             await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
           }
           rejectCatalogReplies = false;
+          await publish(page, "palette-held");
           await input.fill("palette-held");
           const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
           await recovered.waitFor({ state: "visible" });
@@ -593,9 +647,7 @@ suite.define(() => {
           rejectCatalogReplies = true;
           const sidebar = page.locator("openclaw-app-sidebar");
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar
-            .getByRole("menuitemradio", { name: "Reviewer fixture", exact: true })
-            .click();
+          await sidebar.getByRole("menuitem", { name: "Reviewer fixture", exact: true }).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
           const requestsBeforeOpen = catalogParams.length;
           await page.keyboard.press("ControlOrMeta+K");

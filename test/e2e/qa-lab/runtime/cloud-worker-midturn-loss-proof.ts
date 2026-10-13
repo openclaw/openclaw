@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
@@ -123,7 +124,8 @@ async function connectOperator(
 }
 
 function messageRole(message: unknown): string {
-  return String(requireRecord(message, "history message").role ?? "");
+  const role = requireRecord(message, "history message").role;
+  return typeof role === "string" ? role : "";
 }
 
 function messageText(message: unknown): string {
@@ -407,9 +409,9 @@ async function runProof(options: ProducerOptions) {
     );
     const chatError = await waitForChatError(events, runId);
     const failedPlacement = await waitForFailedPlacement(gateway);
-    const terminalReason = String(failedPlacement.terminalReason ?? "");
-    if (!terminalReason || terminalReason.length > 1_024) {
-      throw new Error(`placement terminal reason was missing or unbounded: ${terminalReason}`);
+    const terminalReason = failedPlacement.terminalReason;
+    if (typeof terminalReason !== "string" || !terminalReason || terminalReason.length > 1_024) {
+      throw new Error("placement terminal reason was missing, invalid, or unbounded");
     }
     const historyAfterFailure = await readHistory(operator);
     const countsAfterFailure = markerCounts(historyAfterFailure);
@@ -520,7 +522,9 @@ async function runProof(options: ProducerOptions) {
       },
       turnFailure: {
         agentWaitStatus: waitResult.status,
-        chatError: String(chatError.errorMessage ?? chatError.error ?? "worker turn failed"),
+        chatError: stringifyNonErrorCause(
+          chatError.errorMessage ?? chatError.error ?? "worker turn failed",
+        ),
         terminalReason,
         terminalReasonLength: terminalReason.length,
       },
@@ -569,7 +573,7 @@ async function runProof(options: ProducerOptions) {
     }
   }
   if (proofError) {
-    throw proofError;
+    throw toErrorObject(proofError, "Cloud worker mid-turn loss proof failed");
   }
   if (!verdict) {
     throw new Error("cloud worker mid-turn loss proof produced no verdict");
@@ -594,7 +598,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "src/gateway/worker-environments/transcript-commit.ts",
         "src/gateway/worker-environments/worker-turn-launcher.ts",
         "src/gateway/worker-environments/placement-disk-space.ts",
-        "src/gateway/server-methods/sessions-list-cache.ts",
+        "src/gateway/session-row-projection.ts",
       ],
     },
   });

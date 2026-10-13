@@ -1,4 +1,37 @@
 import * as tar from "tar";
+import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import type { BackupCreateResult } from "./backup-create.js";
+
+export function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {
+  return {
+    stateDir,
+    agentRoots: [],
+    coreDatabases: [],
+    coreDatabaseSourcePaths: [],
+    resolveSqliteSource: () => ({ role: "plugin" }),
+    regenerableRoots: [],
+    isIncluded: () => true,
+    isTraversable: () => true,
+    isPackageContent: () => false,
+    isVolatile: () => false,
+  };
+}
+
+export function makeBackupResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
+  return {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    archiveRoot: "openclaw-backup-2026-01-01",
+    archivePath: "/tmp/openclaw-backup.tar.gz",
+    dryRun: false,
+    includeWorkspace: true,
+    onlyConfig: false,
+    verified: false,
+    assets: [],
+    skipped: [],
+    skippedVolatileCount: 0,
+    ...overrides,
+  };
+}
 
 export async function listArchiveEntries(archivePath: string): Promise<string[]> {
   const entries: string[] = [];

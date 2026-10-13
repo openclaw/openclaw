@@ -1,26 +1,87 @@
 // Provides shared SQLite schema probes and additive column migration helpers.
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
+import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  type SqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { readSqlToken } from "../infra/sqlite-schema-sql.js";
+
+const tableColumns = new WeakMap<SqliteSchemaFacts, Map<string, Set<string>>>();
 
 export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  return tableHasColumns(db, tableName, [columnName]);
+  return readTableColumns(db, tableName).has(columnName);
 }
 
-export function tableHasColumns(
+export function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  const sql = schema?.tableSql.get(tableName);
+  if (
+    schema &&
+    !sql &&
+    ![...schema.tables, ...schema.views].some(
+      (name) => name.toLowerCase() === tableName.toLowerCase(),
+    )
+  ) {
+    return new Set();
+  }
+  if (schema && sql && /^CREATE TABLE\b/iu.test(sql) && !/\bAS\b/iu.test(sql)) {
+    let tables = tableColumns.get(schema);
+    const retained = tables?.get(tableName);
+    if (retained) {
+      return retained;
+    }
+    const definition = parseSqliteTableDefinition(sql, tableName);
+    // table_info omits generated columns and preserves identifier spelling.
+    // Views, virtual tables, and noncanonical identifiers keep native inspection.
+    if (
+      [...definition.columns.values()].every((column) =>
+        /^[a-z_][a-z0-9_]*$/u.test(readSqlToken(column, 0)?.raw ?? ""),
+      )
+    ) {
+      const columns = new Set(definition.columns.keys());
+      if (!tables) {
+        tables = new Map();
+        tableColumns.set(schema, tables);
+      }
+      tables.set(tableName, columns);
+      return columns;
+    }
+  }
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+/** Inspect only failed queries; native unavailability must not become a schema refusal. */
+export function classifySqliteTableReadError(
   db: DatabaseSync,
   tableName: string,
   columnNames: readonly string[],
-): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  const existing = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
-  return columnNames.every((columnName) => existing.has(columnName));
+  error: unknown,
+): unknown {
+  if (sqlitePrimaryResultCode(error) !== 1) {
+    return error;
+  }
+  try {
+    const existing = readTableColumns(db, tableName);
+    // An authorizer can suppress PRAGMA results; empty inspection proves no column absence.
+    if (existing.size > 0 && columnNames.some((column) => !existing.has(column))) {
+      return new SqliteSchemaMismatchError(
+        `SQLite table ${tableName} is missing required columns; run openclaw doctor --fix to repair it.`,
+        { cause: error },
+      );
+    }
+  } catch {
+    // Failed diagnosis cannot replace the original native read failure.
+  }
+  return error;
 }
 
 export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
   return rows
     .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
     .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
@@ -28,6 +89,10 @@ export function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): str
 }
 
 export function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (schema) {
+    return schema.tables.has(tableName);
+  }
   const row = executeWithCachedStatement(
     db,
     "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -45,4 +110,15 @@ export function ensureColumn(db: DatabaseSync, tableName: string, columnSql: str
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
   return true;
+}
+
+/** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
+export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
 }

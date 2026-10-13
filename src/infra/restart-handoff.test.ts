@@ -10,6 +10,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
@@ -21,7 +22,7 @@ import {
   consumeGatewayRestartHandoffSync,
   formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,
-  writeGatewayRestartHandoffSync,
+  writeGatewayRestartHandoff,
 } from "./restart-handoff.js";
 import type { GatewayRestartHandoff } from "./restart-handoff.js";
 
@@ -111,10 +112,17 @@ function insertHandoffRow(
   );
 }
 
-function expectWrittenHandoff(
-  opts: Parameters<typeof writeGatewayRestartHandoffSync>[0],
-): GatewayRestartHandoff {
-  const handoff = writeGatewayRestartHandoffSync(opts);
+async function expectWrittenHandoff(
+  opts: Omit<Parameters<typeof writeGatewayRestartHandoff>[0], "restartKind"> & {
+    restartKind?: GatewayRestartHandoff["restartKind"];
+  },
+): Promise<GatewayRestartHandoff> {
+  const handoff = await writeGatewayRestartHandoff({
+    pid: 12_345,
+    restartKind: "full-process",
+    supervisorMode: "external",
+    ...opts,
+  });
   if (handoff === null) {
     throw new Error("Expected gateway restart handoff to be written");
   }
@@ -167,6 +175,7 @@ function spawnHandoffConsumer(params: {
 describe("gateway restart handoff", () => {
   afterEach(async () => {
     await Promise.all(handoffConsumerCleanups.splice(0).map((cleanup) => cleanup()));
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
@@ -181,15 +190,13 @@ describe("gateway restart handoff", () => {
     expect(fs.existsSync(databasePath)).toBe(false);
   });
 
-  it("reads a restart handoff without advancing an older shared schema", () => {
+  it("reads a restart handoff without advancing an older shared schema", async () => {
     const env = createHandoffEnv();
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const databasePath = path.join(env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite");
     const olderVersion = OPENCLAW_STATE_SCHEMA_VERSION - 1;
@@ -215,14 +222,12 @@ describe("gateway restart handoff", () => {
     }
   });
 
-  it("keeps truncated restart reasons free of lone surrogates", () => {
+  it("keeps truncated restart reasons free of lone surrogates", async () => {
     const env = createHandoffEnv();
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
       pid: 1,
       reason: `${"a".repeat(199)}😀tail`,
-      restartKind: "full-process",
-      supervisorMode: "external",
     });
 
     expect(handoff.reason).toHaveLength(199);
@@ -267,37 +272,11 @@ describe("gateway restart handoff", () => {
     expect(Buffer.from(handoff?.intentId ?? "").toString()).toBe(handoff?.intentId);
   });
 
-  it("persists restart trace timing for supervised process handoff", () => {
+  it("canonicalizes fractional restart trace timing before persistence", async () => {
     const env = createHandoffEnv();
 
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "launchd",
-      createdAt: 1_000,
-      restartTrace: {
-        startedAt: 10_000,
-        lastAt: 10_250,
-      },
-    });
-
-    expect(handoff.restartTrace).toStrictEqual({
-      startedAt: 10_000,
-      lastAt: 10_250,
-    });
-    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
-      startedAt: 10_000,
-      lastAt: 10_250,
-    });
-  });
-
-  it("canonicalizes fractional restart trace timing before persistence", () => {
-    const env = createHandoffEnv();
-
-    const handoff = expectWrittenHandoff({
-      env,
-      pid: 12_345,
       restartKind: "update-process",
       supervisorMode: "systemd",
       createdAt: 1_000,
@@ -332,13 +311,11 @@ describe("gateway restart handoff", () => {
     });
   });
 
-  it("keeps restart trace timing for slow but valid drains", () => {
+  it("keeps restart trace timing for slow but valid drains", async () => {
     const env = createHandoffEnv();
 
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
       supervisorMode: "launchd",
       createdAt: 1_000,
       restartTrace: {
@@ -365,14 +342,12 @@ describe("gateway restart handoff", () => {
     expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
   });
 
-  it("rejects expired handoff rows", () => {
+  it("rejects expired handoff rows", async () => {
     const env = createHandoffEnv();
 
-    expectWrittenHandoff({
+    await expectWrittenHandoff({
       env,
       pid: 111,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
       ttlMs: 1_000,
     });
@@ -387,16 +362,13 @@ describe("gateway restart handoff", () => {
     expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
   });
 
-  it("overwrites the previous pending handoff row", () => {
+  it("overwrites the previous pending handoff row", async () => {
     const env = createHandoffEnv();
 
-    expectWrittenHandoff({
+    await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
     });
-    expectWrittenHandoff({
+    await expectWrittenHandoff({
       env,
       pid: 67_890,
       reason: "gateway.restart",
@@ -416,14 +388,11 @@ describe("gateway restart handoff", () => {
     expect(fs.existsSync(legacyHandoffPath(env))).toBe(false);
   });
 
-  it("atomically accepts and removes a matching handoff", () => {
+  it("atomically accepts and removes a matching handoff", async () => {
     const env = createHandoffEnv();
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
-      pid: 12_345,
       reason: "gateway.restart",
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
 
@@ -450,13 +419,10 @@ describe("gateway restart handoff", () => {
     });
   });
 
-  it("retains a PID-mismatched handoff for the matching consumer", () => {
+  it("retains a PID-mismatched handoff for the matching consumer", async () => {
     const env = createHandoffEnv();
-    expectWrittenHandoff({
+    await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
 
@@ -490,9 +456,6 @@ describe("gateway restart handoff", () => {
       insert: (env: NodeJS.ProcessEnv) =>
         expectWrittenHandoff({
           env,
-          pid: 12_345,
-          restartKind: "full-process",
-          supervisorMode: "external",
           createdAt: 1_000,
           ttlMs: 1_000,
         }),
@@ -523,9 +486,6 @@ describe("gateway restart handoff", () => {
       insert: (env: NodeJS.ProcessEnv) =>
         expectWrittenHandoff({
           env,
-          pid: 12_345,
-          restartKind: "full-process",
-          supervisorMode: "external",
           createdAt: 2_000,
         }),
       now: 1_500,
@@ -534,9 +494,9 @@ describe("gateway restart handoff", () => {
         reason: "invalid",
       },
     },
-  ])("removes a $name handoff after rejecting it", ({ insert, now, expected }) => {
+  ])("removes a $name handoff after rejecting it", async ({ insert, now, expected }) => {
     const env = createHandoffEnv();
-    insert(env);
+    await insert(env);
 
     expect(
       consumeGatewayRestartHandoffSync({
@@ -550,13 +510,11 @@ describe("gateway restart handoff", () => {
 
   it("accepts a handoff exactly once across concurrent consumers", async ({ signal }) => {
     const env = createHandoffEnv();
-    const handoff = expectWrittenHandoff({
+    const handoff = await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const consumers = [0, 1].map(() =>
       spawnHandoffConsumer({ env, expectedPid: 12_345, now: 1_500, signal }),
@@ -607,13 +565,10 @@ describe("gateway restart handoff", () => {
     }
   });
 
-  it("samples the default time after beginning the write transaction", () => {
+  it("samples the default time after beginning the write transaction", async () => {
     const env = createHandoffEnv();
-    expectWrittenHandoff({
+    await expectWrittenHandoff({
       env,
-      pid: 12_345,
-      restartKind: "full-process",
-      supervisorMode: "external",
       createdAt: 1_000,
       ttlMs: 1_000,
     });

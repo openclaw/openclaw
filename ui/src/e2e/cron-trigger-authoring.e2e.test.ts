@@ -2,9 +2,11 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import type { CronJob } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -21,9 +23,8 @@ beforeEach(() => {
     : undefined;
 });
 const proofStage = process.env.OPENCLAW_TRIGGER_UI_PROOF_STAGE ?? "after";
-type CronTriggerTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
-const scriptJob = {
+const scriptJob: CronJob = {
   id: "existing-script-automation",
   configRevision: "existing-script-revision",
   name: "Script health check",
@@ -37,7 +38,7 @@ const scriptJob = {
   state: {},
 };
 
-function listResponse(jobs: unknown[]) {
+function listResponse(jobs: CronJob[]) {
   return {
     jobs,
     snapshotRevision: "trigger-authoring-fixture",
@@ -49,15 +50,13 @@ function listResponse(jobs: unknown[]) {
   };
 }
 
-function cronMethodResponses(jobs: unknown[]) {
+function cronMethodResponses(jobs: CronJob[]) {
   return {
     "cron.add": { id: "new-automation" },
-    "cron.list": {
-      cases: [
-        { match: { lastRunStatus: "error" }, response: listResponse([]) },
-        { response: listResponse(jobs) },
-      ],
-    },
+    "cron.list": cronListResponseFixture([
+      { match: { lastRunStatus: "error" }, response: listResponse([]) },
+      { response: listResponse(jobs) },
+    ]),
     "cron.runs": {
       entries: [],
       total: 0,
@@ -108,8 +107,7 @@ suite.define(() => {
         await page.locator("details.cron-advanced > summary").click();
 
         const scriptTriggerControlCount = await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Condition trigger" })
+          .getByRole("switch", { name: "Condition trigger", exact: true })
           .count();
         await page
           .getByText("Condition trigger", { exact: true })
@@ -210,12 +208,8 @@ suite.define(() => {
           .filter({ hasText: "Condition trigger" });
         await expect.poll(() => triggerToggle.count()).toBe(1);
 
-        const unsaved = await page.evaluate(async () => {
-          const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
-            ?.context.runtimeConfig;
-          if (!config) {
-            throw new Error("Runtime config capability is unavailable");
-          }
+        const unsaved = await evaluateControlUiContext(page, async (context) => {
+          const config = context.runtimeConfig;
           await config.ensureLoaded();
           config.setWritesSuspended(true);
           config.patchForm(["cron", "triggers", "enabled"], false);
@@ -226,12 +220,8 @@ suite.define(() => {
         await expect.poll(() => triggerToggle.count()).toBe(1);
         await captureTriggerCapabilityProof(page, "05-unsaved-disable-keeps-active-trigger");
 
-        await page.evaluate(() => {
-          const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
-            ?.context.runtimeConfig;
-          if (!config) {
-            throw new Error("Runtime config capability is unavailable");
-          }
+        await evaluateControlUiContext(page, (context) => {
+          const config = context.runtimeConfig;
           config.setWritesSuspended(false);
           // Observe this long-lived save through Gateway/state boundaries; returning its
           // promise through CDP lets Chromium collect it under full-shard memory pressure.
@@ -243,13 +233,12 @@ suite.define(() => {
         });
         await expect
           .poll(() =>
-            page.evaluate(() => {
-              const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
-                ?.context.runtimeConfig;
+            evaluateControlUiContext(page, (context) => {
+              const config = context.runtimeConfig;
               return {
-                dirty: config?.state.configFormDirty,
-                needsApply: config?.state.configNeedsApply,
-                saving: config?.state.configSaving,
+                dirty: config.state.configFormDirty,
+                needsApply: config.state.configNeedsApply,
+                saving: config.state.configSaving,
               };
             }),
           )
@@ -275,12 +264,8 @@ suite.define(() => {
         await page.getByText("Condition triggers are disabled by cron.triggers.enabled.").waitFor();
         await captureTriggerCapabilityProof(page, "07-reconnect-refreshes-disabled-trigger");
 
-        const oppositeDraft = await page.evaluate(async () => {
-          const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
-            ?.context.runtimeConfig;
-          if (!config) {
-            throw new Error("Runtime config capability is unavailable");
-          }
+        const oppositeDraft = await evaluateControlUiContext(page, async (context) => {
+          const config = context.runtimeConfig;
           await config.ensureLoaded();
           config.setWritesSuspended(true);
           config.patchForm(["cron", "triggers", "enabled"], true);
@@ -292,11 +277,10 @@ suite.define(() => {
           page,
           "08-unsaved-enable-cannot-author-disabled-trigger",
         );
-        await page.evaluate(async () => {
-          const config = (document.querySelector("openclaw-app") as CronTriggerTestApp).runtime
-            ?.context.runtimeConfig;
-          await config?.discardDraft();
-          config?.setWritesSuspended(false);
+        await evaluateControlUiContext(page, async (context) => {
+          const config = context.runtimeConfig;
+          await config.discardDraft();
+          config.setWritesSuspended(false);
         });
       },
     );
@@ -344,10 +328,10 @@ suite.define(() => {
         await captureProof(page, "05-malformed-trigger-rejected");
 
         // A rejected save must release the fieldset's inherited disabled state.
-        const once = page.locator('[data-test-id="cron-schedule-kind-at"]');
+        const once = page.locator('[data-test-id="cron-schedule-kind-at"]').getByRole("radio");
         await once.scrollIntoViewIfNeeded();
         await captureProof(page, "06-repeat-after-rejection");
-        await expect.poll(() => once.getAttribute("aria-disabled")).toBe("false");
+        await expect.poll(() => once.isEnabled()).toBe(true);
         await once.click();
         await page.locator("#cron-schedule-at").waitFor();
         expect(await page.locator("#cron-name").inputValue()).toBe("Malformed condition");

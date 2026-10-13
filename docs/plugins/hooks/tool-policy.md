@@ -2,6 +2,7 @@
 summary: "Gate, rewrite, and approve tool calls, and rewrite tool results before persistence"
 read_when:
   - You need to block a tool call or require approval from a plugin
+  - You need to observe what a tool call did after it ran
   - You are writing sender-aware tool policy in a standalone plugin file
   - You are contributing environment variables to the exec tool
   - You are rewriting or blocking a transcript write
@@ -21,8 +22,7 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `event.toolKind` and `event.toolInputKind`, host-authoritative
   discriminators for tools that intentionally share names; for example, outer
   code-mode `exec` calls use `toolKind: "code_mode_exec"` and include
-  `toolInputKind: "javascript" | "typescript"` when the input language is
-  known
+  `toolInputKind: "javascript"` for accepted Code Mode input
 - optional `event.derivedPaths`, best-effort host-derived target path hints
   for well-known tool envelopes such as `apply_patch`; these paths may be
   incomplete or over-approximate what the tool will actually touch (for
@@ -37,7 +37,7 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
-  not false assurances; fail closed when policy requires them.
+  not false assurances; deny the action if policy requires those fields.
 
 It can return:
 
@@ -52,8 +52,6 @@ type BeforeToolCallResult = {
     scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
-    /** @deprecated Unresolved approvals always deny. */
-    timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
@@ -191,7 +189,6 @@ the change:
   agents: {
     entries: {
       "maintenance-agent": {
-        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
     },
@@ -247,8 +244,66 @@ plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
 
-Trusted policies may set `matcher` to the same canonical tool-id list accepted
+Trusted policies may set `matcher` to the same standard tool-id list accepted
 by `before_tool_call`. Omit the matcher to retain match-all behavior.
+
+When trusted-policy approval completes inline, ordinary `before_tool_call`
+hooks receive an isolated copy of the approved parameters. Calls with unchanged
+parameters remain allowed, subject to ordinary vetoes and later execution
+checks. An ordinary hook that transforms those parameters must return
+`requireApproval` with its final `params` so the replacement receives separate
+approval. Without that approval request, the changed call is blocked with
+`Tool call parameters changed after trusted approval`.
+
+When upgrading plugins that combine trusted approval with ordinary parameter
+rewrites, update the transforming hook to request separate approval. The first
+approval does not authorize the replacement arguments. This inline boundary
+does not change the narrower native-relay contracts described above.
+
+### Tool call observation
+
+`after_tool_call` observes a tool call that has already run. It is the other
+half of `before_tool_call` for plugins that record what a gated call did. It
+receives the same context type as `before_tool_call` (`PluginHookToolContext`);
+available context fields depend on the emitting harness. Its event contains:
+
+- `event.toolName`: the tool name.
+- `event.params`: the tool arguments, including adjustments from `before_tool_call`.
+- optional `event.runId`: the owning run identifier.
+- optional `event.toolCallId`: the tool invocation identifier.
+- optional `event.result`: the tool outcome supplied by the harness.
+- optional `event.error`: an error message supplied or extracted by the harness.
+- optional `event.durationMs`: elapsed milliseconds when the start time is known.
+
+```typescript
+type AfterToolCallEvent = {
+  toolName: string;
+  params: Record<string, unknown>;
+  runId?: string;
+  toolCallId?: string;
+  result?: unknown;
+  error?: string;
+  durationMs?: number;
+};
+```
+
+It is an observation hook, so it cannot change what already happened:
+
+- Handlers run concurrently and their return values are ignored.
+- A thrown or timed-out handler is logged, and execution continues.
+- `matcher` accepts the same standard tool-id list as `before_tool_call`.
+
+Both `result` and `error` are optional, so an event carrying neither is not
+evidence that the tool succeeded. A handler that infers success from the
+absence of `error` can record a failed call as a successful one; treat an
+unreadable outcome as unknown rather than as either result. What `result`
+carries for exec and bash-family tools is tracked separately in
+[#102961](https://github.com/openclaw/openclaw/issues/102961).
+
+Do not use this hook to enforce policy. As the
+[hook reference](/plugins/hooks/reference) puts it, use a gate that blocks the operation on error
+rather than assuming an observation or delivery hook will reject the operation
+on failure.
 
 ### Exec environment hook
 

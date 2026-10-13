@@ -1,4 +1,3 @@
-// Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
 import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {
@@ -16,17 +15,11 @@ type PluginCliCommandGroupEntry = CommandGroupEntry & {
   placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
 };
 
-type PluginCliCommandGroupMode = "eager" | "lazy";
-
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
   if (entry.placeholders.length === 0) {
     return false;
   }
-  const descriptorNames = new Set(
-    (entry.placeholders as readonly OpenClawPluginCliRootCommandDescriptor[]).map(
-      (descriptor) => descriptor.name,
-    ),
-  );
+  const descriptorNames = new Set(entry.placeholders.map((descriptor) => descriptor.name));
   return getCommandGroupNames(entry).every((command) => descriptorNames.has(command));
 }
 
@@ -42,10 +35,6 @@ function findCommandByPath(program: Command, path: readonly string[]): Command |
     current = next;
   }
   return current;
-}
-
-function commandNamesFor(program: Command): Set<string> {
-  return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
 }
 
 function applyMachineOutputMode(
@@ -70,7 +59,7 @@ export async function registerPluginCliCommandGroups(
   program: Command,
   entries: readonly PluginCliCommandGroupEntry[],
   params: {
-    mode: PluginCliCommandGroupMode;
+    mode: "eager" | "lazy";
     primary?: string;
     existingCommands: Set<string>;
     logger: PluginLogger;
@@ -88,7 +77,11 @@ export async function registerPluginCliCommandGroups(
       continue;
     }
     const existingCommands =
-      parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
+      parentPath.length === 0
+        ? params.existingCommands
+        : new Set(
+            targetProgram.commands.flatMap((command) => [command.name(), ...command.aliases()]),
+          );
     const registerEntry = async () => {
       await entry.register(targetProgram);
       for (const descriptor of entry.placeholders) {

@@ -132,8 +132,8 @@ Register each capability inside `register(api)` alongside your existing
     to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
     ordinary catalog discovery; per-call candidates do not change that catalog.
     Automatic realtime voice and Voice Call transcription selection uses declared alias config as
-    defaults, with earlier aliases preferred and canonical values taking precedence.
-    An explicitly selected alias still overrides canonical config without inheriting
+    defaults, with earlier aliases preferred and primary-provider values taking precedence.
+    An explicitly selected alias still overrides primary-provider config without inheriting
     settings from other aliases.
 
     `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
@@ -263,6 +263,27 @@ Register each capability inside `register(api)` alongside your existing
     close calls during the provider invocation are no-ops; terminal callbacks
     must not wait for their own disposal.
 
+    Continuous mono PCM16/24 kHz bridges may implement
+    `setAudioOutputPort(output)` to bind a worker-owned playback sink before
+    connecting. `RealtimeVoiceAudioOutputPort` carries a transferable Node
+    `MessagePort` and a shared close fence: its first `Int32` is `0` while
+    open and permanently `1` after revocation. With this sink bound, send
+    PCM and clear events through the port instead of `onAudio` and
+    `onClearAudio`; keep transcripts, delegation, and lifecycle callbacks on
+    the host. `createRealtimeVoiceAudioPortSender` provides a bounded queue,
+    copied buffer ownership, one outstanding audio message, and ordered
+    clears. A receiver may send `{ type: "flush", marker }`; the sender replies
+    with `{ type: "flushed", marker }` only after its queued and outstanding
+    PCM has been acknowledged, including when there was no audio. A newer flush
+    marker supersedes an older pending marker. This is local sink admission,
+    not proof of audible playback or future provider silence. Consumers use it
+    to order control-plane completion behind already-submitted media.
+    The receiver acknowledges audio with `{ type: "ack" }`, checks
+    the fence before accepting audio, and closes its playback resources when
+    the port closes. Do not use this path to bypass host response or
+    wake-name admission. The sink owner revokes the fence before asynchronous
+    teardown so queued audio cannot enter a replacement call.
+
     Bundled lazy providers use `createLazyRealtimeVoiceBridgeLifecycle` from
     the private-local `openclaw/plugin-sdk/realtime-voice-provider` surface
     to own loading, callback fencing, and awaited disposal. It claims a
@@ -270,6 +291,17 @@ Register each capability inside `register(api)` alongside your existing
     can close or replace a bridge before the factory returns it. Provider
     modules retain their input queues, readiness policy, authentication, and
     reconnect behavior; module caching stays with the lazy-runtime helpers.
+
+    WebSocket voice bridges can use `RealtimeVoiceWebSocketTransport` from
+    that same private-local surface. It shares socket startup, capture, sends,
+    reconnect scheduling, and terminal cleanup over a supplied
+    `RealtimeVoiceSessionLifecycle`. Providers retain credentials, socket
+    construction, session initialization, event handling, and replay policy.
+
+    That private-local surface also exports the host's internal browser-session
+    request, capability, and provider API types. Official plugins should import
+    those types instead of redeclaring the process-private hook contract. These
+    type-only imports do not load the host's session or provider registry runtime.
 
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
@@ -359,6 +391,12 @@ Register each capability inside `register(api)` alongside your existing
     callback contract, including assignable async handlers and close-time final
     transcript flushing.
 
+    Providers with cumulative provisional transcripts can pass
+    `{ textMode: "snapshot" }` as the fourth `onTranscript` argument. The gateway
+    relay forwards it to the browser, which replaces the provisional text in place.
+    Omit this metadata for incremental fragments. Publish one final per utterance
+    at the provider's actual completion boundary, not for every provisional snapshot.
+
     A host `runAgentConsult` rejection named `AbortError` represents
     cancellation, even when the provider's own signal is still live. Do not
     turn it into a failed-task or retry reply. `TimeoutError` remains a
@@ -377,9 +415,10 @@ Register each capability inside `register(api)` alongside your existing
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected
     **before uploading audio**. The host records that error and automatic
-    selection may try the next provider or local backend. Canonical missing
-    provider auth leaves the automatic candidate unavailable without a failed
-    attempt. Upload and HTTP failures must throw: automatic selection then
+    selection may try the next provider or local backend. A `ProviderAuthError`
+    with code `missing-provider-auth` leaves any automatic candidate unavailable
+    without a failed-attempt record. Other returned errors are recorded as failed
+    attempts. Upload and HTTP failures must throw: automatic selection then
     stops without sending the recording to another provider. Explicit model
     lists retain their authored fallback order.
 

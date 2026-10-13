@@ -98,7 +98,7 @@ export async function authorizeIMessageResourceReference(
   }
 
   const providerBinding = params.hasExclusiveLocalDatabase
-    ? checkIMessageResourceBinding(params)
+    ? await checkIMessageResourceBinding(params)
     : "unavailable";
   if (providerBinding === "match") {
     return;

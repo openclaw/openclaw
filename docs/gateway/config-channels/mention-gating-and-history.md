@@ -50,7 +50,6 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: { mentionPatterns: ["@openclaw", "openclaw"] },
       },
     },
@@ -129,7 +128,6 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: { mentionPatterns: ["reisponde", "@openclaw"] },
       },
     },

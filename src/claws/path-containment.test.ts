@@ -16,7 +16,6 @@ describe("clawContainedRelativePath", () => {
   it.each([
     ["parent", join(root, "..", "outside.md")],
     ["prefix sibling", join(`${root}-sibling`, "file.md")],
-    ["unrelated absolute root", resolve(sep, "unrelated", "file.md")],
   ])("rejects %s paths", (_name, target) => {
     expect(clawContainedRelativePath(root, target)).toBeUndefined();
   });

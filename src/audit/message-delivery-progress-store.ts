@@ -8,15 +8,16 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   OutboundMessageAuditEventRecord,
   OutboundMessageProgressInput,
@@ -46,23 +47,20 @@ const ensuredDatabases = new WeakSet<DatabaseSync>();
 const progressRowCounts = new WeakMap<DatabaseSync, number>();
 
 function progressSchemaSql(): string {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS outbound_message_progress (",
-  );
-  const finalIndex = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE INDEX IF NOT EXISTS outbound_message_progress_run_occurred_idx",
-    start,
-  );
-  const end = finalIndex >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(";", finalIndex) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("canonical outbound message progress schema is missing");
-  }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 1);
+  return getOpenClawStateFeatureSchemaSql("outbound_message_progress", {
+    endMarker: "  ON outbound_message_progress (run_id, occurred_at, sequence);",
+    errorMessage: "canonical outbound message progress schema is missing",
+  });
 }
 
 function progressDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ProgressDatabase>(db);
 }
+
+const ensureProgressSchemaInDatabase = createSqliteSchemaEnsurer(progressSchemaSql, {
+  tables: ["outbound_message_progress"],
+  indexes: ["outbound_message_progress_occurred_idx", "outbound_message_progress_run_occurred_idx"],
+});
 
 function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   const database = openOpenClawStateDatabase(options);
@@ -71,8 +69,7 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; progress rows use Kysely.
-      db.exec(progressSchemaSql());
+      ensureProgressSchemaInDatabase(db);
       ensureColumn(db, "outbound_message_progress", "context_id TEXT");
       ensureColumn(db, "outbound_message_progress", "execution_id TEXT");
     },
@@ -292,9 +289,9 @@ function pruneProgressAfterInsert(db: DatabaseSync, now: number): void {
 }
 
 /** Persist one progress fact idempotently; first use installs only this owner table. */
-export function recordOutboundMessageProgress(
+export function recordOutboundMessageProgressInDatabase(
   input: OutboundMessageProgressInput,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): OutboundMessageAuditEventRecord | undefined {
   const executionToken = planMessageExecutionBinding(input.executionIdentityToken, input.runId);
   ensureProgressSchema(options);
@@ -336,135 +333,130 @@ export function recordOutboundMessageProgress(
   }
 }
 
-export function countOutboundMessageProgressForRun(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): number {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (
-        !tableExists(db, "outbound_message_progress") ||
-        (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
-      ) {
-        return 0;
-      }
-      let query = progressDb(db)
-        .selectFrom("outbound_message_progress")
-        .select((expression) => expression.fn.countAll<number>().as("count"))
-        .where("run_id", "=", params.runId)
-        .where(
-          "occurred_at",
-          ">=",
-          (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
-        );
-      if (exact) {
-        query = query
-          .where("context_id", "=", exact.contextId)
-          .where("execution_id", "=", exact.executionId);
-      }
-      const row = executeSqliteQueryTakeFirstSync(db, query);
-      return normalizeSqliteNumber(row?.count ?? null) ?? 0;
-    }, params.database) ?? 0
-  );
+export function countOutboundMessageProgressForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    now?: number;
+  },
+): number {
+  const exact = selectMessageExecutionBinding(params);
+  if (
+    !tableExists(db, "outbound_message_progress") ||
+    (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
+  ) {
+    return 0;
+  }
+  let query = progressDb(db)
+    .selectFrom("outbound_message_progress")
+    .select((expression) => expression.fn.countAll<number>().as("count"))
+    .where("run_id", "=", params.runId)
+    .where(
+      "occurred_at",
+      ">=",
+      (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
+    );
+  if (exact) {
+    query = query
+      .where("context_id", "=", exact.contextId)
+      .where("execution_id", "=", exact.executionId);
+  }
+  const row = executeSqliteQueryTakeFirstSync(db, query);
+  return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
-export function readOutboundMessageProgressForRun(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  action: OutboundMessageProgressInput["action"];
-  after?: { occurredAt: number; sequence: number };
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): OutboundMessageAuditEventRecord[] {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (
-        !tableExists(db, "outbound_message_progress") ||
-        (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
-      ) {
-        return [];
-      }
-      let query = progressDb(db)
-        .selectFrom("outbound_message_progress")
-        .selectAll()
-        .where("run_id", "=", params.runId)
-        .where("action", "=", params.action)
-        .where(
-          "occurred_at",
-          ">=",
-          (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
-        );
-      if (exact) {
-        query = query
-          .where("context_id", "=", exact.contextId)
-          .where("execution_id", "=", exact.executionId);
-      }
-      const after = params.after;
-      if (after) {
-        query = query.where((expression) =>
-          expression.or([
-            expression("occurred_at", ">", after.occurredAt),
-            expression.and([
-              expression("occurred_at", "=", after.occurredAt),
-              expression("sequence", ">", after.sequence),
-            ]),
-          ]),
-        );
-      }
-      return executeSqliteQuerySync(
-        db,
-        query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
-      ).rows.map(rowToProgressEvent);
-    }, params.database) ?? []
-  );
+export function readOutboundMessageProgressForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    action: OutboundMessageProgressInput["action"];
+    after?: { occurredAt: number; sequence: number };
+    limit: number;
+    now?: number;
+  },
+): OutboundMessageAuditEventRecord[] {
+  const exact = selectMessageExecutionBinding(params);
+  if (
+    !tableExists(db, "outbound_message_progress") ||
+    (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
+  ) {
+    return [];
+  }
+  let query = progressDb(db)
+    .selectFrom("outbound_message_progress")
+    .selectAll()
+    .where("run_id", "=", params.runId)
+    .where("action", "=", params.action)
+    .where(
+      "occurred_at",
+      ">=",
+      (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
+    );
+  if (exact) {
+    query = query
+      .where("context_id", "=", exact.contextId)
+      .where("execution_id", "=", exact.executionId);
+  }
+  const after = params.after;
+  if (after) {
+    query = query.where((expression) =>
+      expression.or([
+        expression("occurred_at", ">", after.occurredAt),
+        expression.and([
+          expression("occurred_at", "=", after.occurredAt),
+          expression("sequence", ">", after.sequence),
+        ]),
+      ]),
+    );
+  }
+  return executeSqliteQuerySync(
+    db,
+    query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
+  ).rows.map(rowToProgressEvent);
 }
 
-export function hasOutboundMessageProgressCursor(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  occurredAt: number;
-  sequence: number;
-  action: OutboundMessageProgressInput["action"];
-  database?: OpenClawStateDatabaseOptions;
-}): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (
-        !tableExists(db, "outbound_message_progress") ||
-        (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
-      ) {
-        return false;
-      }
-      let query = progressDb(db)
-        .selectFrom("outbound_message_progress")
-        .select("sequence")
-        .where("sequence", "=", params.sequence)
-        .where("run_id", "=", params.runId)
-        .where("occurred_at", "=", params.occurredAt)
-        .where("action", "=", params.action);
-      if (exact) {
-        query = query
-          .where("context_id", "=", exact.contextId)
-          .where("execution_id", "=", exact.executionId);
-      }
-      return Boolean(executeSqliteQueryTakeFirstSync(db, query));
-    }, params.database) ?? false
-  );
+export function hasOutboundMessageProgressCursorInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    occurredAt: number;
+    sequence: number;
+    action: OutboundMessageProgressInput["action"];
+  },
+): boolean {
+  const exact = selectMessageExecutionBinding(params);
+  if (
+    !tableExists(db, "outbound_message_progress") ||
+    (exact && !hasMessageExecutionBindingColumns(db, "outbound_message_progress"))
+  ) {
+    return false;
+  }
+  let query = progressDb(db)
+    .selectFrom("outbound_message_progress")
+    .select("sequence")
+    .where("sequence", "=", params.sequence)
+    .where("run_id", "=", params.runId)
+    .where("occurred_at", "=", params.occurredAt)
+    .where("action", "=", params.action);
+  if (exact) {
+    query = query
+      .where("context_id", "=", exact.contextId)
+      .where("execution_id", "=", exact.executionId);
+  }
+  return Boolean(executeSqliteQueryTakeFirstSync(db, query));
 }
 
 /** Prune existing progress without creating its lazy table. */
-export function pruneExpiredOutboundMessageProgress(
-  params: { now?: number; database?: OpenClawStateDatabaseOptions } = {},
-): number {
+export function pruneExpiredOutboundMessageProgressInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
   const database = openOpenClawStateDatabase(params.database);
   if (!tableExists(database.db, "outbound_message_progress")) {
     return 0;

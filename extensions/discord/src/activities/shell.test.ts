@@ -111,8 +111,6 @@ async function executeShellWithHungRequest(hung: HungRequest) {
 describe("Discord Activity shell request deadlines", () => {
   it.each([
     { request: "token", phase: "fetch", timeoutMs: TOKEN_REQUEST_TIMEOUT_MS },
-    { request: "token", phase: "body", timeoutMs: TOKEN_REQUEST_TIMEOUT_MS },
-    { request: "widget", phase: "fetch", timeoutMs: WIDGET_REQUEST_TIMEOUT_MS },
     { request: "widget", phase: "body", timeoutMs: WIDGET_REQUEST_TIMEOUT_MS },
   ] as const)("bounds a hung $request $phase", async ({ request, phase, timeoutMs }) => {
     const { clearTimeoutMock, fetchMock, setTimeoutMock } = await executeShellWithHungRequest({

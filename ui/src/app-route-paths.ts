@@ -67,6 +67,7 @@ const APP_ROUTE_DEFINITIONS = {
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   memory: { path: "/settings/memory" },
+  search: { path: "/settings/search" },
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
@@ -93,7 +94,6 @@ const APP_ROUTE_DEFINITIONS = {
   // Automations is the product name; /cron stays as a legacy alias for
   // pre-rename bookmarks and deep links.
   cron: { path: "/automations", aliases: ["/cron"] },
-  tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
   "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
@@ -259,21 +259,14 @@ export function activityPersonLocation(
 
 export function activityPersonFromPath(pathname: string, basePath = ""): string | null {
   const reference = routePathSuffix(pathname, "activity", basePath);
-  if (!reference || reference.includes("/")) {
+  const personId = decodeRouteSegment(reference);
+  if (!personId?.trim() || personId === "." || personId === "..") {
     return null;
   }
-  try {
-    const personId = decodeURIComponent(reference);
-    if (!personId.trim() || personId === "." || personId === "..") {
-      return null;
-    }
-    // A full UUID is an exact identifier; its final group is not a short prefix.
-    return isProfileUuid(personId)
-      ? personId
-      : (reference.match(ACTIVITY_PERSON_SHORT_REF_RE)?.[1] ?? personId);
-  } catch {
-    return null;
-  }
+  // A full UUID is an exact identifier; its final group is not a short prefix.
+  return isProfileUuid(personId)
+    ? personId
+    : (reference?.match(ACTIVITY_PERSON_SHORT_REF_RE)?.[1] ?? personId);
 }
 
 export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
@@ -306,12 +299,7 @@ export function agentRouteFromPath(pathname: string, basePath = ""): AgentRouteP
   if (segments.length > 2 || !segments[0]) {
     return null;
   }
-  let agentId: string;
-  try {
-    agentId = decodeURIComponent(segments[0]);
-  } catch {
-    return null;
-  }
+  const agentId = decodeRouteSegment(segments[0]);
   if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
     return null;
   }
@@ -355,13 +343,8 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const prefix = `${pathForRoute("plugins", basePath)}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const id = normalizedPath.slice(prefix.length);
-  return isPluginCatalogId(id) ? id : null;
+  const id = routePathSuffix(pathname, "plugins", basePath);
+  return id && isPluginCatalogId(id) ? id : null;
 }
 
 export function pathForPluginSettings(pluginId: string, basePath = ""): string {
@@ -374,23 +357,13 @@ export function pathForPluginSettings(pluginId: string, basePath = ""): string {
 }
 
 export function pluginSettingsIdFromPath(pathname: string, basePath = ""): string | null {
-  const normalizedPath = normalizePath(pathname);
-  const settingsPath = pathForRoute("plugin-settings", basePath);
-  const prefix = `${settingsPath}/`;
-  if (!normalizedPath.startsWith(prefix)) {
-    return null;
-  }
-  const encodedPluginId = normalizedPath.slice(prefix.length);
+  const encodedPluginId = routePathSuffix(pathname, "plugin-settings", basePath);
   // This exact retired discovery route belongs to the Plugins workspace.
-  if (!encodedPluginId || encodedPluginId.includes("/") || encodedPluginId === "discover") {
+  if (encodedPluginId === "discover") {
     return null;
   }
-  try {
-    const pluginId = decodeURIComponent(encodedPluginId);
-    return pluginId && pluginId !== "." && pluginId !== ".." ? pluginId : null;
-  } catch {
-    return null;
-  }
+  const pluginId = decodeRouteSegment(encodedPluginId);
+  return pluginId && pluginId !== "." && pluginId !== ".." ? pluginId : null;
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -426,12 +399,7 @@ export function pathForTerminalSession(sessionId: string, basePath = ""): string
   return `${pathForRoute("terminal", basePath)}/${encodeURIComponent(sessionId)}`;
 }
 
-function singleSegmentIdFromPath(
-  pathname: string,
-  routeId: RouteId,
-  basePath: string,
-): string | null {
-  const encoded = routePathSuffix(pathname, routeId, basePath);
+function decodeRouteSegment(encoded: string | null): string | null {
   if (!encoded || encoded.includes("/")) {
     return null;
   }
@@ -443,11 +411,11 @@ function singleSegmentIdFromPath(
 }
 
 export function terminalSessionIdFromPath(pathname: string, basePath = ""): string | null {
-  return singleSegmentIdFromPath(pathname, "terminal", basePath)?.trim() || null;
+  return decodeRouteSegment(routePathSuffix(pathname, "terminal", basePath))?.trim() || null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
-  const boardId = singleSegmentIdFromPath(pathname, "workboard", basePath);
+  const boardId = decodeRouteSegment(routePathSuffix(pathname, "workboard", basePath));
   return isValidWorkboardBoardId(boardId) ? boardId : null;
 }
 
@@ -464,35 +432,25 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
 
+const DYNAMIC_ROUTE_MATCHERS = [
+  ["terminal", terminalSessionIdFromPath],
+  ["plugin", pluginTabSlugFromPath],
+  ["agents", agentRouteFromPath],
+  ["activity", activityPersonFromPath],
+  ["workboard", workboardBoardIdFromPath],
+  ["memory", memoryTabFromPath],
+  ["plugins", isLegacyPluginsDiscoveryPath],
+  ["plugin-settings", pluginSettingsIdFromPath],
+] as const;
+
 function dynamicRouteIdFromPath(
   pathname: string,
   basePath = "",
 ): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
-  if (terminalSessionIdFromPath(pathname, basePath)) {
-    return "terminal";
-  }
-  if (pluginTabSlugFromPath(pathname, basePath)) {
-    return "plugin";
-  }
-  if (agentRouteFromPath(pathname, basePath)) {
-    return "agents";
-  }
-  if (activityPersonFromPath(pathname, basePath)) {
-    return "activity";
-  }
-  if (workboardBoardIdFromPath(pathname, basePath)) {
-    return "workboard";
-  }
-  if (memoryTabFromPath(pathname, basePath)) {
-    return "memory";
-  }
-  if (isLegacyPluginsDiscoveryPath(pathname, basePath)) {
-    return "plugins";
-  }
-  if (pluginSettingsIdFromPath(pathname, basePath)) {
-    return "plugin-settings";
-  }
-  return sessionRouteNamespaceFromPath(pathname, basePath);
+  return (
+    DYNAMIC_ROUTE_MATCHERS.find(([, matches]) => matches(pathname, basePath))?.[0] ??
+    sessionRouteNamespaceFromPath(pathname, basePath)
+  );
 }
 
 export function dynamicRouteFromPath(pathname: string, basePath: string) {
@@ -542,14 +500,8 @@ function isRouteOwnedBasePath(basePath: string): boolean {
   if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
-  const segments = basePath.split("/").filter(Boolean);
-  for (let count = 1; count <= segments.length; count += 1) {
-    const ancestor = `/${segments.slice(0, count).join("/")}`;
-    if (APP_ROUTE_PATHS.some((path) => path.startsWith(`${ancestor}/`))) {
-      return true;
-    }
-  }
-  return false;
+  const namespace = basePath.split("/").find(Boolean);
+  return APP_ROUTE_PATHS.some((path) => path.startsWith(`/${namespace}/`));
 }
 
 export function inferBasePathFromPathname(pathname: string): string {

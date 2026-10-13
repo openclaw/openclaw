@@ -1,17 +1,19 @@
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import * as combinedStores from "../../config/sessions/combined-store-gateway.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import * as pageReads from "../../config/sessions/session-accessor.sqlite-list-read.js";
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   identifiedClient,
@@ -39,14 +41,13 @@ function viewerConfig(others: "view" | "none"): OpenClawConfig {
 }
 
 it.each([
-  "membership",
   "membership-unpublished",
   "membership-external",
   "visibility",
   "identity",
   "config",
 ] as const)(
-  "rechecks current %s after the selected page has been read asynchronously",
+  "rechecks current %s after the resident projection has completed asynchronous preparation",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const viewer = ensureProfileForEmail("page-viewer@example.test").id;
@@ -98,66 +99,63 @@ it.each([
       const context = requestContext(config);
       context.getRuntimeConfig = () => config;
       const client = identifiedClient(viewer);
-      const inventory = vi.spyOn(combinedStores, "loadCombinedSessionStoreForGatewayAsync");
-      const originalRead = pageReads.readSessionListPageReadOnlyAsync;
-      const pageRead = vi.spyOn(pageReads, "readSessionListPageReadOnlyAsync");
-      pageRead.mockImplementationOnce(async (...args) => {
-        const page = await originalRead(...args);
-        expect(page.entries).toMatchObject([
-          {
-            ok: true,
-            value: {
-              entries: [{ sessionKey: scope.sessionKey, entry: { sessionId: selected.sessionId } }],
-              membershipKeys: membershipChange ? [scope.sessionKey] : [],
-            },
-          },
-        ]);
-        // Deliver the real prepared page only after authority has changed.
-        if (change === "config") {
-          config = viewerConfig("none");
-        } else if (change === "identity") {
-          client.authenticatedUserProfile = {
-            ...client.authenticatedUserProfile!,
-            profileId: owner,
-          };
-        } else {
-          if (change === "membership-external") {
-            const external = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
-            try {
-              external
-                .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
-                .run(scope.sessionKey, viewer);
-            } finally {
-              external.close();
-            }
-          } else if (membershipChange) {
-            expect(removeSessionMember(scope, viewer)).not.toBeNull();
+      const request = { agentId: "main", limit: 1, includeActivitySummary: true };
+      const before = await listSessions({ client, context, request });
+      expect(before.sessions).toMatchObject([
+        { key: scope.sessionKey, sessionId: selected.sessionId },
+      ]);
+      const projection = expectDefined(getSessionRowProjection(context), "resident projection");
+      const ready = projection.prepareSelection.bind(projection);
+      const readiness = vi
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          await ready(...args);
+          // Resume the real request only after its current authority has changed.
+          if (change === "config") {
+            config = viewerConfig("none");
+            setRuntimeConfigSnapshot(config);
+          } else if (change === "identity") {
+            client.authenticatedUserProfile = {
+              ...client.authenticatedUserProfile!,
+              profileId: owner,
+            };
           } else {
-            replaceSessionEntrySync(scope, {
-              ...selected,
-              visibility: "draft",
-            });
+            if (change === "membership-external") {
+              const external = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
+              try {
+                external
+                  .prepare("DELETE FROM session_members WHERE session_key = ? AND identity_id = ?")
+                  .run(scope.sessionKey, viewer);
+              } finally {
+                external.close();
+              }
+              // External writers publish committed changes through their owning bridge.
+              sessionChanges.emit({ ...scope, factsInvalidated: true });
+            } else if (membershipChange) {
+              expect(removeSessionMember(scope, viewer)).not.toBeNull();
+            } else {
+              replaceSessionEntrySync(scope, {
+                ...selected,
+                visibility: "draft",
+              });
+            }
+            if (change === "visibility") {
+              emitSessionsChanged(context, { reason: "sharing", sessionKey: scope.sessionKey });
+            }
           }
-          if (change === "membership" || change === "visibility") {
-            emitSessionsChanged(context, { reason: "sharing", sessionKey: scope.sessionKey });
-          }
-        }
-        return page;
-      });
+        });
 
       const result = await listSessions({
         client,
         context,
-        request: { agentId: "main", limit: 1, includeActivitySummary: true },
+        request,
       });
-      expect(inventory).toHaveBeenCalledOnce();
+      expect(readiness).toHaveBeenCalled();
       if (membershipChange) {
-        expect(pageRead).toHaveBeenCalledOnce();
         expect(result.sessions).toMatchObject([
           { key: scope.sessionKey, sharingRole: "viewer", activitySummary: { canEnsure: false } },
         ]);
       } else {
-        expect(pageRead).toHaveBeenCalledTimes(2);
         expect(result.sessions.map((session) => session.key)).toEqual([replacementKey]);
         expect(result).toMatchObject({ count: 1, nextOffset: 1 });
       }

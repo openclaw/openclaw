@@ -1,4 +1,3 @@
-/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
 /** Token that marks a heartbeat response as an acknowledgement with no user notification. */
@@ -66,40 +65,23 @@ export function isSilentReplyText(
   );
 }
 
-type SilentReplyActionEnvelope = { action?: unknown };
-
-function isSilentReplyJsonStringText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('"') || !trimmed.endsWith('"') || !trimmed.includes(token)) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return typeof parsed === "string" && parsed.trim() === token;
-  } catch {
-    return false;
-  }
-}
-
-function isSilentReplyEnvelopeText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}") || !trimmed.includes(token)) {
+function isSilentReplyJsonText(text: string | undefined, token: string): boolean {
+  const trimmed = text?.trim();
+  if (
+    !trimmed ||
+    !trimmed.includes(token) ||
+    !(
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("{") && trimmed.endsWith("}"))
+    )
+  ) {
     return false;
   }
   try {
-    const parsed = JSON.parse(trimmed) as SilentReplyActionEnvelope;
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === "string") {
+      return parsed.trim() === token;
+    }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
@@ -107,6 +89,7 @@ function isSilentReplyEnvelopeText(
     return (
       keys.length === 1 &&
       keys[0] === "action" &&
+      "action" in parsed &&
       typeof parsed.action === "string" &&
       parsed.action.trim() === token
     );
@@ -141,26 +124,25 @@ function stripFinalSilentToken(text: string, token: string): string | null {
 const silentIntentTextRe =
   /^\s*(?:i|i'll|i\s+will|i'm|i\s+am|we|we'll|we\s+will|the\s+assistant|assistant|the\s+bot|bot|openclaw)\s+(?:(?:will\s+)?(?:stay|remain|keep|be)\s+(?:quiet|silent)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:do\s+not|don't|dont|will\s+not|won't|would\s+not|should\s+not)\s+(?:reply|respond)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:have|has)\s+nothing\s+(?:to|for)\s+(?:say|add|reply|respond))(?:[.!?]+)?\s*$/i;
 
-function hasSilentIntentFinalSilentToken(text: string, token: string): boolean {
-  const withoutToken = stripFinalSilentToken(text, token);
-  if (withoutToken === null) {
-    return false;
-  }
-  return !withoutToken || silentIntentTextRe.test(withoutToken);
-}
-
 const substantiveAnswerCueRe =
   /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
 const bareReasoningPlaceholderRe =
   /^\s*(?:(?:internal|private)\s+)?(?:reasoning|thinking|thoughts?|analysis)(?:\s+notes?)?\s*$/i;
 
-function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean {
+function hasReasoningFinalSilentToken(
+  text: string,
+  token: string,
+  allowPlainReasoning: boolean,
+): boolean {
   const withoutToken = stripFinalSilentToken(text, token);
   if (withoutToken === null) {
     return false;
   }
   if (!withoutToken || silentIntentTextRe.test(withoutToken)) {
     return true;
+  }
+  if (!allowPlainReasoning) {
+    return false;
   }
   const lines = withoutToken
     .split(/\r?\n/)
@@ -178,14 +160,8 @@ function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean
   );
 }
 
-function isReasoningPrefixedSilentReplyText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
+function isReasoningPrefixedSilentReplyText(text: string | undefined, token: string): boolean {
+  const trimmed = text?.trim();
   if (!trimmed) {
     return false;
   }
@@ -194,36 +170,38 @@ function isReasoningPrefixedSilentReplyText(
   if (withoutLeadingReasoningBlocks !== trimmed) {
     return (
       isSilentReplyText(withoutLeadingReasoningBlocks, token) ||
-      hasSilentIntentFinalSilentToken(withoutLeadingReasoningBlocks, token)
+      hasReasoningFinalSilentToken(withoutLeadingReasoningBlocks, token, false)
     );
   }
 
-  if (openReasoningPrefixRe.test(trimmed)) {
-    const withoutOpenReasoningPrefix = trimmed.replace(openReasoningPrefixRe, "");
-    return (
-      isSilentReplyText(withoutOpenReasoningPrefix, token) ||
-      hasPlainReasoningFinalSilentToken(withoutOpenReasoningPrefix, token)
-    );
-  }
-  if (!plainReasoningPrefixRe.test(trimmed)) {
+  const reasoningPrefix = openReasoningPrefixRe.test(trimmed)
+    ? openReasoningPrefixRe
+    : plainReasoningPrefixRe.test(trimmed)
+      ? plainReasoningPrefixRe
+      : undefined;
+  if (!reasoningPrefix) {
     return false;
   }
-  const withoutPlainReasoningPrefix = trimmed.replace(plainReasoningPrefixRe, "");
+  const withoutReasoningPrefix = trimmed.replace(reasoningPrefix, "");
   return (
-    isSilentReplyText(withoutPlainReasoningPrefix, token) ||
-    hasPlainReasoningFinalSilentToken(withoutPlainReasoningPrefix, token)
+    isSilentReplyText(withoutReasoningPrefix, token) ||
+    hasReasoningFinalSilentToken(withoutReasoningPrefix, token, true)
   );
 }
 
-/** Returns true for token-only, JSON-envelope, or reasoning-prefixed silent payload text. */
+/** Returns true for token-only, truncated, JSON-envelope, or reasoning-prefixed silent payloads. */
 export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
+  const trimmed = text?.trim();
   return (
     isSilentReplyText(text, token) ||
-    isSilentReplyJsonStringText(text, token) ||
-    isSilentReplyEnvelopeText(text, token) ||
+    // Final fragments need the underscore; a complete answer of "NO" is legitimate text.
+    (token === SILENT_REPLY_TOKEN &&
+      trimmed?.startsWith("NO_") === true &&
+      isSilentReplyPrefixText(trimmed, token)) ||
+    isSilentReplyJsonText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
 }
@@ -301,20 +279,11 @@ export function isSilentReplyPrefixText(
   const normalized = trimmed.toUpperCase();
   // Guard against suppressing natural-language "No..." text while still
   // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== normalized) {
+  if (trimmed !== normalized || normalized.length < 2 || !tokenUpper.startsWith(normalized)) {
     return false;
-  }
-  if (normalized.length < 2) {
-    return false;
-  }
-  if (!tokenUpper.startsWith(normalized)) {
-    return false;
-  }
-  if (normalized.includes("_")) {
-    return true;
   }
   // Full-token match is safe for any token.
-  if (normalized === tokenUpper) {
+  if (normalized.includes("_") || normalized === tokenUpper) {
     return true;
   }
   // For custom tokens containing non-letter characters (digits, hyphens),

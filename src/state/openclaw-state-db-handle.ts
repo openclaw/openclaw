@@ -1,49 +1,144 @@
-// The handle lease outlives transactions and maintenance, including close-time WAL work.
+// Native open/close and physical identity admission share one owner.
 import type { DatabaseSync } from "node:sqlite";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  registerNodeSqliteDisposeCallback,
+} from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import { acquireStateDatabaseHandleLease } from "../infra/state-database-coordinator.js";
+import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteWalWorkerMaintained } from "../infra/sqlite-wal-write-admission.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { OpenClawStateDatabase, StateDatabaseHandle } from "./openclaw-state-db-contract.js";
 
-const handleLeases = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseHandleLeases"),
-  () => new WeakMap<DatabaseSync, { release: () => void }>(),
+const identities = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateNativeIdentities"),
+  () => new WeakMap<DatabaseSync, DatabasePathIdentity>(),
 );
+
+/** Physical identity admitted by the native opener, never a later pathname observation. */
+export function readTrackedStateDatabaseIdentity(database: DatabaseSync) {
+  return identities.get(database);
+}
+
+type StateDatabaseOpenOptions = {
+  existingOnly?: boolean;
+  expectedIdentity?: string;
+  readOnly?: boolean;
+  timeout?: number;
+  enableForeignKeyConstraints?: false;
+};
 
 export function openTrackedStateDatabase(
   pathname: string,
-  options?: {
-    existingOnly?: boolean;
-    readOnly?: boolean;
-    timeout?: number;
-    enableForeignKeyConstraints?: false;
-  },
+  options?: StateDatabaseOpenOptions,
 ): DatabaseSync {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
+  const result = openTrackedStateDatabaseResult(pathname, options);
+  if (result.status === "unavailable") {
+    throw result.error;
+  }
+  return result.database;
+}
+
+/** Native open failure is an ordinary read failure; admitted handles retain their own cleanup. */
+export function openTrackedStateDatabaseResult(
+  pathname: string,
+  options?: StateDatabaseOpenOptions,
+): { status: "available"; database: DatabaseSync } | { status: "unavailable"; error: unknown } {
+  assertStateDatabaseAccessAllowed(pathname);
   try {
-    const location = options?.existingOnly ? resolveExistingSqliteFileUri(pathname) : pathname;
-    const database = options?.readOnly
-      ? openNodeSqliteDatabase(location, { readOnly: true, timeout: options.timeout })
-      : openNodeSqliteDatabase(location, {
-          enableForeignKeyConstraints: options?.enableForeignKeyConstraints,
+    if (options?.expectedIdentity !== undefined) {
+      assertExistingDatabaseIdentity(pathname, options.expectedIdentity);
+    }
+    const location =
+      options?.existingOnly || options?.expectedIdentity !== undefined
+        ? resolveExistingSqliteFileUri(pathname)
+        : pathname;
+    const nativeOptions = options?.readOnly
+      ? { readOnly: true, timeout: options.timeout }
+      : { enableForeignKeyConstraints: options?.enableForeignKeyConstraints };
+    const openingIdentity = readDatabasePathIdentitySync(pathname);
+    const database = withSqliteNativeOpen(() => openNodeSqliteDatabase(location, nativeOptions));
+    try {
+      assertStateDatabaseAccessAllowed(pathname);
+      if (openingIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(pathname, openingIdentity.key, openingIdentity.birthtime);
+      }
+      const identity = openingIdentity.key.startsWith("file:")
+        ? openingIdentity
+        : readDatabasePathIdentitySync(pathname);
+      if (identity.key.startsWith("file:")) {
+        identities.set(database, identity);
+        const unregister = registerNodeSqliteDisposeCallback(database, () => {
+          identities.delete(database);
+          unregister();
         });
-    handleLeases.set(database, lease);
-    return database;
+      }
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+    return { status: "available", database };
   } catch (error) {
-    lease.release();
-    throw error;
+    return { status: "unavailable", error };
   }
 }
 
 export function closeTrackedStateDatabase(database: DatabaseSync): void {
+  if (database.isOpen) {
+    database.close();
+  }
+}
+
+/** Finish all native close stages even when a previous stage failed. */
+export function closeStateDatabaseHandle(
+  database: StateDatabaseHandle,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): { errors: unknown[]; cleanupPending: boolean } {
+  const errors: unknown[] = [];
+  using seal = prepareSqliteDatabaseCleanClose(database.db);
+  const delegated = isSqliteWalWorkerMaintained(database.db);
+  const priorCheckpointError = database.walMaintenance?.health?.state === "error";
+  let checkpointed = false;
   try {
-    if (database.isOpen) {
-      database.close();
-    }
-  } finally {
-    // A failed close that leaves SQLite live cannot surrender file protection.
-    if (!database.isOpen) {
-      handleLeases.get(database)?.release();
-      handleLeases.delete(database);
+    checkpointed =
+      database.walMaintenance?.close(options) === true && options?.checkpointMode !== "PASSIVE";
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    clearNodeSqliteKyselyCacheForDatabase(database.db);
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    closeTrackedStateDatabase(database.db);
+  } catch (error) {
+    errors.push(error);
+  }
+  let cleanupPending = false;
+  if (!database.db.isOpen) {
+    try {
+      database.afterClose?.();
+    } catch (error) {
+      errors.push(error);
+      cleanupPending = true;
     }
   }
+  if (
+    errors.length === 0 &&
+    !cleanupPending &&
+    options?.checkpointMode !== "PASSIVE" &&
+    (checkpointed || (delegated && !priorCheckpointError))
+  ) {
+    // Native last-close can drain delegated WAL; the seal owner still requires empty journals.
+    seal.publish();
+  }
+  return { errors, cleanupPending };
 }

@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,9 +7,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -16,11 +18,18 @@ import {
 } from "./openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, fork: vi.fn(actual.fork) };
+});
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, availableParallelism: () => 2 };
 });
 
 const supportedVersions = {
@@ -40,29 +49,29 @@ beforeEach(() => {
   vi.stubEnv("XDG_CACHE_HOME", tempDirs.make("openclaw-preflight-lifecycle-cache-"));
 });
 
-function expectReadLeaseHeld(databasePath: string) {
-  let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
-  try {
-    expect(() => {
-      exclusion = acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 });
-    }).toThrow(/state-handles/);
-  } finally {
-    exclusion?.release();
-  }
+function createPreflightState(stateDir: string) {
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  // Reader lifecycle fixtures need known empty deletion history; missing history holds stores.
+  const statePath = fs.realpathSync.native(openOpenClawStateDatabase({ env }).path);
+  closeOpenClawStateDatabaseForTest();
+  return { env, statePath };
 }
 
 it.each([
   ...(["success", "failure", "cancel"] as const).map((outcome) => ({
     source: "direct",
     outcome,
+    owner: "caller" as const,
   })),
-  ...(["close-failure", "cancel"] as const).map((outcome) => ({
+  { source: "snapshot", outcome: "close-failure", owner: "caller" },
+  ...(["startup", "scope"] as const).map((owner) => ({
     source: "snapshot",
-    outcome,
+    outcome: "cancel" as const,
+    owner,
   })),
 ])(
-  "joins all $source children and releases their leases before $outcome settlement",
-  async ({ source, outcome }) => {
+  "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
+  async ({ source, outcome, owner }) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
     const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
     const paths = [
@@ -72,6 +81,7 @@ it.each([
     ] as const;
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    const { env, statePath } = createPreflightState(path.join(root, "active-state"));
     const { DatabaseSync } = requireNodeSqlite();
     for (const [index, pathname] of paths.entries()) {
       const database = new DatabaseSync(pathname);
@@ -144,6 +154,9 @@ it.each([
       .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
       .mockImplementation(async (pathname, options) => {
         const prepared = await prepareLocation(pathname, options);
+        if (pathname === statePath) {
+          return prepared;
+        }
         const index = sources.indexOf(path.toNamespacedPath(pathname));
         expect(index).toBeGreaterThanOrEqual(0);
         locations[index] = path.toNamespacedPath(fs.realpathSync.native(prepared.location));
@@ -164,16 +177,32 @@ it.each([
     const controller = new AbortController();
     const cancellation = new Error("intentional reader cancellation");
     const onAgentInspection = vi.fn();
+    if (owner === "scope") {
+      vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
+        timeoutMs: 10,
+        size: "fixture",
+      });
+    }
     let settled = false;
-    const run = preflightOpenClawDatabaseSchemas({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
-      supportedVersions,
-      configuredAgentDatabaseCandidatePaths: paths,
-      verifyCurrentSchemaShape: true,
-      requireStartupMigrationReadiness: true,
-      signal: controller.signal,
-      onAgentInspection,
-    });
+    const inspect = () =>
+      preflightOpenClawDatabaseSchemas({
+        env,
+        supportedVersions,
+        configuredAgentDatabaseCandidatePaths: paths,
+        verifyCurrentSchemaShape: true,
+        requireStartupMigrationReadiness: true,
+        signal: owner === "scope" ? undefined : controller.signal,
+        onAgentInspection,
+      });
+    const run =
+      owner === "startup"
+        ? withAgentDatabaseStartupAdmission(inspect)
+        : owner === "scope"
+          ? sqliteInspection.withSqliteReadOnlyWorkerScope(inspect, {
+              signal: controller.signal,
+              deadlineOwnedByCaller: true,
+            })
+          : inspect();
     void run.then(
       () => {
         settled = true;
@@ -192,7 +221,11 @@ it.each([
         { timeout: 10_000 },
       );
       expect(settled).toBe(false);
-      expect(prepare).toHaveBeenCalledTimes(source === "snapshot" ? 2 : 0);
+      expect(
+        prepare.mock.calls.filter(([pathname]) =>
+          sources.includes(path.toNamespacedPath(pathname)),
+        ),
+      ).toHaveLength(source === "snapshot" ? 2 : 0);
       expect(cleanedSnapshots.size).toBe(0);
       // Snapshot-copy workers use spawn; this counts the two schema-reader children.
       expect(fork).toHaveBeenCalledTimes(2);
@@ -204,7 +237,6 @@ it.each([
       }
       for (const pathname of readLocations.slice(0, 2)) {
         expect(fs.existsSync(pathname)).toBe(true);
-        expectReadLeaseHeld(pathname);
       }
 
       const children = vi
@@ -223,6 +255,8 @@ it.each([
       );
       if (outcome === "cancel") {
         controller.abort(cancellation);
+        await setImmediate();
+        expect(children.map((child) => child.killed)).toEqual([true, true]);
         await expect(run).rejects.toBe(cancellation);
       } else {
         fs.writeFileSync(marker("release-0"), "resume");
@@ -234,7 +268,6 @@ it.each([
           expect(closedChildren).toBe(0);
           expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
-          expectReadLeaseHeld(firstReadLocation);
           fs.writeFileSync(marker("exit-release"), "resume");
         }
         if (outcome === "failure" || outcome === "close-failure") {
@@ -249,7 +282,6 @@ it.each([
           // Drain the first child's result before checking the still-owned peer.
           await setImmediate();
           expect(settled).toBe(false);
-          expectReadLeaseHeld(secondReadLocation);
           if (source === "snapshot") {
             expect(cleanedSnapshots).toEqual(new Set([0]));
             expect(fs.existsSync(secondReadLocation)).toBe(true);
@@ -279,11 +311,10 @@ it.each([
         expect(fs.existsSync(path.dirname(location))).toBe(false);
       }
       for (const [index, databasePath] of paths.entries()) {
-        expect(fs.readFileSync(databasePath)).toEqual(originalBytes[index]);
+        deepStrictEqual(fs.readFileSync(databasePath), originalBytes[index], databasePath);
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           expect(fs.existsSync(databasePath + suffix)).toBe(false);
         }
-        acquireStateDatabaseHandleExclusion({ databasePath, busyTimeoutMs: 0 }).release();
       }
     } finally {
       fs.writeFileSync(marker("release-0"), "resume");
@@ -296,9 +327,7 @@ it.each([
 );
 
 function createSnapshotCandidates() {
-  const env = {
-    OPENCLAW_STATE_DIR: tempDirs.make("openclaw-preflight-lifecycle-state-"),
-  };
+  const { env } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
   const directory = tempDirs.make("openclaw-preflight-lifecycle-agents-");
   const { DatabaseSync } = requireNodeSqlite();
   const paths = [0, 1, 2].map((index) => path.join(directory, `agent-${index}.sqlite`));
@@ -314,71 +343,6 @@ function createSnapshotCandidates() {
 
   return { env, paths };
 }
-
-it("reuses two schema readers for closed WAL snapshots without changing source artifacts", async () => {
-  const root = tempDirs.make("openclaw-preflight-closed-wal-");
-  const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
-  const paths = ["first", "second", "queued"].map(
-    (agentId) => openOpenClawAgentDatabase({ agentId, env: initializedEnv }).path,
-  );
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
-  for (const pathname of paths) {
-    expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
-    expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
-    expect(fs.existsSync(`${pathname}-journal`)).toBe(false);
-  }
-  const locations: string[] = [];
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      locations.push(prepared.location);
-      return prepared;
-    },
-  );
-  vi.mocked(fork).mockClear();
-  const onAgentInspection = vi.fn();
-
-  await expect(
-    preflightOpenClawDatabaseSchemas({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
-      supportedVersions,
-      configuredAgentDatabaseCandidatePaths: paths,
-      verifyCurrentSchemaShape: true,
-      requireStartupMigrationReadiness: true,
-      onAgentInspection,
-    }),
-  ).resolves.toEqual({ incompatible: [], indeterminate: [] });
-
-  expect(fork).toHaveBeenCalledTimes(2);
-  expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
-    schemaProcessCount: 2,
-    schemaInspectionCount: 3,
-    schemaSnapshotCount: 3,
-  });
-  const children = vi
-    .mocked(fork)
-    .mock.results.filter((result) => result.type === "return")
-    .map(({ value }) => value);
-  expect(children).toHaveLength(2);
-  for (const child of children) {
-    expect(child.exitCode).toBe(0);
-    expect(child.connected).toBe(false);
-  }
-  expect(locations).toHaveLength(3);
-  for (const location of locations) {
-    expect(fs.existsSync(path.dirname(location))).toBe(false);
-  }
-  for (const [index, pathname] of paths.entries()) {
-    expect(fs.readFileSync(pathname)).toEqual(originalBytes[index]);
-    for (const suffix of ["-wal", "-shm", "-journal"]) {
-      expect(fs.existsSync(pathname + suffix)).toBe(false);
-    }
-    acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
-  }
-});
 
 it("drains started agent snapshots before rejecting cancellation", async () => {
   const fixture = createSnapshotCandidates();

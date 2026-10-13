@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   mintMessageActionTurnCapability,
@@ -14,14 +16,165 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createMessageTool } from "./message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
 
-const scheduledWriteActions = ["edit", "delete", "pin", "unpin"] as const;
+const target = "channel:100000000000000001";
 
-async function observeScheduledAccountSelection(
-  action: (typeof scheduledWriteActions)[number] | "send",
-  accountId?: string,
-) {
+it.each([
+  { scheduled: true, currentChannelProvider: "signal", actions: ["poll", "send"] },
+  { scheduled: true, currentChannelProvider: undefined, actions: ["broadcast", "poll", "send"] },
+  { scheduled: false, currentChannelProvider: "signal", actions: ["send"] },
+  { scheduled: false, currentChannelProvider: undefined, actions: ["broadcast", "send"] },
+])(
+  "keeps configured-channel schemas only for admitted scheduled turns ($scheduled, $currentChannelProvider)",
+  async ({ scheduled, currentChannelProvider, actions }) => {
+    const identity = {
+      agentId: "main",
+      runId: "scheduled-schema-run",
+      sessionKey: "agent:main:cron:scheduled-schema:run:fixture",
+    };
+    const channels: PreparedMessageToolCatalog["channels"] = [
+      {
+        id: "signal",
+        reconcilesUnknownSend: false,
+        actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+      },
+      {
+        id: "discord",
+        reconcilesUnknownSend: false,
+        actions: { describeMessageTool: () => ({ actions: ["send", "poll"] }) },
+      },
+    ];
+    const config: OpenClawConfig = {
+      bindings: [{ agentId: "main", match: { channel: "signal" } }],
+      channels: { signal: { enabled: true }, discord: { enabled: true } },
+    };
+    const capability = scheduled
+      ? mintMessageActionTurnCapability({
+          ...identity,
+          scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent() {} },
+        })
+      : undefined;
+    try {
+      setRuntimeConfigSnapshot(config);
+      const tool = await createMessageToolAsync({
+        config,
+        agentId: identity.agentId,
+        agentSessionKey: identity.sessionKey,
+        runId: identity.runId,
+        currentChannelProvider,
+        messageActionTurnCapability: capability,
+        admitScheduledInvocation: () => config,
+        preparedMessageToolCatalog: {
+          version: 1,
+          channels,
+          getChannel: (id) => channels.find((channel) => channel.id === id),
+        },
+      });
+      expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+      for (const property of ["pollQuestion", "pollOption", "pollMulti"]) {
+        if (scheduled) {
+          expect(tool.parameters).toHaveProperty(`properties.${property}`);
+        } else {
+          expect(tool.parameters).not.toHaveProperty(`properties.${property}`);
+        }
+      }
+    } finally {
+      revokeMessageActionTurnCapability(capability);
+      clearRuntimeConfigSnapshot();
+    }
+  },
+);
+
+it("separates generic sends, source reads, and simulated writes", async () => {
+  const registry = captureActivePluginRegistrySnapshot();
+  const identity = {
+    agentId: "main",
+    runId: "source-withdrawal-run",
+    sessionKey: "agent:main:cron:source-withdrawal:run:fixture",
+  };
+  let messageCurrent = true;
+  let sourceCurrent = true;
+  const assertMessageCurrent = vi.fn(() => {
+    if (!messageCurrent) {
+      throw new Error("message authority expired");
+    }
+  });
+  const assertSourceCurrent = vi.fn(() => {
+    if (!sourceCurrent) {
+      throw new Error("source authorization expired");
+    }
+  });
+  const capability = mintMessageActionTurnCapability({
+    ...identity,
+    scheduled: {
+      policy: { version: 1, mode: "trusted" },
+      assertCurrent: assertMessageCurrent,
+      assertSourceCurrent,
+    },
+  });
+  const outboundBoundary = new Error("generic send reached outbound dispatch");
+  try {
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: { describeMessageTool: () => ({ actions: ["send", "read"] }) },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+    const config: OpenClawConfig = { channels: { discord: { token: "fixture-token" } } };
+    setRuntimeConfigSnapshot(config);
+    const tool = createMessageTool({
+      config,
+      agentId: identity.agentId,
+      agentSessionKey: identity.sessionKey,
+      runId: identity.runId,
+      messageActionTurnCapability: capability,
+      admitScheduledInvocation: () => config,
+      runMessageAction: async (input) => {
+        if (input.params.dryRun === true) {
+          messageCurrent = false;
+          return {
+            kind: "send",
+            channel: "discord",
+            action: "send",
+            to: "channel:100000000000000001",
+            handledBy: "plugin",
+            payload: { ok: true },
+            dryRun: true,
+          };
+        }
+        throw outboundBoundary;
+      },
+    });
+
+    const execute = (callId: string, params: Record<string, unknown>) =>
+      tool.execute(callId, { channel: "discord", target, ...params });
+    sourceCurrent = false;
+    await expect(
+      execute("generic-send", { action: "send", message: "Still authorized" }),
+    ).rejects.toBe(outboundBoundary);
+    await expect(execute("source-read", { action: "read" })).rejects.toThrow(
+      "source authorization expired",
+    );
+    expect(assertMessageCurrent).toHaveBeenCalled();
+    expect(assertSourceCurrent).toHaveBeenCalledOnce();
+    await expect(
+      execute("scheduled-dry-run", {
+        action: "send",
+        message: "Simulate only",
+        dryRun: true,
+      }),
+    ).rejects.toThrow("message authority expired");
+  } finally {
+    revokeMessageActionTurnCapability(capability);
+    restoreActivePluginRegistrySnapshot(registry);
+    clearRuntimeConfigSnapshot();
+  }
+});
+
+it.each([
+  ["edit", "ops"],
+  ["send", "delivery"],
+] as const)("selects the scheduled %s account %s", async (action, expectedAccountId) => {
   const registry = captureActivePluginRegistrySnapshot();
   const identity = {
     agentId: "main",
@@ -51,7 +204,7 @@ async function observeScheduledAccountSelection(
           resolveAccount: (cfg, id) => cfg.channels?.discord?.accounts?.[id ?? "delivery"],
         },
       }),
-      actions: { describeMessageTool: () => ({ actions: ["send", ...scheduledWriteActions] }) },
+      actions: { describeMessageTool: () => ({ actions: ["send", "edit"] }) },
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     const config: OpenClawConfig = {
@@ -71,6 +224,7 @@ async function observeScheduledAccountSelection(
     const secretScopes: Array<ReadonlySet<string> | undefined> = [];
     const defaultAccounts: Array<string | undefined> = [];
     const outboundBoundary = new Error("account selection observed at the outbound boundary");
+    setRuntimeConfigSnapshot(config);
     const tool = createMessageTool({
       config,
       agentId: identity.agentId,
@@ -100,51 +254,20 @@ async function observeScheduledAccountSelection(
       tool.execute("scheduled-write-account", {
         action,
         channel: "discord",
-        target: "channel:100000000000000001",
+        target,
         ...(action === "send" ? {} : { messageId: "100000000000000002" }),
-        ...(action === "edit" || action === "send" ? { message: "Updated scheduled message" } : {}),
-        ...(accountId ? { accountId } : {}),
+        message: "Updated scheduled message",
       }),
     ).rejects.toBe(outboundBoundary);
-    return { secretScopes, defaultAccounts };
+    expect({ secretScopes, defaultAccounts }).toEqual({
+      secretScopes: [
+        new Set(["channels.discord.token", `channels.discord.accounts.${expectedAccountId}.token`]),
+      ],
+      defaultAccounts: [expectedAccountId],
+    });
   } finally {
     revokeMessageActionTurnCapability(capability);
     restoreActivePluginRegistrySnapshot(registry);
+    clearRuntimeConfigSnapshot();
   }
-}
-
-describe("scheduled message write account selection", () => {
-  it.each([
-    ...scheduledWriteActions.map((action) => ({
-      action,
-      accountId: undefined,
-      selection: "an omitted account",
-      expectedAccountId: "ops",
-    })),
-    {
-      action: "edit" as const,
-      accountId: "ops",
-      selection: "an explicit matching account",
-      expectedAccountId: "ops",
-    },
-    {
-      action: "send" as const,
-      accountId: undefined,
-      selection: "the delivery default",
-      expectedAccountId: "delivery",
-    },
-  ])(
-    "selects $expectedAccountId for $action with $selection",
-    async ({ action, accountId, expectedAccountId }) => {
-      expect(await observeScheduledAccountSelection(action, accountId)).toEqual({
-        secretScopes: [
-          new Set([
-            "channels.discord.token",
-            `channels.discord.accounts.${expectedAccountId}.token`,
-          ]),
-        ],
-        defaultAccounts: [expectedAccountId],
-      });
-    },
-  );
 });

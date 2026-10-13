@@ -189,6 +189,47 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
+  it("copies only valid ready model order through the catalog boundary", async () => {
+    const outcomes: Array<{ status: string; modelOrder?: readonly string[] }> = [];
+    const provider: ProviderPlugin = {
+      id: "demo",
+      label: "Demo",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {},
+          outcomes: [
+            {
+              provider: "demo",
+              status: "ready",
+              modelOrder: [" second ", "", "second", "first", 42],
+            },
+            {
+              provider: "demo",
+              profileId: "demo:stale",
+              status: "unavailable",
+              modelOrder: ["stale"],
+            },
+          ] as never,
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "demo", status: "ready", modelOrder: ["second", "first"] },
+      { provider: "demo", profileId: "demo:stale", status: "unavailable" },
+    ]);
+  });
+
   it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
     const outcomes: Array<{ profileId?: string; status: string }> = [];
     const provider: ProviderPlugin = {

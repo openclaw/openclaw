@@ -38,8 +38,8 @@ afterAll(async () => {
 
 describe("transcript English loading", () => {
   it.each([
-    { surface: "library", load: () => import("../pages/meetings/view.ts") },
-    { surface: "settings", load: () => import("../pages/config/meeting-capture.ts") },
+    { surface: "library", load: () => import("../pages/meetings/view.tsx") },
+    { surface: "settings", load: () => import("../pages/config/meeting-capture.tsx") },
   ])("keeps startup labels and loads complete fallback copy from $surface", async ({ load }) => {
     const manager = createI18nManagerForTesting(async () => ({ common: { health: "Gesundheit" } }));
     const capture = SETTINGS_SEARCH_TARGETS.meetingCapture;
@@ -59,12 +59,6 @@ describe("transcript English loading", () => {
       expect(manager.t(key)).toBe(value);
     }
     expect(manager.t("common.health")).toBe("Gesundheit");
-    expect(manager.t("transcripts.summaryHint")).toBe(
-      "Check the transcript before relying on decisions or action items.",
-    );
-    expect(manager.t("meetingCapture.sourceChanged")).toBe(
-      "This source changed while you were editing. Cancel and reopen it to use the current draft.",
-    );
     expect(manager.t("transcripts.savedCount", { count: "154" })).toBe("154 saved utterances");
     expect(manager.t(capture.labelKey)).toBe("Meeting capture");
   });

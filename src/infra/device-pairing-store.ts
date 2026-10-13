@@ -1,11 +1,8 @@
 // SQLite row mapping for device pairing and bootstrap-token snapshots.
-// Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
+// The worker owns runtime mutations; native callers hold offline or boot custody.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  resolvePairingSetupAccess,
-  type PairingSetupAccess,
-} from "../shared/device-bootstrap-profile.js";
-import { isNodeHostStats } from "../shared/node-host-stats.js";
+import { resolvePairingSetupAccess } from "../shared/device-bootstrap-profile.js";
 import {
   ensureDevicePairSetupBootstrapSchema,
   ensureDevicePairSetupCompletionSchema,
@@ -13,8 +10,6 @@ import {
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
-  DevicePairingPaired,
-  DevicePairingPending,
   DeviceBootstrapTokens,
 } from "../state/openclaw-state-db.generated.js";
 import {
@@ -23,30 +18,44 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.js";
+import { sha256Base64Url } from "./crypto-digest.js";
+import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
+import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
+import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
+import { invalidateDevicePairingNodeSnapshot } from "./device-pairing-publication.js";
+import type { CloudWorkerSetupCompletionPublication } from "./device-pairing-read.types.js";
+import {
+  toJsonColumn,
+  toPendingRow,
+  fromPendingRow,
+  toPairedRow,
+  fromPairedRow,
+  toBootstrapRow,
+  fromBootstrapRow,
+  fromSetupCompletionRow,
+} from "./device-pairing-row-mapping.js";
+import {
+  invalidateDevicePairingStoreCache,
+  readCachedDevicePairingStoreSnapshot,
+} from "./device-pairing-store-cache.js";
 import type {
-  DeviceAuthToken,
   DeviceBootstrapTokenRecord,
   DevicePairingPendingRecord,
+  DevicePairingStoreState,
   DevicePairSetupCompletionRecord,
   PairedDevice,
-  PairedDeviceApprovalKind,
-  PairedDeviceNodeSurface,
-  PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { readSqliteDataVersion } from "./node-sqlite.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
-export type DevicePairingStoreState = {
-  pendingById: Record<string, DevicePairingPendingRecord>;
-  pairedByDeviceId: Record<string, PairedDevice>;
-};
+export type { DevicePairingStoreState } from "./device-pairing.types.js";
 
 const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
   "device_id",
@@ -61,77 +70,42 @@ const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
   "ts",
 ] as const satisfies readonly (keyof DeviceBootstrapTokens)[];
 
-type DevicePairingStoreValidityToken = {
-  dataVersion: number;
-  totalChanges: number;
-};
-
-type DevicePairingStoreCache = {
-  connection: DatabaseSync;
-  path: string;
-  state: DevicePairingStoreState;
-  validityToken: DevicePairingStoreValidityToken;
-};
-
 type DevicePairingStoreMutation<T> = {
   mutated: boolean;
   value: T;
 };
 
-type PairedDeviceNodeSurfaceUpdate<T> =
-  | { value: T; persist: false }
-  | { value: T; persist: true; nodeSurface: PairedDeviceNodeSurface };
+type PairedDeviceUpdate<T> = {
+  value: T;
+  patch?: Partial<PairedDeviceMetadataPatch & Pick<PairedDevice, "tokens" | "nodeSurface">>;
+};
 
-type PairedDevicePresenceUpdate<T> =
-  | { value: T; persist: false }
-  | {
-      value: T;
-      persist: true;
-      lastSeenAtMs: number;
-      lastSeenReason: string;
-    };
+const boundDatabase = new AsyncLocalStorage<{
+  database: OpenClawStateDatabase;
+  paired?: Record<string, PairedDevice>;
+}>();
 
-// One materialized pairing snapshot avoids rescanning both tables for every node catalog read.
-// The connection token detects other-process writes, and store-owned writes clear it post-commit;
-// without both paths, Gateway and CLI pairing mutations could leave node.list serving stale rows.
-let devicePairingStoreCache: DevicePairingStoreCache | undefined;
+/** Keep nested domain kernels on the broker's admitted physical connection. */
+export function withDevicePairingStoreDatabase<T>(
+  database: OpenClawStateDatabase,
+  operate: () => T,
+  paired?: Record<string, PairedDevice>,
+): T {
+  return boundDatabase.run({ database, paired }, operate);
+}
+
+function transactionPairedRecords(db: DatabaseSync): Record<string, PairedDevice> | undefined {
+  const bound = boundDatabase.getStore();
+  return bound?.database.db === db ? bound.paired : undefined;
+}
 
 /** Route an explicit pairing base dir (tests, alternate state roots) to that dir's DB. */
 function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateDatabaseOptions {
+  const database = boundDatabase.getStore()?.database;
+  if (database) {
+    return { database, path: database.path, env: getSqliteWorkerStateContext().environment };
+  }
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function readTotalChanges(database: DatabaseSync): number {
-  const row = database.prepare("SELECT total_changes() AS value").get() as { value?: unknown };
-  if (typeof row.value !== "number") {
-    throw new Error("SQLite did not return a numeric total_changes() value");
-  }
-  return row.value;
-}
-
-function readDevicePairingStoreValidityToken(
-  database: DatabaseSync,
-): DevicePairingStoreValidityToken {
-  return {
-    dataVersion: readSqliteDataVersion(database),
-    totalChanges: readTotalChanges(database),
-  };
-}
-
-function devicePairingStoreValidityTokensEqual(
-  left: DevicePairingStoreValidityToken,
-  right: DevicePairingStoreValidityToken,
-): boolean {
-  return left.dataVersion === right.dataVersion && left.totalChanges === right.totalChanges;
-}
-
-function invalidateDevicePairingStoreCache(database: OpenClawStateDatabase): void {
-  if (
-    devicePairingStoreCache?.connection === database.db &&
-    devicePairingStoreCache.path === database.path
-  ) {
-    devicePairingStoreCache = undefined;
-  }
 }
 
 function runDevicePairingStoreMutation<T>(
@@ -140,219 +114,24 @@ function runDevicePairingStoreMutation<T>(
 ): T {
   const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
   const database = openOpenClawStateDatabase(databaseOptions);
-  const result = runOpenClawStateWriteTransaction(mutate, { ...databaseOptions, database });
-  if (result.mutated) {
-    invalidateDevicePairingStoreCache(database);
-  }
-  return result.value;
-}
-
-// Read-back allowlist for the approved_via column. The Record type forces
-// every PairedDeviceApprovalKind to appear here at compile time: omit one and
-// this object is a type error, instead of the stored provenance silently
-// dropping to undefined on load (which mergeApprovalKind treats as a legacy
-// record). Keep this in sync when adding an approval kind.
-const APPROVAL_KIND_MEMBERS = {
-  owner: true,
-  silent: true,
-  "trusted-cidr": true,
-  "trusted-proxy": true,
-  "ssh-verified": true,
-  bootstrap: true,
-} satisfies Record<PairedDeviceApprovalKind, true>;
-const APPROVAL_KINDS = new Set(Object.keys(APPROVAL_KIND_MEMBERS));
-
-function toJsonColumn(value: unknown): string | null {
-  return value === undefined ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function fromJsonColumn<T>(value: string | null): T | undefined {
-  return value === null ? undefined : (JSON.parse(value) as T);
-}
-
-function toBooleanColumn(value: boolean | undefined): number | null {
-  return value === undefined ? null : value ? 1 : 0;
-}
-
-// Column null means the optional record key was absent; keep it absent on read
-// so records round-trip byte-identical to the retired JSON store.
-function optional<K extends string, V>(key: K, value: V | null): { [P in K]?: V } {
-  return value === null ? {} : ({ [key]: value } as { [P in K]: V });
-}
-
-function toPendingRow(record: DevicePairingPendingRecord): DevicePairingPending {
-  return {
-    request_id: record.requestId,
-    device_id: record.deviceId,
-    public_key: record.publicKey,
-    display_name: record.displayName ?? null,
-    platform: record.platform ?? null,
-    device_family: record.deviceFamily ?? null,
-    client_id: record.clientId ?? null,
-    client_mode: record.clientMode ?? null,
-    browser_origin: record.browserOrigin ?? null,
-    role: record.role ?? null,
-    roles_json: toJsonColumn(record.roles),
-    scopes_json: toJsonColumn(record.scopes),
-    remote_ip: record.remoteIp ?? null,
-    silent: toBooleanColumn(record.silent),
-    is_repair: toBooleanColumn(record.isRepair),
-    ts: record.ts,
-    refreshed_at_ms: record.refreshedAtMs ?? null,
-  };
-}
-
-function fromPendingRow(row: DevicePairingPending): DevicePairingPendingRecord {
-  return {
-    requestId: row.request_id,
-    deviceId: row.device_id,
-    publicKey: row.public_key,
-    ...optional("displayName", row.display_name),
-    ...optional("platform", row.platform),
-    ...optional("deviceFamily", row.device_family),
-    ...optional("clientId", row.client_id),
-    ...optional("clientMode", row.client_mode),
-    ...optional("browserOrigin", row.browser_origin),
-    ...optional("role", row.role),
-    ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
-    ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),
-    ...optional("remoteIp", row.remote_ip),
-    ...optional("silent", row.silent === null ? null : row.silent !== 0),
-    ...optional("isRepair", row.is_repair === null ? null : row.is_repair !== 0),
-    ts: row.ts,
-    ...optional("refreshedAtMs", row.refreshed_at_ms),
-  };
-}
-
-function toPairedRow(device: PairedDevice): DevicePairingPaired {
-  return {
-    device_id: device.deviceId,
-    public_key: device.publicKey,
-    display_name: device.displayName ?? null,
-    operator_label: device.operatorLabel ?? null,
-    platform: device.platform ?? null,
-    device_family: device.deviceFamily ?? null,
-    client_id: device.clientId ?? null,
-    client_mode: device.clientMode ?? null,
-    browser_origin: device.browserOrigin ?? null,
-    role: device.role ?? null,
-    roles_json: toJsonColumn(device.roles),
-    scopes_json: toJsonColumn(device.scopes),
-    approved_scopes_json: toJsonColumn(device.approvedScopes),
-    remote_ip: device.remoteIp ?? null,
-    tokens_json: toJsonColumn(device.tokens),
-    approved_via: device.approvedVia ?? null,
-    node_surface_json: toJsonColumn(device.nodeSurface),
-    pending_node_surface_json: toJsonColumn(device.pendingNodeSurface),
-    created_at_ms: device.createdAtMs,
-    approved_at_ms: device.approvedAtMs,
-    last_seen_at_ms: device.lastSeenAtMs ?? null,
-    last_seen_reason: device.lastSeenReason ?? null,
-  };
-}
-
-function fromApprovedViaColumn(value: string | null): PairedDeviceApprovalKind | null {
-  return value !== null && APPROVAL_KINDS.has(value) ? (value as PairedDeviceApprovalKind) : null;
-}
-
-// Same compile-time exhaustiveness contract as APPROVAL_KIND_MEMBERS: the
-// completion access level is presented to the operator, so an unrecognized
-// stored value must fall back to the least-privilege label, never leak through.
-const PAIRING_SETUP_ACCESS_MEMBERS = {
-  full: true,
-  limited: true,
-  node: true,
-} satisfies Record<PairingSetupAccess, true>;
-const PAIRING_SETUP_ACCESS_VALUES = new Set(Object.keys(PAIRING_SETUP_ACCESS_MEMBERS));
-
-function fromSetupCompletionAccessColumn(value: string): PairingSetupAccess {
-  return PAIRING_SETUP_ACCESS_VALUES.has(value) ? (value as PairingSetupAccess) : "limited";
-}
-
-function fromSetupCompletionDeliveryStateColumn(
-  value: string,
-): DevicePairSetupCompletionRecord["deliveryState"] {
-  return value === "confirmed" ? "confirmed" : "uncertain";
-}
-
-function fromPairedRow(row: DevicePairingPaired): PairedDevice {
-  const nodeSurface = fromJsonColumn<PairedDeviceNodeSurface>(row.node_surface_json);
-  if (nodeSurface?.lastHostStats !== undefined && !isNodeHostStats(nodeSurface.lastHostStats)) {
-    delete nodeSurface.lastHostStats;
-  }
-  return {
-    deviceId: row.device_id,
-    publicKey: row.public_key,
-    ...optional("displayName", row.display_name),
-    ...optional("operatorLabel", row.operator_label),
-    ...optional("platform", row.platform),
-    ...optional("deviceFamily", row.device_family),
-    ...optional("clientId", row.client_id),
-    ...optional("clientMode", row.client_mode),
-    ...optional("browserOrigin", row.browser_origin),
-    ...optional("role", row.role),
-    ...optional("roles", fromJsonColumn<string[]>(row.roles_json) ?? null),
-    ...optional("scopes", fromJsonColumn<string[]>(row.scopes_json) ?? null),
-    ...optional("approvedScopes", fromJsonColumn<string[]>(row.approved_scopes_json) ?? null),
-    ...optional("remoteIp", row.remote_ip),
-    ...optional("tokens", fromJsonColumn<Record<string, DeviceAuthToken>>(row.tokens_json) ?? null),
-    ...optional("approvedVia", fromApprovedViaColumn(row.approved_via)),
-    ...optional("nodeSurface", nodeSurface ?? null),
-    ...optional(
-      "pendingNodeSurface",
-      fromJsonColumn<PairedDevicePendingNodeSurface>(row.pending_node_surface_json) ?? null,
-    ),
-    createdAtMs: row.created_at_ms,
-    approvedAtMs: row.approved_at_ms,
-    ...optional("lastSeenAtMs", row.last_seen_at_ms),
-    ...optional("lastSeenReason", row.last_seen_reason),
-  };
-}
-
-function toBootstrapRow(
-  tokenKey: string,
-  record: DeviceBootstrapTokenRecord,
-): DeviceBootstrapTokens {
-  return {
-    token_key: tokenKey,
-    token: record.token,
-    setup_id: record.setupId ?? null,
-    ts: record.ts,
-    device_id: record.deviceId ?? null,
-    public_key: record.publicKey ?? null,
-    profile_json: toJsonColumn(record.profile),
-    redeemed_profile_json: toJsonColumn(record.redeemedProfile),
-    pending_profile_json: toJsonColumn(record.pendingProfile),
-    issued_at_ms: record.issuedAtMs,
-    last_used_at_ms: record.lastUsedAtMs ?? null,
-  };
-}
-
-function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
-  return {
-    token: row.token,
-    ...optional("setupId", row.setup_id),
-    ts: row.ts,
-    ...optional("deviceId", row.device_id),
-    ...optional("publicKey", row.public_key),
-    ...optional(
-      "profile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["profile"]>(row.profile_json) ?? null,
-    ),
-    ...optional(
-      "redeemedProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["redeemedProfile"]>(row.redeemed_profile_json) ??
-        null,
-    ),
-    ...optional(
-      "pendingProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["pendingProfile"]>(row.pending_profile_json) ??
-        null,
-    ),
-    issuedAtMs: row.issued_at_ms,
-    ...optional("lastUsedAtMs", row.last_used_at_ms),
-  };
+  return runOpenClawStateWriteTransaction(
+    (transactionDatabase) => {
+      const result = mutate(transactionDatabase);
+      if (result.mutated) {
+        // Transaction-local reads bypass the cache; only real commits invalidate it.
+        stageSqliteTransactionState(transactionDatabase.db, {
+          stage: () => undefined,
+          rollback: () => undefined,
+          commit: () => {
+            invalidateDevicePairingStoreCache(transactionDatabase);
+            invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
+          },
+        });
+      }
+      return result.value;
+    },
+    { ...databaseOptions, database },
+  );
 }
 
 export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): DevicePairingStoreState {
@@ -364,43 +143,31 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
   ).rows) {
     pendingById[row.request_id] = fromPendingRow(row);
   }
-  const pairedByDeviceId = Object.fromEntries(
+  return { pendingById, pairedByDeviceId: readPairedDevicePairingRecordsFromDatabase(db) };
+}
+
+export function readPairedDevicePairingRecordsFromDatabase(
+  db: DatabaseSync,
+): Record<string, PairedDevice> {
+  const paired = transactionPairedRecords(db);
+  if (paired) {
+    return structuredClone(paired);
+  }
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  return Object.fromEntries(
     executeSqliteQuerySync(db, kysely.selectFrom("device_pairing_paired").selectAll()).rows.map(
       (row) => [row.device_id, fromPairedRow(row)],
     ),
   );
-  return { pendingById, pairedByDeviceId };
 }
 
-/** Load the full pending + paired device snapshot from the shared state DB. */
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
   const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  const { db } = database;
-  const validityToken = readDevicePairingStoreValidityToken(db);
-  if (
-    devicePairingStoreCache?.connection === db &&
-    devicePairingStoreCache.path === database.path &&
-    devicePairingStoreValidityTokensEqual(devicePairingStoreCache.validityToken, validityToken)
-  ) {
-    return structuredClone(devicePairingStoreCache.state);
-  }
-  const state = readDevicePairingStoreStateFromDatabase(db);
-  devicePairingStoreCache = {
-    connection: db,
-    path: database.path,
-    state: structuredClone(state),
-    validityToken,
-  };
-  return state;
-}
-
-/** Load one paired-device row without materializing either pairing table. */
-export function loadPairedDevicePairingStoreRecord(
-  deviceId: string,
-  baseDir?: string,
-): PairedDevice | null {
-  const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  return loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId);
+  return structuredClone(
+    readCachedDevicePairingStoreSnapshot(database.db, database.path, () =>
+      readDevicePairingStoreStateFromDatabase(database.db),
+    ).state,
+  );
 }
 
 /** Load one paired-device row from an existing shared-state transaction. */
@@ -411,6 +178,12 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
   const normalizedDeviceId = deviceId.trim();
   if (!normalizedDeviceId) {
     return null;
+  }
+  const paired = transactionPairedRecords(db);
+  if (paired) {
+    return Object.hasOwn(paired, normalizedDeviceId)
+      ? structuredClone(paired[normalizedDeviceId]!)
+      : null;
   }
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -423,65 +196,48 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
   return row ? fromPairedRow(row) : null;
 }
 
-/** Read, validate, and update one paired node surface in a single cross-process transaction. */
-export function updatePairedDeviceNodeSurfaceInTransaction<T>(
+/** Read and patch one device under the worker's transaction and commit admission. */
+export function updatePairedDeviceInTransaction<T>(
   deviceId: string,
-  baseDir: string | undefined,
-  update: (device: PairedDevice | null) => PairedDeviceNodeSurfaceUpdate<T>,
+  update: (device: PairedDevice | null) => PairedDeviceUpdate<T>,
 ): T {
-  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
+  return runDevicePairingStoreMutation(undefined, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
-    const device = normalizedDeviceId
-      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
-      : null;
+    const device = loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId);
+    // Kernels may mutate their borrowed row while building the patch.
+    const stored = device ? toPairedRow(device) : undefined;
     const result = update(device);
-    if (!result.persist) {
+    const patch = result.patch;
+    if (!patch || Object.keys(patch).length === 0) {
       return { mutated: false, value: result.value };
     }
     if (!device) {
-      throw new Error("cannot update a missing paired-device node surface");
+      throw new Error("cannot update a missing paired device");
     }
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    const columns = {
+      ...("displayName" in patch ? { display_name: patch.displayName ?? null } : {}),
+      ...("operatorLabel" in patch ? { operator_label: patch.operatorLabel ?? null } : {}),
+      ...("platform" in patch ? { platform: patch.platform ?? null } : {}),
+      ...("clientId" in patch ? { client_id: patch.clientId ?? null } : {}),
+      ...("clientMode" in patch ? { client_mode: patch.clientMode ?? null } : {}),
+      ...("remoteIp" in patch ? { remote_ip: patch.remoteIp ?? null } : {}),
+      ...("lastSeenAtMs" in patch ? { last_seen_at_ms: patch.lastSeenAtMs ?? null } : {}),
+      ...("lastSeenReason" in patch ? { last_seen_reason: patch.lastSeenReason ?? null } : {}),
+      ...("tokens" in patch ? { tokens_json: toJsonColumn(patch.tokens) } : {}),
+      ...("nodeSurface" in patch ? { node_surface_json: toJsonColumn(patch.nodeSurface) } : {}),
+    };
     executeSqliteQuerySync(
       db,
       kysely
         .updateTable("device_pairing_paired")
-        .set({ node_surface_json: toJsonColumn(result.nodeSurface) })
+        .set(columns)
         .where("device_id", "=", normalizedDeviceId),
     );
-    return { mutated: true, value: result.value };
-  });
-}
-
-/** Read, validate, and update one paired-device presence row in one transaction. */
-export function updatePairedDevicePresenceInTransaction<T>(
-  deviceId: string,
-  baseDir: string | undefined,
-  update: (device: PairedDevice | null) => PairedDevicePresenceUpdate<T>,
-): T {
-  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
-    const normalizedDeviceId = deviceId.trim();
-    const device = normalizedDeviceId
-      ? loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId)
-      : null;
-    const result = update(device);
-    if (!result.persist) {
-      return { mutated: false, value: result.value };
+    const paired = transactionPairedRecords(db);
+    if (paired && stored) {
+      paired[normalizedDeviceId] = fromPairedRow({ ...stored, ...columns });
     }
-    if (!device) {
-      throw new Error("cannot update presence for a missing paired device");
-    }
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("device_pairing_paired")
-        .set({
-          last_seen_at_ms: result.lastSeenAtMs,
-          last_seen_reason: result.lastSeenReason,
-        })
-        .where("device_id", "=", normalizedDeviceId),
-    );
     return { mutated: true, value: result.value };
   });
 }
@@ -498,6 +254,8 @@ export function persistDevicePairingStoreState(
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    const pairedRows =
+      target !== "pending" ? Object.values(state.pairedByDeviceId).map(toPairedRow) : undefined;
     if (target !== "paired") {
       executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
       const rows = Object.values(state.pendingById).map(toPendingRow);
@@ -505,11 +263,10 @@ export function persistDevicePairingStoreState(
         executeSqliteQuerySync(db, kysely.insertInto("device_pairing_pending").values(rows));
       }
     }
-    if (target !== "pending") {
+    if (pairedRows) {
       executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_paired"));
-      const rows = Object.values(state.pairedByDeviceId).map(toPairedRow);
-      if (rows.length > 0) {
-        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(rows));
+      if (pairedRows.length > 0) {
+        executeSqliteQuerySync(db, kysely.insertInto("device_pairing_paired").values(pairedRows));
       }
     }
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
@@ -518,15 +275,34 @@ export function persistDevicePairingStoreState(
     if (options?.retiredNodeToken) {
       clearDeviceAuthTokenFromDatabase(db, { ...options.retiredNodeToken, role: "node" });
     }
+    const paired = transactionPairedRecords(db);
+    if (paired && pairedRows) {
+      for (const deviceId of Object.keys(paired)) {
+        delete paired[deviceId];
+      }
+      for (const row of pairedRows) {
+        Object.defineProperty(paired, row.device_id, {
+          value: fromPairedRow(row),
+          configurable: true,
+          enumerable: true,
+          writable: true,
+        });
+      }
+    }
     return { mutated: true, value: undefined };
   });
 }
 
-/** Load all bootstrap token records keyed by token key. */
 export function loadDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): Record<string, DeviceBootstrapTokenRecord> {
   const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
+  return readDeviceBootstrapTokenRecordsFromDatabase(db);
+}
+
+export function readDeviceBootstrapTokenRecordsFromDatabase(
+  db: DatabaseSync,
+): Record<string, DeviceBootstrapTokenRecord> {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const state: Record<string, DeviceBootstrapTokenRecord> = {};
   const hasSetupId = tableHasColumn(db, "device_bootstrap_tokens", "setup_id");
@@ -577,11 +353,14 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
   token: string;
   deviceId: string;
   completedAtMs: number;
-  oldestValidIssuedAtMs: number;
+  nowMs: number;
   retentionNowMs: number;
   retainUntilMs: number;
-  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
-  baseDir?: string;
+  pairedDeviceMatches?: (
+    device: PairedDevice | null,
+    record: DeviceBootstrapTokenRecord,
+  ) => boolean;
+  recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
   const deviceId = params.deviceId.trim();
@@ -596,21 +375,20 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     // against the authoritative row before consumption becomes terminal.
     const tokenRow = executeSqliteQueryTakeFirstSync(
       db,
-      kysely
-        .selectFrom("device_bootstrap_tokens")
-        .selectAll()
-        .where("token_key", "=", token)
-        .where("issued_at_ms", ">=", params.oldestValidIssuedAtMs),
+      kysely.selectFrom("device_bootstrap_tokens").selectAll().where("token_key", "=", token),
     );
     if (!tokenRow || tokenRow.token !== token || tokenRow.device_id?.trim() !== deviceId) {
       return null;
     }
     const record = fromBootstrapRow(tokenRow);
+    if (params.nowMs > resolveDeviceBootstrapTokenExpiresAtMs(record)) {
+      return null;
+    }
     const paired =
       record.setupId || params.pairedDeviceMatches
         ? loadPairedDevicePairingStoreRecordFromDatabase(db, deviceId)
         : null;
-    if (params.pairedDeviceMatches && !params.pairedDeviceMatches(paired)) {
+    if (params.pairedDeviceMatches && !params.pairedDeviceMatches(paired, record)) {
       return null;
     }
     const deviceName = paired?.operatorLabel ?? paired?.displayName;
@@ -636,7 +414,13 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     }
     if (completion) {
       if (record.profile?.purpose === "cloud-worker") {
-        bindCloudWorkerSetupCompletion({ db, completion });
+        params.recordWorkerEnvironment(
+          bindCloudWorkerSetupCompletion({
+            db,
+            completion,
+            credentialDigest: sha256Base64Url(tokenRow.token),
+          }),
+        );
       }
       executeSqliteQuerySync(
         db,
@@ -663,7 +447,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       );
     }
     return { record, ...(completion ? { completion } : {}) };
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+  }, resolveDevicePairingStateDbOptions());
 }
 
 /** Mark one consumed setup handoff as delivered without reviving an expired or replaced row. */
@@ -671,7 +455,6 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
   setupId: string;
   deviceId: string;
   nowMs: number;
-  baseDir?: string;
 }): DevicePairSetupCompletionRecord | null {
   const setupId = params.setupId.trim();
   const deviceId = params.deviceId.trim();
@@ -701,39 +484,42 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
         .where("setup_id", "=", setupId)
         .where("device_id", "=", deviceId),
     );
-    return {
-      setupId: row.setup_id,
-      deviceId: row.device_id,
-      ...optional("deviceName", row.device_name),
-      access: fromSetupCompletionAccessColumn(row.access),
-      completedAtMs: row.completed_at_ms,
-      deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-      retainUntilMs: row.retain_until_ms,
-    };
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+    return fromSetupCompletionRow(row);
+  }, resolveDevicePairingStateDbOptions());
 }
 
-/** Prune retained setup outcomes when the Gateway maintenance owner ticks. */
-export function pruneExpiredDevicePairSetupCompletionRecords(
+/** The host retains this deadline until a shared-state writer receipt changes. */
+export function readDevicePairSetupCompletionExpiryInDatabase(
+  db: DatabaseSync,
+): number | undefined {
+  if (!tableExists(db, "device_pair_setup_completions")) {
+    return undefined;
+  }
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+      .selectFrom("device_pair_setup_completions")
+      .select("retain_until_ms")
+      .orderBy("retain_until_ms", "asc")
+      .limit(1),
+  )?.retain_until_ms;
+}
+
+/** The maintenance command owns the write transaction and its live admission. */
+export function pruneExpiredDevicePairSetupCompletionsInDatabase(
+  db: DatabaseSync,
   nowMs: number,
-  baseDir?: string,
 ): number {
-  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
-  const database = openOpenClawStateDatabase(databaseOptions);
-  if (!tableExists(database.db, "device_pair_setup_completions")) {
+  if (!tableExists(db, "device_pair_setup_completions")) {
     return 0;
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-      const result = executeSqliteQuerySync(
-        db,
-        kysely.deleteFrom("device_pair_setup_completions").where("retain_until_ms", "<=", nowMs),
-      );
-      return Number(result.numAffectedRows ?? 0);
-    },
-    { ...databaseOptions, database },
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+      .deleteFrom("device_pair_setup_completions")
+      .where("retain_until_ms", "<=", nowMs),
   );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 /** Prune elapsed setup completions, then read one live record. */
@@ -759,17 +545,7 @@ export function loadDevicePairSetupCompletionRecord(
           .selectAll()
           .where("setup_id", "=", setupId),
       );
-      return row
-        ? {
-            setupId: row.setup_id,
-            deviceId: row.device_id,
-            ...optional("deviceName", row.device_name),
-            access: fromSetupCompletionAccessColumn(row.access),
-            completedAtMs: row.completed_at_ms,
-            deliveryState: fromSetupCompletionDeliveryStateColumn(row.delivery_state),
-            retainUntilMs: row.retain_until_ms,
-          }
-        : null;
+      return row ? fromSetupCompletionRow(row) : null;
     },
     { ...databaseOptions, database },
   );

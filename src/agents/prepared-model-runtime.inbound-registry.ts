@@ -4,14 +4,13 @@ import {
   createRuntimePluginManifestLookup,
 } from "../plugins/active-runtime-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
-  getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir,
-  getActivePluginRuntimeSubagentMode,
-} from "../plugins/runtime.js";
-import { getReusablePluginRuntimeActivation } from "../plugins/runtime/load-context.js";
-import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
+  getPluginRuntimeLoadContext,
+  getReusablePluginRuntimeActivation,
+} from "../plugins/runtime/load-context.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import type {
@@ -48,6 +47,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     env: hashRuntimeConfigValue(input.env ?? process.env),
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
+    runtimePluginPurpose: input.runtimePluginPurpose,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     // Normalization already resolves each model to its runtime. The workspace
@@ -59,6 +59,24 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
   });
 }
 
+/** Gateway-hosted prepared loads borrow unchanged instances from the live Gateway registry. */
+function resolveLendingGatewayRegistry(
+  input: PreparedInboundRegistryInput,
+  metadataSnapshot: PluginMetadataSnapshot,
+): PluginRegistry | undefined {
+  if (input.allowGatewaySubagentBinding !== true || input.env !== undefined) {
+    return undefined;
+  }
+  // Startup and admitted turns carry their Gateway registry through the same scope.
+  // A process-active sibling with matching files is not this caller's runtime owner.
+  const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const registry = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
+  return registry &&
+    getPluginRuntimeLoadContext(registry)?.workspaceDir === metadataSnapshot.workspaceDir
+    ? registry
+    : undefined;
+}
+
 /** Loads generic plugin facts without acquiring model, catalog, or credential state. */
 export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
@@ -66,25 +84,21 @@ export function loadPreparedInboundPluginRegistry(
   configuredHarnessRuntimes?: readonly string[],
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
-  const activeRegistry = getActivePluginRegistry();
+  const gatewayRegistry = resolveLendingGatewayRegistry(input, metadataSnapshot);
   // Registry-owned facts survive an outer reload cache without allowing stale
   // metadata or changed activation inputs to reuse already-registered callbacks.
   const reusableGatewayRegistry =
-    input.allowGatewaySubagentBinding === true &&
-    input.env === undefined &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
-    activeRegistry &&
-    getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
-    getReusablePluginRuntimeActivation(activeRegistry, {
+    gatewayRegistry &&
+    getReusablePluginRuntimeActivation(gatewayRegistry, {
       config: input.config,
       env: process.env,
       workspaceDir: metadataSnapshot.workspaceDir,
       metadataSnapshot,
     }) &&
-    listRuntimePluginIdsFromRegistry(activeRegistry).every(
-      createRuntimePluginManifestLookup(activeRegistry, metadataSnapshot.manifestRegistry.plugins),
+    listRuntimePluginIdsFromRegistry(gatewayRegistry).every(
+      createRuntimePluginManifestLookup(gatewayRegistry, metadataSnapshot.manifestRegistry.plugins),
     )
-      ? activeRegistry
+      ? gatewayRegistry
       : undefined;
   const registry =
     reusableGatewayRegistry ??
@@ -97,6 +111,7 @@ export function loadPreparedInboundPluginRegistry(
         metadataSnapshot,
         preferBuiltPluginArtifacts: true,
         configuredHarnessRuntimes,
+        borrowRegistry: gatewayRegistry,
       },
       onPrimaryRegistry,
     );
@@ -150,27 +165,24 @@ type PreparedWorkspacePluginRegistries = {
 export function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
   metadataSnapshot: PluginMetadataSnapshot,
+  retainRegistry: (registry: PluginRegistry) => void,
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
   getConfiguredHarnessRuntimes?: () => readonly string[],
   basePluginIds?: readonly string[],
-  registryResources?: PreparedModelRuntimeBuildResources,
-  purpose?: RuntimePluginLoadPurpose,
+  loadRuntimeRegistry:
+    | PreparedModelRuntimeBuildResources["load"]
+    | typeof loadAgentRuntimePluginRegistryHandle = loadAgentRuntimePluginRegistryHandle,
 ): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
-  // Passive reads stay runtime-free; catalog workers and executable probes carry explicit scope.
-  if (
-    purpose !== "model-catalog" &&
-    input.readOnly &&
-    !input.loadRuntimePlugins &&
-    !input.runtimePluginSelections
-  ) {
+  // Passive reads stay runtime-free; executable probes carry explicit scope.
+  if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
   // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
   let primaryRegistry: PluginRegistry | undefined;
   const inboundPluginRegistry =
-    input.readOnly || purpose === "model-catalog"
+    input.readOnly || input.runtimePluginPurpose === "isolated-completion"
       ? undefined
       : (reusableGeneration?.inboundPluginRegistry ??
         loadInboundRegistry?.(
@@ -182,27 +194,28 @@ export function prepareWorkspacePluginRegistries(
           },
         ));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
+  for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
+    if (registry) {
+      retainRegistry(registry);
+    }
+  }
   primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
   let loadedPrimaryRegistry: PluginRegistry | undefined;
-  const loadRuntimeRegistry = registryResources
-    ? registryResources.load.bind(registryResources)
-    : loadAgentRuntimePluginRegistryHandle;
   const runtimePluginRegistry =
-    purpose === "model-catalog" || input.runtimePluginSelections || !baseRegistry
+    input.runtimePluginSelections || !baseRegistry
       ? loadRuntimeRegistry(
           {
-            ...(purpose === "model-catalog"
-              ? { basePluginIds: basePluginIds ?? [] }
-              : input.loadRuntimePlugins
-                ? { basePluginIds: [] }
-                : baseRegistry
-                  ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
-                  : basePluginIds !== undefined
-                    ? { basePluginIds }
-                    : {}),
-            ...(reusableGeneration?.pluginRegistry
-              ? { reusableRegistry: reusableGeneration.pluginRegistry }
-              : {}),
+            ...(input.loadRuntimePlugins
+              ? { basePluginIds: [] }
+              : baseRegistry
+                ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
+                : basePluginIds !== undefined
+                  ? { basePluginIds }
+                  : {}),
+            // Inbound preparation already admitted this exact context. Let the runtime
+            // planner check selected owners before acquiring another captured registry.
+            ...(baseRegistry ? { reusableRegistry: baseRegistry } : {}),
+            purpose: input.runtimePluginPurpose,
             config: input.config,
             env: input.env ?? process.env,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -211,7 +224,7 @@ export function prepareWorkspacePluginRegistries(
             ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
             selections: input.runtimePluginSelections,
             configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
-            ...(purpose ? { purpose } : {}),
+            borrowRegistry: resolveLendingGatewayRegistry(input, metadataSnapshot),
           },
           (source) => {
             loadedPrimaryRegistry =
@@ -221,14 +234,17 @@ export function prepareWorkspacePluginRegistries(
           },
         )
       : baseRegistry;
-  const prepared = (registry: PluginRegistry | undefined): PreparedWorkspacePluginRegistries => ({
-    runtimePluginRegistry: registry,
-    primaryRegistry:
-      registry === baseRegistry
-        ? (primaryRegistry ?? registry)
-        : (loadedPrimaryRegistry ?? registry),
-    ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-  });
+  const prepared = (registry: PluginRegistry): PreparedWorkspacePluginRegistries => {
+    retainRegistry(registry);
+    return {
+      runtimePluginRegistry: registry,
+      primaryRegistry:
+        registry === baseRegistry
+          ? (primaryRegistry ?? registry)
+          : (loadedPrimaryRegistry ?? registry),
+      ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
+    };
+  };
   return runtimePluginRegistry instanceof Promise
     ? runtimePluginRegistry.then(prepared)
     : prepared(runtimePluginRegistry);

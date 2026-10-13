@@ -3,8 +3,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
 import type { CronJob, CronJobState } from "../types.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { enqueueCronNotification } from "./wake.js";
+import { cronNotificationJob } from "./notification-intents.js";
+import type { DeferredCronNotifications } from "./state.js";
 
 type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"];
 
@@ -20,19 +20,21 @@ function autoDisableReasonLabel(reason: CronAutoDisableReason): string {
 
 /** Records one canonical auto-disable fact and queues its owning-agent notification. */
 export function autoDisableCronJob(params: {
-  state: CronServiceState;
   job: CronJob;
   reason: CronAutoDisableReason;
   atMs: number;
   consecutiveErrors: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
+  /** A terminal one-shot is already disabled when its notification is finalized. */
+  terminalOneShot?: boolean;
+  notify?: boolean;
 }): boolean {
-  const { state, job } = params;
+  const { job } = params;
   // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
   if (isSystemMonitorDeclaration(job.declarationKey)) {
     return false;
   }
-  if (!job.enabled || job.state.autoDisabled) {
+  if ((!job.enabled && !params.terminalOneShot) || job.state.autoDisabled) {
     return false;
   }
 
@@ -44,6 +46,9 @@ export function autoDisableCronJob(params: {
     consecutiveErrors: params.consecutiveErrors,
   };
 
+  if (params.notify === false) {
+    return true;
+  }
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
   const errorReason =
     params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
@@ -52,24 +57,15 @@ export function autoDisableCronJob(params: {
     ...cronFailureDetailLines(errorReason),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
-  const notify = () => enqueueCronNotification(state, job, text, "auto-disabled");
-
-  if (params.deferredNotifications) {
-    params.deferredNotifications.push(notify);
-  } else {
-    // Production mutations always supply a post-persist queue; this fallback
-    // remains only for direct unit callers that have no durable owner.
-    notify();
-  }
+  params.deferredNotifications.push({ kind: "auto-disabled", job: cronNotificationJob(job), text });
   return true;
 }
 
 /** Auto-disables only time-based recurring jobs once their run-error streak reaches the limit. */
 export function maybeAutoDisableCronJobAfterRunFailure(params: {
-  state: CronServiceState;
   job: CronJob;
   atMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): boolean {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
   if (

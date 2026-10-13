@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "request": {
     "canonical": {
       "id": "invoke-1",
@@ -10,11 +10,37 @@
       "idempotencyKey": "idem-1",
       "sessionKey": "agent:main:main"
     },
-    "invalid": {
+    "withExtensions": {
       "id": "invoke-1",
       "nodeId": "node-1",
       "command": "example.duplex",
+      "paramsJSON": null,
+      "timeoutMs": 0,
+      "idempotencyKey": "idem-1",
+      "sessionKey": "agent:main:main",
       "unexpected": true
+    },
+    "legacyParams": {
+      "id": "invoke-legacy",
+      "nodeId": "node-1",
+      "command": "example.status",
+      "params": {
+        "verbose": true
+      }
+    },
+    "ambiguousParams": {
+      "id": "invoke-ambiguous",
+      "nodeId": "node-1",
+      "command": "example.status",
+      "params": {
+        "legacy": true
+      },
+      "paramsJSON": "{\"current\":true}"
+    },
+    "invalid": {
+      "id": "",
+      "nodeId": "node-1",
+      "command": "example.duplex"
     }
   },
   "input": {
@@ -45,6 +71,12 @@
       "nodeId": "node-1",
       "seq": 1,
       "chunk": "é"
+    },
+    "invalid": {
+      "invokeId": "invoke-1",
+      "nodeId": "node-1",
+      "seq": -1,
+      "chunk": "invalid"
     }
   },
   "results": {
@@ -64,6 +96,20 @@
         "code": "LOCAL_POLICY_DENIED",
         "message": "command is outside the embedding's current local policy"
       }
+    },
+    "invalid": {
+      "id": "invoke-1",
+      "nodeId": "node-1",
+      "ok": "true"
+    }
+  },
+  "cancel": {
+    "canonical": {
+      "invokeId": "invoke-1",
+      "nodeId": "node-1"
+    },
+    "invalid": {
+      "invokeId": "invoke-1"
     }
   }
 }

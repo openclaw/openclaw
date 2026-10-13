@@ -1,0 +1,25 @@
+{
+  "id": "x",
+  "categories": [
+    "channels"
+  ],
+  "name": "X (Twitter)",
+  "description": "Allowlisted X mentions and public replies",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "x"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/e57c147ef214dc8ed95db6520972cd85987792e64157bf67b8a10217f1402f48/index.js",
+    "styles": [
+      "dist/control-ui/e57c147ef214dc8ed95db6520972cd85987792e64157bf67b8a10217f1402f48/index.css"
+    ]
+  }
+}

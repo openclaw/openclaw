@@ -1,4 +1,4 @@
-import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-queue-types.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -15,10 +15,9 @@ export function normalizePendingFinalDeliveryPayloads(
 export function normalizePendingFinalRecoveryPayloads(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
-  return payloads.flatMap((payload) => {
-    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
-    return normalized ? [normalized] : [];
-  });
+  return payloads.flatMap(
+    (payload) => normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? [],
+  );
 }
 
 /** Build durable recovery text only for payload shapes this marker can replay without loss. */
@@ -48,46 +47,28 @@ export function buildRecoverablePendingFinalDeliveryText(
   }
   if (
     sendablePayloads.length > 1 &&
-    sendablePayloads.some((payload) => hasDurableMedia(payload) || hasMediaDirectiveText(payload))
+    sendablePayloads.some(
+      (payload) => hasDurableMedia(payload) || /^\s*MEDIA:/imu.test(payload.text ?? ""),
+    )
   ) {
     return undefined;
   }
 
-  const recoveryPayloads: ReplyPayload[] = [];
-  for (const payload of sendablePayloads) {
-    const textAndMedia = [
-      payload.text,
-      ...collectDurableMediaDirectives(payload).map((mediaUrl) => `MEDIA:${mediaUrl}`),
-    ]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n");
-    if (textAndMedia) {
-      recoveryPayloads.push({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        text: textAndMedia,
-      });
-    }
-  }
-  return buildPendingFinalDeliveryText(recoveryPayloads) || undefined;
-}
-
-/** Build the restart-recovery text represented by one or more final payloads. */
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
+  const recoveryText = sendablePayloads
+    .map((payload) =>
+      [payload.text, ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`)]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n"),
+    )
+    .filter(Boolean);
+  return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 
 export function resolvePendingFinalDeliveryCompletion(
   payloads: readonly ReplyPayload[] | undefined,
 ): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
   const metadata = payloads
-    ?.map((payload) => getReplyPayloadMetadata(payload))
+    ?.map(getReplyPayloadMetadata)
     .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
   const completion = metadata?.pendingFinalDeliveryCompletion;
   return completion
@@ -101,23 +82,6 @@ export function resolvePendingFinalDeliveryCompletion(
     : undefined;
 }
 
-function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
-  if (payload.sensitiveMedia === true) {
-    return [];
-  }
-  const mediaUrls = [...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])];
-  const seen = new Set<string>();
-  return mediaUrls
-    .map((mediaUrl) => mediaUrl.trim())
-    .filter((mediaUrl) => {
-      if (!mediaUrl || seen.has(mediaUrl)) {
-        return false;
-      }
-      seen.add(mediaUrl);
-      return true;
-    });
-}
-
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
   const hasMedia = hasDurableMedia(payload);
   return (
@@ -129,11 +93,7 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.delivery !== undefined ||
     payload.channelData !== undefined ||
     payload.location !== undefined ||
-    payload.replyToId !== undefined ||
-    payload.replyToTag === true ||
-    payload.replyToCurrent === true ||
-    payload.audioAsVoice === true ||
-    payload.videoAsNote === true ||
+    hasUnrecoverableNormalizedDeliveryShape(payload) ||
     payload.spokenText !== undefined ||
     payload.ttsSupplement !== undefined ||
     (hasMedia && (payload.isCommentary === true || payload.isStatusNotice === true))
@@ -142,10 +102,6 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
 
 function hasDurableMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
-}
-
-function hasMediaDirectiveText(payload: ReplyPayload): boolean {
-  return /^\s*MEDIA:/imu.test(payload.text ?? "");
 }
 
 function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean {

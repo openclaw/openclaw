@@ -1,7 +1,12 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { readProcessAncestry } from "@openclaw/proc-safe/identity";
+import {
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+  MAX_ANCESTOR_WALK_DEPTH,
+} from "../shared/pid-alive.js";
 import type { HandoffProcessIdentity } from "./update-managed-service-handoff-schema.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
@@ -13,10 +18,7 @@ function windowsArgvIdentity(argv: readonly string[]): string | null {
     return null;
   }
   const normalized = [path.win32.normalize(argv[0]).toLowerCase(), ...argv.slice(1)];
-  return (
-    WINDOWS_ARGV_IDENTITY_PREFIX +
-    createHash("sha256").update(JSON.stringify(normalized)).digest("hex")
-  );
+  return WINDOWS_ARGV_IDENTITY_PREFIX + sha256Hex(JSON.stringify(normalized));
 }
 
 /** Process facts shared by lease admission, live ownership, and cleanup. */
@@ -58,6 +60,44 @@ export function createManagedHandoffProcessIdentityReader(options: {
       : String(start);
   }
 
+  function validateDarwinAncestorProcesses(
+    requiredHelperPid: number,
+    validate: (
+      ancestors: ReadonlySet<number>,
+      isProcessIdentityCurrent: (identity: HandoffProcessIdentity) => boolean,
+    ) => boolean,
+  ): boolean {
+    const immediateParent = process.ppid;
+    let ancestry: ReturnType<typeof readProcessAncestry>;
+    try {
+      ancestry = readProcessAncestry(process.pid, {
+        maxDepth: MAX_ANCESTOR_WALK_DEPTH + 2,
+        throughPid: requiredHelperPid,
+      });
+    } catch {
+      return false;
+    }
+    if (
+      !ancestry?.complete ||
+      (ancestry.stoppedBy !== "through-pid" &&
+        !ancestry.chain.some(({ pid }) => pid === requiredHelperPid)) ||
+      process.ppid !== immediateParent
+    ) {
+      return false;
+    }
+    // One synchronous snapshot supplies both ancestry and the released seconds-based identity.
+    const observed = new Map(ancestry.chain.map((identity) => [identity.pid, identity]));
+    return validate(new Set(observed.keys()), (value) => {
+      const facts = observed.get(value.pid);
+      return (
+        isPidAlive(value.pid) &&
+        facts != null &&
+        !facts.exited &&
+        String(Math.floor(facts.startTimeMicros / 1_000_000)) === value.startIdentity
+      );
+    });
+  }
+
   function readWindowsArgvIdentity(pid: number): string | null {
     if (pid !== process.pid) {
       const argv = readWindowsProcessArgsSync(pid, undefined, options.env);
@@ -76,35 +116,33 @@ export function createManagedHandoffProcessIdentityReader(options: {
   }
   function inspectProcessIdentity(
     value: HandoffProcessIdentity,
+    ownedCustody = false,
   ): "live" | "dead" | "unknown" | "mismatch" {
     if (!isPidAlive(value.pid)) {
       return "dead";
     }
-    if (process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)) {
-      const argvIdentity = readWindowsArgvIdentity(value.pid);
-      return argvIdentity === null
-        ? "unknown"
-        : argvIdentity === value.startIdentity
-          ? "live"
-          : "mismatch";
+    const argvIdentity =
+      process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity);
+    const start = argvIdentity
+      ? readWindowsArgvIdentity(value.pid)
+      : readProcessStartIdentity(value.pid);
+    if (start === null) {
+      return argvIdentity && ownedCustody ? "live" : "unknown";
     }
-    const start = readProcessStartIdentity(value.pid);
-    return start === null ? "unknown" : start === value.startIdentity ? "live" : "dead";
+    return start === value.startIdentity ? "live" : "mismatch";
   }
   function processState(value: HandoffProcessIdentity): "live" | "dead" | "unknown" {
     const state = inspectProcessIdentity(value);
     // Launcher disagreement revokes attribution; it cannot prove process death.
-    return state === "mismatch" ? "unknown" : state;
+    if (state === "mismatch") {
+      return process.platform === "win32" && WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity)
+        ? "unknown"
+        : "dead";
+    }
+    return state;
   }
   function isProcessIdentityCurrent(value: HandoffProcessIdentity, ownedCustody = false): boolean {
-    const state = inspectProcessIdentity(value);
-    return (
-      state === "live" ||
-      (state === "unknown" &&
-        ownedCustody &&
-        process.platform === "win32" &&
-        WINDOWS_ARGV_IDENTITY_PATTERN.test(value.startIdentity))
-    );
+    return inspectProcessIdentity(value, ownedCustody) === "live";
   }
   function acceptSelfIdentity(value: HandoffProcessIdentity, parentBound = false): boolean {
     if (value.pid !== process.pid) {
@@ -132,15 +170,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
   }
   function processIdentity(pid = process.pid, argv?: readonly string[]): HandoffProcessIdentity {
     if (pid === process.pid && selfIdentity) {
-      // This executing process is live; only observed identity disagreement can revoke its pin.
-      const observed =
-        process.platform === "win32" &&
-        WINDOWS_ARGV_IDENTITY_PATTERN.test(selfIdentity.startIdentity)
-          ? readWindowsArgvIdentity(pid)
-          : readProcessStartIdentity(pid);
-      if (observed !== null && observed !== selfIdentity.startIdentity) {
-        throw new Error("managed handoff process identity changed");
-      }
+      // A running process cannot reuse its own PID or change its birth identity.
       return { ...selfIdentity };
     }
     const startIdentity = readProcessStartIdentity(pid);
@@ -170,7 +200,9 @@ export function createManagedHandoffProcessIdentityReader(options: {
     readProcessStartIdentity,
     processIdentity,
     processState,
+    inspectProcessIdentity,
     isProcessIdentityCurrent,
+    validateDarwinAncestorProcesses,
     acceptSelfIdentity,
   };
 }

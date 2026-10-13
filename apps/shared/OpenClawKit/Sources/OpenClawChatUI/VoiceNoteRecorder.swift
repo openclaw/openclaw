@@ -75,6 +75,7 @@ public final class OpenClawVoiceNoteRecorder {
     @ObservationIgnored private let timerIntervalNanoseconds: UInt64
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var timerTask: Task<Void, Never>?
+    @ObservationIgnored private var permissionRequestID: UUID?
     @ObservationIgnored private var captureAdmissionHandler: @MainActor () -> Bool = { true }
 
     /// Creates a recorder backed by the system audio recorder.
@@ -162,13 +163,19 @@ public final class OpenClawVoiceNoteRecorder {
 
         self.elapsedSeconds = 0
         self.state = .requestingPermission
-        guard await self.capture.requestPermission() else {
+        let requestID = UUID()
+        self.permissionRequestID = requestID
+        let granted = await self.capture.requestPermission()
+        // The permission dialog can outlive cancellation and a newer start attempt.
+        guard self.permissionRequestID == requestID, self.state == .requestingPermission else { return false }
+        self.permissionRequestID = nil
+        guard granted else {
             self.fail(message: String(localized: "Microphone access is required. Enable it in Settings."))
             return false
         }
-        guard self.state == .requestingPermission else { return false }
 
-        let fileURL = self.makeTemporaryFileURL()
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
         self.onRecordingActiveChanged?(true)
         do {
             try self.capture.start(url: fileURL)
@@ -207,6 +214,7 @@ public final class OpenClawVoiceNoteRecorder {
     public func cancel() {
         // The chat view model owns the file after claiming the handoff.
         if case .staging = self.state { return }
+        self.permissionRequestID = nil
         let fileURL: URL? = switch self.state {
         case let .recording(_, fileURL):
             fileURL
@@ -269,11 +277,6 @@ public final class OpenClawVoiceNoteRecorder {
         self.capture.cancel()
         try? FileManager.default.removeItem(at: fileURL)
         self.fail(message: String(localized: "Recording was interrupted. Try again."))
-    }
-
-    private func makeTemporaryFileURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
     }
 }
 
@@ -370,9 +373,7 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
     public func stop() -> TimeInterval {
         guard let recorder = self.recorder else { return 0 }
         let duration = recorder.currentTime
-        recorder.stop()
-        self.recorder = nil
-        self.deactivateAudioSession()
+        self.cancel()
         return duration
     }
 
@@ -408,9 +409,7 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 
     private func captureDidFail() {
         guard self.recorder != nil else { return }
-        self.recorder?.stop()
-        self.recorder = nil
-        self.deactivateAudioSession()
+        self.cancel()
         self.failureHandler?()
     }
 

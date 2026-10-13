@@ -407,11 +407,17 @@ struct CLIInstallerTests {
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let executable = root.appendingPathComponent("openclaw")
+        let node = root.appendingPathComponent("node")
         try "#!/bin/sh\necho 'OpenClaw 2026.7.3'\n".write(
             to: executable,
             atomically: true,
             encoding: .utf8)
+        try "#!/bin/sh\necho 'v24.16.0'\n".write(
+            to: node,
+            atomically: true,
+            encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let status = await CLIInstaller.status(location: executable.path)
 
@@ -473,22 +479,25 @@ struct CLIInstallerTests {
         ].joined(separator: ":"))
     }
 
-    @Test func `successful CLI setup starts the local gateway and waits for readiness`() async {
+    @Test(arguments: [false, true])
+    func `successful CLI setup starts the local gateway and waits for readiness`(pauseDuringReadiness: Bool) async {
         var didStart = false
         var didWait = false
+        var paused = false
 
         let activation = await CLIInstaller.activateLocalGateway(
             mode: .local,
-            paused: false,
+            paused: paused,
             start: { didStart = true },
             waitUntilReady: {
                 didWait = true
+                paused = pauseDuringReadiness
                 return true
             })
 
         #expect(didStart)
         #expect(didWait)
-        #expect(activation == .ready)
+        #expect(activation == (pauseDuringReadiness ? .deferred : .ready))
     }
 
     @Test func `paused CLI setup defers gateway activation`() async {

@@ -3,7 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
-import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
+import type {
+  CliOutput,
+  CliTerminalFailure,
+  CliToolUseStartDelta,
+  CliUsage,
+} from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -33,14 +38,6 @@ export function isClaudeStreamJsonDialect(params: {
   return isClaudeCliProvider(params.providerId);
 }
 
-export function isStreamJsonDialect(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-}): boolean {
-  return supportsCliJsonlToolEvents(params);
-}
-
-/** Returns whether JSONL output carries correlated provider tool events. */
 export function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -50,14 +47,6 @@ export function supportsCliJsonlToolEvents(params: {
     isClaudeCliProvider(params.providerId) ||
     isGeminiStreamJsonDialect(params)
   );
-}
-
-export function isClaudeStreamJsonResult(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-}): boolean {
-  return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
 }
 
 export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
@@ -108,14 +97,8 @@ function readNestedErrorMessage(parsed: Record<string, unknown>): string | undef
       return errorMessage;
     }
   }
-  if (typeof parsed.message === "string") {
-    const trimmed = parsed.message.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (typeof parsed.error === "string") {
-    const trimmed = parsed.error.trim();
+  for (const value of [parsed.message, parsed.error]) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
     if (trimmed) {
       return trimmed;
     }
@@ -175,9 +158,6 @@ export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefi
 }
 
 function collectCliText(value: unknown): string {
-  if (!value) {
-    return "";
-  }
   if (typeof value === "string") {
     return value;
   }
@@ -187,17 +167,10 @@ function collectCliText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
-  if (typeof value.response === "string") {
-    return value.response;
-  }
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.result === "string") {
-    return value.result;
-  }
-  if (typeof value.content === "string") {
-    return value.content;
+  for (const field of ["response", "text", "result", "content"] as const) {
+    if (typeof value[field] === "string") {
+      return value[field];
+    }
   }
   if (Array.isArray(value.content)) {
     return value.content.map((entry) => collectCliText(entry)).join("");
@@ -211,25 +184,12 @@ function collectCliText(value: unknown): string {
 function unwrapNestedCliResultText(raw: string): string {
   let text = raw;
   for (let depth = 0; depth < 8; depth += 1) {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
+    const parsed = safeParseJsonRecord(text.trim());
+    if (!parsed || parsed.type !== "result" || typeof parsed.result !== "string") {
       return text;
     }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.type !== "string" ||
-        parsed.type !== "result" ||
-        typeof parsed.result !== "string"
-      ) {
-        return text;
-      }
-      // Claude can wrap a result payload inside repeated JSON-string result envelopes.
-      text = parsed.result;
-    } catch {
-      return text;
-    }
+    // Claude can wrap a result payload inside repeated JSON-string result envelopes.
+    text = parsed.result;
   }
   return text;
 }
@@ -248,19 +208,14 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
     if (text) {
       return unwrapCliErrorText(text);
     }
-    const nested = readNestedErrorMessage(parsed);
-    if (nested) {
-      return unwrapCliErrorText(nested);
-    }
-    if (subtype) {
-      return `Claude CLI result subtype ${subtype}.`;
-    }
-    return "CLI result was marked as an error.";
   }
 
   const nested = readNestedErrorMessage(parsed);
   if (nested) {
     return unwrapCliErrorText(nested);
+  }
+  if (isResultError) {
+    return subtype ? `Claude CLI result subtype ${subtype}.` : "CLI result was marked as an error.";
   }
 
   if (parsed.type === "assistant") {
@@ -314,7 +269,6 @@ const CLAUDE_TURN_STOP_REASONS = new Set([
   "budget_exhausted",
 ]);
 
-/** Reads a reply-less Claude result that the backend deliberately stopped. */
 function readClaudeTurnStop(
   parsed: Record<string, unknown>,
 ): { terminalReason: string; stopReason?: string } | undefined {
@@ -328,10 +282,6 @@ function readClaudeTurnStop(
   // classification (an API failure must stay failover-able, not terminal).
   if (
     parsed.type !== "result" ||
-    !terminalReason ||
-    terminalReason === "completed" ||
-    terminalReason === "max_turns" ||
-    terminalReason === "background_requested" ||
     !CLAUDE_TURN_STOP_REASONS.has(terminalReason) ||
     unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
     collectExplicitCliErrorText(parsed)
@@ -430,6 +380,66 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
+const CLAUDE_FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
+
+export function isClaudeForegroundAgentToolName(name: string): boolean {
+  return CLAUDE_FOREGROUND_AGENT_TOOL_NAMES.has(name);
+}
+
+export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+export function isClaudeToolResultBlockType(type: unknown): boolean {
+  return typeof type === "string" && (type === "tool_result" || type.endsWith("_tool_result"));
+}
+
+function messageHasToolResult(message: unknown): boolean {
+  if (!isRecord(message) || !Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (block) => isRecord(block) && isClaudeToolResultBlockType(block.type),
+  );
+}
+
+function isClaudeSemanticSubagentProgressRecord(parsed: Record<string, unknown>): boolean {
+  if (
+    parsed.type === "assistant" &&
+    isRecord(parsed.message) &&
+    Array.isArray(parsed.message.content) &&
+    parsed.message.content.length > 0
+  ) {
+    return true;
+  }
+  if (parsed.type === "user" && messageHasToolResult(parsed.message)) {
+    return true;
+  }
+  if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
+    return false;
+  }
+  const event = parsed.event;
+  if (event.type !== "content_block_start" || !isRecord(event.content_block)) {
+    return false;
+  }
+  const blockType = event.content_block.type;
+  return isClaudeToolUseBlockType(blockType) || isClaudeToolResultBlockType(blockType);
+}
+
+/** Parent id of a semantic subagent record. Partial deltas and system chatter stay out. */
+export function readClaudeAttributedSubagentProgressId(
+  parsed: Record<string, unknown>,
+): string | undefined {
+  if (typeof parsed.parent_tool_use_id !== "string") {
+    return undefined;
+  }
+  const parentToolUseId = parsed.parent_tool_use_id.trim();
+  if (!parentToolUseId || !isClaudeSemanticSubagentProgressRecord(parsed)) {
+    return undefined;
+  }
+  return parentToolUseId;
+}
+
 export function pickCliResumeCheckpointId(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -446,16 +456,6 @@ export function pickCliResumeCheckpointId(params: {
   return checkpointId || undefined;
 }
 
-function shouldUnwrapNestedCliResultText(params: {
-  providerId?: string;
-  parsed: Record<string, unknown>;
-}): boolean {
-  if (!params.providerId || !isClaudeCliProvider(params.providerId)) {
-    return false;
-  }
-  return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
-}
-
 function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
   if (typeof parsed.error === "string") {
     return Boolean(parsed.error.trim());
@@ -466,17 +466,14 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
   return false;
 }
 
-/** Parses a single JSON payload emitted by a CLI backend. */
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
   providerId?: string,
 ): CliOutput | null {
   const parsedRecords = decodeCliRecords(raw);
-  if (parsedRecords.length === 0) {
-    return null;
-  }
-
+  const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
+  const unwrapResultText = Boolean(providerId && isClaudeCliProvider(providerId));
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let text = "";
@@ -484,7 +481,6 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
-    const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
     const terminalFailure = claudeDialect ? readClaudeTerminalFailure(parsed) : undefined;
     if (terminalFailure && !(terminalFailure.reason === "turn_stopped" && text.trim())) {
       return {
@@ -514,7 +510,7 @@ export function parseCliJson(
       collectCliText(parsed.response) ||
       collectCliText(parsed);
     const trimmedText = (
-      shouldUnwrapNestedCliResultText({ providerId, parsed })
+      unwrapResultText && (!Object.hasOwn(parsed, "type") || parsed.type === "result")
         ? unwrapNestedCliResultText(nextText)
         : nextText
     ).trim();
@@ -541,35 +537,27 @@ export function parseClaudeCliJsonlResult(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!supportsCliJsonlToolEvents(params) || params.parsed.type !== "result") {
     return null;
   }
-  if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
-    const terminalFailure = isClaudeStreamJsonDialect(params)
-      ? readClaudeTerminalFailure(params.parsed)
-      : undefined;
-    const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
-    if (errorText) {
-      return {
-        text: "",
-        sessionId: params.sessionId,
-        usage: params.usage,
-        errorText,
-        ...(terminalFailure ? { terminalFailure } : {}),
-      };
-    }
+  const terminalFailure = isClaudeStreamJsonDialect(params)
+    ? readClaudeTerminalFailure(params.parsed)
+    : undefined;
+  const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
+  let text = "";
+  if (!errorText) {
     if (typeof params.parsed.result !== "string") {
       return null;
     }
-    const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
-    if (resultText) {
-      return { text: resultText, sessionId: params.sessionId, usage: params.usage };
-    }
-    // Claude may finish with an empty result after tool-only work. Keep the
-    // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
+    // Tool-only turns may have an empty result and still carry continuity and usage.
+    text = unwrapNestedCliResultText(params.parsed.result).trim();
   }
-  return null;
+  return {
+    text,
+    sessionId: params.sessionId,
+    usage: params.usage,
+    ...(errorText ? { errorText, ...(terminalFailure ? { terminalFailure } : {}) } : {}),
+  };
 }
 
 // A tool-split turn streams pre-tool answer text the terminal result envelope

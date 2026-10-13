@@ -1,4 +1,3 @@
-// Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
@@ -40,19 +39,7 @@ export function isDiscordThreadChannelMessage(params: {
   message: Message;
   channelInfo: DiscordChannelInfo | null;
 }): boolean {
-  if (!params.isGuildMessage) {
-    return false;
-  }
-  const channel =
-    "channel" in params.message ? (params.message as { channel?: unknown }).channel : undefined;
-  return Boolean(
-    (channel &&
-      typeof channel === "object" &&
-      "isThread" in channel &&
-      typeof (channel as { isThread?: unknown }).isThread === "function" &&
-      (channel as { isThread: () => boolean }).isThread()) ||
-    isDiscordThreadChannelType(params.channelInfo?.type),
-  );
+  return params.isGuildMessage && isDiscordThreadChannelType(params.channelInfo?.type);
 }
 
 export function resolveInjectedBoundThreadLookupRecord(params: {
@@ -169,16 +156,6 @@ export function matchesActiveDiscordMentionPatterns(
   return false;
 }
 
-export function resolvePreflightMentionRequirement(params: {
-  shouldRequireMention: boolean;
-  bypassMentionRequirement: boolean;
-}): boolean {
-  if (!params.shouldRequireMention) {
-    return false;
-  }
-  return !params.bypassMentionRequirement;
-}
-
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
   threadId?: string;
   webhookId?: string | null;
@@ -196,11 +173,5 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     return true;
   }
   const threadId = normalizeOptionalString(params.threadId) ?? "";
-  if (!threadId) {
-    return false;
-  }
-  if (params.threadBinding) {
-    return true;
-  }
-  return false;
+  return Boolean(threadId && params.threadBinding);
 }

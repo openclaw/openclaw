@@ -1,19 +1,12 @@
 // Facts Commander owns after parsing: the active path and which tokens became option values.
 import type { Command, Option } from "commander";
+import { getCommandHierarchy, getRootCommand } from "./command-tree.js";
 
 const activeErrorCommandByRoot = new WeakMap<Command, Command>();
 const lazyCommands = new WeakSet<Command>();
 
 export function markCommanderLazyCommand(command: Command): void {
   lazyCommands.add(command);
-}
-
-function getCommandHierarchy(command: Command): Command[] {
-  const hierarchy: Command[] = [];
-  for (let current: Command | null = command; current; current = current.parent ?? null) {
-    hierarchy.unshift(current);
-  }
-  return hierarchy;
 }
 
 function requiresFollowingValue(token: string, options: readonly Option[]): boolean {
@@ -79,19 +72,9 @@ export function hasCommanderOptionToken(
 
 /** Return the registered command path for the exact Commander node handling an error or action. */
 export function getCommanderCommandPath(command: Command): string[] {
-  const commandPath: string[] = [];
-  for (let current: Command | null = command; current?.parent; current = current.parent) {
-    commandPath.unshift(current.name());
-  }
-  return commandPath;
-}
-
-function getRootCommand(command: Command): Command {
-  let root = command;
-  while (root.parent) {
-    root = root.parent;
-  }
-  return root;
+  return getCommandHierarchy(command)
+    .slice(1)
+    .map((current) => current.name());
 }
 
 /** Resolve lazy help before classifying a possible child on Commander's active command node. */

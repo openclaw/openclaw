@@ -16,16 +16,13 @@ const keyAdmissions = resolveGlobalSingleton(
   () => ({ fallbackScope: {}, tails: new WeakMap<object, Promise<void>>() }),
 );
 
-function resolveLocalFileMutationQueueKey(filePath: string): string {
-  return resolveIdentityPathViaExistingAncestorSync(filePath);
-}
-
 export async function resolveFileMutationQueueKey(
   filePath: string,
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>,
   signal?: AbortSignal,
 ): Promise<string> {
-  return await (resolveQueueKey?.(filePath, signal) ?? resolveLocalFileMutationQueueKey(filePath));
+  return await (resolveQueueKey?.(filePath, signal) ??
+    resolveIdentityPathViaExistingAncestorSync(filePath));
 }
 
 /**
@@ -67,21 +64,6 @@ export async function withFileMutationQueueKeysResolution<T>(
   tail.then(cleanup, cleanup);
   await admission;
   return await operation;
-}
-
-/**
- * Serialize file mutation operations targeting the same file.
- * Operations for different files still run in parallel.
- */
-export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  return await withFileMutationQueues([filePath], fn);
-}
-
-async function withFileMutationQueues<T>(
-  filePaths: readonly string[],
-  fn: () => Promise<T>,
-): Promise<T> {
-  return await enqueueFileMutationQueueKeys(filePaths.map(resolveLocalFileMutationQueueKey), fn);
 }
 
 function enqueueFileMutationQueueKeys<T>(

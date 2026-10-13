@@ -4,11 +4,11 @@ import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js"
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   pushWarning,
   type ResolverContext,
   type SecretDefaults,
@@ -34,10 +34,10 @@ function resolveAuthProfileOwnerContract(
 }
 
 function collectAuthStoreSecretInputAssignment(
-  params: Parameters<typeof collectRuntimeSecretInputAssignment>[0],
+  params: Parameters<typeof collectSecretInputAssignment>[0],
 ): void {
   const previousCount = params.context.assignments.length;
-  collectRuntimeSecretInputAssignment(params);
+  collectSecretInputAssignment(params);
   for (const assignment of params.context.assignments.slice(previousCount)) {
     setSecretAssignmentSource(assignment, "auth-store");
   }
@@ -55,11 +55,14 @@ function collectStaticProfileAssignment(params: {
   const ownerContract = resolveAuthProfileOwnerContract(params.profile, params.context);
   const profile = params.profile;
   const field = profile.type === "api_key" ? "key" : "token";
-  const { explicitRef, inlineRef, ref } = resolveSecretInputRef({
-    value: profile.type === "api_key" ? profile.key : profile.token,
-    refValue: profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
-    defaults: params.defaults,
-  });
+  const explicitRef = parseSecretRef(
+    profile.type === "api_key" ? profile.keyRef : profile.tokenRef,
+    params.defaults,
+  );
+  const inlineRef = explicitRef
+    ? null
+    : parseSecretRef(profile.type === "api_key" ? profile.key : profile.token, params.defaults);
+  const ref = explicitRef ?? inlineRef;
   if (!ref) {
     return;
   }

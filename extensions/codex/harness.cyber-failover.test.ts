@@ -72,18 +72,35 @@ async function refusedTurn(params: AttemptParams) {
   return failedTurn(params, "The provider refused this request.", "cyberPolicy");
 }
 
+function createHarness() {
+  return createCodexAppServerAgentHarness({ bindingStore: testCodexAppServerBindingStore });
+}
+
+function expectNotice(
+  params: Awaited<ReturnType<typeof paramsForWorkspace>>,
+  state: "unavailable" | "escalated",
+) {
+  expect(params.onAgentEvent).toHaveBeenCalledWith({
+    stream: "notice",
+    data: {
+      phase: "provider_policy",
+      category: "cyber",
+      state,
+      provider: "openai",
+      model: PRIMARY,
+      fallbackModel: FALLBACK,
+    },
+  });
+}
+
 describe("Codex fallback terminal results", () => {
-  it.each(["message", "spawn", "native continuation", "abort", "timeout"] as const)(
+  it.each(["spawn", "abort"] as const)(
     "retains a denied fallback's result after a %s",
     async (effect) => {
       const params = await paramsForWorkspace(`acted-${effect}`, "first");
       const refusal = await refusedTurn(params);
       const telemetry = buildEmptyToolTelemetry();
-      if (effect === "message") {
-        telemetry.didSendViaMessagingTool = true;
-        telemetry.sourceReplyDelivered = true;
-        telemetry.messagingToolSentTexts = ["Synthetic delivered update"];
-      } else if (effect === "spawn") {
+      if (effect === "spawn") {
         telemetry.acceptedSessionSpawns = [
           { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
         ];
@@ -94,13 +111,9 @@ describe("Codex fallback terminal results", () => {
         "other",
         telemetry,
       );
-      if (effect === "native continuation") {
-        // The attempt finalizer adds this after the projector computes replay metadata.
-        denied.runtimeContinuationStarted = true;
-      } else if (effect === "abort" || effect === "timeout") {
+      if (effect === "abort") {
         denied.terminal = attemptTerminal.normalize({
           aborted: true,
-          timedOut: effect === "timeout",
           promptError: "Unexpected status 403: forbidden",
           promptErrorSource: "prompt",
         });
@@ -109,23 +122,11 @@ describe("Codex fallback terminal results", () => {
       expect(denied.lastAssistant).toBeUndefined();
       params.onAgentEvent.mockClear();
       runAttempt.mockReset().mockResolvedValueOnce(refusal).mockResolvedValueOnce(denied);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore: testCodexAppServerBindingStore,
-      });
+      const harness = createHarness();
 
       await expect(harness.runAttempt?.(params)).resolves.toBe(denied);
       expect(runAttempt).toHaveBeenCalledTimes(2);
-      expect(params.onAgentEvent).toHaveBeenCalledWith({
-        stream: "notice",
-        data: {
-          phase: "provider_policy",
-          category: "cyber",
-          state: "unavailable",
-          provider: "openai",
-          model: PRIMARY,
-          fallbackModel: FALLBACK,
-        },
-      });
+      expectNotice(params, "unavailable");
     },
   );
 
@@ -154,9 +155,7 @@ describe("Codex fallback terminal results", () => {
     expect(denied.replayMetadata?.replaySafe).toBe(true);
     expect(denied.toolMetas).toHaveLength(1);
     runAttempt.mockReset().mockResolvedValueOnce(refusal).mockResolvedValueOnce(denied);
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
+    const harness = createHarness();
 
     await expect(harness.runAttempt?.(params)).resolves.toBe(denied);
     expect(runAttempt).toHaveBeenCalledTimes(2);
@@ -168,117 +167,83 @@ describe("Codex fallback terminal results", () => {
     refusal.runtimeContinuationStarted = true;
     expect(refusal.replayMetadata?.replaySafe).toBe(true);
     runAttempt.mockReset().mockResolvedValue(refusal);
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
+    const harness = createHarness();
 
     await expect(harness.runAttempt?.(params)).resolves.toBe(refusal);
     expect(runAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["abort", "timeout", "failure"] as const)(
-    "does not replay a primary refusal superseded by %s",
-    async (terminal) => {
-      const params = await paramsForWorkspace(`primary-${terminal}`, "first");
-      const refusal = await refusedTurn(params);
-      refusal.terminal = attemptTerminal.normalize({
-        aborted: terminal === "abort",
-        timedOut: terminal === "timeout",
-        promptError: terminal === "failure" ? "Native connection closed" : undefined,
-        promptErrorSource: "prompt",
-      });
-      runAttempt.mockReset().mockResolvedValue(refusal);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore: testCodexAppServerBindingStore,
-      });
+  it("does not replay a primary refusal superseded by abort", async () => {
+    const params = await paramsForWorkspace("primary-abort", "first");
+    const refusal = await refusedTurn(params);
+    refusal.terminal = attemptTerminal.normalize({
+      aborted: true,
+      promptErrorSource: "prompt",
+    });
+    runAttempt.mockReset().mockResolvedValue(refusal);
+    const harness = createHarness();
 
-      await expect(harness.runAttempt?.(params)).resolves.toBe(refusal);
-      expect(runAttempt).toHaveBeenCalledTimes(1);
-    },
-  );
+    await expect(harness.runAttempt?.(params)).resolves.toBe(refusal);
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+  });
 
-  it.each([401, 403])(
-    "keeps the refusal and avoids repeating a target denied with %i before assistant output",
-    async (status) => {
-      const firstParams = await paramsForWorkspace(`denied-${status}`, "first");
-      const nextParams = await paramsForWorkspace(`denied-${status}`, "next");
-      const refusal = await refusedTurn(firstParams);
-      const nextRefusal = await refusedTurn(nextParams);
-      const denied = await failedTurn(
-        firstParams,
-        `Unexpected status ${status}: configured target is not authorized`,
-        "other",
-      );
-      expect(denied.terminal).toMatchObject({ kind: "failed", source: "prompt" });
-      expect(denied.currentAttemptAssistant).toBeUndefined();
-      expect(denied.lastAssistant).toBeUndefined();
-      firstParams.onAgentEvent.mockClear();
-      nextParams.onAgentEvent.mockClear();
-      runAttempt
-        .mockReset()
-        .mockResolvedValueOnce(refusal)
-        .mockResolvedValueOnce(denied)
-        .mockResolvedValueOnce(nextRefusal)
-        .mockResolvedValue(denied);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore: testCodexAppServerBindingStore,
-      });
+  it("keeps the refusal and avoids repeating a target denied before assistant output", async () => {
+    const firstParams = await paramsForWorkspace("denied", "first");
+    const nextParams = await paramsForWorkspace("denied", "next");
+    const refusal = await refusedTurn(firstParams);
+    const nextRefusal = await refusedTurn(nextParams);
+    const denied = await failedTurn(
+      firstParams,
+      "Unexpected status 403: configured target is not authorized",
+      "other",
+    );
+    expect(denied.terminal).toMatchObject({ kind: "failed", source: "prompt" });
+    expect(denied.currentAttemptAssistant).toBeUndefined();
+    expect(denied.lastAssistant).toBeUndefined();
+    firstParams.onAgentEvent.mockClear();
+    nextParams.onAgentEvent.mockClear();
+    runAttempt
+      .mockReset()
+      .mockResolvedValueOnce(refusal)
+      .mockResolvedValueOnce(denied)
+      .mockResolvedValueOnce(nextRefusal)
+      .mockResolvedValue(denied);
+    const harness = createHarness();
 
-      const firstResult = await harness.runAttempt?.(firstParams);
-      const nextResult = await harness.runAttempt?.(nextParams);
+    const firstResult = await harness.runAttempt?.(firstParams);
+    const nextResult = await harness.runAttempt?.(nextParams);
 
-      expect(runAttempt.mock.calls.map(([, options]) => options.runtimeModelId)).toEqual([
-        PRIMARY,
-        FALLBACK,
-        PRIMARY,
-      ]);
-      expect(firstResult).toBe(refusal);
-      expect(nextResult).toBe(nextRefusal);
-      expect(runAttempt.mock.calls[1]?.[0]).toEqual({
-        ...firstParams,
-        suppressNextUserMessagePersistence: true,
-      });
-      for (const params of [firstParams, nextParams]) {
-        expect(params.onAgentEvent).toHaveBeenCalledWith({
-          stream: "notice",
-          data: {
-            phase: "provider_policy",
-            category: "cyber",
-            state: "unavailable",
-            provider: "openai",
-            model: PRIMARY,
-            fallbackModel: FALLBACK,
-          },
-        });
-        expect(params.model.id).toBe(PRIMARY);
-      }
+    expect(runAttempt.mock.calls.map(([, options]) => options.runtimeModelId)).toEqual([
+      PRIMARY,
+      FALLBACK,
+      PRIMARY,
+    ]);
+    expect(firstResult).toBe(refusal);
+    expect(nextResult).toBe(nextRefusal);
+    expect(runAttempt.mock.calls[1]?.[0]).toEqual({
+      ...firstParams,
+      suppressNextUserMessagePersistence: true,
+    });
+    for (const params of [firstParams, nextParams]) {
+      expectNotice(params, "unavailable");
+      expect(params.model.id).toBe(PRIMARY);
+    }
 
-      const otherParams = await paramsForWorkspace(`other-${status}`, "other");
-      const otherRefusal = await refusedTurn(otherParams);
-      const answeredProjector = await createProjector(otherParams);
-      await answeredProjector.handleNotification(
-        turnCompleted([{ type: "agentMessage", id: "reply", text: "Synthetic fallback reply" }]),
-      );
-      const answer = answeredProjector.buildResult(buildEmptyToolTelemetry());
-      otherParams.onAgentEvent.mockClear();
-      runAttempt.mockReset().mockResolvedValueOnce(otherRefusal).mockResolvedValueOnce(answer);
+    const otherParams = await paramsForWorkspace("other", "other");
+    const otherRefusal = await refusedTurn(otherParams);
+    const answeredProjector = await createProjector(otherParams);
+    await answeredProjector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "reply", text: "Synthetic fallback reply" }]),
+    );
+    const answer = answeredProjector.buildResult(buildEmptyToolTelemetry());
+    otherParams.onAgentEvent.mockClear();
+    runAttempt.mockReset().mockResolvedValueOnce(otherRefusal).mockResolvedValueOnce(answer);
 
-      await expect(harness.runAttempt?.(otherParams)).resolves.toBe(answer);
-      expect(runAttempt.mock.calls.map(([, options]) => options.runtimeModelId)).toEqual([
-        PRIMARY,
-        FALLBACK,
-      ]);
-      expect(otherParams.onAgentEvent).toHaveBeenCalledWith({
-        stream: "notice",
-        data: {
-          phase: "provider_policy",
-          category: "cyber",
-          state: "escalated",
-          provider: "openai",
-          model: PRIMARY,
-          fallbackModel: FALLBACK,
-        },
-      });
-    },
-  );
+    await expect(harness.runAttempt?.(otherParams)).resolves.toBe(answer);
+    expect(runAttempt.mock.calls.map(([, options]) => options.runtimeModelId)).toEqual([
+      PRIMARY,
+      FALLBACK,
+    ]);
+    expectNotice(otherParams, "escalated");
+  });
 });

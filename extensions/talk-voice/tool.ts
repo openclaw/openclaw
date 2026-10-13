@@ -4,7 +4,11 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 
-export const executeTalkVoiceTool: AnyAgentTool["execute"] = async (_id, args, signal) => {
+export async function executeTalkVoiceTool(
+  sessionKey: string | undefined,
+  ...toolArgs: Parameters<AnyAgentTool["execute"]>
+) {
+  const [, args, signal] = toolArgs;
   const params = asOptionalRecord(args) ?? {};
   const action = readStringParam(params, "action", { required: true });
   let method: string;
@@ -21,10 +25,13 @@ export const executeTalkVoiceTool: AnyAgentTool["execute"] = async (_id, args, s
     default:
       throw new Error(`Unknown Talk voice action: ${action}`);
   }
+  if (sessionKey) {
+    request.sessionKey = sessionKey;
+  }
   return jsonResult(
     await callGatewayTool(method, { timeoutMs: 65_000 }, request, {
       requireAgentRuntimeIdentity: true,
       signal,
     }),
   );
-};
+}

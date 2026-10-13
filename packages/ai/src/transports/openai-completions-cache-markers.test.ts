@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, describe, expect, it } from "vitest";
+import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -27,6 +29,25 @@ function markers(payload: unknown) {
 }
 
 describe("managed Completions cache markers", () => {
+  it("keeps cache markers request-local when tool descriptors are published", () => {
+    const { schema } = publishRuntimeToolInputSchema({ type: "object", properties: {} });
+    assert(isRecord(schema));
+    const publishedContext = {
+      ...context,
+      tools: [{ name: "lookup", description: "Lookup", parameters: schema }],
+    };
+    const markedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+      cacheRetention: "short",
+    });
+    const unmarkedRequest = buildOpenAICompletionsParams(model, publishedContext, {
+      cacheRetention: "none",
+    });
+    expect(markedRequest.tools?.[0]).toHaveProperty("cache_control", marker);
+    expect(unmarkedRequest.tools?.[0]).not.toHaveProperty("cache_control");
+    expect(markedRequest.tools?.[0]?.function).toBe(unmarkedRequest.tools?.[0]?.function);
+    expect(markedRequest.tools?.[0]).not.toBe(unmarkedRequest.tools?.[0]);
+  });
+
   it("keeps every message as a string for string-only endpoints with caching enabled", () => {
     const payload = buildOpenAICompletionsParams(
       { ...model, compat: { requiresStringContent: true, cacheControlFormat: "anthropic" } },
@@ -97,57 +118,66 @@ describe("managed Completions cache markers", () => {
     expect(markers(first)).toHaveLength(3);
   });
 
-  it("advances from a user turn to a tool result to a new turn while skipping runtime carriers", () => {
-    const toolLoop: Context["messages"] = [
-      ...context.messages,
-      {
-        role: "assistant",
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "alpha",
-        isError: false,
-        content: [{ type: "text", text: "Result" }],
-        timestamp: 3,
-      },
-    ];
-    for (const [messages, anchor] of [
-      [context.messages, "Question"],
-      [toolLoop, "Result"],
-      [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
-    ] satisfies Array<[Context["messages"], string]>) {
-      const payload = buildOpenAICompletionsParams(
-        model,
+  it.each([true, false])(
+    "skips runtime carriers after tool replay (supportsTools=%s)",
+    (supportsTools) => {
+      const route = { ...model, compat: { ...model.compat, supportsTools } };
+      const toolLoop: Context["messages"] = [
+        ...context.messages,
         {
-          ...context,
-          messages: [
-            ...messages,
-            { role: "user", content: "Runtime facts", runtimeContextCarrier: true, timestamp: 5 },
-          ],
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 2,
         },
-        undefined,
-      );
-      const wire = JSON.stringify(payload.messages);
-      expect(wire).toContain(JSON.stringify(marked(anchor)));
-      expect(wire).toContain('"content":"Runtime facts"');
-      expect(markers(payload)).toHaveLength(3);
-    }
-  });
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "alpha",
+          isError: false,
+          content: [{ type: "text", text: "Result" }],
+          timestamp: 3,
+        },
+      ];
+      for (const [messages, anchor] of [
+        [context.messages, "Question"],
+        [toolLoop, supportsTools ? "Result" : "Question"],
+        [[...toolLoop, { role: "user", content: "Next", timestamp: 4 }], "Next"],
+      ] satisfies Array<[Context["messages"], string]>) {
+        const payload = buildOpenAICompletionsParams(
+          route,
+          {
+            ...context,
+            messages: [
+              ...messages,
+              {
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime facts",
+                timestamp: 5,
+                runtimeContext: {},
+              },
+            ],
+          },
+          undefined,
+        );
+        const wire = JSON.stringify(payload.messages);
+        expect(wire).toContain(JSON.stringify(marked(anchor)));
+        expect(wire).toContain('"content":"OpenClaw runtime context:\\nRuntime facts"');
+        expect(markers(payload)).toHaveLength(supportsTools ? 3 : 2);
+      }
+    },
+  );
 
   it.each([
     ["openrouter", "", 3, true],

@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage selected-session details" });
 
@@ -86,13 +86,8 @@ suite.define(() => {
                 byAgent: [],
                 byChannel: [],
                 daily: [],
+                costDaily: [{ date, ...totals }],
               },
-            },
-            "usage.cost": {
-              updatedAt: start + 5000,
-              days: 1,
-              daily: [{ date, ...totals }],
-              totals,
             },
             "usage.status": { updatedAt: start + 5000, providers: [] },
             "sessions.usage.timeseries": { points },
@@ -179,12 +174,10 @@ suite.define(() => {
             },
           ],
           totals: refreshedTotals,
-        });
-        await gateway.setMethodResponse("usage.cost", {
-          ...scenario.methodResponses["usage.cost"],
-          updatedAt: start + 7000,
-          daily: [{ date, ...refreshedTotals }],
-          totals: refreshedTotals,
+          aggregates: {
+            ...usage.aggregates,
+            costDaily: [{ date, ...refreshedTotals }],
+          },
         });
         await gateway.setMethodResponse("sessions.usage.timeseries", {
           points: [...points, { ...points[2]!, timestamp: start + 6000, cumulativeTokens: 480 }],
@@ -195,6 +188,13 @@ suite.define(() => {
             { timestamp: start + 6000, role: "assistant", content: latestReply },
           ],
         });
+        const detailMethods = ["sessions.usage.timeseries", "sessions.usage.logs"] as const;
+        const previousDetailRequests = await Promise.all(
+          detailMethods.map(
+            async (method) =>
+              (await gateway.getRequests(method, { key: "agent:main:tool-count" })).length,
+          ),
+        );
         await page.getByRole("button", { name: "Refresh", exact: true }).click();
         await expect
           .poll(() => panel.locator(".session-detail-stats").textContent())
@@ -208,8 +208,12 @@ suite.define(() => {
             timeline: expect.stringContaining("480"),
             conversation: expect.arrayContaining([latestReply]),
           });
-          for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
-            expect(await gateway.getRequests(method)).toHaveLength(2);
+          for (const [index, method] of detailMethods.entries()) {
+            const requests = await gateway.getRequests(method, { key: "agent:main:tool-count" });
+            expect(requests).toHaveLength(previousDetailRequests[index]! + 1);
+            expect(requests.at(-1)?.params).toMatchObject({
+              key: "agent:main:tool-count",
+            });
           }
         } finally {
           if (proofDir) {

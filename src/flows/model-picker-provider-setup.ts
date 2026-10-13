@@ -4,18 +4,12 @@ import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choi
 import { buildProviderPluginMethodChoice } from "../plugins/provider-plugin-choice.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
-async function loadModelPickerRuntime() {
-  return import("../commands/model-picker.runtime.js");
+export async function loadResolvedModelPickerRuntime() {
+  return (await import("../commands/model-picker.runtime.js")).modelPickerRuntime;
 }
-
-export const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
-  loadModelPickerRuntime,
-  ({ modelPickerRuntime }) => modelPickerRuntime,
-);
 
 export async function resolveProviderPluginSetupOptions(params: {
   cfg: OpenClawConfig;
@@ -23,27 +17,17 @@ export async function resolveProviderPluginSetupOptions(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<WizardSelectOption[]> {
   const runtime = await loadResolvedModelPickerRuntime();
-  const providerModelPickerOptions =
-    "resolveProviderModelPickerContributions" in runtime &&
-    typeof runtime.resolveProviderModelPickerContributions === "function"
-      ? runtime
-          .resolveProviderModelPickerContributions({
-            config: params.cfg,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
-          })
-          .map((contribution) => contribution.option)
-      : runtime.resolveProviderModelPickerEntries({
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        });
-  return providerModelPickerOptions.map((entry) =>
-    Object.assign(
-      { value: entry.value, label: entry.label },
-      entry.hint ? { hint: entry.hint } : {},
-    ),
-  );
+  return runtime
+    .resolveProviderModelPickerEntries({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    })
+    .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
+    .toSorted(
+      (left, right) =>
+        left.label.localeCompare(right.label) || left.value.localeCompare(right.value),
+    );
 }
 
 export async function maybeHandleProviderPluginSelection(params: {
@@ -135,6 +119,7 @@ export async function maybeHandleProviderPluginSelection(params: {
   }
   const applied = await runProviderPluginAuthMethod({
     config: params.cfg,
+    providerId: resolved.provider.id,
     runtime: params.runtime,
     prompter: params.prompter,
     method: resolved.method,

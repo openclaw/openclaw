@@ -26,7 +26,6 @@ struct ChatStreamingRevealFrame: Equatable {
         let opacity: Double
     }
 
-    let fullyRevealedPrefixCharacterOffset: Int
     let fading: [FadingWord]
 }
 
@@ -122,9 +121,7 @@ func revealedOpacities(
             characterRange: word.characterRange,
             opacity: opacity)
     }
-    return ChatStreamingRevealFrame(
-        fullyRevealedPrefixCharacterOffset: fading.first?.characterRange.lowerBound ?? state.text.count,
-        fading: fading)
+    return ChatStreamingRevealFrame(fading: fading)
 }
 
 func chatStreamingWordRanges(in text: String) -> [Range<Int>] {

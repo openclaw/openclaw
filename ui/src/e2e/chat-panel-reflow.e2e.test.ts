@@ -17,8 +17,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const chatSessionKey = "agent:main:main";
-
 const longReply =
   "Additional runtime work may make an earlier benchmark misleading. " +
   "The current implementation must preserve the visible conversation while panels resize the transcript. ";
@@ -66,7 +64,7 @@ async function expectMessagesNotToOverlap(page: import("playwright").Page): Prom
 }
 
 suite.define(() => {
-  it("keeps transcript rows separate across background-task, file, and diff panel toggles", async () => {
+  it("keeps transcript rows separate across file and diff panel toggles", async () => {
     const artifactDir = createControlUiE2eArtifactDir("chat-panel-reflow");
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
@@ -113,24 +111,6 @@ suite.define(() => {
             root: "/workspace",
             sessionKey: "main",
           },
-          "tasks.list": {
-            tasks: [
-              {
-                agentId: "main",
-                createdAt: Date.now() - 5_000,
-                id: "task-reflow",
-                kind: "subagent",
-                ownerKey: chatSessionKey,
-                progressSummary: "Checking transcript layout",
-                runtime: "subagent",
-                startedAt: Date.now() - 4_000,
-                status: "running",
-                taskId: "task-reflow",
-                title: "Reflow proof",
-                updatedAt: Date.now(),
-              },
-            ],
-          },
         },
       });
 
@@ -142,11 +122,6 @@ suite.define(() => {
       });
       await expectMessagesNotToOverlap(page);
       await page.screenshot({ path: path.join(artifactDir, "00-closed.png") });
-
-      await openChatSidePanelType(page, "Tasks");
-      await page.locator(".chat-tasks-rail").waitFor({ state: "visible" });
-      await expectMessagesNotToOverlap(page);
-      await page.screenshot({ path: path.join(artifactDir, "01-background-tasks.png") });
 
       await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });

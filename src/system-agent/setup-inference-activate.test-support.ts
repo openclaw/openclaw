@@ -55,6 +55,7 @@ export async function fixture(
     secretRef?: boolean;
     signal?: AbortSignal;
     codex?: boolean;
+    nativeCatalogEnabled?: boolean;
     subscription?: boolean;
     homeScope?: "agent" | "user";
     modelTarget?: "utility";
@@ -94,7 +95,7 @@ export async function fixture(
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace,
         ...(options.primaryModel
@@ -136,7 +137,12 @@ export async function fixture(
   if (options.codex) {
     (config.plugins!.entries ??= {}).codex = {
       enabled: true,
-      config: { appServer: { homeScope: options.homeScope } },
+      config: {
+        appServer: { homeScope: options.homeScope },
+        ...(options.nativeCatalogEnabled !== undefined
+          ? { sessionCatalog: { enabled: options.nativeCatalogEnabled } }
+          : {}),
+      },
     };
   }
   const providerModels = config.models;
@@ -256,24 +262,23 @@ export async function fixture(
   const run = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(async (params) =>
     reply(params),
   );
+  // Revalidation must reload the same prepared provider used by login and the probe.
+  vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(pluginRegistry);
   const deps: ActivateSetupInferenceDeps = {
     resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,
     resolveManifestProviderAuthChoices: () => [choice],
     resolvePluginMetadataSnapshot: metadata.bind,
+    resolveApiKeyForProvider: resolveAuth,
     runEmbeddedAgent: run,
   };
   if (options.codex) {
-    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockReturnValue(
-      pluginRegistry,
-    );
     deps.readCodexCliActiveApiKey = () => null;
     deps.ensureCodexRuntimePlugin = async ({ cfg: candidateConfig }) => ({
       ok: true,
       cfg: candidateConfig,
       required: false,
     });
-    deps.resolveApiKeyForProvider = resolveAuth;
     deps.loadPluginRegistrySnapshot = () => ({
       plugins: [pluginRecord("openai"), pluginRecord("codex")],
     });
@@ -301,7 +306,13 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
+      | "agentId"
+      | "apiKey"
+      | "signal"
+      | "onActivationCompletion"
+      | "modelTarget"
+      | "modelRef"
+      | "automaticSetup"
     > = {},
   ) =>
     metadata.run(() =>
@@ -326,7 +337,6 @@ export async function fixture(
         resolveManifestProviderAuthChoices: () => [choice],
         resolvePluginProviders: () => [provider],
         detectInferenceBackends: async () => [],
-        probeLocalCommand: async (command) => ({ command, found: false }),
       }),
     );
   return {

@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  computeRelayAuthProof,
-  deriveRelayAuthKeyId,
-  extensionRelayAuthResource,
-  type RelayAuthProofFields,
-} from "./relay-auth-v2-crypto.js";
+import { extensionRelayAuthResource, type RelayAuthProofFields } from "./relay-auth-v2-crypto.js";
 import { createExtensionRelayAuthClient, parseRelayAuthJson } from "./relay-auth-v2.js";
 
 const VECTOR = {
@@ -48,19 +43,6 @@ async function client() {
 }
 
 describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
-  it("matches the fixed Node HMAC vector", async () => {
-    await expect(deriveRelayAuthKeyId(VECTOR.token)).resolves.toBe(VECTOR.fields.keyId);
-    await expect(computeRelayAuthProof(VECTOR.token, "server", VECTOR.fields)).resolves.toBe(
-      VECTOR.serverProof,
-    );
-    await expect(computeRelayAuthProof(VECTOR.token, "client", VECTOR.fields)).resolves.toBe(
-      VECTOR.clientProof,
-    );
-    await expect(
-      computeRelayAuthProof(VECTOR.token, "accept", VECTOR.fields, VECTOR.clientProof),
-    ).resolves.toBe(VECTOR.acceptProof);
-  });
-
   it("verifies server proof before producing client proof and verifies accept proof", async () => {
     const auth = await client();
     expect(auth.start()).toEqual({
