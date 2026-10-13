@@ -59,11 +59,18 @@ afterEach(async () => {
 });
 
 describe("agent database admission", () => {
-  it.each([21, OPENCLAW_AGENT_SCHEMA_VERSION + 1])(
-    "isolates secondary schema %s across restart and startup without touching retained data",
-    async (version) => {
+  it.each([
+    [21, "per-agent"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "per-agent"],
+    [21, "fixed"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "fixed"],
+  ] as const)(
+    "isolates secondary schema %s with %s stores across restart and startup without touching retained data",
+    async (version, layout) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-isolation-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared", "sessions.json");
       const config: OpenClawConfig = {
+        ...(layout === "fixed" ? { session: { store: storePath } } : {}),
         agents: {
           entries: { main: {}, worker: {} },
           defaults: { systemAgent: { agentId: "main" } },
@@ -71,7 +78,13 @@ describe("agent database admission", () => {
       };
       const mainPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
       const workerPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
-      const retainedPath = openOpenClawAgentDatabase({ agentId: "retained", env }).path;
+      const retainedPath = openOpenClawAgentDatabase({
+        agentId: "retained",
+        env,
+        ...(layout === "fixed"
+          ? { path: path.join(path.dirname(storePath), "openclaw-agent.retained.sqlite") }
+          : {}),
+      }).path;
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawStateDatabaseForTest();
       for (const pathname of [workerPath, retainedPath]) {
