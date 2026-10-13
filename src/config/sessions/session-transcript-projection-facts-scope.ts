@@ -28,5 +28,5 @@ export function readSessionTranscriptProjectionReceipt(
   ) {
     return undefined;
   }
-  return structuredClone(receipt.facts);
+  return structuredClone({ facts: receipt.facts, contextOnly: receipt.contextOnly });
 }

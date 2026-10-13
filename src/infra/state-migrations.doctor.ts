@@ -55,10 +55,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
-import {
-  legacyAgentQuarantineNotices,
-  resolveLegacyStandaloneAgentDir,
-} from "./state-migrations.agent-dir-receipt.js";
+import { legacyAgentQuarantineNotices } from "./state-migrations.agent-dir-receipt.js";
 import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
@@ -154,6 +151,7 @@ import {
   inspectOrphanSessionStoreEndpoints,
   uniqueMigrationEndpoints,
 } from "./state-migrations.prelude.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 import {
   detectLegacyRescuePending,
   discardLegacyRescuePending,
@@ -319,8 +317,13 @@ export async function detectLegacyStateMigrations(params: {
     : undefined;
   const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const seenAgentSources = new Set<string>();
+  const { standaloneAgent } = resolveLegacyProfileMigrationExceptions({
+    env,
+    homedir,
+    configuredAgentDir: migrationTarget?.dir,
+  });
   const legacyAgentInspections = [
-    { legacyDir: resolveLegacyStandaloneAgentDir(homedir), standalone: true },
+    ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
     { legacyDir: path.join(stateDir, "agent"), standalone: false },
   ]
     .filter(({ legacyDir }) => {

@@ -494,10 +494,3 @@ export function SidebarIssueItem(props: {
     </Show>
   );
 }
-
-export function renderSidebarIssueItem(
-  item: SidebarAttentionItem,
-  handlers: SidebarIssueItemHandlers,
-) {
-  return <SidebarIssueItem item={item} handlers={handlers} />;
-}
