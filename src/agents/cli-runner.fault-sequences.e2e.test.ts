@@ -9,7 +9,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import {
   createTestAdmittedRunContext,
@@ -20,8 +19,7 @@ import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
-import { hasProviderRequestSizeCeiling, isFailoverError } from "./failover-error.js";
-import { isLikelyContextOverflowError } from "./failover/classify.js";
+import { isFailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
   installEmbeddedRunnerBaseE2eMocks,
@@ -80,7 +78,6 @@ type ScenarioHarness = {
 
 type OuterRunOptions = {
   fallbacks?: string[];
-  onError?: (error: unknown) => void;
   runCandidate?: (
     provider: string,
     model: string,
@@ -249,7 +246,6 @@ async function runOuter(options: OuterRunOptions = {}) {
         sessionKey: "agent:main:cli-fault-e2e",
         skipAuthProfileRuntime: true,
         fallbacksOverride: options.fallbacks,
-        onError: ({ error }) => options.onError?.(error),
         run: async (provider, model) => {
           harness.outerCandidates.push({ provider, model });
           return options.runCandidate
@@ -504,54 +500,43 @@ describe("CLI runner fault sequences", () => {
     });
   });
 
-  it("fresh-retries reused-session context overflow once and never crosses models", async () => {
+  it("fresh-retries reused-session context overflow once before advancing the outer model", async () => {
     harness.contextFor = buildReusableProcessContext;
-    const fallbackErrors: string[] = [];
     supervisorSpawnMock
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
       )
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
-      );
+      )
+      .mockResolvedValueOnce(managedRun(successExit("fallback after context overflow")));
 
-    let error: unknown;
-    try {
-      await runOuter({
-        fallbacks: [`claude-cli/${FALLBACK_MODEL}`],
-        onError: (failure) => {
-          const formatted = formatErrorMessage(failure);
-          fallbackErrors.push(
-            JSON.stringify({
-              formatted,
-              formattedLikely: isLikelyContextOverflowError(formatted),
-              rawLikely: failure instanceof Error && isLikelyContextOverflowError(failure.message),
-              ceiling: hasProviderRequestSizeCeiling(failure),
-              ...(isFailoverError(failure)
-                ? {
-                    reason: failure.reason,
-                    code: failure.code,
-                    requestSizeCeiling: failure.requestSizeCeiling,
-                  }
-                : {}),
-            }),
-          );
-        },
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    const outcome = await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
 
-    expect(error, JSON.stringify({ fallbackErrors, counts: currentCounts() })).toMatchObject({
-      reason: "context_overflow",
-      code: "cli_context_overflow",
-    });
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(outcome.model).toBe(FALLBACK_MODEL);
+    expect(outcome.result.payloads).toEqual([{ text: "fallback after context overflow" }]);
+    expect(outcome.attempts).toMatchObject([
+      {
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    ]);
+    expect(supervisorSpawnMock.mock.calls.map(([params]) => params.argv)).toEqual([
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--resume", "source-cli-session"]),
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--session-id"]),
+      expect.arrayContaining(["--model", FALLBACK_MODEL]),
+    ]);
+    expect(harness.outerCandidates).toEqual([
+      { provider: "claude-cli", model: PRIMARY_MODEL },
+      { provider: "claude-cli", model: FALLBACK_MODEL },
+    ]);
     expectCounts({
-      childProcesses: 2,
+      childProcesses: 3,
       nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
+      outerCandidates: 2,
+      runCliAgentCalls: 2,
       wholeTurnRetries: 0,
     });
   });
