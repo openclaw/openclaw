@@ -323,10 +323,7 @@ describe("mantis desktop browser smoke runtime", () => {
         createdLease: leaseId === undefined,
         id: expectedId,
         provider: "hetzner",
-        vncCommand:
-          expectedId === "unallocated"
-            ? "unallocated"
-            : `/tmp/crabbox vnc --provider hetzner --id ${expectedId} --open`,
+        vncCommand: `/tmp/crabbox vnc --provider hetzner --id ${expectedId} --open`,
       });
       expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
         operations.map((operation) => ["/tmp/crabbox", operation]),

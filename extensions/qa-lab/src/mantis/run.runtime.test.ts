@@ -30,7 +30,7 @@ describe("mantis before/after runtime", () => {
 
   it.each(["repo-root-token-outside-lane"] as const)(
     "runs baseline and candidate worktrees and writes stable comparison artifacts (%s)",
-    async (artifactBase) => {
+    async () => {
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "test-run");
       await fs.mkdir(outputDir, { recursive: true });
       await fs.writeFile(path.join(outputDir, "error.txt"), "stale failure", "utf8");
@@ -56,19 +56,12 @@ describe("mantis before/after runtime", () => {
         const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
         const laneOutputDir = path.join(repoRootArg, outputDirArg);
         await fs.mkdir(laneOutputDir, { recursive: true });
-        const artifactDir =
-          artifactBase === "repo-root-token-outside-lane"
-            ? path.join(repoRootArg, ".artifacts", "capture")
-            : laneOutputDir;
+        const artifactDir = path.join(repoRootArg, ".artifacts", "capture");
         await fs.mkdir(artifactDir, { recursive: true });
         const screenshotPath = path.join(artifactDir, `${lane}-timeline.png`);
         const videoPath = path.join(artifactDir, `${lane}-timeline.mp4`);
         const evidencePath = (artifactPath: string) =>
-          artifactBase.startsWith("repo-root-token")
-            ? toRepoArtifactPath(repoRootArg, artifactPath)
-            : artifactBase === "lane-relative"
-              ? path.relative(laneOutputDir, artifactPath)
-              : artifactPath;
+          toRepoArtifactPath(repoRootArg, artifactPath);
         await fs.writeFile(screenshotPath, `${lane} screenshot`);
         await fs.writeFile(videoPath, `${lane} video`);
         const title = "Discord explicit status reactions run in tool-only reply mode";
