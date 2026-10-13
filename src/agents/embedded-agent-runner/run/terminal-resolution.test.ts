@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
+import { applyInputProvenanceToUserMessage } from "../../../sessions/input-provenance.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
@@ -53,7 +54,10 @@ describe("terminal resolution", () => {
         const attempt = makeEmbeddedRunnerAttempt({
           assistantTexts: [],
           messagesSnapshot: [
-            { role: "user", content: prompt, timestamp: 0, provenance },
+            applyInputProvenanceToUserMessage(
+              { role: "user", content: prompt, timestamp: 0 },
+              provenance,
+            ),
             assistant,
           ],
           lastAssistant: assistant,
