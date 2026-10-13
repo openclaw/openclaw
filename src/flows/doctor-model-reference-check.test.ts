@@ -50,6 +50,54 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  [
+    "publishes the id",
+    { models: [{ id: "gemini-flash-lite-latest", name: "x", provider: "google" }] },
+    false,
+  ],
+  [
+    "does not publish the id",
+    { models: [{ id: "gemini-2.5-flash", name: "x", provider: "google" }] },
+    true,
+  ],
+  ["cannot answer", new Error("Gateway offline"), true],
+])(
+  "uses the selected Gateway's published ids for membership when it %s",
+  async (_label, response, reported) => {
+    vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+      pid: 123,
+      port: 19568,
+      createdAt: "fixture",
+    });
+    const call = vi.spyOn(gateway, "callGateway");
+    if (response instanceof Error) {
+      call.mockRejectedValue(response);
+    } else {
+      call.mockResolvedValue(response);
+    }
+    const ref = "google/gemini-flash-lite-latest";
+    const findings = await createModelReferenceCheck().detect({
+      mode: "lint",
+      env: {},
+      cfg: { agents: { defaults: { imageModel: ref } } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    expect(findings.filter((finding) => finding.target === ref)).toEqual(
+      reported
+        ? [
+            expect.objectContaining({
+              severity: "info",
+              requirement: "a provider-supported model id",
+            }),
+          ]
+        : [],
+    );
+    expect(call).toHaveBeenCalledOnce();
+  },
+);
+
 it("does not execute Gateway secret providers without Doctor's allow-exec opt-in", async () => {
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({

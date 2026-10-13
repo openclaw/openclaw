@@ -1,6 +1,9 @@
 /** Doctor checks configured references against known provider and catalog facts. */
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
-import { readModelCatalogWarnings } from "../commands/models/catalog-warnings.js";
+import {
+  getModelCatalogWarnings,
+  readPreparedGatewayModelCatalog,
+} from "../commands/models/catalog-warnings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -13,10 +16,17 @@ export function createModelReferenceCheck(): HealthCheck {
     async detect(ctx) {
       const { inspectConfiguredModelReferences } =
         await import("../commands/models/model-reference-validation.js");
+      const catalogSkipped =
+        ctx.allowExecSecretRefs !== true &&
+        (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }));
+      // One prepared read serves both membership and server diagnostics. Providers
+      // that discover models at runtime publish ids offline metadata cannot list.
+      const catalog = catalogSkipped ? undefined : await readPreparedGatewayModelCatalog(ctx.cfg);
       const findings = inspectConfiguredModelReferences({
         cfg: ctx.cfg,
         env: ctx.env,
         workspaceDir: ctx.cwd,
+        ...(catalog ? { publishedModelCatalog: catalog.models } : {}),
       }).flatMap((inspection): HealthFinding[] => {
         const migrationTarget = resolveKnownModelRefMigrationTarget(ctx.cfg, inspection.ref);
         const migrationFinding = migrationTarget
@@ -27,15 +37,18 @@ export function createModelReferenceCheck(): HealthCheck {
             }
           : undefined;
         // A provider that ships no catalog rows cannot confirm or deny a model
-        // id offline; the generic advisory would be unactionable there, so only
-        // a legacy-reference migration is still worth reporting.
+        // id offline, and a published id is not missing; the generic advisory
+        // would be unactionable there, so only a legacy-reference migration is
+        // still worth reporting.
         const unknownProvider = inspection.status === "unknown-provider";
         if (
           !unknownProvider &&
           !(
             inspection.active &&
             (inspection.status === "unknown-model" ||
-              (inspection.status === "uncatalogued-provider" && migrationFinding))
+              ((inspection.status === "uncatalogued-provider" ||
+                inspection.status === "published-model") &&
+                migrationFinding))
           )
         ) {
           return [];
@@ -63,10 +76,7 @@ export function createModelReferenceCheck(): HealthCheck {
           },
         ];
       });
-      if (
-        ctx.allowExecSecretRefs !== true &&
-        (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }))
-      ) {
+      if (catalogSkipped) {
         findings.push({
           checkId: "core/doctor/model-references",
           severity: "info",
@@ -77,7 +87,7 @@ export function createModelReferenceCheck(): HealthCheck {
         });
         return findings;
       }
-      for (const warning of await readModelCatalogWarnings(ctx.cfg)) {
+      for (const warning of getModelCatalogWarnings(catalog)) {
         findings.push({
           checkId: "core/doctor/model-references",
           severity: "warning",

@@ -45,4 +45,27 @@ describe("inspectModelReference", () => {
     expect(inspect(cfg, "openrouter", "openrouter/auto")).toBe("known");
     expect(inspect(cfg, "openrouter", "deepseek/deepseek-v4-pro")).toBe("unknown-model");
   });
+
+  it("treats an id the selected Gateway publishes as present", () => {
+    // Google's manifest seeds a few rows and its runtime catalog publishes more,
+    // so an advertised alias can be missing offline yet present at runtime.
+    const published = [{ provider: "google", id: "gemini-flash-lite-latest" }];
+    expect(inspect({}, "google", "gemini-flash-lite-latest")).toBe("unknown-model");
+    expect(
+      inspectModelReference({
+        cfg: {},
+        env: {},
+        ref: { provider: "google", model: "gemini-flash-lite-latest" },
+        publishedModelCatalog: published,
+      }).status,
+    ).toBe("published-model");
+    expect(
+      inspectModelReference({
+        cfg: {},
+        env: {},
+        ref: { provider: "google", model: "gemini-flash-lite-lates" },
+        publishedModelCatalog: published,
+      }).status,
+    ).toBe("unknown-model");
+  });
 });
