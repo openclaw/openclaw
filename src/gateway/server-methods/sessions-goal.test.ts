@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -207,36 +208,49 @@ describe("typed Goal management RPCs", () => {
     });
   });
 
-  it("edits literal objectives without chat rows and rejects a changed retry", async () => {
+  it("edits literal objectives in the writer without chat rows and rejects a changed retry", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();
       const objective = "clear the backlog\n/goal pause is part of the objective";
       const request = operation("edit", { objective });
-      const first = await invoke(request);
-      expect(first).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          operationId: request.operationId,
-          status: "updated",
-          goal: expect.objectContaining({ objective, status: "paused" }),
-        }),
-        undefined,
-      );
-      const replay = await invoke(request);
-      expect(replay).toHaveBeenCalledWith(
-        true,
-        { ...first.mock.calls[0]?.[1], replayed: true },
-        undefined,
-      );
-      const conflict = await invoke({ ...request, objective: "different objective" });
-      expect(conflict).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
-        }),
-      );
+      const commitGuard = vi.fn();
+      const sql = observeHostDataSql();
+      try {
+        const first = await invoke(request, { commitGuard });
+        expect(first).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            operationId: request.operationId,
+            status: "updated",
+            goal: expect.objectContaining({ objective, status: "paused" }),
+          }),
+          undefined,
+        );
+        const replay = await invoke(request, { commitGuard });
+        expect(replay).toHaveBeenCalledWith(
+          true,
+          { ...first.mock.calls[0]?.[1], replayed: true },
+          undefined,
+        );
+        const conflict = await invoke(
+          { ...request, objective: "different objective" },
+          { commitGuard },
+        );
+        expect(conflict).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
+          }),
+        );
+        expect(commitGuard).toHaveBeenCalled();
+        expect(sql.queries.filter((query) => /\bsession_goal_operations\b/i.test(query))).toEqual(
+          [],
+        );
+      } finally {
+        sql.restore();
+      }
       expect(loadSessionEntry({ agentId: "main", sessionKey })?.goal?.objective).toBe(objective);
       expect(await loadTranscriptEvents({ agentId: "main", sessionKey, sessionId })).toEqual([]);
       expect(resumeChat).not.toHaveBeenCalled();
@@ -326,7 +340,7 @@ describe("typed Goal management RPCs", () => {
     });
   });
 
-  it("checks caller lifetime again inside the mutation transaction", async () => {
+  it("rejects a revoked caller without persisting a Goal change or receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(cfg);
       await seedSession();

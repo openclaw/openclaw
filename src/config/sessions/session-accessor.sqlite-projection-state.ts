@@ -19,7 +19,6 @@ import {
 import {
   assertRawSessionEntryRemovalUnchanged,
   deleteMaterializedSessionStatePlans,
-  shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   ProjectedLifecycleCommitResult,
@@ -31,8 +30,10 @@ import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
 } from "./session-accessor.sqlite-maintenance-store.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
@@ -54,7 +55,6 @@ type ProjectedLifecycleCommitOptions = Omit<ProjectedLifecycleCommitInput, "main
     projectionNeedsReconcile: boolean;
   }) => void;
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
 };
 
 function readProjectedRemovalEntry(
@@ -107,18 +107,11 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
           : `SQLite session entry changed before lifecycle removal for ${removal.sessionKey}`,
       );
     }
-    const shouldRemove = shouldRemoveSessionEntry(entry, removal.removal);
-    if (
-      !shouldRemove &&
-      projected.upsertedEntries.some((upsert) => upsert.sessionKey === removal.sessionKey)
-    ) {
-      throw new Error(`SQLite session entry has stale lifecycle state for ${removal.sessionKey}`);
-    }
-    if (shouldRemove && entry) {
+    if (entry) {
       validatedRemovalEntries.set(removal.sessionKey, entry);
       validatedRemovalRows.set(removal.sessionKey, selected);
     }
-    return shouldRemove;
+    return true;
   });
   const archivedTranscripts = deleteMaterializedSessionStatePlans(
     database,
@@ -229,7 +222,20 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
   }
   options.afterUpsertsInTransaction?.(database);
-  options.afterFreshUpsertsInTransaction?.(database);
+  if (options.creation?.preparedTranscript) {
+    const { sessionKey, sessionId, events } = options.creation.preparedTranscript;
+    appendTranscriptEventsInTransaction(
+      database,
+      { ...options.resetScope, sessionKey, sessionId },
+      events,
+    );
+  }
+  if (options.creation?.ownerAssignment) {
+    const { sessionKey, owner } = options.creation.ownerAssignment;
+    if (!replaceSessionOwnerInTransaction(database, sessionKey, owner, options.postimages)) {
+      throw new Error(`Session owner assignment lost its target: ${sessionKey}`);
+    }
+  }
   const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
   for (const removal of validatedRemovals) {
     if (upsertedKeys.has(removal.sessionKey)) {
@@ -261,8 +267,7 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     afterCount:
       options.allowCanonicalRepair ||
       projected.removals.some(({ removal }) => removal.expectedRawEntryJson !== undefined) ||
-      options.afterUpsertsInTransaction ||
-      options.afterFreshUpsertsInTransaction
+      options.afterUpsertsInTransaction
         ? readSessionEntryCount(database)
         : afterCount,
     maintenancePlans: [options.applyMaintenance(database, options.postimages)],

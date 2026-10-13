@@ -71,6 +71,17 @@ describe("diagnostics-prometheus runtime metrics", () => {
           trusted,
         );
       }
+      metrics.record(
+        {
+          ...baseEvent(),
+          type: "diagnostic.child_process.spawn",
+          family: "node",
+          operation: "sqlite.scoped-read.broker",
+          count: 1,
+          intervalMs: 60_000,
+        },
+        trusted,
+      );
       for (const [operation, count] of [
         ["repository.identities", 4],
         ["checkout.diff", 2],
@@ -126,6 +137,9 @@ describe("diagnostics-prometheus runtime metrics", () => {
       );
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="node",operation="sqlite.scoped-read.broker"} 1\n',
       );
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4\n',
