@@ -32,15 +32,24 @@
  *     genuine failure exactly as before, proving the regression direction.
  *  4. A run that reports its own outcome clears the interruption streak, so
  *     restarts cannot accumulate across healthy runs.
+ *  5. A quiet (non-firing) trigger evaluation after a real restart clears the
+ *     error streak, so the interruption offset it was subtracted from must go
+ *     with it; ten later genuine failures then still auto-disable on the tenth.
+ *  6. A v2026.9.9 row (eight genuine failures plus one gateway restart, no
+ *     offset) keeps its full budget after Doctor's migration owner attributes
+ *     the one interruption it proves, and still auto-disables on the tenth
+ *     genuine failure. The scenario runs its own control first, showing the
+ *     un-normalized row disabling on the ninth.
  *
  * Run: pnpm tsx scripts/proof-3i95-cron-restart-interrupt-budget.ts
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeStoredCronJobs } from "../src/commands/doctor/cron/store-migration.js";
 import { CronService } from "../src/cron/service.js";
 import { createCronServiceState } from "../src/cron/service/state.js";
-import { applyJobResult } from "../src/cron/service/timer-outcomes.js";
+import { applyJobResult, applyTriggerNoFireResult } from "../src/cron/service/timer-outcomes.js";
 import { loadCronStore, saveCronStore } from "../src/cron/store.js";
 import type { CronJob } from "../src/cron/types.js";
 import { GatewayScheduler } from "../src/infra/gateway-scheduler.js";
@@ -66,6 +75,24 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(`ASSERTION FAILED: ${message}`);
   }
+}
+
+/**
+ * Reads a live counter without letting an earlier assertion narrow it. `assert`
+ * is an assertion signature, so asserting `job.state.x === 1` narrows that
+ * property to the literal `1` for the rest of the scope and a later
+ * `=== 0` on the mutated value is then rejected as a dead comparison.
+ */
+function readCounter(
+  job: CronJob,
+  key: "consecutiveErrors" | "consecutiveRestartInterruptions",
+): number | undefined {
+  return job.state[key];
+}
+
+/** Reads the live enabled flag; see `readCounter` for why this is a function. */
+function readEnabled(job: CronJob): boolean {
+  return job.enabled;
 }
 
 function recurringJob(id: string, runningAtMs: number, state: CronJob["state"]): CronJob {
@@ -132,7 +159,7 @@ async function scenarioRepeatedRestarts(tmpDir: string): Promise<void> {
     const nowMs = BASE_MS + restart * EVERY_MS;
     repaired = await restartGateway(storePath, nowMs);
     assert(
-      repaired.enabled === true,
+      readEnabled(repaired),
       `restart ${restart} disabled a healthy job (autoDisabled=${JSON.stringify(repaired.state.autoDisabled)})`,
     );
     assert(
@@ -174,9 +201,8 @@ async function scenarioRestartDoesNotPayForFailure(tmpDir: string): Promise<void
   await saveCronStore(storePath, { version: 1, jobs: [job] });
 
   const afterRestart = await restartGateway(storePath, BASE_MS + EVERY_MS);
-  const enabledAfterRestart = afterRestart.enabled;
   assert(
-    enabledAfterRestart === true,
+    readEnabled(afterRestart),
     "a gateway restart spent the tenth run-failure slot of a nine-failure streak",
   );
   assert(
@@ -204,7 +230,7 @@ async function scenarioRestartDoesNotPayForFailure(tmpDir: string): Promise<void
     { deferredNotifications: [] },
   );
 
-  assert(afterRestart.enabled === false, "the tenth genuine failure did not auto-disable the job");
+  assert(!readEnabled(afterRestart), "the tenth genuine failure did not auto-disable the job");
   assert(
     afterRestart.state.autoDisabled?.reason === "consecutive-failures",
     "auto-disable did not record the consecutive-failures reason",
@@ -248,13 +274,152 @@ function scenarioGenuineStreakUnchanged(tmpDir: string): void {
   );
 
   assert(job.state.consecutiveErrors === 10, "genuine failure counting regressed");
-  assert(job.enabled === false, "an uninterrupted ten-failure streak no longer auto-disables");
+  assert(!readEnabled(job), "an uninterrupted ten-failure streak no longer auto-disables");
   assert(
     job.state.autoDisabled?.consecutiveErrors === 10,
     "auto-disable evidence changed for an uninterrupted streak",
   );
 
   console.log("  scenario 3: uninterrupted tenth genuine failure still auto-disables");
+}
+
+/** Applies one genuine run failure through the real run-outcome owner. */
+function applyGenuineFailure(
+  state: ReturnType<typeof offlineServiceState>,
+  job: CronJob,
+  index: number,
+): void {
+  const startedAt = BASE_MS + (index + 1) * EVERY_MS;
+  applyJobResult(
+    state,
+    job,
+    {
+      status: "error",
+      error: "provider refused the request",
+      executionStarted: true,
+      startedAt,
+      endedAt: startedAt + 500,
+    },
+    { deferredNotifications: [] },
+  );
+}
+
+async function scenarioQuietTriggerClearsOffset(tmpDir: string): Promise<void> {
+  const storePath = path.join(tmpDir, "quiet-trigger.json");
+  const endedAt = BASE_MS + 1_000;
+  const job = recurringJob("quiet-trigger", BASE_MS, {
+    nextRunAtMs: BASE_MS,
+    runningAtMs: BASE_MS,
+  });
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+  // One real gateway restart records the interruption through startup repair.
+  const interrupted = await restartGateway(storePath, BASE_MS + 30_000);
+  assert(
+    readCounter(interrupted, "consecutiveRestartInterruptions") === 1,
+    "the restart did not record an interruption offset",
+  );
+
+  // A non-firing trigger evaluation is successful scheduler work: it clears the
+  // error streak, so the offset it was subtracted from no longer exists.
+  const state = offlineServiceState(storePath, endedAt);
+  applyTriggerNoFireResult(
+    state,
+    interrupted,
+    {
+      startedAt: BASE_MS,
+      endedAt,
+      // `busy` is `busy?: true`, so a non-busy evaluation omits it entirely.
+      triggerEval: { fired: false, stateChanged: false },
+    },
+    { deferredNotifications: [] },
+  );
+  assert(
+    readCounter(interrupted, "consecutiveErrors") === 0,
+    "the quiet trigger tick did not clear the error streak",
+  );
+  assert(
+    readCounter(interrupted, "consecutiveRestartInterruptions") === 0,
+    "the quiet trigger tick left a stale interruption offset",
+  );
+
+  await saveCronStore(storePath, { version: 1, jobs: [interrupted] });
+  const reloaded = (await loadCronStore(storePath)).jobs[0];
+  assert(reloaded, "expected the quiet-trigger job to survive the store");
+  for (let failure = 0; failure < 10 && readEnabled(reloaded); failure += 1) {
+    applyGenuineFailure(state, reloaded, failure);
+  }
+  assert(
+    readCounter(reloaded, "consecutiveErrors") === 10,
+    "the post-tick failure streak did not reach ten genuine failures",
+  );
+  assert(
+    !readEnabled(reloaded),
+    "a stale interruption offset survived the quiet tick and delayed auto-disable",
+  );
+
+  console.log(
+    "  scenario 5: a quiet trigger tick clears the offset; ten later genuine failures still auto-disable",
+  );
+}
+
+async function scenarioLegacyUpgradeKeepsBudget(tmpDir: string): Promise<void> {
+  // A v2026.9.9 row: eight genuine failures plus one gateway restart, recorded
+  // before the interruption counters existed, so there is no offset at all.
+  const legacyState = {
+    nextRunAtMs: BASE_MS,
+    consecutiveErrors: 9,
+    lastRunStatus: "error" as const,
+    lastStatus: "error" as const,
+    lastError: "cron: job interrupted by gateway restart",
+  };
+
+  // Control: without normalization the next genuine failure is the tenth the
+  // budget can see, so an upgraded healthy job dies one real failure early.
+  const controlPath = path.join(tmpDir, "legacy-control.json");
+  const controlJob = recurringJob("legacy-control", BASE_MS, { ...legacyState });
+  await saveCronStore(controlPath, { version: 1, jobs: [controlJob] });
+  const controlLoaded = (await loadCronStore(controlPath)).jobs[0];
+  assert(controlLoaded, "expected the control job to survive the store");
+  applyGenuineFailure(offlineServiceState(controlPath, BASE_MS), controlLoaded, 0);
+  assert(
+    !readEnabled(controlLoaded),
+    "control invalid: an un-normalized legacy row should disable on its ninth genuine failure",
+  );
+
+  // Doctor's migration owner attributes the one interruption the row proves.
+  const storePath = path.join(tmpDir, "legacy-upgrade.json");
+  const legacyRow = recurringJob("legacy-upgrade", BASE_MS, { ...legacyState });
+  const normalized = normalizeStoredCronJobs([legacyRow as unknown as Record<string, unknown>]);
+  assert(
+    normalized.issues.legacyRestartInterruption === 1,
+    "the migration owner did not report the legacy interruption",
+  );
+  // Normalization repairs the row in place, so this persists the repaired shape.
+  await saveCronStore(storePath, { version: 1, jobs: [legacyRow] });
+
+  const job = (await loadCronStore(storePath)).jobs[0];
+  assert(job, "expected the normalized job to survive the store");
+  assert(
+    readCounter(job, "consecutiveRestartInterruptions") === 1,
+    "the normalized interruption offset did not survive persistence",
+  );
+  const state = offlineServiceState(storePath, BASE_MS);
+  applyGenuineFailure(state, job, 0);
+  assert(
+    readEnabled(job),
+    "the upgraded job lost a genuine failure to the retained restart interruption",
+  );
+  applyGenuineFailure(state, job, 1);
+  assert(!readEnabled(job), "the upgraded job did not auto-disable on its tenth genuine failure");
+  assert(
+    job.state.autoDisabled?.consecutiveErrors === 10,
+    "the upgraded job's auto-disable evidence did not count ten genuine failures",
+  );
+
+  console.log(
+    "  scenario 6: an upgraded v2026.9.9 row keeps its full budget and still disables on the tenth genuine failure",
+  );
 }
 
 function scenarioSuccessClearsStreak(tmpDir: string): void {
@@ -293,6 +458,8 @@ async function main(): Promise<void> {
     await scenarioRestartDoesNotPayForFailure(tmpDir);
     scenarioGenuineStreakUnchanged(tmpDir);
     scenarioSuccessClearsStreak(tmpDir);
+    await scenarioQuietTriggerClearsOffset(tmpDir);
+    await scenarioLegacyUpgradeKeepsBudget(tmpDir);
     console.log("All runtime assertions passed.");
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -30,6 +30,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
+import { reconcileCronRestartInterruptionOffset } from "./auto-disable.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import { normalizeDeclarativeLabel } from "./jobs-declarative.js";
 import {
@@ -423,6 +424,10 @@ export function applyJobPatch(
     delete statePatch.autoDisabled;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
+    // A patch may rewrite the public error streak but never the scheduler-owned
+    // interruption offset, so the merged state can leave the offset describing a
+    // streak that no longer exists.
+    reconcileCronRestartInterruptionOffset(job);
   }
   if (patch.enabled === true) {
     resetJobFailureState(job);

@@ -45,6 +45,7 @@ type CronStoreIssueKey =
   | "legacyScheduleKind"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
+  | "legacyRestartInterruption"
   | "legacyImageInspectionToolName"
   | "legacyTaskSuggestionToolName"
   | "legacyAgentTurnCommandPayload"
@@ -132,6 +133,41 @@ function normalizeStoredCronJobIdentity(
   return mutated;
 }
 
+/**
+ * `state.lastError` text a pre-interruption-counter gateway persisted for a run
+ * it killed mid-flight. Doctor matches the stored historical string instead of
+ * importing the scheduler's current constant: this is operator data written by
+ * older versions and has to stay recognizable even if the live message is
+ * reworded, and the scheduler module that owns the live constant pulls the whole
+ * cron run-outcome graph into Doctor's import surface.
+ */
+const LEGACY_CRON_RESTART_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
+
+/**
+ * Attributes the one restart interruption a legacy row still proves. Before the
+ * interruption counters existed, a gateway restart was recorded as an ordinary
+ * failed run, so the retained streak silently includes infrastructure failures
+ * that the auto-disable budget must not spend. `lastError` only describes the
+ * most recent run, so exactly one interruption is provable; defaulting the
+ * offset to zero instead would disable an upgraded job one genuine failure
+ * early.
+ */
+function normalizeLegacyRestartInterruption(state: Record<string, unknown>): boolean {
+  if (
+    state.consecutiveRestartInterruptions !== undefined ||
+    state.lastError !== LEGACY_CRON_RESTART_INTERRUPTED_ERROR
+  ) {
+    return false;
+  }
+  const consecutiveErrors = asFiniteNumber(state.consecutiveErrors);
+  if (consecutiveErrors === undefined || Math.floor(consecutiveErrors) < 1) {
+    return false;
+  }
+  state.consecutiveRestartInterruptions = 1;
+  state.lastRunInterruptionReason = "gateway-restart";
+  return true;
+}
+
 function resolveLegacyCronDeliveryMode(mode: unknown): "none" | "announce" | "webhook" | undefined {
   if (mode === undefined || mode === null) {
     return "announce";
@@ -209,6 +245,8 @@ export function normalizeStoredCronJobs(
 
     if (!isRecord(raw.state)) {
       setField(raw, "state", {});
+    } else if (normalizeLegacyRestartInterruption(raw.state)) {
+      trackChange("legacyRestartInterruption");
     }
 
     if (typeof raw.schedule === "string") {

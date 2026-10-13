@@ -36,7 +36,7 @@ import {
   recoverCronRunForTest,
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
-import { createCronServiceState, type CronServiceDeps } from "./state.js";
+import { createCronServiceState } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 

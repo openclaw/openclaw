@@ -61,13 +61,35 @@ export function autoDisableCronJob(params: {
  * inside the current error streak are excluded from the auto-disable budget;
  * otherwise repeated restarts would disable a healthy schedule.
  */
-export function resolveCronJobRunFailureCount(job: Pick<CronJob, "state">): number {
+function resolveCronJobRunFailureCount(job: Pick<CronJob, "state">): number {
   const consecutiveErrors = Math.max(0, Math.floor(job.state.consecutiveErrors ?? 0));
   const restartInterruptions = Math.max(
     0,
     Math.floor(job.state.consecutiveRestartInterruptions ?? 0),
   );
   return Math.max(0, consecutiveErrors - restartInterruptions);
+}
+
+/**
+ * Restores `consecutiveRestartInterruptions <= consecutiveErrors`, the invariant
+ * that makes the offset describe the streak it is subtracted from. Owners that
+ * clear the streak themselves write the matching zero inline; this is for an
+ * owner that merges a caller-supplied error count, which can clear or shorten
+ * the streak while the scheduler-owned offset stays behind. Left stale, the
+ * offset keeps excusing interruptions a later streak never suffered and delays
+ * auto-disable past the job's own failure budget.
+ */
+export function reconcileCronRestartInterruptionOffset(job: Pick<CronJob, "state">): void {
+  const recorded = job.state.consecutiveRestartInterruptions;
+  if (recorded === undefined) {
+    // Nothing was ever attributed to a restart; keep the field absent.
+    return;
+  }
+  const consecutiveErrors = Math.max(0, Math.floor(job.state.consecutiveErrors ?? 0));
+  const reconciled = Math.min(Math.max(0, Math.floor(recorded)), consecutiveErrors);
+  if (reconciled !== recorded) {
+    job.state.consecutiveRestartInterruptions = reconciled;
+  }
 }
 
 /** Auto-disables only time-based recurring jobs once their run-error streak reaches the limit. */

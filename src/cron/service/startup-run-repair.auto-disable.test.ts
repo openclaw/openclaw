@@ -160,38 +160,6 @@ describe("startup run repair auto-disable", () => {
     expect(requestHeartbeat).toHaveBeenCalledOnce();
   });
 
-  it("auto-disables an uninterrupted job on its tenth genuine failure", () => {
-    const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
-    const startedAt = runningAtMs + 60_000;
-    const state = createRepairState("/tmp/startup-run-repair-genuine-streak.json", startedAt + 500);
-    const job = createRecurringJob("genuine-streak", runningAtMs, {
-      nextRunAtMs: startedAt,
-      runningAtMs: startedAt,
-      consecutiveErrors: 9,
-    });
-    const deferredNotifications: DeferredCronNotifications = [];
-
-    applyJobResult(
-      state,
-      job,
-      {
-        status: "error",
-        error: "provider refused the request",
-        executionStarted: true,
-        startedAt,
-        endedAt: startedAt + 500,
-      },
-      { deferredNotifications },
-    );
-
-    expect(job.state.consecutiveErrors).toBe(10);
-    expect(job.enabled).toBe(false);
-    expect(job.state.autoDisabled).toMatchObject({
-      reason: "consecutive-failures",
-      consecutiveErrors: 10,
-    });
-  });
-
   it("clears the restart-interruption streak once a run reports its own outcome", () => {
     const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
     const nowMs = runningAtMs + 30_000;

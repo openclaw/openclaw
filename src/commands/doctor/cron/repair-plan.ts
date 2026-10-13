@@ -100,6 +100,8 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
       "can recover scheduled account authority from persisted owner identity",
     reconciledOwnerAccount:
       "can reconcile its owner account from persisted creator identity without changing tool permissions",
+    legacyRestartInterruption:
+      "retains a gateway-restart interruption inside its failure streak; doctor will record it so auto-disable spends only the job's own failures",
     invalidSchedule: "has an invalid persisted schedule and will be removed",
     invalidPayload: "has an invalid persisted payload and will be removed",
   };

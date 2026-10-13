@@ -567,6 +567,8 @@ export function applyTriggerNoFireResult(
     // A non-firing evaluation is successful scheduler work, not a payload run;
     // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;
+    // The interruption offset only describes the streak this tick just cleared.
+    job.state.consecutiveRestartInterruptions = 0;
     job.state.scheduleErrorCount = 0;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
     resolveFailureIncident(job, { triggerOnly: true });
