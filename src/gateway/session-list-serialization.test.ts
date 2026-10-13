@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
 import {
   ensureBoardSchema,
@@ -439,6 +440,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(first.owners).toBe(second.owners);
     const projection = getSessionRowProjection(context)!;
     const present = vi.spyOn(projection, "present");
+    const filter = vi.spyOn(listFilters, "filterSessionEntries");
     const clone = vi.spyOn(globalThis, "structuredClone");
     const unrelated = createSubagentRunRecord({
       runId: "unrelated-presentation",
@@ -451,9 +453,12 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         if (publish) {
           subagentRuns.set(unrelated.runId, unrelated);
           subagentRuns.commitOwnership(unrelated);
+          publishSubagentRunChanges();
         }
         const unchanged = await read(0, false);
         expect(unchanged.sessions[0]).toBe(first.sessions[0]);
+        expect(unchanged.owners).toBe(first.owners);
+        expect(filter).not.toHaveBeenCalled();
         expect(present).not.toHaveBeenCalled();
         expect(
           clone.mock.calls.filter(
@@ -467,6 +472,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
       }
     } finally {
       present.mockRestore();
+      filter.mockRestore();
       clone.mockRestore();
       subagentRuns.delete(unrelated.runId);
     }
