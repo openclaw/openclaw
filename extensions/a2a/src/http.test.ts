@@ -505,6 +505,33 @@ describe("A2A JSON-RPC protocol boundary", () => {
     await expect(response.json()).resolves.toMatchObject({ id: "bad", error: { code: errorCode } });
   });
 
+  it.each([
+    ["CreateTaskPushNotificationConfig", -32003],
+    ["SetTaskPushNotificationConfig", -32003],
+    ["GetTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfigs", -32003],
+    ["DeleteTaskPushNotificationConfig", -32003],
+    ["SendStreamingMessage", -32004],
+    ["SubscribeToTask", -32004],
+    ["GetExtendedAgentCard", -32004],
+    ["UnknownTaskPushNotificationConfig", -32601],
+  ])("rejects %s with capability-specific error %s", async (method, code) => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const createTask = vi.spyOn(harness.taskStore, "create");
+    const response = await harness.post({ jsonrpc: "2.0", id: "capability", method });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: "2.0",
+      id: "capability",
+      error: { code, message: expect.any(String) },
+    });
+    expect(onDispatch).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
   it("executes batch notifications without returning notification response entries", async () => {
     const harness = await startHttpHarness();
     const notification = sendRequest({ text: "notify", returnImmediately: true });
