@@ -148,6 +148,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/secrets/runtime.auth-migration-isolation.test.ts",
   "src/secrets/runtime.fast-path.test.ts",
   "src/sessions/auth-profile-preservation.test.ts",
+  "src/system-agent/approval-intent.resources.test.ts",
   "src/test-utils/openclaw-test-state.test.ts",
   "test/test-env.test.ts",
   "src/agents/model-auth-label.personal-profile.test.ts",
