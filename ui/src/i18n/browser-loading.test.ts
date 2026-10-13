@@ -11,7 +11,7 @@ describe("Browser English loading", () => {
       load: () => import("../components/browser/browser-panel-controller.ts"),
     },
     { surface: "client", load: () => import("../components/browser/browser-client.ts") },
-    { surface: "toolbar", load: () => import("../components/browser/browser-panel-render.ts") },
+    { surface: "toolbar", load: () => import("../components/browser/browser-panel-render.tsx") },
   ])(
     "loads fallback copy from the standalone $surface without replacing siblings",
     async ({ load }) => {

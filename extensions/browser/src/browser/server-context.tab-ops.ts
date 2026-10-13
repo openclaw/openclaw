@@ -46,9 +46,9 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import { readColdNativeActivity, volatileTabsBySession } from "./session-tab-process-state.js";
 import {
-  browserSessionTabNativeIdentity,
   dispatchBrowserTabClose,
   findRetainedBrowserDashboardTab,
   readBrowserDashboardTabs,
@@ -389,6 +389,8 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const cdpPolicy = getCdpControlPolicy();
     // Runtime shutdown fences state() before draining this operation's cleanup.
     const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
+    const adoptOwnedTab = async (tab: BrowserTab) =>
+      adoptValidatedTab(await withTabOwnership(tab, opts), { ...opts, label: normalizedLabel });
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -421,18 +423,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           });
           closeCreatedPage = page.close;
           createdTargetId = page.targetId;
-          return adoptValidatedTab(
-            await withTabOwnership(
-              {
-                targetId: page.targetId,
-                title: page.title,
-                url: page.url,
-                type: page.type,
-              },
-              opts,
-            ),
-            { ...opts, label: normalizedLabel },
-          );
+          return await adoptOwnedTab({
+            targetId: page.targetId,
+            title: page.title,
+            url: page.url,
+            type: page.type,
+          });
         }
       }
 
@@ -470,10 +466,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
               await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
               // The attached target owns the committed URL; /json/list supplies the
               // remaining metadata and may briefly lag that exact document snapshot.
-              return adoptValidatedTab(
-                await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
-                { ...opts, label: normalizedLabel },
-              );
+              return await adoptOwnedTab({ ...found, url: createdViaCdp.finalUrl });
             }
             await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
           }

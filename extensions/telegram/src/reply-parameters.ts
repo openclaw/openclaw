@@ -61,6 +61,8 @@ export function buildTelegramThreadReplyParams(opts?: {
   replyQuotePosition?: number;
   replyQuoteEntities?: unknown[];
   useReplyIdAsQuoteSource?: boolean;
+  /** Keep native reply_parameters even without quote text. */
+  nativeReply?: boolean;
 }): TelegramThreadReplyParams {
   const params: TelegramThreadReplyParams = { ...buildTelegramThreadParams(opts?.thread) };
 
@@ -77,7 +79,7 @@ export function buildTelegramThreadReplyParams(opts?: {
   const replyQuoteTextRaw =
     replyQuoteMessageId === replyToMessageId ? opts?.replyQuoteText : undefined;
   const replyQuoteText = replyQuoteTextRaw?.trim() ? replyQuoteTextRaw : undefined;
-  if (!replyQuoteText) {
+  if (!replyQuoteText && !opts?.nativeReply) {
     params.reply_to_message_id = replyToMessageId;
     params.allow_sending_without_reply = true;
     return params;
@@ -85,27 +87,29 @@ export function buildTelegramThreadReplyParams(opts?: {
 
   const replyParameters: TelegramReplyParameters = {
     message_id: replyToMessageId,
-    quote: replyQuoteText,
+    // Previews placed this field before the quote; durable replies placed it after.
+    ...(opts?.nativeReply ? { allow_sending_without_reply: true } : {}),
+    ...(replyQuoteText ? { quote: replyQuoteText } : {}),
     allow_sending_without_reply: true,
   };
-  if (typeof opts?.replyQuotePosition === "number" && Number.isFinite(opts.replyQuotePosition)) {
-    replyParameters.quote_position = Math.trunc(opts.replyQuotePosition);
+  if (replyQuoteText) {
+    if (typeof opts?.replyQuotePosition === "number" && Number.isFinite(opts.replyQuotePosition)) {
+      replyParameters.quote_position = Math.trunc(opts.replyQuotePosition);
+    }
+    if (Array.isArray(opts?.replyQuoteEntities) && opts.replyQuoteEntities.length > 0) {
+      replyParameters.quote_entities = opts.replyQuoteEntities as MessageEntity[];
+    }
   }
-  if (Array.isArray(opts?.replyQuoteEntities) && opts.replyQuoteEntities.length > 0) {
-    replyParameters.quote_entities = opts.replyQuoteEntities as MessageEntity[];
-  }
-  params.reply_parameters = replyParameters;
-  return params;
+  return { ...params, reply_parameters: replyParameters };
 }
 
 export function buildTelegramSendParams(
   opts?: NonNullable<Parameters<typeof buildTelegramThreadReplyParams>[0]> & { silent?: boolean },
 ): Record<string, unknown> {
-  const params: Record<string, unknown> = { ...buildTelegramThreadReplyParams(opts) };
-  if (opts?.silent === true) {
-    params.disable_notification = true;
-  }
-  return params;
+  return {
+    ...buildTelegramThreadReplyParams(opts),
+    ...(opts?.silent === true ? { disable_notification: true } : {}),
+  };
 }
 
 export function getTelegramNativeQuoteReplyMessageId(
@@ -120,10 +124,9 @@ export function getTelegramNativeQuoteReplyMessageId(
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
-    return QUOTE_PARAM_RE.test(err.description);
-  }
-  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+  return QUOTE_PARAM_RE.test(
+    err instanceof GrammyError ? err.description : formatErrorMessage(err),
+  );
 }
 
 function removeTelegramNativeQuoteParam(params: Record<string, unknown>): Record<string, unknown> {

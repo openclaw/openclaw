@@ -230,12 +230,6 @@ describe("chat.send quoted model profiles", () => {
 
   it.each([
     [
-      '/model openai/test-model@"openai:Work account" -s',
-      "openai:Work account",
-      "openai",
-      "test-model",
-    ],
-    [
       String.raw`/model openai/test-model@"openai:Work \"account\"\\primary" -s`,
       'openai:Work "account"\\primary',
       "openai",

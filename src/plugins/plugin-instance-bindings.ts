@@ -7,7 +7,7 @@ import {
 } from "./plugin-instance-argument-views.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "./plugin-instance-invocation.types.js";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 import {
   getPluginOriginalValue,
   pluginInstanceState,
@@ -32,19 +32,6 @@ type PluginIteratorAdmission = {
   call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
 };
 
-class ExecutableBinding extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: object, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: object, factory: object) {
-    return #factory in value && value.#factory === factory;
-  }
-}
-
 const DATA_FIELDS = new Set([
   "parameters",
   "schema",
@@ -64,17 +51,6 @@ function pluginMemberDescriptor(object: object, key: PropertyKey) {
     descriptor = Object.getOwnPropertyDescriptor(source, key);
   }
   return descriptor;
-}
-
-function readPluginMember(
-  object: object,
-  key: PropertyKey,
-  invoke: (run: () => unknown) => unknown,
-  receiver = object,
-): unknown {
-  return pluginMemberNeedsAdmission(object, key)
-    ? invoke(() => Reflect.get(object, key, receiver))
-    : Reflect.get(object, key, receiver);
 }
 
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
@@ -207,7 +183,7 @@ function createPluginBindings(
   const wrapArguments = createPluginArgumentView({
     original: originalValue,
     setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
-    isWrapped: (value) => ExecutableBinding.belongsTo(value, factory),
+    isWrapped: (value) => PluginFactoryBinding.belongsTo(value, factory),
     invoke: admitCallback,
   });
   // Executable return contracts keep admission; ordinary result graphs are never inspected.
@@ -275,7 +251,7 @@ function createPluginBindings(
       return value;
     }
     const object: object = value;
-    if (ExecutableBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(object, factory)) {
       return value;
     }
     const cached = wrapped.get(object);
@@ -336,7 +312,9 @@ function createPluginBindings(
       let property: unknown;
       try {
         resolvedReceiver = resolveReceiver(key, receiver);
-        property = readPluginMember(object, key, invoke, resolvedReceiver);
+        property = pluginMemberNeedsAdmission(object, key)
+          ? invoke(() => Reflect.get(object, key, resolvedReceiver))
+          : Reflect.get(object, key, resolvedReceiver);
       } catch (error) {
         if (protocol && iteration?.active) {
           iteration.close();
@@ -497,7 +475,11 @@ function createPluginBindings(
             object,
             key,
             next,
-            pluginMemberDescriptor(object, key)?.set ? resolveReceiver(key, receiver) : receiver,
+            // Inherited and derived data writes must reach their owning view's defineProperty.
+            (receiver === result && !derivedReceivers.has(object)) ||
+              pluginMemberDescriptor(object, key)?.set
+              ? resolveReceiver(key, receiver)
+              : receiver,
           ),
         ),
       // Freezing only the shadow would invalidate its live original-property projection.
@@ -572,7 +554,7 @@ function createPluginBindings(
       );
     }
     wrapped.set(object, result);
-    void new ExecutableBinding(result, factory);
+    void new PluginFactoryBinding(result, factory);
     setPluginOriginalValue(result, object, bindings.instance);
     valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.

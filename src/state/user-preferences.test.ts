@@ -3,7 +3,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureAgentProvenanceSchema } from "./agent-provenance.js";
+import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,

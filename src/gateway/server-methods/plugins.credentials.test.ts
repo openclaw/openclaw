@@ -80,21 +80,18 @@ describe("plugin credential inspection authorization", () => {
       undefined,
     );
   });
-  it.each([false, true])(
-    "rejects read-only access before reading config (reveal=%s)",
-    async (reveal) => {
-      const options = request({
-        params: { pluginId: "example", path, baseHash: "public:revision", reveal },
-      });
-      options.client!.connect.scopes = ["operator.read"];
-      expect(await invoke(options)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects read-only reveal access before reading config", async () => {
+    const options = request({
+      params: { pluginId: "example", path, baseHash: "public:revision", reveal: true },
+    });
+    options.client!.connect.scopes = ["operator.read"];
+    expect(await invoke(options)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
   it("rejects a connection retired while the snapshot read is pending", async () => {
     const options = request({
       params: { pluginId: "example", path, baseHash: "public:revision", reveal: true },

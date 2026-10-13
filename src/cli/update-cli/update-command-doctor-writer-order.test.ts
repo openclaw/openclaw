@@ -44,10 +44,9 @@ vi.mock("../../commands/doctor-gateway-services.js", async (original) => ({
   maybeScanExtraGatewayServices: vi.fn(),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn(),
 }));
-vi.mock("../../commands/doctor-platform-notes.js", () => ({
-  noteMacLaunchAgentOverrides: vi.fn(),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
+vi.mock("../../commands/doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/doctor-platform-notes.js")>()),
+  noteMacGatewayPlatformWarnings: vi.fn(),
 }));
 vi.mock("../../commands/doctor-foreign-launchd-jobs.js", () => ({
   noteMacForeignLaunchdJobs: vi.fn(),

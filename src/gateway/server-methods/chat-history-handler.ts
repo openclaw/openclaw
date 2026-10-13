@@ -90,6 +90,7 @@ export async function handleChatHistoryRequest({
     messageId: wireMessageId,
     sessionId: wireSessionId,
     maxChars,
+    toolResultMaxChars,
     maxBytes,
     pendingBefore,
     inputRunIds,
@@ -186,8 +187,9 @@ export async function handleChatHistoryRequest({
     });
     const max = limit ?? 200;
     const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
-    // Recovery lookahead keeps its read budget; every response has the same byte target.
-    const maxResponseBytes = Math.min(maxBytes ?? Infinity, 512 * 1024, maxHistoryBytes);
+    // Keep the default response small while honoring explicit back-scroll budgets.
+    // Recovery lookahead retains its separate read budget.
+    const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
       sessionId && sessionId === entry?.sessionId
@@ -255,6 +257,7 @@ export async function handleChatHistoryRequest({
                     maxHistoryBytes,
                     responseHistoryBytes: maxResponseBytes,
                     effectiveMaxChars,
+                    toolResultMaxChars,
                     offset,
                     messageId,
                     ...(pageCursor ? { pageCursor } : {}),
@@ -331,6 +334,7 @@ export async function handleChatHistoryRequest({
                 ...selectedSession,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
+                preparedRuntimeOwnership: null,
                 modelCatalog: sessionModelCatalog,
                 rowContext: rowProjection.state.rowContext,
               })),
@@ -487,6 +491,7 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                toolResultMaxChars,
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,
@@ -614,7 +619,7 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { shortId, slugHint, agentId, limit, maxBytes } = opts.params;
+    const { shortId, slugHint, agentId, limit, maxBytes, toolResultMaxChars } = opts.params;
     const projection = getSessionRowProjection(opts.context);
     if (!projection) {
       respondChatHistoryUnavailable(
@@ -654,7 +659,13 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
     }
     await handleChatHistoryRequest({
       ...opts,
-      params: { sessionKey: resolution.key, agentId: resolution.agentId, limit, maxBytes },
+      params: {
+        sessionKey: resolution.key,
+        agentId: resolution.agentId,
+        limit,
+        maxBytes,
+        toolResultMaxChars,
+      },
       method: "chat.startup",
       respond: (ok, payload, error, meta) =>
         opts.respond(ok, ok ? { ...asOptionalRecord(payload), resolution } : payload, error, meta),

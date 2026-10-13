@@ -4,10 +4,14 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   HOST_KEY,
   HOST_MODEL,
@@ -55,6 +59,9 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type NativeRunParams = ReturnType<typeof createNativeRunParams>;
 
@@ -168,6 +175,7 @@ async function createRunParams(fixture: NativeFixture) {
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
   params.config = { tools: { web: { search: { enabled: false } } } };
+  setRuntimeConfigSnapshot(params.config);
   setCodexTestToolFactory(params, () => []);
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   return params;
@@ -729,10 +737,13 @@ describe.skipIf(process.platform === "win32")(
               clientFactory: shared.factory,
               nativeHookRelay: { enabled: false },
             };
-            const initialized = await runCodexAppServerAttempt(
-              { ...params, prompt: "Initialize the source." },
-              runOptions,
-            );
+            // Both turns use production process policy with separate run authorities.
+            const initialParams = { ...params, prompt: "Initialize the source." };
+            const closeInitialHost =
+              await bindProductionHarnessHostCapabilitiesForTest(initialParams);
+            cleanups.push(async () => closeInitialHost());
+            const initialized = await runCodexAppServerAttempt(initialParams, runOptions);
+            closeInitialHost();
             expect(initialized.terminal).toEqual({ kind: "ok" });
             const initialBinding = await readCodexAppServerBinding(params.sessionFile);
             if (!initialBinding) {
@@ -761,7 +772,6 @@ describe.skipIf(process.platform === "win32")(
             fixture.setPhase("action");
             params.runId = "run-settled-action";
             if (hidden) {
-              params.agentId = "main";
               params.prompt =
                 "Background task completed. Use exec_command exactly once to run " +
                 "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +

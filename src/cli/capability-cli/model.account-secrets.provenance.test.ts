@@ -50,6 +50,8 @@ vi.mock("../../agents/simple-completion-execution.js", () => ({
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   getRuntimeConfig: () => hoisted.rawCfg,
+  loadConfig: () => hoisted.rawCfg,
+  captureRuntimeConfigAsyncReader: () => async () => hoisted.rawCfg,
 }));
 
 vi.mock("../cli-utils.js", () => ({

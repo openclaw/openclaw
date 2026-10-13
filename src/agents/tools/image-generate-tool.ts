@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,
@@ -28,7 +29,6 @@ import {
 import {
   executeImageGenerationJob,
   inferImageGenerationResolution,
-  normalizeImageGenerationResolution,
 } from "./image-generate-tool.execution.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import {
@@ -244,8 +244,16 @@ function resolveSelectedImageGenerationModelId(params: {
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
 }
 
-export function createImageGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const context = resolveMediaGenerateToolContext("imageGenerationProviders", options, log);
+export function createImageGenerateTool(
+  options?: MediaGenerateToolOptions,
+  preparedAvailability?: boolean,
+): AnyAgentTool | null {
+  const context = resolveMediaGenerateToolContext(
+    "imageGenerationProviders",
+    options,
+    log,
+    preparedAvailability,
+  );
   if (!context) {
     return null;
   }
@@ -394,6 +402,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             }
             const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
             const loadedReferenceImages = await loadMediaToolReferences({
+              workspaceReadiness: context.workspaceReadiness,
               inputs: imageInputs,
               toolName: "image_generate",
               expectedKind: "image",

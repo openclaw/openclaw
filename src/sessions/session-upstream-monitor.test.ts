@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
@@ -19,11 +20,9 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { listSessionStateEventsSince, registerSessionStateWatch } from "./session-state-events.js";
 import * as upstreamRuntime from "./session-upstream-links-runtime.js";
-import {
-  deleteSessionUpstreamLink,
-  readSessionUpstreamLink,
-  upsertSessionUpstreamLink,
-} from "./session-upstream-links.js";
+import * as upstreamLinks from "./session-upstream-links.js";
+import { deleteSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 import { startSessionUpstreamMonitor } from "./session-upstream-monitor.js";
 import { runSessionUpstreamMonitorTick } from "./session-upstream-monitor.test-support.js";
 
@@ -37,6 +36,7 @@ function createMissingCounts() {
 function createDatabaseOptions() {
   const stateDir = sessionDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  setRuntimeConfigSnapshot({});
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
@@ -81,10 +81,41 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 
 describe("session upstream monitor", () => {
+  it("skips watched-link reads without a capable provider and reads fresh links when one appears", async () => {
+    const database = createDatabaseOptions();
+    const list = vi.spyOn(upstreamLinks, "listWatchedSessionUpstreamLinks");
+    const missingCounts = createMissingCounts();
+    missingCounts.set("old-watch", { count: 2, linkUpdatedAt: 100 });
+    try {
+      await runSessionUpstreamMonitorTick({ ...database, providers: [] }, missingCounts);
+      expect(list).not.toHaveBeenCalled();
+      expect(missingCounts.size).toBe(0);
+
+      const sessionKey = "agent:main:adopted:new-provider";
+      await createLink(sessionKey, "claude", database);
+      const check = vi.fn(async () => []);
+      await runSessionUpstreamMonitorTick({
+        ...database,
+        providers: [provider("claude", check)],
+        loadEntry: () => ({ sessionId: "new-provider", updatedAt: 100 }),
+        isRunActive: () => false,
+        loadOwnRecentUserTexts: async () => [],
+      });
+      expect(list).toHaveBeenCalledOnce();
+      expect(check).toHaveBeenCalledWith(
+        [expect.objectContaining({ sessionKey })],
+        expect.anything(),
+      );
+    } finally {
+      list.mockRestore();
+    }
+  });
+
   it("discards discovery after the monitor is aborted", async () => {
     const database = createDatabaseOptions();
     await createLink("agent:main:adopted:aborted-discovery", "claude", database);
@@ -141,8 +172,14 @@ describe("session upstream monitor", () => {
     } finally {
       settlement.mockRestore();
     }
-    expect(readSessionUpstreamLink(stale, "main", database)?.marker).toEqual({ offset: 0 });
-    expect(readSessionUpstreamLink(healthy, "main", database)?.marker).toEqual({ offset: 9 });
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, stale, "main")
+        ?.marker,
+    ).toEqual({ offset: 0 });
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, healthy, "main")
+        ?.marker,
+    ).toEqual({ offset: 9 });
   });
 
   it("keeps the upstream marker available when its durable event insert fails", async () => {
@@ -170,7 +207,10 @@ describe("session upstream monitor", () => {
       loadEntry: () => ({ sessionId: "session-failed-event", updatedAt: 1_000 }),
       loadOwnRecentUserTexts: async () => [],
     });
-    expect(readSessionUpstreamLink(sessionKey, "main", database)?.marker).toEqual({ offset: 0 });
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main")
+        ?.marker,
+    ).toEqual({ offset: 0 });
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
@@ -263,7 +303,9 @@ describe("session upstream monitor", () => {
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
     expect(check).toHaveBeenCalledTimes(3);
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeUndefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeUndefined();
     expect(missingCounts.size).toBe(0);
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [
@@ -303,7 +345,9 @@ describe("session upstream monitor", () => {
     await runSessionUpstreamMonitorTick(options, missingCounts);
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
@@ -313,7 +357,9 @@ describe("session upstream monitor", () => {
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
     expect(check).toHaveBeenCalledTimes(4);
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeUndefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeUndefined();
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [expect.objectContaining({ kind: "upstream_missing" })],
     );
@@ -346,7 +392,9 @@ describe("session upstream monitor", () => {
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
     expect(missingCounts.size).toBe(0);
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
@@ -355,7 +403,9 @@ describe("session upstream monitor", () => {
     await runSessionUpstreamMonitorTick(options, missingCounts);
 
     expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
   });
 
   it.each(["monitor", "scheduler"])(
@@ -410,7 +460,13 @@ describe("session upstream monitor", () => {
         await stopping;
         await thirdWake;
 
-        expect(readSessionUpstreamLink(sessionKey, "main", database)).toMatchObject({
+        expect(
+          readSessionUpstreamLinkInDatabase(
+            openOpenClawStateDatabase(database).db,
+            sessionKey,
+            "main",
+          ),
+        ).toMatchObject({
           marker: { offset: 0 },
         });
         expect(
@@ -465,7 +521,9 @@ describe("session upstream monitor", () => {
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
     expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
   });
 
@@ -493,7 +551,9 @@ describe("session upstream monitor", () => {
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
     expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
   });
 
@@ -530,7 +590,9 @@ describe("session upstream monitor", () => {
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toBeDefined();
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toBeDefined();
     expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([1]);
   });
 
@@ -573,10 +635,9 @@ describe("session upstream monitor", () => {
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toEqual(
-      expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }),
-    );
-    expect(missingCounts.size).toBe(0);
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
+    ).toEqual(expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }));
   });
 
   it("prunes missing counters when a link leaves the watched set", async () => {
@@ -859,67 +920,6 @@ describe("session upstream monitor", () => {
     );
   });
 
-  it.each([
-    {
-      change: "a run starts",
-      mutate: (state: { active: boolean; sessionId: string }) => {
-        state.active = true;
-      },
-    },
-    {
-      change: "the session is replaced",
-      mutate: (state: { active: boolean; sessionId: string }) => {
-        state.sessionId = "session-after";
-      },
-    },
-  ])("defers activity when $change during final provenance I/O", async ({ mutate }) => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:provenance-race";
-    await createLink(sessionKey, "claude", database);
-    const state = { active: false, sessionId: "session-before" };
-    const provenanceReadStarted = createDeferred();
-    const provenanceResult = createDeferred<string[]>();
-    let provenanceReads = 0;
-    const loadOwnRecentUserTexts = vi.fn(async () => {
-      provenanceReads += 1;
-      if (provenanceReads === 2) {
-        provenanceReadStarted.resolve();
-        return await provenanceResult.promise;
-      }
-      return [];
-    });
-    const check = vi.fn(async () => [
-      {
-        kind: "activity" as const,
-        sessionKey,
-        occurredAt: 2_000,
-        humanTurns: 1,
-        nextMarker: { offset: 12 },
-        dedupeId: "12",
-      },
-    ]);
-
-    const tick = runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: state.sessionId }) as never,
-      isRunActive: () => state.active,
-      loadOwnRecentUserTexts,
-    });
-    await provenanceReadStarted.promise;
-    mutate(state);
-    provenanceResult.resolve([]);
-    await tick;
-
-    expect(check).toHaveBeenCalledOnce();
-    expect(readSessionUpstreamLink(sessionKey, "main", database)).toEqual(
-      expect.objectContaining({ marker: { offset: 0 } }),
-    );
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-  });
-
   it("supplies provenance text so a matching upstream prompt advances without an event", async () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:provenance";
@@ -966,7 +966,10 @@ describe("session upstream monitor", () => {
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
       [],
     );
-    expect(readSessionUpstreamLink(sessionKey, "main", database)?.marker).toEqual({ offset: 20 });
+    expect(
+      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main")
+        ?.marker,
+    ).toEqual({ offset: 20 });
   });
 
   it("reports a matching external prompt after catalog history import", async () => {

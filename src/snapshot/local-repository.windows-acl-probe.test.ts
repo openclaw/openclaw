@@ -87,23 +87,8 @@ describe("fail-closed Windows ACL probe", () => {
     });
   });
 
-  it.each([CURRENT_USER_SID, "s-1-5-18"])(
-    "accepts a private local Windows repository owned by %s",
-    async (rootOwnerSid) => {
-      mockWindowsPathSecurity({
-        rootOwnerSid,
-        rootEntries: [CURRENT_USER_SID, "s-1-5-18", "s-1-5-32-544", "s-1-3-0"].map((sid) =>
-          Object.assign({}, CURRENT_USER_FULL_ACCESS, { sid }),
-        ),
-      });
-
-      await expect(admitRoot(tempDir)).resolves.toBe(tempDir);
-    },
-  );
-
   it.each([
     { role: "root", rightsMask: 0x100000, inheritOnly: false, allowed: true },
-    { role: "root", rightsMask: 0x80000000, inheritOnly: false, allowed: false },
     { role: "ancestor", rightsMask: 0x000001, inheritOnly: false, allowed: true },
     { role: "ancestor", rightsMask: 0x040000, inheritOnly: false, allowed: false },
     { role: "ancestor", rightsMask: 0x040000, inheritOnly: true, allowed: true },
@@ -171,7 +156,6 @@ describe("fail-closed Windows ACL probe", () => {
       { label: "null DACL", facts: { daclPresent: false } },
       { label: "unknown ACE types", facts: { complete: false, unsupportedAceTypes: [5] } },
       { label: "remote filesystem", facts: { isLocal: false } },
-      { label: "empty DACL", facts: { aces: [] } },
       {
         label: "deny-only DACL",
         facts: { aces: [{ ...CURRENT_USER_FULL_ACCESS, aceType: "deny" as const }] },

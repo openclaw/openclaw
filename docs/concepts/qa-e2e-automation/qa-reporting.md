@@ -48,6 +48,15 @@ skip can leave the scenario passing when its paired runtime passes, but the
 skipped cell stays labeled `skip`. Unexpected skips and pairs with both runtimes
 skipped still fail the parity gate. Missing captures are labeled `missing`.
 
+Unexpected exits of a ready QA Gateway child report its exit code and signal
+alongside the recent Gateway logs. Intentional shutdown and replacement remain
+separate from runtime failures.
+
+When a flow scenario fails, the failed step's details also list the Gateway log
+sentinel findings recorded during that scenario, such as a channel
+`final reply failed` line behind a wait timeout. Scenario-level details stay
+unchanged, so parity classification never depends on that log text.
+
 Explicit tool-result error flags take precedence over keywords in returned text;
 error result blocks remain failures. Results without an error flag retain text-based
 error detection. A successful file read can therefore contain words such as

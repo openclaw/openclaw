@@ -10,6 +10,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,7 +35,6 @@ import {
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  resolveSessionObserverDigestForLifecycle,
   snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
@@ -75,7 +75,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
   const readSession: NonNullable<SessionObserverDeps["readSession"]> =
     deps.readSession ??
-    ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)));
+    ((sessionKey, agentId) =>
+      deps.getSessionRowProjection?.()?.sharingTarget({ key: sessionKey, agentId })?.entry);
   const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> = (params) =>
     params.reader
       ? params.reader.persist(params)
@@ -132,6 +133,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
     },
     finishClose: () => {
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       lifecycle.dispose();
       terminalRuns.clear();
       contextlessTerminalRuns.clear();
@@ -195,7 +197,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const synthesizeTerminalDigest = createSessionObserverTerminalPublisher({
     dormantRuns,
-    readSession,
+    readSession:
+      deps.readSession ??
+      ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId))),
     persistDigest,
     now,
     work,

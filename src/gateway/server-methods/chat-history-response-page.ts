@@ -146,7 +146,7 @@ function capChatHistoryAroundMessage(params: {
   messages: unknown[];
   messageId: string;
   maxCost: number;
-  messageCost?: (message: unknown) => number;
+  messageCost: (message: unknown) => number;
   messageSequences?: MessageSequences;
 }): unknown[] {
   const anchorIndex = params.messages.findIndex(
@@ -155,39 +155,34 @@ function capChatHistoryAroundMessage(params: {
   if (anchorIndex === -1) {
     return [];
   }
-  const messageCost = params.messageCost ?? (() => 1);
   const groupAt = (index: number) =>
-    resolveChatHistoryMessageGroup(params.messages, index, messageCost, params.messageSequences);
+    resolveChatHistoryMessageGroup(
+      params.messages,
+      index,
+      params.messageCost,
+      params.messageSequences,
+    );
   const anchorGroup = groupAt(anchorIndex);
   if (!(anchorGroup.cost <= params.maxCost)) {
     return [params.messages[anchorIndex]];
   }
 
   let { start, end, cost } = anchorGroup;
+  const grow = (index: number) => {
+    const group = groupAt(index);
+    if (!(cost + group.cost <= params.maxCost)) {
+      return false;
+    }
+    start = Math.min(start, group.start);
+    end = Math.max(end, group.end);
+    cost += group.cost;
+    return true;
+  };
   let canGrowOlder = start > 0;
   let canGrowNewer = end < params.messages.length;
   while (canGrowOlder || canGrowNewer) {
-    if (canGrowOlder) {
-      const olderGroup = groupAt(start - 1);
-      if (cost + olderGroup.cost <= params.maxCost) {
-        start = olderGroup.start;
-        cost += olderGroup.cost;
-      } else {
-        canGrowOlder = false;
-      }
-    }
-    canGrowOlder &&= start > 0;
-
-    if (canGrowNewer) {
-      const newerGroup = groupAt(end);
-      if (cost + newerGroup.cost <= params.maxCost) {
-        end = newerGroup.end;
-        cost += newerGroup.cost;
-      } else {
-        canGrowNewer = false;
-      }
-    }
-    canGrowNewer &&= end < params.messages.length;
+    canGrowOlder &&= grow(start - 1) && start > 0;
+    canGrowNewer &&= grow(end) && end < params.messages.length;
   }
   return params.messages.slice(start, end);
 }
@@ -241,9 +236,10 @@ export function prepareChatHistoryResponsePage(
     messages: groups,
     maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
+  const capParams = { messages: replaced.messages, maxCost, messageCost, messageSequences };
   const capped = messageId
     ? capChatHistoryAroundMessage({
-        messages: replaced.messages,
+        ...capParams,
         messageId: historyPage.anchor?.direction
           ? (readChatHistoryMessageId(
               historyPage.anchor.direction === "newer"
@@ -251,17 +247,8 @@ export function prepareChatHistoryResponsePage(
                 : replaced.messages.at(-1),
             ) ?? messageId)
           : messageId,
-        // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost,
-        messageCost,
-        messageSequences,
       })
-    : capChatHistoryTail({
-        messages: replaced.messages,
-        maxCost,
-        messageCost,
-        messageSequences,
-      });
+    : capChatHistoryTail(capParams);
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined

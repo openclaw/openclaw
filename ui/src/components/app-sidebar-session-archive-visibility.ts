@@ -39,7 +39,8 @@ export function projectSidebarArchiveVisibility(input: {
       (row.archived === true || !isSessionSnoozed(row, input.now)));
   const selectedAgentId = normalizeAgentId(input.selectedAgentId);
   const sourceRows =
-    selectedAgentId === normalizeAgentId(input.sessionData.sessionsAgentId ?? "")
+    input.sessionData.sessionsAgentId === null ||
+    selectedAgentId === normalizeAgentId(input.sessionData.sessionsAgentId)
       ? (input.sessionData.sessionsResult?.sessions ?? [])
       : (input.sessionData.sessionResultsByAgent[selectedAgentId]?.sessions ?? []);
   const knownRows = new Map(

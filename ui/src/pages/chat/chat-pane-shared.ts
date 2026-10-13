@@ -98,10 +98,9 @@ export function clearPaneSessionHandoff(
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane?.get(paneId)) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }

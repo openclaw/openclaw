@@ -6,7 +6,6 @@ import {
 } from "../../agents/auth-health.js";
 import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../../agents/auth-profiles/credential-state.js";
 import { isExternalCliAuthProfileInScope } from "../../agents/auth-profiles/external-cli-sync.js";
-import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
@@ -56,6 +55,15 @@ function buildModelAuthStatusFacts(
   const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
   const statusProviderIds = new Set<string>();
   const expectsOAuth = new Set<string>();
+  const includeConfiguredAuthProvider = (provider: string, mode: string | undefined) => {
+    if (apiKeys.has(provider)) {
+      return;
+    }
+    statusProviderIds.add(provider);
+    if (mode === "oauth") {
+      expectsOAuth.add(provider);
+    }
+  };
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     const normalized = normalizeProviderId(id);
     if (!normalized) {
@@ -70,13 +78,7 @@ function buildModelAuthStatusFacts(
     if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    statusProviderIds.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
+    includeConfiguredAuthProvider(normalized, mode);
   }
   // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
   for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
@@ -93,13 +95,7 @@ function buildModelAuthStatusFacts(
     if (!normalized) {
       continue;
     }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    statusProviderIds.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
+    includeConfiguredAuthProvider(normalized, mode);
   }
   for (const provider of apiKeys.keys()) {
     statusProviderIds.add(provider);
@@ -142,7 +138,6 @@ function buildModelAuthStatusFacts(
   ];
 
   const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
-  const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
   const logoutProfileIds = new Set(
     Object.entries(store.profiles)
       .filter(
@@ -190,7 +185,6 @@ function buildModelAuthStatusFacts(
     readAuthHealth: readsExternalAuth ? readAuthHealth : undefined,
     usageProviderIds,
     externalProfileIds,
-    externalCliProfileIds,
     logoutProfileIds,
     configBoundProfileIds,
     configBoundAuthProviders,

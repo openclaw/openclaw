@@ -280,6 +280,7 @@ export function createApplicationOverlays(
     subscribe: (listener) => registerListener(listeners, listener),
     refreshUpdateStatus: updates.refreshUpdateStatus,
     acknowledgeUpdateRun: updates.acknowledgeUpdateRun,
+    captureUpdateTarget: updates.captureUpdateTarget,
     runUpdate: updates.runUpdate,
     holdUpdate: updates.holdUpdate,
     diagnoseUpdateFailure: updates.diagnoseUpdateFailure,

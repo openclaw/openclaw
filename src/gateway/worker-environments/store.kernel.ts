@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { ensureWorkerEnvironmentNodeEnrollmentSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type {
@@ -19,6 +16,7 @@ import { isTerminalWorkerEnvironmentState } from "./state.js";
 import {
   credentialInsert,
   revokeCredential,
+  updateRow,
   updateWorkerEnvironmentRecord,
   upsertCredential,
 } from "./store-mutations.js";
@@ -38,6 +36,7 @@ import {
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
 import type { CredentialRevocationInput } from "./store-write-types.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 export function createWorkerEnvironmentStoreKernel(
@@ -49,7 +48,7 @@ export function createWorkerEnvironmentStoreKernel(
   const createIntent = (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord => {
     const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
     const createdAtMs = now();
-    executeSqliteQuerySync(
+    executeWorkerEnvironmentWrite(
       db,
       queryWorkerEnvironmentStore(db)
         .insertInto("worker_environments")
@@ -223,7 +222,7 @@ export function createWorkerEnvironmentStoreKernel(
       const updatedAtMs = now();
       const ownerEpoch = Math.max(1, current.ownerEpoch);
       if (ownerEpoch !== current.ownerEpoch) {
-        updateWorkerEnvironmentRecord(db, environmentId, current.state, {
+        updateRow(db, environmentId, current.state, {
           owner_epoch: ownerEpoch,
           updated_at_ms: updatedAtMs,
         });
@@ -266,7 +265,7 @@ export function createWorkerEnvironmentStoreKernel(
       if (deliveredAtMs >= credential.expiresAtMs) {
         throw new Error("Expired worker credential cannot be marked delivered");
       }
-      const result = executeSqliteQuerySync(
+      const result = executeWorkerEnvironmentWrite(
         db,
         queryWorkerEnvironmentStore(db)
           .updateTable("worker_environment_credentials")

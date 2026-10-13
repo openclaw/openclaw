@@ -33,7 +33,7 @@ import {
 } from "./diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { markHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
-import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
+import { resolveCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
   createDiagnosticTraceContext,
   formatDiagnosticTraceparent,
@@ -224,7 +224,7 @@ describe("diagnostic-events", () => {
     const events: Array<{ coreSemantic: boolean; type: string }> = [];
     onInternalDiagnosticEvent((event, metadata) => {
       events.push({
-        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
+        coreSemantic: resolveCoreSemanticRunProgressDiagnosticMetadata(metadata) !== undefined,
         type: event.type,
       });
     });
@@ -770,12 +770,19 @@ describe("diagnostic-events", () => {
       delayMaxMs: 1_500,
     });
     emitInternalDiagnosticEvent({ type: "diagnostic.gc", durationMs: 25 });
+    emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: "client" });
+    expect(internalEvents).toStrictEqual([]);
 
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual(["log.record", "gateway.event_loop.sample", "diagnostic.gc"]);
+    expect(internalEvents).toEqual([
+      "log.record",
+      "gateway.event_loop.sample",
+      "diagnostic.gc",
+      "gateway.http.cancelled",
+    ]);
   });
 });
 

@@ -69,6 +69,7 @@ export class SubagentSessionReadLookup {
   #memberships = new Map<string, LookupMembership>();
   #byRunId = new Map<string, Set<LookupMembership>>();
   #sessions?: SessionBuckets;
+  #topology?: readonly Readonly<RunIdentity>[];
   #nextOrder = 0;
 
   constructor(entries: Iterable<readonly [string, LookupIdentity]> = []) {
@@ -78,6 +79,7 @@ export class SubagentSessionReadLookup {
   }
 
   set(cacheKey: string, entry: LookupIdentity | undefined): void {
+    this.#topology = undefined;
     const previous = this.#memberships.get(cacheKey);
     if (!entry) {
       if (previous) {
@@ -122,6 +124,22 @@ export class SubagentSessionReadLookup {
   /** Broad publications invalidate relationships without rebuilding the eager run-ID index. */
   invalidateSessions(): void {
     this.#sessions = undefined;
+    this.#topology = undefined;
+  }
+
+  /** Durable comparison bases share immutable links until their row owner changes. */
+  captureTopology(): readonly Readonly<RunIdentity>[] {
+    return (this.#topology ??= Object.freeze(
+      [...this.#memberships.values()]
+        .map(({ entry: { childSessionKey, requesterSessionKey } }) =>
+          Object.freeze({ childSessionKey, requesterSessionKey }),
+        )
+        .toSorted(
+          (left, right) =>
+            left.childSessionKey.localeCompare(right.childSessionKey) ||
+            left.requesterSessionKey.localeCompare(right.requesterSessionKey),
+        ),
+    ));
   }
 
   #sessionBuckets(): SessionBuckets {
@@ -175,13 +193,13 @@ export class SubagentSessionReadLookup {
     return this.#select(this.#byRunId, ids, additionalCacheKeys);
   }
 
-  selectSessions(sessionKeys: readonly string[], inMemoryRuns: Iterable<RunIdentity>) {
+  selectSessions(sessionKeys: readonly string[], live: SubagentSessionReadLookup) {
     const buckets = this.#sessionBuckets();
-    const liveChildren = buildChildren([inMemoryRuns]);
+    const liveBuckets = live.#sessionBuckets();
     const selected = collectKeys(
       sessionKeys,
       (requester) => buckets.children.get(requester)?.keys() ?? [],
-      (requester) => liveChildren.get(requester) ?? [],
+      (requester) => liveBuckets.children.get(requester)?.keys() ?? [],
     );
     return { sessionKeys: selected, cacheKeys: this.#select(buckets.byChild, selected) };
   }

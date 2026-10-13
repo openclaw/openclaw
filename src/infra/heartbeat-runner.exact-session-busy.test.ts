@@ -64,9 +64,17 @@ function registerRun(kind: (typeof runKinds)[number], key: string, sessionId: st
   return () => clearActiveEmbeddedRun(sessionId, handle, key);
 }
 
+function captureReplyRunSessionIds() {
+  const sessionIds = new Map<string, string>();
+  for (const [key, operation] of replyRunState.activeRunsByKey) {
+    sessionIds.set(key, operation.sessionId);
+  }
+  return sessionIds;
+}
+
 function countListedRunKeys() {
   let visits = 0;
-  const restore = [ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, replyRunState.activeSessionIdsByKey].map(
+  const restore = [ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY, replyRunState.activeRunsByKey].map(
     (map) => {
       const descriptor = Object.getOwnPropertyDescriptor(map, "keys");
       const originalKeys = map.keys.bind(map);
@@ -112,7 +120,7 @@ describe("heartbeat exact-session busy checks", () => {
     async (isolatedSession) => {
       await withHeartbeatFixture(isolatedSession, async (opts, storePath) => {
         const embeddedBefore = new Map(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY);
-        const replyBefore = new Map(replyRunState.activeSessionIdsByKey);
+        const replyBefore = captureReplyRunSessionIds();
         const scope = { agentId: "main", storePath, sessionKey };
         const entryBefore = loadExactSessionEntry(scope)?.entry;
         expect(entryBefore).toMatchObject({
@@ -169,12 +177,12 @@ describe("heartbeat exact-session busy checks", () => {
             expect(isolatedEntry).toBeUndefined();
           }
           expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.size).toBe(embeddedBefore.size + 500);
-          expect(replyRunState.activeSessionIdsByKey.size).toBe(replyBefore.size + 500);
+          expect(replyRunState.activeRunsByKey.size).toBe(replyBefore.size + 500);
           for (let index = 0; index < 500; index += 1) {
             expect(
               ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(`agent:other:embedded-${index}`),
             ).toBe(`embedded-session-${index}`);
-            expect(replyRunState.activeSessionIdsByKey.get(`agent:other:reply-${index}`)).toBe(
+            expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.sessionId).toBe(
               `reply-session-${index}`,
             );
             expect(replyRunState.activeRunsByKey.get(`agent:other:reply-${index}`)?.phase).toBe(
@@ -187,7 +195,7 @@ describe("heartbeat exact-session busy checks", () => {
           }
         }
         expect(ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY).toEqual(embeddedBefore);
-        expect(replyRunState.activeSessionIdsByKey).toEqual(replyBefore);
+        expect(captureReplyRunSessionIds()).toEqual(replyBefore);
         expect(visits).toBe(0);
       });
     },

@@ -4,22 +4,28 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import {
   activeHistory,
   createState,
+  delayed,
+  emit,
+  event,
+  failedHistory,
+  message,
+  renderedText,
+  steerPrompts,
+  tail,
+  toolEvent,
   type TestState,
 } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory, type ChatEventPayload } from "./chat-history.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
 import {
   admitChatSubmission,
   getChatSessionProjection,
-  getChatModelObservedRunId,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -30,55 +36,9 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
-const message = (
-  role: string,
-  content: string,
-  metadata?: Record<string, unknown>,
-  timestamp?: number,
-) => ({
-  role,
-  content,
-  ...(metadata ? { __openclaw: metadata } : {}),
-  ...(timestamp ? { timestamp } : {}),
-});
-function emit(
-  state: TestState,
-  runId: string,
-  event: Omit<ChatEventPayload, "sessionKey" | "runId">,
-) {
-  handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
-}
-function delayed(history: ChatHistoryResult) {
-  const response = createDeferred<ChatHistoryResult>();
-  const state = createState(history);
-  const request = vi.spyOn(state.client!, "request").mockReturnValue(response.promise);
-  return { state, response, request };
-}
-const tail = (state: TestState) =>
-  visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText);
-function renderedText(state: TestState) {
-  return buildChatItems({
-    paneId: "steer-regression",
-    sessionKey: state.sessionKey,
-    runId: state.chatRunId,
-    messages: state.chatMessages,
-    toolMessages: state.chatToolMessages,
-    streamSegments: state.chatStreamSegments,
-    stream: state.chatStream,
-    streamStartedAt: state.chatStreamStartedAt,
-    showToolCalls: true,
-  }).flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.map(({ message: entry }) => extractText(entry)?.trim())
-      : item.kind === "stream"
-        ? [item.text.trim()]
-        : [],
-  );
-}
 async function loadWithTools(state: TestState) {
   vi.stubGlobal("window", globalThis);
   try {
@@ -88,54 +48,6 @@ async function loadWithTools(state: TestState) {
     vi.unstubAllGlobals();
   }
 }
-function failedHistory(): ChatHistoryResult {
-  return {
-    messages: [
-      message(
-        "user",
-        "Inspect the unavailable project",
-        { id: "first-user", idempotencyKey: "run-first:user", seq: 1 },
-        1,
-      ),
-    ],
-    sessionInfo: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      status: "failed",
-      hasActiveRun: false,
-      lastRunId: "run-first",
-      lastRunError:
-        "ProjectCloneError: Git clone could not reach GitHub. Check the Gateway network connection and retry.",
-    },
-  };
-}
-function steerPrompts(seq: number, timestamp = seq) {
-  return {
-    original: message("user", "Original prompt", { idempotencyKey: "active-run:user", seq: 1 }, 1),
-    steer: message(
-      "user",
-      "Steer prompt",
-      {
-        id: "steer",
-        idempotencyKey: "steer-run:user",
-        seq,
-        steerTargetRunId: "active-run",
-      },
-      timestamp,
-    ),
-  };
-}
-const toolEvent = (call: string) => ({
-  ...event(2, "tool", {
-    toolCallId: call,
-    name: "read",
-    phase: "start",
-    args: { path: "README.md" },
-  }),
-  ts: 1000,
-});
-
 it("retires an interrupted run after missing its live terminal", async () => {
   const history = activeHistory("run-interrupted");
   const state = createState(history);
@@ -260,8 +172,9 @@ it("restores tools, preamble time, and usage from the active snapshot", async ()
   );
 });
 
-it("restores cleared activity without replacing an owned run's live text", async () => {
+it("restores cleared activity alongside an owned run's current text", async () => {
   const history = activeHistory("run-live");
+  history.inFlightRun!.text = "The active response survived reconnect.";
   history.inFlightRun!.events = [toolEvent("call-reconnected")];
   const state = createState(history);
   state.chatRunId = "run-live";
@@ -281,7 +194,7 @@ it("restores cleared activity without replacing an owned run's live text", async
 });
 
 it.each(["fresh mirror", "retained idempotency"])(
-  "keeps cumulative prefixes through history replacement (%s)",
+  "keeps saved replies before an accepted steer and the live tail after it (%s)",
   async (mode) => {
     const history = activeHistory("active-run");
     const identity = (seq: number) =>
@@ -315,45 +228,60 @@ it.each(["fresh mirror", "retained idempotency"])(
       steer,
       message("user", "Queued follow-up.", { idempotencyKey: "queued-run:user", seq: 6 }),
     ];
-    history.inFlightRun!.text = `${prefix} After steer.`;
-    const persistedText = history.messages.slice(0, -1).map(extractText);
+    history.inFlightRun!.text = "After steer.";
+    const persistedText = history.messages.slice(0, -2).map(extractText);
     const state = createState(history);
     if (mode === "retained idempotency") {
       state.chatRunId = "active-run";
       state.chatMessages = [original, steer];
+      state.chatStreamSegments = [{ text: prefix, ts: 2, runId: "active-run" }];
       emit(state, "active-run", {
         state: "delta",
+        replace: true,
         message: message("assistant", history.inFlightRun!.text),
       });
-      state.chatStreamSegments = [
-        { text: prefix, ts: 2, runId: "active-run", boundaryRunId: "steer-run" },
-      ];
     }
     await loadChatHistory(state);
     expect(tail(state)).toBe("After steer.");
-    expect(renderedText(state)).toEqual([...persistedText, "After steer.", "Queued follow-up."]);
+    expect(renderedText(state)).toEqual([
+      ...persistedText,
+      "Steer prompt",
+      "After steer.",
+      "Queued follow-up.",
+    ]);
     emit(state, "active-run", {
       state: "delta",
       deltaText: " Continued.",
-      message: message("assistant", `${prefix} After steer. Continued.`),
+      message: message("assistant", "After steer. Continued."),
     });
     expect(renderedText(state)).toEqual([
       ...persistedText,
+      "Steer prompt",
       "After steer. Continued.",
       "Queued follow-up.",
     ]);
-    expect(state.chatStream).toBe(`${prefix} After steer. Continued.`);
+    expect(state.chatStream).toBe("After steer. Continued.");
     emit(state, "active-run", {
       state: "final",
-      message: message("assistant", `${prefix} After steer. Continued. Final suffix.`),
+      message: {
+        ...message("assistant", `${prefix} After steer. Continued. Final suffix.`),
+        openclawDisplayContent: [{ type: "text", text: "After steer. Continued. Final suffix." }],
+      },
     });
     const expected = [
       ...persistedText,
+      "Steer prompt",
       "After steer. Continued. Final suffix.",
       "Queued follow-up.",
     ];
     expect(renderedText(state)).toEqual(expected);
-    expect(state.chatMessages.map(extractText)).toEqual(expected);
+    const transcriptOrder = [
+      ...persistedText,
+      "Steer prompt",
+      "After steer. Continued. Final suffix.",
+      "Queued follow-up.",
+    ];
+    expect(state.chatMessages.map(extractText)).toEqual(transcriptOrder);
     expect(state.chatMessages.at(-2)).toMatchObject({ role: "assistant" });
     reduceChatSessionProjection(
       state,
@@ -368,11 +296,54 @@ it.each(["fresh mirror", "retained idempotency"])(
       },
       { scope: readChatSessionProjectionScope(state), runActive: false },
     );
-    expect(state.chatMessages.map(extractText)).toEqual([...expected, "Later authoritative user."]);
+    expect(state.chatMessages.map(extractText)).toEqual([
+      ...transcriptOrder,
+      "Later authoritative user.",
+    ]);
   },
 );
 
-it("rolls over a live steer after active-run publication", async () => {
+it.each([false, true])(
+  "keeps the accepted steer before the whole unpersisted assistant message (history=%s)",
+  async (reload) => {
+    const runId = "active-run";
+    const { original, steer } = steerPrompts(2);
+    const history = activeHistory(runId);
+    history.messages = [original, steer];
+    history.inFlightRun!.text = "Before steer. After steer.";
+    const state = createState(history);
+    state.chatMessages = [original];
+    state.chatRunId = runId;
+    emit(state, runId, {
+      state: "delta",
+      message: message("assistant", "Before steer."),
+    });
+    applySessionMessagePayload(
+      state,
+      { clientRunId: runId, messageId: "steer", messageSeq: 2, message: steer },
+      true,
+      { kind: "live", activeRunId: runId },
+    );
+    expect(renderedText(state)).toEqual(["Original prompt", "Steer prompt", "Before steer."]);
+    if (reload) {
+      await loadChatHistory(state);
+    } else {
+      emit(state, runId, {
+        state: "delta",
+        deltaText: " After steer.",
+        message: message("assistant", "Before steer. After steer."),
+      });
+    }
+    expect(state.chatRunId).toBe(runId);
+    expect(renderedText(state)).toEqual([
+      "Original prompt",
+      "Steer prompt",
+      "Before steer. After steer.",
+    ]);
+  },
+);
+
+it("keeps streaming one message after a live steer is published", async () => {
   const history = activeHistory("active-run");
   const { original, steer } = steerPrompts(2, 3);
   history.messages = [original, steer];
@@ -392,18 +363,23 @@ it("rolls over a live steer after active-run publication", async () => {
   });
   expect(renderedText(state)).toEqual([
     "Original prompt",
-    "Before steer.",
     "Steer prompt",
-    "After steer.",
+    "Before steer. After steer.",
   ]);
 });
 
-it("retains the persisted replacement baseline for the next cumulative delta", () => {
+it("keeps an identical new reply after the Gateway retires its persisted predecessor", () => {
   const state = createState(activeHistory("active-run"));
   state.chatMessages = [
     message("user", "Original prompt", { idempotencyKey: "active-run:user", seq: 1 }),
   ];
   emit(state, "active-run", { state: "delta", message: message("assistant", "Saved opening.") });
+  emit(state, "active-run", {
+    state: "delta",
+    replace: true,
+    deltaText: "",
+    message: message("assistant", ""),
+  });
   applySessionMessagePayload(
     state,
     {
@@ -421,10 +397,234 @@ it("retains the persisted replacement baseline for the next cumulative delta", (
   );
   emit(state, "active-run", {
     state: "delta",
-    deltaText: " Continued.",
-    message: message("assistant", "Saved opening. Continued."),
+    deltaText: "Saved opening.",
+    message: message("assistant", "Saved opening."),
   });
-  expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Continued."]);
+  expect(renderedText(state)).toEqual(["Original prompt", "Saved opening.", "Saved opening."]);
+});
+
+it.each([false, true])(
+  "keeps an identical unpersisted tail through active history reload (retained steer=%s)",
+  async (steered) => {
+    const history = activeHistory("active-run");
+    const prompt = message("user", "Repeat the answer", {
+      id: "prompt",
+      seq: 1,
+      idempotencyKey: "active-run:user",
+    });
+    const steer = message("user", "Steer prompt", {
+      id: "steer",
+      seq: 3,
+      idempotencyKey: "steer-run:user",
+      steerTargetRunId: "active-run",
+    });
+    history.messages = [
+      prompt,
+      message("assistant", "Repeated answer.", { id: "saved", seq: 2, runId: "active-run" }),
+      ...(steered ? [steer] : []),
+    ];
+    history.inFlightRun!.text = "Repeated answer.";
+    const state = createState(history);
+    state.chatMessages = [prompt];
+    state.chatRunId = "active-run";
+    emit(state, "active-run", {
+      state: "delta",
+      message: message("assistant", "Repeated answer."),
+    });
+    if (steered) {
+      applySessionMessagePayload(
+        state,
+        {
+          clientRunId: "active-run",
+          messageId: "steer",
+          messageSeq: 3,
+          message: steer,
+        },
+        true,
+        { kind: "live", activeRunId: "active-run" },
+      );
+      expect(renderedText(state)).toEqual([
+        "Repeat the answer",
+        "Steer prompt",
+        "Repeated answer.",
+      ]);
+    }
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("active-run");
+    const persisted = ["Repeat the answer", "Repeated answer."];
+    const steers = steered ? ["Steer prompt"] : [];
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer."]);
+    emit(state, "active-run", {
+      state: "delta",
+      deltaText: " Continued.",
+      message: message("assistant", "Repeated answer. Continued."),
+    });
+    expect(renderedText(state)).toEqual([...persisted, ...steers, "Repeated answer. Continued."]);
+  },
+);
+
+it.each(["live replacement", "history adoption", "steer then history"])(
+  "preserves independent unkeyed preamble occurrences through %s",
+  async (delivery) => {
+    const runId = "active-run";
+    const text = "Checking the workspace.";
+    const now = Date.now();
+    const prompt = message(
+      "user",
+      "Check the workspace",
+      {
+        id: "prompt",
+        seq: 1,
+        idempotencyKey: `${runId}:user`,
+      },
+      now - 3,
+    );
+    const history = activeHistory(runId);
+    history.messages = [prompt];
+    history.inFlightRun!.text = text;
+    history.inFlightRun!.startedAt = now + 2;
+    const state = createState(history);
+    state.chatRunId = runId;
+    state.chatMessages = [prompt];
+    for (const seq of [1, 2, 2]) {
+      handleAgentEvent(state, {
+        sessionKey: "main",
+        runId,
+        seq,
+        ts: now - 3 + seq,
+        stream: "item",
+        data: { kind: "preamble", phase: "end", progressText: text },
+      });
+    }
+    const expected = ["Check the workspace", text, text];
+    if (delivery === "steer then history") {
+      emit(state, runId, { state: "delta", message: message("assistant", "Before steer.") });
+      const steer = message(
+        "user",
+        "Steer prompt",
+        {
+          id: "steer",
+          seq: 3,
+          idempotencyKey: "steer-run:user",
+          steerTargetRunId: runId,
+        },
+        now + 1,
+      );
+      history.messages.push(
+        message("assistant", "Before steer.", { id: "before", seq: 2, runId }, now),
+        steer,
+      );
+      applySessionMessagePayload(
+        state,
+        { clientRunId: runId, messageId: "steer", messageSeq: 3, message: steer },
+        true,
+        { kind: "live", activeRunId: runId },
+      );
+      expected.push("Before steer.");
+    }
+    if (delivery === "live replacement") {
+      emit(state, runId, {
+        state: "delta",
+        replace: true,
+        deltaText: text,
+        message: message("assistant", text),
+      });
+    } else {
+      await loadChatHistory(state);
+    }
+    expect(state.chatRunId).toBe(runId);
+    expect(renderedText(state)).toEqual([
+      ...expected,
+      ...(delivery === "steer then history" ? ["Steer prompt"] : []),
+      text,
+    ]);
+  },
+);
+
+it.each([
+  { name: "an empty committed tail", snapshot: "", newer: undefined, expectedTail: null },
+  {
+    name: "a different committed tail",
+    snapshot: "Next answer.",
+    newer: undefined,
+    expectedTail: "Next answer.",
+  },
+  {
+    name: "a newer live answer",
+    snapshot: "",
+    newer: "Live next answer.",
+    expectedTail: "Live next answer.",
+  },
+  { name: "a newer live retraction", snapshot: "Old tail.", newer: "", expectedTail: null },
+])(
+  "restores $name after a missed Gateway replacement",
+  async ({ snapshot, newer, expectedTail }) => {
+    const runId = "active-run";
+    const history = activeHistory(runId);
+    const prompt = message("user", "Continue working", { id: "prompt", seq: 1, runId });
+    history.messages = [
+      prompt,
+      message("assistant", "Saved reply.", { id: "saved", seq: 2, runId }),
+    ];
+    history.inFlightRun!.text = snapshot;
+    const { state, response, request } = delayed(history);
+    state.chatMessages = [prompt];
+    state.chatRunId = runId;
+    emit(state, runId, { state: "delta", seq: 1, message: message("assistant", "Saved reply.") });
+    const loading = loadChatHistory(state);
+    expect(request).toHaveBeenCalledOnce();
+    if (newer !== undefined) {
+      emit(state, runId, {
+        state: "delta",
+        seq: 2,
+        replace: true,
+        deltaText: newer,
+        message: message("assistant", newer),
+      });
+    }
+    response.resolve(history);
+    await loading;
+    expect(state.chatRunId).toBe(runId);
+    expect(tail(state)).toBe(expectedTail);
+    expect(renderedText(state)).toEqual([
+      "Continue working",
+      "Saved reply.",
+      ...(expectedTail ? [expectedTail] : []),
+    ]);
+  },
+);
+
+it("keeps a shorter live replacement over pending history and continues its baseline", async () => {
+  const runId = "active-run";
+  const history = activeHistory(runId);
+  history.inFlightRun!.text = "Same.\n\nSame.";
+  const { state, response, request } = delayed(history);
+  emit(state, runId, {
+    state: "delta",
+    seq: 1,
+    message: message("assistant", "Same.\n\nSame."),
+  });
+  const loading = loadChatHistory(state);
+  expect(request).toHaveBeenCalledOnce();
+  emit(state, runId, {
+    state: "delta",
+    seq: 2,
+    replace: true,
+    deltaText: "Same.",
+    message: message("assistant", "Same."),
+  });
+  response.resolve(history);
+  await loading;
+  expect(tail(state)).toBe("Same.");
+  expect(renderedText(state)).toEqual(["Same."]);
+  emit(state, runId, {
+    state: "delta",
+    seq: 3,
+    deltaText: " More.",
+    message: message("assistant", "Same. More."),
+  });
+  expect(tail(state)).toBe("Same. More.");
+  expect(renderedText(state)).toEqual(["Same. More."]);
 });
 
 it("adopts the snapshot after remount replaces an unchanged run map", async () => {
@@ -444,25 +644,24 @@ it("adopts the snapshot after remount replaces an unchanged run map", async () =
   response.resolve(history);
   await loading;
   expect(state.chatRunId).toBe("run-reconnected");
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBe("run-reconnected");
   expect(state.chatStream).toBe(history.inFlightRun!.text);
 });
 
 it.each([
   {
-    snapshot: "Saved opening. repeat",
+    snapshot: "repeat",
     delta: "repeat",
-    live: "Saved opening. repeatrepeat",
+    live: "repeatrepeat",
     expected: "repeatrepeat",
   },
   {
-    snapshot: "Saved opening. Buffered before reconnect. And live.",
+    snapshot: "Buffered before reconnect. And live.",
     delta: " Buffered before reconnect.",
-    live: "Saved opening. Buffered before reconnect.",
-    expected: "Buffered before reconnect. And live.",
+    live: "Buffered before reconnect.",
+    expected: "Buffered before reconnect.",
   },
 ])(
-  "reconciles an in-flight delta against snapshot $snapshot",
+  "keeps the ordered live baseline while snapshot $snapshot is pending",
   async ({ snapshot, delta, live, expected }) => {
     const history = activeHistory("run-reconnected");
     history.messages = [
@@ -481,9 +680,15 @@ it.each([
     response.resolve(history);
     await loading;
     expect(state.chatRunId).toBe("run-reconnected");
-    expect(state.chatStream).toBe(`Saved opening. ${expected}`);
+    expect(state.chatStream).toBe(expected);
     expect(tail(state)).toBe(expected);
     expect(state.chatMessages).toEqual(history.messages);
+    emit(state, "run-reconnected", {
+      state: "delta",
+      deltaText: " More.",
+      message: message("assistant", `${expected} More.`),
+    });
+    expect(state.chatStream).toBe(`${expected} More.`);
   },
 );
 
@@ -513,16 +718,6 @@ it("does not resurrect delayed history after a newer intervening run completes",
   await loading;
   expect(state.chatRunId).toBeNull();
   expect(state.chatStream).toBeNull();
-  expect(getChatModelObservedRunId(state, history.sessionInfo)).toBeUndefined();
-});
-
-const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
-  runId: "run-live",
-  seq,
-  stream,
-  ts: 899 + seq,
-  sessionKey: "main",
-  data,
 });
 
 it("retains newer live startup progress through delayed history", async () => {

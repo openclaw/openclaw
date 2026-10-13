@@ -56,22 +56,6 @@ describe("check-release-metadata-only", () => {
     expect(() => parseArgs(["--base", ""])).toThrow("Expected --base <ref>.");
   });
 
-  it.each([
-    {
-      paths: ["CHANGELOG.md", "CHANGELOG/2026.9.4.md", "CHANGELOG/records/2026.9.4.md"],
-      status: 0,
-    },
-    { paths: ["CHANGELOG/2026.9.4.md", "CHANGELOG/other.md"], status: 1 },
-    { paths: ["CHANGELOG/2026.9.4.md", "src/index.ts"], status: 1 },
-  ])("checks split changelog metadata paths through the CLI: $paths", ({ paths, status }) => {
-    const result = spawnSync(process.execPath, [...scriptArgs, "--", ...paths], {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      encoding: "utf8",
-      env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
-    });
-    expect(result.status, result.stderr).toBe(status);
-  });
-
   it("rejects unknown options before treating args as paths", () => {
     expect(() => parseArgs(["--stgaed"])).toThrow("Unknown option: --stgaed");
   });

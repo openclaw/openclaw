@@ -47,7 +47,7 @@ A runnable version lives in the repository at `examples/ai-chat`.
   instances; `registerBuiltInApiProviders(registry)` opts one registry into the
   built-in transports. Provider SDK modules load lazily on first use.
 - **Host policy is injected, not bundled.** Request fetch guarding (for
-  example SSRF policy), secret redaction of tool-result replay text, OpenAI
+  example SSRF policy), credential masking for diagnostics, OpenAI
   strict-tool defaults, and diagnostics logging are `AiTransportHost` ports
   configured with `configureAiTransportHost`. The library defaults are inert;
   OpenClaw installs its real implementations in its stream facade.

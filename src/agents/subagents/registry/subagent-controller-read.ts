@@ -12,7 +12,6 @@ import type { IncognitoSessionFacts } from "../../../config/sessions/session-inc
 import { captureSessionStoreReadCandidates } from "../../../config/sessions/session-store-target-inventory.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  captureSessionMutationRouting,
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "../../../gateway/session-sharing-preparation.js";
@@ -51,15 +50,13 @@ async function prepareControllerFacts(
       if (actor.agentId !== agentId) {
         throw new SessionMutationFactsUnavailableError();
       }
-      const assertRouting = captureSessionMutationRouting(cfg);
       const { entry, claim } = await actor.sessions.read(
         { assertCurrent },
         { sessionKey: request.key },
       );
       return {
         sourcePath: actor.path,
-        readCurrent(current, transactionFacts) {
-          assertRouting(current);
+        readCurrent(_current, transactionFacts) {
           actor.assertCurrent();
           const local = transactionFacts?.find((facts) => facts.sessionKey === request.key);
           if (local) {
@@ -95,7 +92,6 @@ async function prepareControllerFacts(
     };
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const assertRouting = captureSessionMutationRouting(cfg);
   let releasePrepared: (() => void) | undefined;
   try {
     return await withSessionEntriesFromStoreInWorker(
@@ -142,9 +138,8 @@ async function prepareControllerFacts(
             return {
               sourcePath: sharing?.source.path,
               databaseIdentity: sharing?.databaseIdentity,
-              readCurrent(current: OpenClawConfig) {
+              readCurrent() {
                 try {
-                  assertRouting(current);
                   generation.assertCurrent();
                   const value = facts?.readCurrent();
                   if (facts && !value) {
@@ -190,8 +185,9 @@ export function createSubagentControllerRead(params: {
   /** Prepared actor borrows owned by the caller; inactive until the runtime cutover. */
   incognito?: (agentId: string) => IncognitoAgentDatabaseExecution;
 }) {
-  const initial = resolveSubagentControllerIdentity({ ...params, cfg: params.config() });
-  const assertRouting = captureSessionMutationRouting(params.config());
+  // Keep prepared routing for this cancellation; control policy remains current.
+  const cfg = params.config();
+  const initial = resolveSubagentControllerIdentity({ ...params, cfg });
   const keys = new Map<string, Facts>();
   const ids = new Map<string, { facts?: Facts; invalidated: boolean }>();
   const releases: Array<() => void> = [];
@@ -209,20 +205,12 @@ export function createSubagentControllerRead(params: {
       throw new Error("Subagent controller read is no longer active.");
     }
     params.assertCurrent();
-    assertRouting(params.config());
-    const current = resolveSubagentControllerIdentity({ ...params, cfg: params.config() });
-    if (
-      current.callerSessionKey !== initial.callerSessionKey ||
-      current.controllerAgentId !== initial.controllerAgentId
-    ) {
-      throw new Error("Subagent controller changed during cancellation.");
-    }
   };
   const assertCurrent = (transactionFacts?: readonly IncognitoSessionFacts[]) => {
     assertCallerCurrent();
     // These original source/identity leases cannot be replaced by a later lookup.
     for (const facts of keys.values()) {
-      facts.readCurrent(params.config(), transactionFacts);
+      facts.readCurrent(cfg, transactionFacts);
     }
     for (const key of ids.keys()) {
       store(transactionFacts).getById(key);
@@ -235,7 +223,7 @@ export function createSubagentControllerRead(params: {
       if (!facts) {
         throw new ControllerReadRequired({ kind: "key", key });
       }
-      return facts.readCurrent(params.config(), transactionFacts);
+      return facts.readCurrent(cfg, transactionFacts);
     },
     getById(key) {
       const selected = ids.get(key);
@@ -245,7 +233,7 @@ export function createSubagentControllerRead(params: {
       if (selected.invalidated) {
         throw new Error("Subagent controller session-id selection changed.");
       }
-      const entry = selected.facts?.readCurrent(params.config(), transactionFacts);
+      const entry = selected.facts?.readCurrent(cfg, transactionFacts);
       if (entry && entry.sessionId.trim() !== key.trim()) {
         throw new Error("Subagent controller session-id selection changed.");
       }
@@ -255,13 +243,13 @@ export function createSubagentControllerRead(params: {
   const read = (transactionFacts?: readonly IncognitoSessionFacts[]) => {
     assertCurrent(transactionFacts);
     return resolveSubagentController({
-      ...params,
       cfg: params.config(),
+      agentSessionKey: initial.callerSessionKey,
+      agentId: initial.controllerAgentId,
       capabilityStore: store(transactionFacts),
     });
   };
   const prepareRequest = async (request: ReadRequest) => {
-    const cfg = params.config();
     // Session IDs are opaque; only keys can select another agent's store.
     const agentId =
       (request.kind === "key" ? parseAgentSessionKey(request.key)?.agentId : undefined) ??

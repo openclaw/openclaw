@@ -141,8 +141,7 @@ describe("memory artifact provenance", () => {
           };
           return {
             ...store,
-            update: (...args) => delay(() => store.update(...args)),
-            deleteIf: (...args) => delay(() => store.deleteIf(...args)),
+            compareAndApply: (...args) => delay(() => store.compareAndApply(...args)),
           };
         });
         const pending =
@@ -169,16 +168,6 @@ describe("memory artifact provenance", () => {
       });
     },
   );
-
-  it("restores the previous provenance on rollback", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
-      await write(address, "", "first", 1);
-      const rollback = await write(address, "first", "second", 2);
-      await expectDefined(rollback, "provenance rollback")();
-      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({ observedAt: 1 });
-    });
-  });
 
   it("uses the same workspace identity through symlink aliases", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
@@ -232,6 +221,55 @@ describe("memory artifact provenance", () => {
       });
     });
   });
+
+  it.each(["write", "rollback", "clear"] as const)(
+    "preserves concurrent provenance when %s conflicts",
+    async (operation) => {
+      await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+        const address = { workspaceDir: tempRoot, relativePath: "MEMORY.md" };
+        const firstRollback = expectDefined(
+          await write(address, "", "first", 1),
+          "first provenance rollback",
+        );
+        const createStore = pluginState.createCorePluginStateKeyedStore;
+        let replaceBeforeCommit = true;
+        vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
+          const store = createStore(options);
+          return {
+            ...store,
+            compareAndApply: async (...args) => {
+              if (replaceBeforeCommit) {
+                replaceBeforeCommit = false;
+                await write(address, "first", "concurrent", 3, "untrusted");
+              }
+              return store.compareAndApply(...args);
+            },
+          };
+        });
+
+        if (operation === "write") {
+          const rollback = expectDefined(
+            await write(address, "first", "second", 2),
+            "replacement provenance rollback",
+          );
+          await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+            originClass: "untrusted",
+            observedAt: 2,
+          });
+          await rollback();
+        } else if (operation === "rollback") {
+          await firstRollback();
+        } else {
+          await clearMemoryArtifactProvenance({ ...address, contentBefore: "first" });
+        }
+
+        await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+          originClass: "untrusted",
+          observedAt: 3,
+        });
+      });
+    },
+  );
 
   it("clears only matching deleted content", async () => {
     await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {

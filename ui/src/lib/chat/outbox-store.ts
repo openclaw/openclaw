@@ -146,12 +146,8 @@ export function notifyStoredChatOutboxChanges(): void {
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
-  if (event.key === null && event.storageArea) {
-    projectedStoreByStorage.get(event.storageArea)?.clear();
-    notifyStoredChatOutboxChanges();
-    return;
-  }
   if (
+    (event.key === null && event.storageArea) ||
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||
@@ -625,16 +621,14 @@ export function writeStoredOutboxStore(
   // A recovery move consumes its remaining source. Unlike an ordinary bounded
   // cache write, it must retain both that destination and every existing input.
   if (options.requiredSessionKey !== undefined) {
-    const required = new Set([
-      options.requiredSessionKey,
-      ...entries
-        .filter(([, session]) => session.queue?.length || hasStoredComposerDraftInput(session))
-        .map(([key]) => key),
-    ]);
-    for (const [key] of retained) {
-      required.delete(key);
-    }
-    if (required.size > 0) {
+    const retainedKeys = new Set(retained.map(([key]) => key));
+    if (
+      !retainedKeys.has(options.requiredSessionKey) ||
+      entries.some(
+        ([key, session]) =>
+          (session.queue?.length || hasStoredComposerDraftInput(session)) && !retainedKeys.has(key),
+      )
+    ) {
       throw new Error("Required chat outbox destination exceeds retention; source retained");
     }
   }

@@ -190,12 +190,6 @@ function gatewayHost(gateway) {
   return (gateway.host || "").trim().replace(/\.$/, "");
 }
 
-function canConnectDirect(gateway) {
-  return (
-    gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
-  );
-}
-
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
   elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
@@ -214,7 +208,9 @@ function renderGateways(gateways) {
     const button = document.createElement("button");
     button.className = "gateway-card";
     button.type = "button";
-    button.disabled = !canConnectDirect(gateway);
+    button.disabled = !(
+      gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
+    );
     if (button.disabled) {
       button.title = "This gateway does not advertise a direct connection.";
     }
@@ -284,13 +280,22 @@ async function refreshGateways() {
   }
 }
 
-async function connect() {
-  render({
+async function connect(action) {
+  render(action ? {
+    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
+    description: "OpenClaw is waiting for the local gateway to become healthy.",
+    eyebrow: "GATEWAY",
+    title: "One moment",
+  } : {
     activity: "Checking local services…",
     description: "Finding your gateway and preparing the Control UI.",
     title: "Connecting to OpenClaw",
   });
   try {
+    if (action) {
+      await invoke("gateway_action", { action });
+      return;
+    }
     const snapshot = await invoke("bootstrap");
     if (snapshot.phase === "missingCli" || snapshot.phase === "unconfigured") {
       firstRunPhase = snapshot.phase;
@@ -298,7 +303,11 @@ async function connect() {
       if (firstRunBuild?.releaseBuild === false) {
         elements.channel.value = "dev";
       }
-      renderWelcome();
+      if (snapshot.setupError) {
+        renderConnectionChoices(snapshot.setupError);
+      } else {
+        renderWelcome();
+      }
     } else if (snapshot.phase === "remoteError") {
       renderRemoteRetry(snapshot.detail);
     }
@@ -319,16 +328,16 @@ function renderWelcome() {
   show(elements.welcomeScreen, true);
 }
 
-function renderConnectionChoices() {
+function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
   elements.localSubtitle.textContent = freebsd
     ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
     : "Private to this computer. Installs and starts automatically.";
   render({
-    description: freebsd
+    description: error || (freebsd
       ? "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding."
-      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-    dot: "idle",
+      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background."),
+    dot: error ? "error" : "idle",
     eyebrow: "CHOOSE YOUR GATEWAY",
     title: "Where should your assistant live?",
   });
@@ -611,20 +620,6 @@ async function install() {
   }
 }
 
-async function runGatewayAction(action) {
-  render({
-    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
-    description: "OpenClaw is waiting for the local gateway to become healthy.",
-    eyebrow: "GATEWAY",
-    title: "One moment",
-  });
-  try {
-    await invoke("gateway_action", { action });
-  } catch (error) {
-    renderRetry(friendlyError(error));
-  }
-}
-
 function renderRetry(message) {
   show(elements.logWrap, false);
   renderAction(
@@ -645,7 +640,7 @@ function renderRetry(message) {
 elements.installButton.addEventListener("click", () => {
   void install();
 });
-elements.welcomeContinue.addEventListener("click", renderConnectionChoices);
+elements.welcomeContinue.addEventListener("click", () => renderConnectionChoices());
 elements.connectionLocal.addEventListener("click", () => selectConnection("local"));
 elements.connectionRemote.addEventListener("click", () => selectConnection("remote"));
 elements.setupBack.addEventListener("click", () =>
@@ -800,7 +795,7 @@ if (mode === "connectionSettings") {
       eyebrow: "GATEWAY STOPPED",
       title: "OpenClaw is standing by",
     },
-    () => runGatewayAction("start"),
+    () => connect("start"),
   );
 } else if (mode === "error") {
   renderRetry("The last gateway action failed. Check the service, then retry.");

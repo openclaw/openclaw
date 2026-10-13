@@ -10,6 +10,10 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -59,11 +63,13 @@ describe("ManagedWorktreeService canonical paths", () => {
     stateDir = path.join(root, "state");
     await fs.mkdir(stateDir, { recursive: true });
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -421,10 +427,12 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     repo = await fs.realpath(repo);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
+    resetConfigRuntimeState();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -593,7 +601,11 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
     let now = Date.now();
     service = new ManagedWorktreeService({ env, now: () => now });
-    const expired = await service.create({ repoRoot: repo, name: "expired-snapshot" });
+    const expired = await service.create({
+      repoRoot: repo,
+      name: "expired-snapshot",
+      baseRef: "HEAD",
+    });
     await service.remove({ id: expired.id, reason: "retention" });
     now += SNAPSHOT_RETENTION_MS + 1;
 

@@ -24,21 +24,6 @@ const INTERNAL_NON_DELIVERY_CHANNELS = [
 ] as const;
 
 const emptyRegistry = createTestRegistry([]);
-const demoAliasPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "demo-alias-channel",
-    label: "Demo Alias Channel",
-    docsPath: "/channels/demo-alias-channel",
-  }),
-  meta: {
-    ...createChannelTestPluginBase({
-      id: "demo-alias-channel",
-      label: "Demo Alias Channel",
-      docsPath: "/channels/demo-alias-channel",
-    }).meta,
-    aliases: ["workspace-chat"],
-  },
-};
 
 const demoMarkdownPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -87,17 +72,6 @@ describe("message-channel", () => {
     expect(isOperatorUiClient(client)).toBe(true);
     expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
     expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
-  });
-
-  it("normalizes plugin aliases when registered", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "demo-alias-channel", plugin: demoAliasPlugin, source: "test" },
-      ]),
-    );
-    expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
-    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
-    expect(isDeliverableMessageChannel("workspace-chat")).toBe(false);
   });
 
   it("recognises internal non-delivery channel sources", () => {

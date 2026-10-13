@@ -134,7 +134,9 @@ describe("createChatRunState", () => {
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
     state.toolEventRecipients.add("run-1", "conn-1");
     const run = state.getOrCreate("run-1");
+    const releaseBufferAuthority = vi.fn();
     Object.assign(run, {
+      releaseBufferAuthority,
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
@@ -151,8 +153,11 @@ describe("createChatRunState", () => {
       data: { kind: "preamble", progressText: "Inspecting" },
     });
 
+    state.updateBuffer("run-1", { itemId: "reused", text: "Saved." });
+    state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
+    expect(releaseBufferAuthority).toHaveBeenCalledOnce();
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
@@ -161,6 +166,8 @@ describe("createChatRunState", () => {
       abortMarker: expect.any(Object),
       toolRecipient: expect.any(Object),
     });
+    state.updateBuffer("run-1", { itemId: "reused", text: "New reply." });
+    expect(state.resolveBuffer("run-1").text).toBe("New reply.");
   });
 
   it.each(["full", "summary"] as const)(
@@ -275,6 +282,33 @@ describe("createChatRunState", () => {
           }),
         );
       }
+    },
+  );
+
+  it.each(["full", "summary"] as const)(
+    "retains permission notices for %s reconnect history",
+    (mode) => {
+      const state = createChatRunState();
+      const data = {
+        phase: "warning",
+        kind: "permission_missing",
+        permissionMissing: {
+          nodeId: "mac-node",
+          command: "screen.snapshot",
+          capabilities: ["screenRecording"],
+          state: "not-determined",
+        },
+      };
+      const event = {
+        runId: "run-permission",
+        seq: 1,
+        stream: "notice",
+        ts: 1_000,
+        sessionKey: "main",
+        data,
+      };
+      state.recordProgressEvent("run-permission", event, mode);
+      expect(state.runs.get("run-permission")?.progressSnapshot?.events).toEqual([event]);
     },
   );
 

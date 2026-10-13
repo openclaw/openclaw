@@ -20,10 +20,6 @@ type ProxyEnvSource = {
   label: "doctor process" | "installed Gateway service";
 };
 
-function listConfiguredProxyKeys(env: NodeJS.ProcessEnv): string[] {
-  return HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(env[key]?.trim()));
-}
-
 async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
   return await new Promise((resolve) => {
     let settled = false;
@@ -123,19 +119,15 @@ export async function noteWebFetchProxyDiagnostic(params: {
 
   const directConnectivity = await (params.probeDirectConnectivity ?? probeDirectTlsConnectivity)();
   const sourceLines = sources.map((source) => {
-    const keys = listConfiguredProxyKeys(source.env);
+    const keys = HTTP_PROXY_ENV_KEYS.filter((key) => Boolean(source.env[key]?.trim()));
     return `- HTTP(S) proxy environment detected in the ${source.label}: ${keys.join(", ")}.`;
   });
-  const directProbe =
-    directConnectivity === "reachable"
-      ? `- Direct TLS connectivity to ${DIRECT_PROBE_HOST}:${DIRECT_PROBE_PORT} succeeded.`
-      : `- Direct TLS connectivity to ${DIRECT_PROBE_HOST}:${DIRECT_PROBE_PORT} failed.`;
 
   (params.noteFn ?? note)(
     [
       ...sourceLines,
       "- web_fetch still uses direct connections because tools.web.fetch.useTrustedEnvProxy is not enabled.",
-      directProbe,
+      `- Direct TLS connectivity to ${DIRECT_PROBE_HOST}:${DIRECT_PROBE_PORT} ${directConnectivity === "reachable" ? "succeeded" : "failed"}.`,
       "- If direct web_fetch requests time out and the proxy is operator-controlled, enable the explicit opt-in:",
       `  ${formatCliCommand("openclaw config set tools.web.fetch.useTrustedEnvProxy true")}`,
       "- Keep the opt-in disabled for untrusted proxies; enabling it lets the proxy resolve DNS after OpenClaw's hostname checks.",

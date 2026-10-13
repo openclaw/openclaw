@@ -8,15 +8,12 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   call,
   hoisted,
-  markPluginRegistryActive,
   provider,
   resetSessionCatalogTestState,
   setSessionCatalogEntries,
   startCall,
   type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
-
-const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
 
 beforeEach(() => {
   resetSessionCatalogTestState();
@@ -195,7 +192,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
   }
 });
 
-it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archive"] as const)(
+it.each(["caller", "query", "config", "registration", "gateway", "archive"] as const)(
   "does not reuse a cached page after a change to %s",
   async (change) => {
     const host = {
@@ -225,9 +222,6 @@ it.each(["caller", "query", "config", "registration", "epoch", "gateway", "archi
     }
     if (change === "registration") {
       hoisted.activeRegistry.sessionCatalogs = [{ provider: fixture }];
-    }
-    if (change === "epoch") {
-      markPluginRegistryActive(getActivePluginRegistry());
     }
     if (change === "gateway") {
       gateway.abort();

@@ -60,7 +60,7 @@ describe("Doctor gateway bind persistence", () => {
         expect(prepared.snapshot.sourceConfig.commands).toBeUndefined();
         let result: Awaited<ReturnType<typeof repairLegacyConfigForUpdateChannel>>;
         if (scenario === "doctor") {
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           // Deferred model advice leaves the actual migration to Doctor's config flow.
           expect(await fs.readFile(configPath, "utf8")).toBe(before);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);

@@ -11,7 +11,6 @@ export const SOURCE_EXECUTABLES = new Set([".", "source"]);
 const MAX_ENV_SPLIT_PAYLOAD_DEPTH = 32;
 
 const COMMAND_EXECUTING_OPTIONS = new Set(["-p"]);
-const COMMAND_QUERY_OPTIONS = new Set(["-v", "-V"]);
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-C",
   "-P",
@@ -150,20 +149,6 @@ function parseCarrierOptionToken(
   return options.length > 0 ? options : null;
 }
 
-function stripSudoEnvAssignmentsFromCommandArgv(
-  executable: string,
-  argv: string[],
-): string[] | null {
-  if (executable !== "sudo") {
-    return argv.length > 0 ? argv : null;
-  }
-  let index = 0;
-  while (index < argv.length && isEnvAssignmentToken(argv[index] ?? "")) {
-    index += 1;
-  }
-  return index < argv.length ? argv.slice(index) : null;
-}
-
 function resolveEnvSplitPayload(
   payload: string,
   trailingArgv: string[],
@@ -271,9 +256,6 @@ function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
       return argv.slice(index);
     }
     const normalized = parseInlineOptionToken(token).name;
-    if (COMMAND_QUERY_OPTIONS.has(normalized)) {
-      return null;
-    }
     if (!COMMAND_EXECUTING_OPTIONS.has(normalized)) {
       return null;
     }
@@ -283,38 +265,39 @@ function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
 
 function resolveOptionCarrierArgv(argv: string[]): string[] | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  const standaloneOptions =
+  const profile: readonly [ReadonlySet<string>, ReadonlySet<string>, ReadonlySet<string>?] | null =
     executable === "sudo"
-      ? SUDO_STANDALONE_OPTIONS
+      ? [SUDO_STANDALONE_OPTIONS, SUDO_OPTIONS_WITH_VALUE, SUDO_NON_EXEC_OPTIONS]
       : executable === "doas"
-        ? DOAS_STANDALONE_OPTIONS
+        ? [DOAS_STANDALONE_OPTIONS, DOAS_OPTIONS_WITH_VALUE]
         : executable === "exec"
-          ? EXEC_STANDALONE_OPTIONS
+          ? [EXEC_STANDALONE_OPTIONS, EXEC_OPTIONS_WITH_VALUE]
           : null;
-  const optionsWithValue =
-    executable === "sudo"
-      ? SUDO_OPTIONS_WITH_VALUE
-      : executable === "doas"
-        ? DOAS_OPTIONS_WITH_VALUE
-        : executable === "exec"
-          ? EXEC_OPTIONS_WITH_VALUE
-          : null;
-  if (!standaloneOptions || !optionsWithValue) {
+  if (!profile) {
     return null;
   }
+  const [standaloneOptions, optionsWithValue, nonExecutingOptions] = profile;
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
     if (token === "--" || !token.startsWith("-")) {
       const commandArgv = argv.slice(token === "--" ? index + 1 : index);
-      return executable === "exec"
-        ? commandArgv
-        : stripSudoEnvAssignmentsFromCommandArgv(executable, commandArgv);
+      if (executable !== "sudo") {
+        return executable === "exec" || commandArgv.length > 0 ? commandArgv : null;
+      }
+      let assignmentIndex = 0;
+      while (
+        assignmentIndex < commandArgv.length &&
+        isEnvAssignmentToken(commandArgv[assignmentIndex] ?? "")
+      ) {
+        assignmentIndex += 1;
+      }
+      return assignmentIndex < commandArgv.length ? commandArgv.slice(assignmentIndex) : null;
     }
     const option = parseCarrierOptionToken(
       token,
       standaloneOptions,
       optionsWithValue,
-      executable === "sudo" ? SUDO_NON_EXEC_OPTIONS : undefined,
+      nonExecutingOptions,
     );
     if (!option) {
       return null;

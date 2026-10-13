@@ -121,26 +121,22 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
       if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
         return true;
       }
       switch (change.scope) {
-        case "config-presentation":
-          return true;
         case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          return true;
         case "worker-environments":
         case "worker-placements":
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.

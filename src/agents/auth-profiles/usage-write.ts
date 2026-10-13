@@ -67,7 +67,6 @@ export async function withAuthProfileUsage<T>(
   agentDir: string | undefined,
   consume: (usage: {
     observed: AuthProfileStore;
-    inherited: boolean;
     record: (
       reduction: PersonalAuthProfileUsageReduction,
       providerKey?: string,
@@ -79,7 +78,6 @@ export async function withAuthProfileUsage<T>(
     const observed: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
     return consume({
       observed,
-      inherited: false,
       record: async () => createAuthProfileUsageReceipt(observed),
     });
   }
@@ -115,34 +113,28 @@ export async function withAuthProfileUsage<T>(
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
     ])) {
+      const target = {
+        path: databasePath,
+        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+        env,
+      };
       readers.set(
         databasePath,
         prepareAgentAuthProfileRowsRead({
           databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
+          agentId: target.agentId,
           env,
         }),
       );
       try {
         executions.set(databasePath, {
           ok: true,
-          value: captureOpenClawAgentDatabaseExecution({
-            path: databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-            env,
-          }),
+          value: captureOpenClawAgentDatabaseExecution(target),
         });
       } catch (error) {
         executions.set(databasePath, { ok: false, error });
       }
-      writers.set(
-        databasePath,
-        reserveAuthProfileUsageWrite({
-          path: databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      );
+      writers.set(databasePath, reserveAuthProfileUsageWrite(target));
     }
     preparation = reserveAuthProfileUsagePreparation(
       [
@@ -211,21 +203,19 @@ export async function withAuthProfileUsage<T>(
       agentDir: useShared ? undefined : selectedDir,
       env,
     });
+    const sourcePaths = [
+      ...new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])]),
+    ];
     const credentialOwnerChanged = () =>
-      [...new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])])].some(
-        (sourcePath) => {
-          const previous = credentialTokens.get(sourcePath)!;
-          const current = credentialToken(sourcePath);
-          return current.revision !== previous.revision || current.known !== previous.known;
-        },
-      );
+      sourcePaths.some((sourcePath) => {
+        const previous = credentialTokens.get(sourcePath)!;
+        const current = credentialToken(sourcePath);
+        return current.revision !== previous.revision || current.known !== previous.known;
+      });
     const assertOwnerCurrent = () => {
       context.admission.assertCurrent();
       context.maintenanceScope?.assertAdmission();
-      for (const sourcePath of new Set([
-        ...(mode ? [] : [sharedPath]),
-        ...(localPath ? [localPath] : []),
-      ])) {
+      for (const sourcePath of sourcePaths) {
         readers.get(sourcePath)?.assertCurrent();
       }
       const execution = executions.get(databasePath);
@@ -256,7 +246,6 @@ export async function withAuthProfileUsage<T>(
     let recordingStarted = false;
     const operation = consume({
       observed,
-      inherited,
       async record(reduction, providerKey) {
         recordingStarted = true;
         const reconcileRemovedProfile = async (): Promise<AuthProfileUsageReceipt | undefined> => {

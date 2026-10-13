@@ -37,8 +37,6 @@ final class ChatSessionSidebarCatalogs {
     @ObservationIgnored var hasVisibleRows: (SessionCatalog) -> Bool = { $0.hosts.contains { !$0.sessions.isEmpty } }
     private var generation = UUID()
     private var observation = UUID()
-    private var refreshRevision = 0
-    private var revisions: [String: Int] = [:]
     private var pageDepths: [String: [String: Int]] = [:]
     private var visited: [String: [String: Set<String>]] = [:]
     private var discovery: [String: [String: Discovery]] = [:]
@@ -110,7 +108,6 @@ final class ChatSessionSidebarCatalogs {
         self.pageDepths = [:]
         self.visited = [:]
         self.errors = [:]
-        self.revisions = [:]
     }
 
     func scheduleRefresh() {
@@ -153,11 +150,10 @@ final class ChatSessionSidebarCatalogs {
     }
 
     func refresh() async {
-        self.refreshRevision += 1
-        let generation = self.generation, revision = self.refreshRevision, versions = self.revisions
-        // session-data-controller-catalog.ts:514 fences each catalog by its request revision.
+        let generation = self.generation
+        // A catalog refreshed while paging may briefly show an older window; the next refresh repairs it.
         func eligible(_ id: String) -> Bool {
-            versions[id, default: 0] == self.revisions[id, default: 0] && !self.loading.contains(id)
+            !self.loading.contains(id)
         }
         do {
             var fresh = try await self.request(.catalogList(agentID: self.agentID))
@@ -177,7 +173,7 @@ final class ChatSessionSidebarCatalogs {
                             throw self.pageError(host: host, catalogError: catalog.error)
                         }
                         for _ in 0..<(self.pageDepths[catalog.id]?[host.hostid] ?? 0) {
-                            guard self.current(generation), revision == self.refreshRevision else { return }
+                            guard self.current(generation) else { return }
                             guard eligible(catalog.id) else { break }
                             guard let cursor = expanded.nextcursor, !cursor.isEmpty else { break }
                             guard seen.insert(cursor).inserted else { throw self.pageError() }
@@ -204,7 +200,7 @@ final class ChatSessionSidebarCatalogs {
                 }
                 fresh[index] = Self.replacing(catalog, hosts: hosts)
             }
-            guard self.current(generation), revision == self.refreshRevision else { return }
+            guard self.current(generation) else { return }
             let retained = self.catalogs.filter { !eligible($0.id) }
             // A skipped window still owns the event invalidation; retry once paging settles, not on its safety timer.
             self.refreshAfterPages = self.refreshAfterPages || !retained.isEmpty
@@ -217,10 +213,10 @@ final class ChatSessionSidebarCatalogs {
             for catalog in fresh where eligible(catalog.id) {
                 self.visited[catalog.id] = visited[catalog.id]
             }
-            await self.discoverHiddenPages(generation: generation, revision: revision)
+            await self.discoverHiddenPages(generation: generation)
             if self.current(generation) { self.resumeRefreshAfterPages() }
         } catch {
-            guard self.current(generation), revision == self.refreshRevision else { return }
+            guard self.current(generation) else { return }
             self.errors[""] = error.localizedDescription
         }
     }
@@ -240,9 +236,9 @@ final class ChatSessionSidebarCatalogs {
         })
     }
 
-    private func discoverHiddenPages(generation: UUID, revision: Int) async {
+    private func discoverHiddenPages(generation: UUID) async {
         var stopped: [String: Set<String>] = [:]
-        while self.current(generation), revision == self.refreshRevision {
+        while self.current(generation) {
             var requested = false
             for catalog in self.catalogs where !self.hidden.contains(catalog.id) && catalog.error == nil &&
                 !self.loading.contains(catalog.id) && !self.hasVisibleRows(catalog)
@@ -254,7 +250,7 @@ final class ChatSessionSidebarCatalogs {
                 guard !hosts.isEmpty else { continue }
                 requested = true
                 let advanced = await self.loadMore(catalog.id, hostIDs: hosts, discovering: true)
-                guard self.current(generation), revision == self.refreshRevision else { return }
+                guard self.current(generation) else { return }
                 stopped[catalog.id, default: []].formUnion(hosts.subtracting(advanced))
             }
             if !requested { return }
@@ -273,20 +269,17 @@ final class ChatSessionSidebarCatalogs {
         guard !cursors.isEmpty else { return [] }
         var advanced = Set<String>()
         self.loading.insert(catalogID)
-        self.revisions[catalogID, default: 0] += 1
-        let revision = self.revisions[catalogID, default: 0]
         let generation = self.generation
         defer {
             if self.generation == generation {
                 self.loading.remove(catalogID)
-                self.revisions[catalogID, default: 0] += 1
                 self.resumeRefreshAfterPages()
             }
         }
         do {
             let page = try await self.request(.catalogList(
                 agentID: self.agentID, catalogID: catalogID, cursors: cursors))
-            guard self.current(generation), revision == self.revisions[catalogID, default: 0] else { return [] }
+            guard self.current(generation) else { return [] }
             self.errors.removeValue(forKey: catalogID)
             let hosts = catalog.hosts.map { host in
                 guard let cursor = cursors[host.hostid] else { return host }
@@ -332,7 +325,7 @@ final class ChatSessionSidebarCatalogs {
             }
             self.catalogs = self.catalogs.map { $0.id == catalogID ? Self.replacing($0, hosts: hosts) : $0 }
         } catch {
-            if self.current(generation), revision == self.revisions[catalogID, default: 0] {
+            if self.current(generation) {
                 self.errors[catalogID] = error.localizedDescription
             }
         }
@@ -344,12 +337,10 @@ final class ChatSessionSidebarCatalogs {
         guard let connection, connection.isCurrent(), connection.allowsArchive, !Task.isCancelled,
               catalog.capabilities.archive, row.canarchive else { return false }
         let generation = self.generation
-        self.revisions[catalog.id, default: 0] += 1
         do {
             _ = try await connection.request(.catalogArchive(
                 agentID: self.agentID, catalogID: catalog.id, hostID: host.hostid, row: row))
             guard self.current(generation) else { return false }
-            self.revisions[catalog.id, default: 0] += 1
             self.catalogs = self.catalogs.map { entry in
                 entry.id != catalog.id ? entry : Self.replacing(entry, hosts: entry.hosts.map {
                     $0.hostid != host.hostid ? $0 : Self.replacing(

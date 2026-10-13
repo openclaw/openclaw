@@ -127,26 +127,14 @@ function installFeishuLifecycleRuntime(params: {
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
   resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
-  resolveCommandAuthorizedFromAuthorizers?: PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"];
-  readAllowFromStore?: PluginRuntime["channel"]["pairing"]["readAllowFromStore"];
-  upsertPairingRequest?: PluginRuntime["channel"]["pairing"]["upsertPairingRequest"];
-  buildPairingReply?: PluginRuntime["channel"]["pairing"]["buildPairingReply"];
-  detectMime?: PluginRuntime["media"]["detectMime"];
 }): PluginRuntime {
   const runtime = createPluginRuntimeMock({
     channel: {
       debounce: createImmediateInboundDebounce(),
-      text: {
-        hasControlCommand: params.hasControlCommand ?? vi.fn(() => false),
-      },
       routing: {
         resolveAgentRoute: params.resolveAgentRoute,
       },
       reply: {
-        resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-        formatAgentEnvelope: vi.fn((value: { body: string }) => value.body),
         dispatchReplyWithBufferedBlockDispatcher: async ({
           cfg,
           ctx,
@@ -186,22 +174,14 @@ function installFeishuLifecycleRuntime(params: {
         withReplyDispatcher: params.withReplyDispatcher,
       },
       commands: {
-        shouldComputeCommandAuthorized: params.shouldComputeCommandAuthorized ?? vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers:
-          params.resolveCommandAuthorizedFromAuthorizers ?? vi.fn(() => false),
+        shouldComputeCommandAuthorized: vi.fn(() => false),
       },
       session: {
-        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
         resolveStorePath: params.resolveStorePath,
       },
       pairing: {
-        readAllowFromStore: params.readAllowFromStore ?? vi.fn().mockResolvedValue([]),
-        upsertPairingRequest: params.upsertPairingRequest ?? vi.fn(),
-        buildPairingReply: params.buildPairingReply ?? vi.fn(),
+        upsertPairingRequest: vi.fn(),
       },
-    },
-    media: {
-      detectMime: params.detectMime ?? vi.fn(async () => "text/plain"),
     },
   }) as unknown as PluginRuntime;
   setFeishuRuntime(runtime);

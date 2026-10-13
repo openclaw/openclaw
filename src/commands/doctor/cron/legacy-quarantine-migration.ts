@@ -1,6 +1,7 @@
 /** Imports shipped cron quarantine sidecars only through the doctor migration boundary. */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronQuarantinedJob } from "../../../cron/store.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
@@ -40,10 +41,7 @@ export async function loadLegacyCronQuarantineForMigration(
       throw new Error(`Unsupported cron quarantine entry at ${quarantinePath} index ${index}`);
     }
     const quarantined: CronQuarantinedJob = {
-      quarantinedAtMs:
-        typeof entry.quarantinedAtMs === "number" && Number.isFinite(entry.quarantinedAtMs)
-          ? entry.quarantinedAtMs
-          : Date.now(),
+      quarantinedAtMs: asFiniteNumber(entry.quarantinedAtMs) ?? Date.now(),
       sourceIndex: typeof entry.sourceIndex === "number" ? entry.sourceIndex : -1,
       reason: entry.reason,
     };

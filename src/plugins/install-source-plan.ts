@@ -400,6 +400,9 @@ export function resolveManagedPluginInstallRequest(
       return {
         source: "clawhub",
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
+        ...(!request.version && !request.expectedIntegrity
+          ? { recordSpec: `clawhub:${packageName}` }
+          : {}),
         mode,
         ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,

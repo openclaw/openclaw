@@ -4,7 +4,6 @@ import {
   listAgentIds,
   resolveAgentConfig,
 } from "../agents/agent-scope-config.js";
-// Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
   resolveProviderToolPolicy,
@@ -113,12 +112,13 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   });
 }
 
-/** Produce a concise inventory of major security-relevant surfaces. */
-export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export async function collectAttackSurfaceSummaryFindings(
+  cfg: OpenClawConfig,
+): Promise<SecurityAuditFinding[]> {
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
+  const internalHooksEnabled = (await resolveInternalHookSelection(cfg)).configured;
   const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
@@ -138,7 +138,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     {
       checkId: "summary.attack_surface",
       severity: "info",
-      title: "Attack surface summary",
+      title: "Exposure summary",
       detail,
     },
   ];

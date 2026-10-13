@@ -81,6 +81,8 @@ export function createDiscordMessageReactionRuntime(params: {
   });
   let statusReactionTarget = `${messageChannelId}/${message.id}`;
   let statusReactionsActive = statusReactionsEnabled;
+  const logReactionFailure = (target: string, error: unknown) =>
+    logAckFailure({ log: logVerbose, channel: "discord", target, error });
   const createController = (
     enabled: boolean,
     adapter: Parameters<typeof createStatusReactionController>[0]["adapter"],
@@ -91,14 +93,7 @@ export function createDiscordMessageReactionRuntime(params: {
       adapter,
       initialEmoji,
       presentation: "acknowledgement",
-      onError: (err) => {
-        logAckFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: statusReactionTarget,
-          error: err,
-        });
-      },
+      onError: (err) => logReactionFailure(statusReactionTarget, err),
     });
   let statusReactions: StatusReactionController = createController(
     statusReactionsEnabled,
@@ -159,12 +154,10 @@ export function createDiscordMessageReactionRuntime(params: {
     try {
       trackedChannelId = await resolveTrackedReactionChannelId(args);
     } catch (err) {
-      logAckFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: `${normalizeOptionalString(args.to) ?? normalizeOptionalString(args.channelId) ?? messageChannelId}/${trackedMessageId}`,
-        error: err,
-      });
+      logReactionFailure(
+        `${normalizeOptionalString(args.to) ?? normalizeOptionalString(args.channelId) ?? messageChannelId}/${trackedMessageId}`,
+        err,
+      );
       return;
     }
     statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;

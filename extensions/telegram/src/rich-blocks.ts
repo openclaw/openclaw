@@ -109,31 +109,6 @@ function resolveTelegramLinkAction(
   return { kind: "url", href };
 }
 
-function collectTelegramLinkActions(
-  ir: MarkdownIR,
-): Array<{ start: number; end: number; action: TelegramLinkAction }> {
-  if (ir.links.length === 0) {
-    return [];
-  }
-  const links: Array<{ start: number; end: number; action: TelegramLinkAction }> = [];
-  renderMarkdownWithMarkers(
-    ir,
-    {
-      styleMarkers: {},
-      escapeText: (text) => text,
-      buildLink: (link, source, context) => {
-        const action = resolveTelegramLinkAction(link, source, context);
-        if (action) {
-          links.push({ start: link.start, end: link.end, action });
-        }
-        return null;
-      },
-    },
-    TELEGRAM_RICH_FORMAT_PROFILE,
-  );
-  return links;
-}
-
 /**
  * Build nested RichText from IR spans over [rangeStart, rangeEnd).
  * Spans that partially overlap are split at shared boundaries (IR contract).
@@ -160,11 +135,25 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   for (const span of slice.annotations ?? []) {
     spans.push({ start: span.start, end: span.end, kind: "annotation" });
   }
-  for (const link of collectTelegramLinkActions(slice)) {
-    spans.push(
-      link.action.kind === "code"
-        ? { start: link.start, end: link.end, kind: "style", style: "code" }
-        : { start: link.start, end: link.end, kind: "link", target: link.action },
+  if (slice.links.length > 0) {
+    renderMarkdownWithMarkers(
+      slice,
+      {
+        styleMarkers: {},
+        escapeText: (value) => value,
+        buildLink: (link, source, context) => {
+          const action = resolveTelegramLinkAction(link, source, context);
+          if (action) {
+            spans.push(
+              action.kind === "code"
+                ? { start: link.start, end: link.end, kind: "style", style: "code" }
+                : { start: link.start, end: link.end, kind: "link", target: action },
+            );
+          }
+          return null;
+        },
+      },
+      TELEGRAM_RICH_FORMAT_PROFILE,
     );
   }
   type Leaf = { start: number; end: number } & (
@@ -207,9 +196,9 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   const points = [
     ...new Set([...spans, ...leaves].flatMap((span) => [span.start, span.end])),
   ].toSorted((left, right) => left - right);
-  const stack: Active[] = [];
+  const stack: Array<{ span: Active; text: RichText[] }> = [];
   const root: RichText[] = [];
-  const frameStack: RichText[][] = [root];
+  const currentText = () => stack.at(-1)?.text ?? root;
   let leafIndex = 0;
   let nextSpanIndex = 0;
   let pendingSpans: Active[] = [];
@@ -236,13 +225,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     // may contain independently authored styles and clickable links.
     const active = annotation ? [annotation] : covering;
     let shared = 0;
-    while (shared < stack.length && stack[shared] === active[shared]) {
+    while (shared < stack.length && stack[shared]?.span === active[shared]) {
       shared += 1;
     }
     // Retain unchanged containers; rebuild the suffix when an ancestor expires,
     // even if its child continues, so crossed ranges cannot leak formatting.
     stack.length = shared;
-    frameStack.length = shared + 1;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
       const node: RichText =
@@ -253,14 +241,11 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
               ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
-      frameStack.at(-1)?.push(node);
-      stack.push(item);
-      frameStack.push(container);
+      currentText().push(node);
+      stack.push({ span: item, text: container });
     }
-    if (end > start) {
-      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      frameStack.at(-1)?.push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
-    }
+    // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+    currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
   }
 
   return normalizeRichText(root);
@@ -298,41 +283,29 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
-  if (!cell?.text) {
-    return undefined;
-  }
-  const rich = irRangeToRichText(cell, 0, cell.text.length);
-  return rich === "" ? undefined : rich;
-}
-
-function renderTableBlock(table: MarkdownTableMeta): {
-  block: InputRichBlock;
-  degradation?: TelegramRichBlocksDegradationReason;
-} {
+function renderTableBlock(
+  table: MarkdownTableMeta,
+  degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+): InputRichBlock {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
-    return {
-      block: {
-        type: "pre",
-        text: renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-          headerSeparator: true,
-        }),
-      },
-      degradation: "table-ascii",
-    };
+    const text = renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+      headerSeparator: true,
+    });
+    degradationReasons.add("table-ascii");
+    return { type: "pre", text };
   }
   const renderCell = (
     cell: MarkdownTableCell | undefined,
     index: number,
     header = false,
   ): RichBlockTableCell => {
-    const text = cellToRichText(cell);
+    const text = cell?.text ? irRangeToRichText(cell, 0, cell.text.length) : "";
     return {
       ...(header ? { is_header: true as const } : {}),
       align: table.aligns?.[index] ?? "left",
       valign: "middle",
-      ...(text !== undefined ? { text } : {}),
+      ...(text !== "" ? { text } : {}),
     };
   };
   const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));
@@ -341,12 +314,10 @@ function renderTableBlock(table: MarkdownTableMeta): {
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
-    block: {
-      type: "table",
-      cells,
-      is_bordered: true,
-      is_striped: true,
-    },
+    type: "table",
+    cells,
+    is_bordered: true,
+    is_striped: true,
   };
 }
 
@@ -477,16 +448,6 @@ function emitSegments(
     if (left.start !== right.start) {
       return left.start - right.start;
     }
-    // Tables occupy no IR text. A table before an HTML opener shares its offset,
-    // but Markdown quotes/lists at that offset still own their table children.
-    const ownsTable = (segment: StructuralSegment) =>
-      segment.kind === "blockquote" || segment.kind === "list";
-    if (left.kind === "table" && right.kind !== "table" && !ownsTable(right)) {
-      return -1;
-    }
-    if (right.kind === "table" && left.kind !== "table" && !ownsTable(left)) {
-      return 1;
-    }
     return right.end - left.end || containerRank(left) - containerRank(right);
   });
   const blocks: InputRichBlock[] = [];
@@ -567,11 +528,7 @@ function emitSegments(
         break;
       }
       case "table": {
-        const rendered = renderTableBlock(segment.table);
-        if (rendered.degradation) {
-          degradationReasons.add(rendered.degradation);
-        }
-        blocks.push(rendered.block);
+        blocks.push(renderTableBlock(segment.table, degradationReasons));
         break;
       }
     }
@@ -637,8 +594,7 @@ export function markdownToTelegramRichBlocks(
 
   return {
     blocks,
-    // Tables are zero-width placeholders in ir.text; project the blocks so the
-    // plain fallback keeps table content instead of silently dropping it.
+    // Native-table coordinates carry no cell text; project the blocks to retain it.
     plainText: inputRichBlocksToPlainText(plainBlocks),
     degradationReasons: [...degradationReasons],
   };

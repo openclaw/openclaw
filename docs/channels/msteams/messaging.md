@@ -177,7 +177,7 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 | ----------------------------------------------------------------------- | --------------------------------------------------------- |
 | Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
 | Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
-| Group chat without a supported chat-member read grant                   | Send fails closed                                         |
+| Group chat without a supported chat-member read grant                   | Send is blocked                                           |
 
 Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 

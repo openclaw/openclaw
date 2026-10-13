@@ -7,7 +7,6 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -21,7 +20,7 @@ import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
-import { formatCliRequirements } from "./skills-hooks-cli.format.js";
+import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
 type SkillsListOptions = {
   json?: boolean;
@@ -165,35 +164,21 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     return appendClawHubHint(message);
   }
 
-  const ready = skills.filter(isReadyForAgent);
-  const tableWidth = getTerminalTableWidth();
-  const rows = skills.map((skill) => ({
-    Status: formatSkillStatus(skill),
-    Skill: formatSkillName(skill),
-    Description: theme.muted(skill.description),
-    Source: skill.source,
-    Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
-  }));
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Skill", header: "Skill", minWidth: 22 },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 10 },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
   return appendClawHubHint(
-    [
-      `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
-      renderTable({
-        width: tableWidth,
-        columns,
-        rows,
-      }).trimEnd(),
-    ].join("\n"),
+    formatCliStatusTable({
+      title: "Skills",
+      ready: skills.filter(isReadyForAgent).length,
+      nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
+      sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
+      verbose: opts.verbose,
+      rows: skills.map((skill) => ({
+        Status: formatSkillStatus(skill),
+        Skill: formatSkillName(skill),
+        Description: theme.muted(skill.description),
+        Source: skill.source,
+        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+      })),
+    }),
   );
 }
 

@@ -61,7 +61,10 @@ export class ProcessInspectionError extends Error {
 }
 
 function remainingInspectionTime(deadline: number): number {
-  const remainingMs = deadline - Date.now();
+  // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
+  // or shrink the budget while the inspection timers (also monotonic) are in flight.
+  // Math.floor keeps the value integral for AbortSignal.timeout / setTimeout.
+  const remainingMs = Math.floor(deadline - performance.now());
   if (remainingMs <= 0) {
     throw new ProcessInspectionError("deadline");
   }
@@ -83,8 +86,17 @@ function inspectionFailure(error: unknown): ProcessInspectionError {
   );
 }
 
+function isMissingProcess(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ESRCH")
+  );
+}
+
 export async function readCodexAppServerProcessSnapshot(
-  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+  deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
   pids?: readonly number[],
 ): Promise<PosixProcess[]> {
   // Registration proves only known owners. Containment still needs the full tree.
@@ -210,7 +222,7 @@ async function readProcessOutput(
       },
       (error, stdout) => {
         settle(
-          Date.now() >= deadline
+          performance.now() >= deadline
             ? new ProcessInspectionError("deadline")
             : error
               ? procfs && error.code === PROCFS_COMMAND_PERMISSION_EXIT
@@ -292,12 +304,7 @@ async function readLinuxProcesses(
       const stat = await readFile(`/proc/${entry}/stat`, options).catch((error: unknown) => {
         // A process may exit between enumeration and read. Other failures must
         // not turn an unreadable process into proof that an orphan is gone.
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           return undefined;
         }
         throw error;
@@ -423,12 +430,7 @@ function readSelectedLinuxProcesses(selected: readonly number[], deadline: numbe
           PROCESS_INSPECTION_MAX_BYTES - bytes,
         );
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          (error.code === "ENOENT" || error.code === "ESRCH")
-        ) {
+        if (isMissingProcess(error)) {
           continue;
         }
         throw error;

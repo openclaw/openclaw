@@ -21,7 +21,8 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -273,7 +274,7 @@ describe("mounted pane session event ownership", () => {
     },
   );
 
-  it("does not admit fenced hidden history and hydrates its foreign descriptor when presented", async () => {
+  it("hydrates a hidden foreign descriptor when presented", async () => {
     const primary = globalSession("main");
     const original = globalSession("research", {
       archived: true,
@@ -286,7 +287,6 @@ describe("mounted pane session event ownership", () => {
     const freshDescribe = createDeferred<{ session: GatewaySessionRow | null }>();
     const initialHistoryStarted = createDeferred();
     const freshReadStarted = createDeferred();
-    const oldHistoryReconciled = createDeferred();
     const freshRowObserved = createDeferred();
     let eventDelivered = false;
     const reads: Array<{ method: string; params: unknown; afterEvent: boolean }> = [];
@@ -338,20 +338,6 @@ describe("mounted pane session event ownership", () => {
       }
       return observation;
     });
-    const oldOutcomes: Array<boolean | "defaults-only"> = [];
-    const captureReconcile = sessions.captureReconcile;
-    vi.spyOn(sessions, "captureReconcile").mockImplementation(() => {
-      const reconcile = captureReconcile();
-      const beforeEvent = !eventDelivered;
-      return (...args) => {
-        const outcome = reconcile(...args);
-        if (beforeEvent && args[0]?.agentId === "research") {
-          oldOutcomes.push(outcome);
-          oldHistoryReconciled.resolve();
-        }
-        return outcome;
-      };
-    });
     let initialHistory: ReturnType<typeof loadChatHistory> | undefined;
     let initialRefresh: Promise<void> | undefined;
     try {
@@ -389,10 +375,6 @@ describe("mounted pane session event ownership", () => {
       oldHistory.resolve({ messages: [], sessionInfo: original, sessionId: original.sessionId });
       await initialHistory;
       await initialRefresh;
-      expect(observation.hasObserved).toBe(false);
-      await oldHistoryReconciled.promise;
-      expect(oldOutcomes.length).toBeGreaterThan(0);
-      expect.soft(oldOutcomes).not.toContain(true);
       expect(pane.presented).toBe(false);
       pane.presented = true;
       await freshReadStarted.promise;
@@ -474,7 +456,7 @@ describe("mounted pane session event ownership", () => {
   });
 
   it.each([false, true])(
-    "shows the admitted run's model before provisional descriptor reads settle (reentrant publication: %s)",
+    "keeps the saved model while execution metadata changes before descriptor reads settle (reentrant publication: %s)",
     async (reentrant) => {
       const row: GatewaySessionRow = {
         key: "agent:main:provisional-model",
@@ -548,7 +530,7 @@ describe("mounted pane session event ownership", () => {
         expect(descriptor.hasObserved).toBe(false);
         expect(state.chatLoading).toBe(true);
         const model = draw();
-        expect(model?.textContent).toContain(reentrant ? "Primary" : "Fallback");
+        expect(model?.textContent).toContain("Primary");
         expect(model?.getAttribute("aria-busy")).toBe("false");
       } finally {
         reads.resolve();
@@ -718,7 +700,10 @@ describe("mounted pane session event ownership", () => {
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
       const container = document.createElement("div");
       const draw = () => {
-        render(renderChatPermissionPicker(composerControls(state).permissionPicker), container);
+        render(
+          solidTemplate(ChatPermissionPicker, composerControls(state).permissionPicker),
+          container,
+        );
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");

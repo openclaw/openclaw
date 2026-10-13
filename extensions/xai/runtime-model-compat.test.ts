@@ -100,4 +100,26 @@ describe("xai runtime model compat", () => {
       xhigh: null,
     });
   });
+
+  it("sends none for off only when the listed efforts include it", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.20-0309-reasoning",
+      provider: "xai",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["high", "none", "low", "unknown"] },
+    });
+
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "high"],
+    });
+    expect(model.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: "low",
+      low: "low",
+      medium: "low",
+      high: "high",
+      xhigh: "high",
+    });
+  });
 });

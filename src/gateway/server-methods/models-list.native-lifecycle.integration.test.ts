@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -39,6 +39,7 @@ it.for([false, true])(
       label: "native-catalog-lifecycle",
       layout: "state-only",
       env: {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         OPENCLAW_SKIP_CHANNELS: "1",
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_CRON: "1",
@@ -55,7 +56,7 @@ it.for([false, true])(
     let emptyNativeCatalog = false;
     let failedNativeCatalog = false;
     let failedProviderCatalog = !withProviderCredentials;
-    const nativeRequested = createDeferred();
+    let nativeRequested = createDeferred();
     let holdOther = false;
     const otherRequested = createDeferred();
     const otherReleased = createDeferred();
@@ -287,10 +288,22 @@ it.for([false, true])(
         await server.startupSettled;
         const list = () =>
           client.request<ModelsListResult>("models.list", { agentId: "main", view: "all" });
-        await nativeRequested.promise;
+        const preparedList = () =>
+          client.request<ModelsListResult>("models.list", {
+            agentId: "main",
+            view: "all",
+            preparedOnly: true,
+          });
+        expect(requests.filter((path) => path === "/native/models")).toHaveLength(0);
+        const firstReads = Promise.all([list(), list()]);
+        await awaitGateBeforeSettlement(
+          nativeRequested.promise,
+          firstReads,
+          "models.list completed without starting native discovery",
+        );
         const beforeReads = requests.length;
-        // Discovery stays held until these RPCs return the prepared snapshot.
-        const pending = await Promise.all([list(), list()]);
+        // Prepared metadata remains responsive while the first demanded discovery is held.
+        const pending = await Promise.all([preparedList(), preparedList()]);
         expect.soft(requests.filter((path) => path === "/native/models")).toHaveLength(1);
         expect(requests).toHaveLength(beforeReads);
         for (const result of pending) {
@@ -299,15 +312,13 @@ it.for([false, true])(
           expect(result.models).not.toContainEqual(modelRow(provider, nativeModelId));
         }
         nativeReleased.resolve();
-        await expect
-          .poll(
-            async () => (await list()).models.find((row) => row.id === nativeModelId)?.available,
-            { timeout: 15_000 },
-          )
-          .toBe(true);
+        for (const result of await firstReads) {
+          expect(result.models.find((row) => row.id === nativeModelId)?.available).toBe(true);
+        }
         expect((await list()).models).toContainEqual(modelRow(provider, "harness-host-row"));
         if (!withProviderCredentials) {
-          expect(requests).toEqual(["/native/models"]);
+          // Cold startup discovers the full catalog, as an explicit refresh would.
+          expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
           // Gateway refresh can return a pending snapshot before discovery publishes.
           const refresh = () =>
             waitForCatalogPublication({
@@ -332,17 +343,17 @@ it.for([false, true])(
           expect((await list()).models).toContainEqual(modelRow(provider, "provider-account"));
           const beforeOpaqueReload = requests.length;
           nativeReleased = createDeferred();
+          nativeRequested = createDeferred();
           await client.request("models.authRefresh", { agentId: "main", operation: "logout" });
-          await expect
-            .poll(
-              () =>
-                requests.slice(beforeOpaqueReload).filter((path) => path === "/native/models")
-                  .length,
-              { timeout: 15_000 },
-            )
-            .toBe(1);
+          expect(requests.slice(beforeOpaqueReload)).not.toContain("/native/models");
+          const firstOpaqueRead = list();
+          await awaitGateBeforeSettlement(
+            nativeRequested.promise,
+            firstOpaqueRead,
+            "models.list completed without rediscovering the changed native account",
+          );
           const beforeOpaqueReads = requests.length;
-          const opaquePending = await Promise.all([list(), list()]);
+          const opaquePending = await Promise.all([preparedList(), preparedList()]);
           expect(requests).toHaveLength(beforeOpaqueReads);
           for (const result of opaquePending) {
             expect(result.pendingProviders).toContain(provider);
@@ -350,9 +361,7 @@ it.for([false, true])(
             expect(result.models).toContainEqual(modelRow(provider, "provider-account"));
           }
           nativeReleased.resolve();
-          await expect
-            .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
-            .not.toContain(provider);
+          expect((await firstOpaqueRead).pendingProviders ?? []).not.toContain(provider);
         }
         if (withProviderCredentials) {
           const beforeUnrelated = requests.length;
@@ -461,17 +470,12 @@ it.for([false, true])(
               agents: { defaults: { modelPolicy: { allow: [`${provider}/*`, "unused/*"] } } },
             }),
           });
-          await expect
-            .poll(() => requests.filter((path) => path === "/native/models").length, {
-              timeout: 15_000,
-            })
-            .toBe(beforeReloadNative + 1);
-          await expect
-            .poll(
-              async () => (await list()).models.find((row) => row.id === nativeModelId)?.available,
-              { timeout: 15_000 },
-            )
-            .toBe(true);
+          expect((await list()).models.find((row) => row.id === nativeModelId)?.available).toBe(
+            true,
+          );
+          expect(requests.filter((path) => path === "/native/models")).toHaveLength(
+            beforeReloadNative + 1,
+          );
           const beforeFullFailure = requests.length;
           nativeReleased = createDeferred();
           failedNativeCatalog = true;
@@ -563,13 +567,14 @@ it.for([false, true])(
   },
 );
 
-it("models.list full refresh discovers an enabled provider without configured credentials", async ({
+it("models.list discovers credential-free providers at startup and explicitly refreshes once", async ({
   signal,
 }) => {
   const state = await createOpenClawTestState({
     label: "credential-free-catalog",
     layout: "state-only",
     env: {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_SKIP_CHANNELS: "1",
       OPENCLAW_SKIP_GMAIL_WATCHER: "1",
       OPENCLAW_SKIP_CRON: "1",
@@ -586,7 +591,8 @@ it("models.list full refresh discovers an enabled provider without configured cr
     response.end(
       JSON.stringify([
         {
-          id: "public-model",
+          // Each response names its request so a publication proves which discovery produced it.
+          id: `public-model-${requests}`,
           name: "Public model",
           reasoning: false,
           input: ["text"],
@@ -652,18 +658,23 @@ it("models.list full refresh discovers an enabled provider without configured cr
       await server.startupSettled;
       const list = (refresh = false) =>
         client.request<ModelsListResult>("models.list", { agentId: "main", view: "all", refresh });
-      expect((await list()).models.some((row) => row.id === "public-model")).toBe(false);
-      expect(requests).toBe(0);
+      const published = (modelId: string) => (result: ModelsListResult) =>
+        !result.pendingProviders?.includes(provider) &&
+        result.models.some((row) => row.provider === provider && row.id === modelId);
+      // Cold startup runs the full discovery a refresh would, without an operator request.
+      await waitForCatalogPublication({ signal, read: list, ready: published("public-model-1") });
+      expect(requests).toBe(1);
+      // An explicit refresh acquires fresh responses instead of reusing startup discovery.
       const refreshed = await waitForCatalogPublication({
         signal,
         start: () => list(true),
         read: list,
-        ready: (result) => !result.pendingProviders?.includes(provider),
+        ready: published("public-model-2"),
       });
-      expect(refreshed.models).toContainEqual(modelRow(provider, "public-model"));
-      expect(requests).toBe(1);
-      expect((await list()).models).toContainEqual(modelRow(provider, "public-model"));
-      expect(requests).toBe(1);
+      expect(refreshed.models).not.toContainEqual(modelRow(provider, "public-model-1"));
+      expect(requests).toBe(2);
+      expect((await list()).models).toContainEqual(modelRow(provider, "public-model-2"));
+      expect(requests).toBe(2);
     } finally {
       await disconnectGatewayClient(client);
       await server.close();

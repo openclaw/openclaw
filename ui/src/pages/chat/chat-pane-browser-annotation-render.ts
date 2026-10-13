@@ -11,6 +11,13 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
       return;
     }
     const sourceSessionKey = state.sessionKey;
+    const focusAfterUpdate = (target: () => HTMLElement | null | undefined) => {
+      void this.updateComplete.then(() => {
+        if (this.state === state && this.state.sessionKey === sourceSessionKey) {
+          target()?.focus({ preventScroll: true });
+        }
+      });
+    };
     removeBrowserAnnotationWithUndo(
       {
         getOwner: () => this.stagedAttachmentGatewayOwner ?? undefined,
@@ -22,27 +29,17 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
           }
         },
         requestUpdate: () => this.state?.requestUpdate?.(),
-        focusComposer: () => {
-          void this.updateComplete.then(() => {
-            if (this.state !== state || this.state.sessionKey !== sourceSessionKey) {
-              return;
-            }
-            this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
-              preventScroll: true,
-            });
-          });
-        },
-        focusRestoredAnnotation: (attachmentId) => {
-          void this.updateComplete.then(() => {
-            if (this.state !== state || this.state.sessionKey !== sourceSessionKey) {
-              return;
-            }
+        focusComposer: () =>
+          focusAfterUpdate(() =>
+            this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR),
+          ),
+        focusRestoredAnnotation: (attachmentId) =>
+          focusAfterUpdate(() => {
             const card = [...this.querySelectorAll<HTMLElement>("[data-attachment-id]")].find(
               (candidate) => candidate.dataset.attachmentId === attachmentId,
             );
-            card?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
-          });
-        },
+            return card?.querySelector<HTMLButtonElement>("button");
+          }),
       },
       attachment,
       {

@@ -216,7 +216,6 @@ async function runFile(
   }
 }
 
-/** Describes one image file or URL through the configured image-understanding pipeline. */
 export async function describeImageFile(
   params: DescribeImageFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -263,7 +262,6 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   };
 }
 
-/** Describes a prepared image with an explicit provider/model. */
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -308,7 +306,6 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   });
 }
 
-/** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!params.input.some((entry) => entry.type === "image")) {
@@ -338,7 +335,6 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   });
 }
 
-/** Describes one video file or URL through the configured video-understanding pipeline. */
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -371,7 +367,6 @@ export async function resolveAudioInputBudget(params: {
   };
 }
 
-/** Transcribes one audio file or URL through the configured audio-understanding pipeline. */
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {

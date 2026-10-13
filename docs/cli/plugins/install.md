@@ -105,7 +105,12 @@ Default official installs follow the catalog's declared source order.
 ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
-[plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
+[plugin inventory](/plugins/plugin-inventory). Stable official ClawHub installs
+first try the running OpenClaw version. If that build is unpublished, installation
+falls back to the original catalog candidate with a visible warning and retains
+that candidate’s integrity pin. An incompatible fallback names the required
+plugin API or OpenClaw version and asks you to upgrade or choose an explicit
+compatible plugin version.
 Fresh beta-channel installs with bare/default or `@latest` intent target the
 installed core's exact beta version for eligible official npm and trusted
 official ClawHub plugins. If the core is not a beta release, they target `@beta`.
@@ -148,7 +153,7 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
-When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the canonical extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
+When legacy metadata supplies `files[]` without an archive digest, OpenClaw verifies the normalized extracted paths and SHA-256 hashes before installing. Harmless archive spellings such as backslash separators may normalize to those paths; missing, changed, or extra files and named unsupported records still fail verification. Root-only records that create no output are ignored. Server-provided paths and generated `_meta.json` metadata remain strictly validated.
 
 ZIP archives with entry names that differ only by case or Unicode normalization
 are rejected on every platform. ClawHub fallback verification reports the archive
@@ -157,9 +162,9 @@ corrected archive before installation can continue.
 
 ### Config includes and invalid-config repair
 
-If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
+If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` are rejected instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Doctor owns [legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale) and can quarantine invalid plugin entries. Gateway startup and hot reload reject invalid plugin config without running that repair. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+If config is invalid before install, `plugins install` normally refuses to proceed and tells you to run `openclaw doctor --fix` first. Doctor owns [legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale) and can quarantine invalid plugin entries. Gateway startup and hot reload reject invalid plugin config without running that repair. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
 When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
@@ -195,7 +200,7 @@ pins; an explicit version supplied to the current update command still wins. See
 
 ### --acknowledge-install-policy-warning
 
-When `security.installPolicy` returns `warn` in an interactive terminal, OpenClaw prints the reason and findings, then uses the same acknowledgement copy as a suspicious ClawHub release: `type: '<plugin>' to install anyway`. If the fully rendered review exceeds 4,000 characters, OpenClaw fails closed before prompting; reduce or coalesce the policy output first. A matching answer re-evaluates the staged source before continuing. A declined or non-interactive direct CLI install stops before commit; after review, `--acknowledge-install-policy-warning` explicitly approves every warning for that command invocation. Control UI installs offer **Install anyway** after showing the warning; Gateway API clients can acknowledge the reviewed request with `acknowledgeInstallPolicyWarning: true`. Automatic installs do not approve policy warnings themselves. For a managed surface without an explicit acknowledgment step, rerun the equivalent direct CLI command when one exists, or change `security.installPolicy` to return `allow` for the reviewed request before retrying the managed flow. Every approved warning is re-evaluated before continuing. Neither acknowledgement nor `--force` overrides `block` or a policy failure.
+When `security.installPolicy` returns `warn` in an interactive terminal, OpenClaw prints the reason and findings, then uses the same acknowledgement copy as a suspicious ClawHub release: `type: '<plugin>' to install anyway`. If the fully rendered review exceeds 4,000 characters, OpenClaw stops before prompting; reduce or coalesce the policy output first. A matching answer re-evaluates the staged source before continuing. A declined or non-interactive direct CLI install stops before commit; after review, `--acknowledge-install-policy-warning` explicitly approves every warning for that command invocation. Control UI installs offer **Install anyway** after showing the warning; Gateway API clients can acknowledge the reviewed request with `acknowledgeInstallPolicyWarning: true`. Automatic installs do not approve policy warnings themselves. For a managed surface without an explicit acknowledgment step, rerun the equivalent direct CLI command when one exists, or change `security.installPolicy` to return `allow` for the reviewed request before retrying the managed flow. Every approved warning is re-evaluated before continuing. Neither acknowledgement nor `--force` overrides `block` or a policy failure.
 
 If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). This flag does not ask ClawHub to rescan the plugin or make a blocked release public. The deprecated `--dangerously-force-unsafe-install` flag remains a no-op.
 
@@ -316,7 +321,7 @@ Workspace-origin plugins discovered from a workspace extensions root are not
 imported or executed until they are explicitly enabled. For local development,
 run `openclaw plugins enable <plugin-id>` or set
 `plugins.entries.<plugin-id>.enabled: true`; if your config uses
-`plugins.allow`, include the same plugin id there too. This fail-closed rule
+`plugins.allow`, include the same plugin id there too. This rule
 also applies when channel setup explicitly targets a workspace-origin plugin for
 setup-only loading, so local channel plugin setup code will not run while that
 workspace plugin remains disabled or excluded from the allowlist. Linked installs

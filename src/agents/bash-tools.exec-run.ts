@@ -5,7 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
-  loadExecApprovals,
+  loadExecApprovalsReadOnlyAsync,
   maxAsk,
   minSecurity,
   normalizeExecAsk,
@@ -76,6 +76,7 @@ import {
   resolveExecDefaultTimeoutSec,
 } from "./exec-tool-timeout.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -96,10 +97,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       sessionId: defaults?.sessionId,
     });
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
-  const subagentExecution =
-    resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
-      cfg: defaults?.config,
-    }).depth > 0;
+  let subagentExecutionPromise: Promise<boolean> | undefined;
+  const resolveSubagentExecution = () =>
+    (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
+      () =>
+        resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
+          cfg: defaults?.config,
+        }).depth > 0,
+    ));
   // Agent runs own one tool instance; unprepared store snapshots are read on first exec.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise: Promise<Readonly<SecretStoreExecEnvironment>> | undefined =
@@ -161,12 +166,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifyDeliveryContext,
     notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
-  const backgroundFollowUp =
-    notifyOnExit && notifyOnExitEmptySuccess
-      ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
-      : notifyOnExit
-        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
-        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -269,7 +268,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested && (!elevatedDefaults?.enabled || !elevatedDefaults.allowed)) {
         const runtime = defaults?.sandbox ? "sandboxed" : "direct";
-        const gates: string[] = [];
         const contextParts: string[] = [];
         const provider = normalizeOptionalString(defaults?.messageProvider);
         const sessionKey = normalizeOptionalString(defaults?.sessionKey);
@@ -279,17 +277,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (sessionKey) {
           contextParts.push(`session=${sessionKey}`);
         }
-        if (!elevatedDefaults?.enabled) {
-          gates.push("enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)");
-        } else {
-          gates.push(
-            "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)",
-          );
-        }
+        const gate = !elevatedDefaults?.enabled
+          ? "enabled (tools.elevated.enabled / agents.entries.*.tools.elevated.enabled)"
+          : "allowFrom (tools.elevated.allowFrom.<provider> / agents.entries.*.tools.elevated.allowFrom.<provider>)";
         throw new Error(
           [
             `elevated is not available right now (runtime=${runtime}).`,
-            `Failing gates: ${gates.join(", ")}`,
+            `Failing gates: ${gate}`,
             contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
             "Fix-it keys:",
             "- tools.elevated.enabled",
@@ -321,7 +315,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         host === "sandbox" || defaults?.bypassHostApprovalFloors === true
           ? undefined
           : resolveExecApprovalsFromFile({
-              file: loadExecApprovals(),
+              file: await loadExecApprovalsReadOnlyAsync(),
               agentId,
               overrides: {
                 security: "full",
@@ -428,6 +422,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
+        const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
@@ -456,47 +451,51 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           warnings,
         });
 
+        const hostApprovalParams = () => ({
+          command: params.command,
+          toolCallId,
+          env,
+          requestedEnv,
+          sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
+          bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+          nonInteractiveApproval: defaults?.nonInteractiveApproval,
+          approvalFollowupMode: defaults?.approvalFollowupMode,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+          agentId,
+          security,
+          ask,
+          bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+          autoReview,
+          autoReviewer,
+          signal,
+          strictInlineEval: defaults?.strictInlineEval,
+          commandHighlighting: defaults?.commandHighlighting,
+          trigger: defaults?.trigger,
+          timeoutSec: params.timeoutSeconds,
+          defaultTimeoutSec,
+          approvalRunningNoticeMs,
+          warnings,
+          notifySessionKey,
+          trustedSafeBinDirs,
+        });
+
         if (host === "node") {
           return executeNodeHostCommand({
-            command: params.command,
-            toolCallId,
+            ...hostApprovalParams(),
             workdir,
-            env,
-            requestedEnv,
             executionContext,
             requestedNode: params.node?.trim(),
             boundNode: defaults?.node?.trim(),
-            sessionKey: defaults?.sessionKey,
-            sessionId: defaults?.sessionId,
-            sessionStore: defaults?.sessionStore,
-            bashElevated: elevatedDefaults,
-            approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
-            nonInteractiveApproval: defaults?.nonInteractiveApproval,
-            approvalFollowupMode: defaults?.approvalFollowupMode,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
-            agentId,
-            security,
-            ask,
-            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
-            autoReview,
-            autoReviewer,
-            signal,
-            strictInlineEval: defaults?.strictInlineEval,
-            commandHighlighting: defaults?.commandHighlighting,
-            trigger: defaults?.trigger,
-            timeoutSec: params.timeoutSeconds,
-            defaultTimeoutSec,
-            approvalRunningNoticeMs,
-            warnings,
             foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             // Remote system.run has no process-session owner.
             processContinuationAvailable: false,
-            notifySessionKey,
             notifyOnExit,
-            trustedSafeBinDirs,
           });
         }
 
@@ -511,53 +510,23 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
-            command: params.command,
+            ...hostApprovalParams(),
             workdir,
-            env,
             secretEgressBindings,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
-            requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeoutSeconds,
-            defaultTimeoutSec,
-            security,
-            ask,
-            bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
-            autoReview,
-            autoReviewer,
-            signal,
             safeBins,
             safeBinProfiles,
-            strictInlineEval: defaults?.strictInlineEval,
-            commandHighlighting: defaults?.commandHighlighting,
-            trigger: defaults?.trigger,
-            agentId,
-            sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
-            toolCallId,
             onApprovalReview: (review) => (approvalReview = review),
-            sessionId: defaults?.sessionId,
-            sessionStore: defaults?.sessionStore,
-            bashElevated: elevatedDefaults,
-            approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
-            nonInteractiveApproval: defaults?.nonInteractiveApproval,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
             scopeKey: defaults?.scopeKey,
             approvalFollowupText: defaults?.approvalFollowupText,
             approvalFollowup: defaults?.approvalFollowup,
-            approvalFollowupMode: defaults?.approvalFollowupMode,
-            warnings,
-            notifySessionKey,
-            approvalRunningNoticeMs,
             maxOutput: DEFAULT_MAX_OUTPUT,
             pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
             cleanupMs,
             processContinuationAvailable: allowBackground,
-            trustedSafeBinDirs,
           });
           const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
           if (immediateResult) {
@@ -633,6 +602,12 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
+      const backgroundFollowUp =
+        run.session.notifyOnExit && notifyOnExitEmptySuccess
+          ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+          : run.session.notifyOnExit
+            ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
+            : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;

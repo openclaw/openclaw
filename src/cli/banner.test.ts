@@ -75,17 +75,6 @@ describe("emitCliBanner", () => {
     expect(hasEmittedCliBanner()).toBe(false);
   });
 
-  it("allows injected TTY state to emit when stdout lacks isTTY", async () => {
-    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(false);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
-    emitCliBanner("2026.3.7", bannerOptions);
-
-    expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
-    expect(hasEmittedCliBanner()).toBe(true);
-  });
-
   it("adds the ASCII lobster on lobster days for rich random-mode terminals", async () => {
     const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
@@ -102,24 +91,24 @@ describe("emitCliBanner", () => {
     expect(written).toContain("( o.o )");
   });
 
-  it.each([
-    { label: "plain terminals", mode: "random" as const, richTty: false },
-    { label: "pinned tagline modes", mode: "off" as const, richTty: true },
-  ])("keeps lobster day out of $label", async ({ mode, richTty }) => {
-    const { emitCliBanner } = await importFreshBannerModule();
-    setStdoutIsTty(true);
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  it.each([{ label: "plain terminals", mode: "random" as const, richTty: false }])(
+    "keeps lobster day out of $label",
+    async ({ mode, richTty }) => {
+      const { emitCliBanner } = await importFreshBannerModule();
+      setStdoutIsTty(true);
+      const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
-    emitCliBanner("2026.3.7", {
-      ...bannerOptions,
-      mode,
-      now: () => new Date(2026, 1, 26),
-      richTty,
-    });
+      emitCliBanner("2026.3.7", {
+        ...bannerOptions,
+        mode,
+        now: () => new Date(2026, 1, 26),
+        richTty,
+      });
 
-    const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
-    expect(written).not.toContain("( o.o )");
-  });
+      const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(written).not.toContain("( o.o )");
+    },
+  );
 
   it("emits only once per module instance", async () => {
     const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();

@@ -8,11 +8,12 @@ import { createGatewayStoreTestStore } from "../../app/gateway-store.test-suppor
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  createComposerContainer,
   createComposerProps as props,
   findComposerButton as button,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
@@ -32,7 +33,7 @@ afterEach(async () => {
 type PickerDropdown = HTMLElement & { open: boolean; updateComplete: Promise<unknown> };
 
 function mountPicker(composerProps: ReturnType<typeof props>) {
-  const container = document.body.appendChild(document.createElement("div"));
+  const container = document.body.appendChild(createComposerContainer());
   const draw = () => render(renderChatComposer(composerProps), container);
   composerProps.onRequestUpdate = draw;
   draw();
@@ -63,7 +64,7 @@ describe("composer microphone picker", () => {
       createGatewayStoreTestStore({ settings }).gateway,
     );
     onTestFinished(() => theme.dispose());
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     document.body.append(container);
     const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
     const draw = () => {
@@ -78,6 +79,7 @@ describe("composer microphone picker", () => {
       HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
     >("wa-dropdown.chat-talk-input-picker");
     await dropdown?.updateComplete;
+    expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
     button(container, t("chat.composer.microphoneInput")).click();
     await dropdown?.updateComplete;
 
@@ -199,6 +201,12 @@ describe("composer microphone picker", () => {
       const { container, dropdown } = mountPicker(composerProps);
 
       await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      expect(dropdown?.querySelector("wa-dropdown-item")).toBeNull();
+      if (pending) {
+        button(container, t("chat.composer.startVoiceInput")).click();
+      } else {
+        await openPicker(container);
+      }
       await vi.waitFor(() =>
         expect(
           [...container.querySelectorAll<HTMLElement>("[data-chat-talk-capability]")].map(
@@ -232,7 +240,6 @@ describe("composer microphone picker", () => {
           alert.parentElement?.matches(".chat-talk-input-picker__capability-copy strong"),
         ),
       ).toBe(true);
-      button(container, t("chat.composer.startVoiceInput")).click();
       await vi.waitFor(() => expect(dropdown?.open).toBe(true));
 
       expect(onToggleRealtimeTalk).not.toHaveBeenCalled();

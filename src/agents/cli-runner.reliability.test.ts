@@ -8,6 +8,10 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   ensureSessionEntrySync,
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
@@ -49,12 +53,15 @@ import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js"
 import { registerCliReplyCompletionTests } from "./cli-runner.reply-completion.cases.js";
 import {
   createManagedRun,
-  enqueueSystemEventMock,
-  requestHeartbeatMock,
+  enqueueSessionEventMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { registerCliWatchdogNoticeTests } from "./cli-runner.watchdog.cases.js";
 import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
-import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
+import {
+  createSuccessfulProcessExit,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./cli-runner/execute.test-support.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
@@ -105,6 +112,7 @@ function createSessionFixture(params?: {
   const dir = sessionDirs.make();
   sessionFileEnvSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
   setTestEnvValue("OPENCLAW_STATE_DIR", dir);
+  setRuntimeConfigSnapshot({});
   const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
   const sessionTarget: SessionTranscriptRuntimeTarget = {
     agentId: "main",
@@ -315,6 +323,7 @@ async function warmedPluginContext(
       }
     },
   );
+  context.params.timeoutMs = 60_000;
   const close = () => {
     liveHandle?.close("restart");
     admission.close();
@@ -351,22 +360,8 @@ const failClosedPluginResumeCases: Array<{
   },
 ];
 
-function makeRunExit(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 50,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
-}
-
 function makeManagedRun(overrides: Partial<RunExit> = {}) {
-  return createManagedRun(makeRunExit(overrides));
+  return createManagedRun({ ...createSuccessfulProcessExit(), ...overrides });
 }
 
 function completeCapturedToolCall(
@@ -503,14 +498,14 @@ describe("runCliAgent reliability", () => {
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
     cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();
   });
 
   it("does not enqueue watchdog system events for side-question no-output timeouts", async () => {
-    enqueueSystemEventMock.mockClear();
-    requestHeartbeatMock.mockClear();
+    enqueueSessionEventMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(makeNoOutputTimeoutRun());
 
     await expect(
@@ -525,8 +520,7 @@ describe("runCliAgent reliability", () => {
       ),
     ).rejects.toThrow("produced no output");
 
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 
   it("falls back to cold reseed when Claude lacks the checkpoint flag", async ({
@@ -614,7 +608,7 @@ describe("runCliAgent reliability", () => {
 
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
     // Image preparation must not consume this retry-policy fixture's budget.
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     supervisorSpawnMock.mockResolvedValueOnce(
       makeManagedRun({
         exitCode: 1,
@@ -984,38 +978,11 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
-    enqueueSystemEventMock.mockClear();
-    const clearBeforeRetry = vi.fn(async () => true);
-    supervisorSpawnMock.mockResolvedValueOnce(
-      makeManagedRun({
-        reason: "no-output-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-        durationMs: 500,
-        stdout: "partial progress before the stall",
-        timedOut: true,
-        noOutputTimedOut: true,
-      }),
-    );
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:timeout-after-output",
-      runId: "run-timeout-after-output",
-      cliSessionId: "stale-cli-session",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-
-    await expect(
-      runPreparedCliAgent(
-        withParams(context, {
-          onBeforeFreshCliSessionRetry: clearBeforeRetry,
-        }),
-      ),
-    ).rejects.toThrow("produced no output");
-
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expect(clearBeforeRetry).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+  registerCliWatchdogNoticeTests({
+    createContext: makeClaudePreparedContext,
+    makeManagedRun,
+    run: runPreparedCliAgent,
+    historyPrompt: CLI_RESEED_PROMPT,
   });
 
   it("does not start a fresh CLI attempt when format recovery retains the binding", async () => {
@@ -1086,8 +1053,7 @@ describe("runCliAgent reliability", () => {
         }
       });
       const hookRunner = createLifecycleHooks(["llm_input", "llm_output", "agent_end"]);
-      enqueueSystemEventMock.mockClear();
-      requestHeartbeatMock.mockClear();
+      enqueueSessionEventMock.mockClear();
       const events: string[] = [];
       let spawnCount = 0;
       supervisorSpawnMock.mockImplementation(async () => {
@@ -1168,8 +1134,7 @@ describe("runCliAgent reliability", () => {
         expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
         expect(events).toEqual(["spawn-1", `clear-${reason}`, "spawn-2"]);
         if (reason === "timeout") {
-          expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-          expect(requestHeartbeatMock).not.toHaveBeenCalled();
+          expect(enqueueSessionEventMock).not.toHaveBeenCalled();
         }
         expect(clearBeforeRetry).toHaveBeenCalledWith({
           provider: "claude-cli",

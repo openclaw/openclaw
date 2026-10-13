@@ -13,10 +13,6 @@ const maintenanceReasons = {
   "legacy-session-store": "session store migration",
 } as const;
 
-export function isStartupMaintenanceKind(value: unknown): value is keyof typeof maintenanceReasons {
-  return typeof value === "string" && Object.hasOwn(maintenanceReasons, value);
-}
-
 export class StartupMaintenanceRequiredError extends Error {
   readonly code = GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON;
 

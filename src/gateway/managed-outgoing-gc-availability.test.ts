@@ -3,6 +3,10 @@ import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -75,12 +79,14 @@ function dropSessionNodes() {
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(fs.realpathSync("/tmp"), "gc-availability-"));
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 

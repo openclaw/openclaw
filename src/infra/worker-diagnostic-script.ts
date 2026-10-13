@@ -6,7 +6,6 @@ const workerScriptNames = new Set([
   // Pools with source/standalone-plugin entrypoints outside the process manifest.
   "catalog-page.worker.js",
   "code-mode.worker.js",
-  "compaction-planning.worker.js",
   "disk-budget.worker.js",
   "document-extractor.worker.js",
   "manager-index.worker.js",

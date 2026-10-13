@@ -117,7 +117,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   const agentIdFromDir = params.agentDir
     ? resolveRegisteredAgentIdForDir(params.agentDir)
     : undefined;
-  const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
+  const { sessionKey, storePath } = await resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
     agentId: params.agentId ?? agentIdFromDir,

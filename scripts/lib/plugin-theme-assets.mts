@@ -12,7 +12,10 @@ export function collectPluginThemeAssetPaths(manifest: Record<string, unknown>):
   const paths = new Set<string>();
   for (const theme of normalized.themes ?? []) {
     paths.add(theme.source);
-    for (const source of Object.values(theme.hats ?? {})) {
+    for (const source of [
+      ...Object.values(theme.icons ?? {}),
+      ...Object.values(theme.hats ?? {}),
+    ]) {
       paths.add(source);
     }
     for (const critter of Object.values(theme.critters ?? {})) {

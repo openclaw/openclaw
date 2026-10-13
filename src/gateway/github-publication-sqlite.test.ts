@@ -6,11 +6,9 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
 import { readSharedGitHubPublicationRequestInDatabase } from "./github-publication-shared-read.kernel.js";
-import {
-  deferGitHubPublicationRequests,
-  digestGitHubPublicationRequest,
-} from "./github-publication-store.js";
+import { deferGitHubPublicationRequestsFixture } from "./github-publication-store.test-support.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
@@ -77,7 +75,7 @@ describe("publication SQLite materialization", () => {
     ).toBeUndefined();
   });
 
-  it("defers rich receipts with compact notifications while retaining rollback and input order", () => {
+  it("defers rich receipts with authority postimages while retaining rollback and input order", () => {
     const first = insertSharedWorktreeReceipt("first");
     const second = insertSharedWorktreeReceipt("second", {
       session: { ...session, sessionKey: session.sessionKey + ":other" },
@@ -108,7 +106,7 @@ describe("publication SQLite materialization", () => {
       );
       try {
         expect(() =>
-          deferGitHubPublicationRequests(["first", "second", "first", "absent"]),
+          deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]),
         ).toThrow("late defer failure");
         expect(readRows()).toEqual(before);
         expect(observer).not.toHaveBeenCalled();
@@ -121,7 +119,7 @@ describe("publication SQLite materialization", () => {
         sql.startsWith('update "github_publication_requests"') ? "defer" : null,
       );
       try {
-        deferGitHubPublicationRequests(["first", "second", "first", "absent"]);
+        deferGitHubPublicationRequestsFixture(["first", "second", "first", "absent"]);
         expect(readRows()).toEqual(
           before.map((row) =>
             Object.assign({}, row, {
@@ -146,7 +144,8 @@ describe("publication SQLite materialization", () => {
         expect(db.isTransaction).toBe(false);
         expect(counter.rowCounts.defer).toBeGreaterThan(0);
         expect(counter.rowCounts.defer).toBeLessThanOrEqual(3);
-        expect(counter.textBytes.defer).toBeLessThan(512);
+        const authorityPostimageTextBudget = 2048;
+        expect(counter.textBytes.defer).toBeLessThan(authorityPostimageTextBudget);
       } finally {
         counter.restore();
         clock.mockRestore();

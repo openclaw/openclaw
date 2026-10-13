@@ -8,9 +8,7 @@
 // msteams cancel has no inbound event: user Stop makes Teams 403 the next chunk
 // and the SDK throws StreamCancelledError synchronously from the write, so the
 // cancel scenario arms a stream write fault at setup and maps the scripted
-// `cancel` step to nothing. A non-cancel write fault latches streamFailed and
-// the full reply is intentionally re-delivered as blocks even though a prefix
-// already streamed (duplication over truncation — see reply-stream-controller).
+// `cancel` step to nothing.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
   deliveryTraceScenarios,
@@ -25,24 +23,17 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { describe, it } from "vitest";
-import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/** Core-owned dispatcher options returned by the Teams delivery plan. */
-type CapturedDispatcherOptions = {
-  onReplyStart?: () => Promise<void> | void;
-  deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
-  typingCallbacks?: { onIdle?: () => void };
-};
-
 /**
  * Deterministic stream write fault. Writes are counted across emit/update/close;
- * the fault fires at `atWrite` and every later write, matching a broken or
- * canceled SDK HttpStream that stays broken for the rest of the turn.
+ * the fault fires at `atWrite` and every later write, matching a canceled
+ * SDK HttpStream for the rest of the turn.
  */
-type StreamWriteFault = { atWrite: number; kind: "cancelled" | "broken" };
+type StreamWriteFault = { atWrite: number };
 
 function createStreamCancelledError(): Error {
   // The controller matches by err.name (the SDK class re-export is not
@@ -60,23 +51,15 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
     if (!fault || writes < fault.atWrite) {
       return;
     }
-    if (fault.kind === "cancelled") {
-      // SDK behavior on user Stop: the chunk POST 403s, the streamer flips its
-      // canceled flag, and this and every later write throws StreamCancelledError.
-      canceled = true;
-      recorder.recordWireCall({
-        method,
-        ...(payload !== undefined ? { payload } : {}),
-        result: { error: "StreamCancelledError" },
-      });
-      throw createStreamCancelledError();
-    }
+    // SDK behavior on user Stop: the chunk POST 403s, the streamer flips its
+    // canceled flag, and this and every later write throws StreamCancelledError.
+    canceled = true;
     recorder.recordWireCall({
       method,
       ...(payload !== undefined ? { payload } : {}),
-      result: { error: "stream write failed" },
+      result: { error: "StreamCancelledError" },
     });
-    throw new Error("Teams stream write failed");
+    throw createStreamCancelledError();
   };
   return {
     emit(activity: unknown): void {
@@ -133,10 +116,7 @@ function createRecordingTurnContext(params: {
   };
 }
 
-function createTraceRuntimeStub(
-  recorder: WireRecorder,
-  captureDispatcherOptions: (options: CapturedDispatcherOptions) => void,
-): PluginRuntime {
+function createTraceRuntimeStub(recorder: WireRecorder): PluginRuntime {
   return {
     channel: {
       // Real text helpers: chunking behavior is part of the recorded lifecycle.
@@ -145,23 +125,6 @@ function createTraceRuntimeStub(
         chunkMarkdownTextWithMode,
         convertMarkdownTables,
         resolveMarkdownTableMode,
-      },
-      reply: {
-        createReplyDispatcherWithTyping: (options: CapturedDispatcherOptions) => {
-          captureDispatcherOptions(options);
-          return {
-            dispatcher: {},
-            replyOptions: {},
-            // Mirror core createReplyDispatcherWithTyping.markDispatchIdle: with
-            // no typing controller bound it stops typing via the callbacks, which
-            // ends the 8s keepalive loop and the 10min TTL timer.
-            markDispatchIdle: () => {
-              options.typingCallbacks?.onIdle?.();
-            },
-            markRunComplete: () => {},
-          };
-        },
-        resolveHumanDelayConfig: () => undefined,
       },
     },
     system: {
@@ -198,7 +161,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
   {
     // Same script in a channel: native streaming is DM-only and typing is
     // unsupported for channel conversations, so everything batches as block
-    // sends that flush at markDispatchIdle.
+    // sends that flush at settlement.
     golden: "block-fallback-channel",
     scenario: "streaming-happy",
     conversationType: "channel",
@@ -212,22 +175,12 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
     scenario: "cancel-mid-stream",
     conversationType: "personal",
     conversationId: "a:1dm-trace-conversation",
-    streamWriteFault: { atWrite: 2, kind: "cancelled" },
-  },
-  {
-    // This fixture has no provider acknowledgement, so the full first reply
-    // falls back before later blocks. A later partial cannot reopen the failed
-    // native segment or trigger another write to its retired stream.
-    golden: "stream-failure-redeliver-full",
-    scenario: "streaming-happy",
-    conversationType: "personal",
-    conversationId: "a:1dm-trace-conversation",
-    streamWriteFault: { atWrite: 2, kind: "broken" },
+    streamWriteFault: { atWrite: 2 },
   },
 ];
 
 function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) {
-  setMSTeamsRuntime(createTraceRuntimeStub(recorder, () => undefined));
+  setMSTeamsRuntime(createTraceRuntimeStub(recorder));
   const stream = createRecordingStream(recorder, traceCase.streamWriteFault);
   const context = createRecordingTurnContext({
     recorder,
@@ -264,7 +217,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
   const options = {
     ...created.dispatcherOptions,
     deliver: created.delivery.deliver,
-  } as CapturedDispatcherOptions;
+  };
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {

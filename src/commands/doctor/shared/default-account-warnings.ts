@@ -56,7 +56,6 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
       const accountIdSet = new Set(normalizedAccountIds);
       const channelPattern = normalizeBindingChannelKey(channelKey);
 
-      let hasWildcardBinding = false;
       const coveredAccountIds = new Set<string>();
       for (const binding of bindings) {
         const match = asNullableRecord(asNullableRecord(binding)?.match);
@@ -75,17 +74,12 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
           continue;
         }
         if (rawAccountId === "*") {
-          hasWildcardBinding = true;
-          continue;
+          return [];
         }
         const normalizedBindingAccountId = normalizeAccountId(rawAccountId);
         if (accountIdSet.has(normalizedBindingAccountId)) {
           coveredAccountIds.add(normalizedBindingAccountId);
         }
-      }
-
-      if (hasWildcardBinding) {
-        return [];
       }
 
       const uncoveredAccountIds = normalizedAccountIds.filter(

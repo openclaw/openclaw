@@ -6,7 +6,6 @@ import {
   inspectProviderToolSchemasWithPlugin,
   normalizeProviderToolSchemasWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import type { ProviderToolSchemaDiagnostic } from "../../plugins/types.js";
 import type { AgentTool } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -68,7 +67,12 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
+    const violationCount = diagnostic.violations.length;
+    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
+  });
+  const remaining = diagnostics.length - visible.length;
+  const summary = remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
@@ -84,15 +88,4 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
-}
-
-function summarizeProviderToolSchemaDiagnostics(
-  diagnostics: readonly ProviderToolSchemaDiagnostic[],
-) {
-  const visible = diagnostics.slice(0, 6).map((diagnostic) => {
-    const violationCount = diagnostic.violations.length;
-    return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
-  });
-  const remaining = diagnostics.length - visible.length;
-  return remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
 }

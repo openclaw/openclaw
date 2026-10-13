@@ -23,7 +23,7 @@ type PositionalRead = (
   position: number | null,
 ) => Promise<{ bytesRead: number; buffer: Buffer }>;
 
-const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => ({
+const { redactSensitiveLinesMock, resolveLogTailRedactOptionsMock } = vi.hoisted(() => ({
   redactSensitiveLinesMock: vi.fn(
     (lines: string[], options?: RedactOptions, selectedLines?: readonly boolean[]) =>
       lines
@@ -34,7 +34,7 @@ const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => 
             : line,
         ),
   ),
-  resolveRedactOptionsMock: vi.fn(() => resolvedRedaction),
+  resolveLogTailRedactOptionsMock: vi.fn(() => resolvedRedaction),
 }));
 
 vi.mock("./redact.js", async () => {
@@ -46,14 +46,14 @@ vi.mock("./redact.js", async () => {
       options?: RedactOptions,
       selectedLines?: readonly boolean[],
     ) => redactSensitiveLinesMock(lines, options, selectedLines),
-    resolveRedactOptions: () => resolveRedactOptionsMock(),
+    resolveLogTailRedactOptions: () => resolveLogTailRedactOptionsMock(),
   };
 });
 
 describe("readConfiguredLogTail", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    resolveRedactOptionsMock.mockClear();
+    resolveLogTailRedactOptionsMock.mockClear();
     redactSensitiveLinesMock.mockClear();
     resetLogger();
     setLoggerOverride(null);
@@ -91,7 +91,7 @@ describe("readConfiguredLogTail", () => {
     const result = await readConfiguredLogTail();
 
     expect(stat.mock.calls.filter(([target]) => String(target) === file)).toHaveLength(1);
-    expect(resolveRedactOptionsMock).toHaveBeenCalledTimes(1);
+    expect(resolveLogTailRedactOptionsMock).toHaveBeenCalledTimes(1);
     expect(redactSensitiveLinesMock).toHaveBeenCalledTimes(1);
     expect(redactSensitiveLinesMock).toHaveBeenCalledWith(
       ["custom-secret-abcdefghijklmnopqrstuvwxyz", "second line"],

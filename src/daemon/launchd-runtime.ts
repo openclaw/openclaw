@@ -1,4 +1,3 @@
-/** launchctl state parsing, inspection, and bootstrap primitives. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";

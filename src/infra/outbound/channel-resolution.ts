@@ -19,10 +19,7 @@ import { findChannelPluginInRegistry } from "./runtime-visible-channels.js";
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(raw?: string | null): string | undefined {
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
-    return undefined;
-  }
-  return normalized;
+  return normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
 }
 
 function getOutboundRuntimeRegistry(): PluginRegistry | null {
@@ -45,16 +42,17 @@ function resolveSendCapableMessageAdapter(
   return typeof message?.send?.text === "function" ? message : undefined;
 }
 
-function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
-}
-
-function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(
-    plugin?.outbound?.sendText ||
-    plugin?.outbound?.deliveryMode === "gateway" ||
-    resolveSendCapableMessageAdapter(plugin),
-  );
+function hasOutboundSurface(
+  plugin: ChannelPlugin | undefined,
+  requireActivatedRuntime = false,
+): boolean {
+  return requireActivatedRuntime
+    ? Boolean(
+        plugin?.outbound?.sendText ||
+        plugin?.outbound?.deliveryMode === "gateway" ||
+        resolveSendCapableMessageAdapter(plugin),
+      )
+    : Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
 }
 
 function resolveRuntimeOutboundPluginCandidate(params: {
@@ -64,11 +62,10 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   bundled?: ChannelPlugin;
   requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
-  const hasRuntimeSurface = params.requireActivatedRuntime
-    ? channelPluginHasActivatedOutboundSurface
-    : channelPluginHasRuntimeOutboundSurface;
   return (
-    [params.loaded, params.runtime, params.bundled].find(hasRuntimeSurface) ??
+    [params.loaded, params.runtime, params.bundled].find((plugin) =>
+      hasOutboundSurface(plugin, params.requireActivatedRuntime),
+    ) ??
     (params.requireActivatedRuntime
       ? undefined
       : (params.loaded ?? params.setupFallback ?? params.bundled))
@@ -81,10 +78,7 @@ function resolveOutboundPluginFromRuntimeRegistry(
   requireActivatedRuntime = false,
 ): ChannelPlugin | undefined {
   const plugin = findChannelPluginInRegistry(registry, channel);
-  const hasSurface = requireActivatedRuntime
-    ? channelPluginHasActivatedOutboundSurface
-    : channelPluginHasRuntimeOutboundSurface;
-  return hasSurface(plugin) ? plugin : undefined;
+  return hasOutboundSurface(plugin, requireActivatedRuntime) ? plugin : undefined;
 }
 
 function* resolveOutboundChannelPluginSteps(
@@ -126,7 +120,7 @@ function* resolveOutboundChannelPluginSteps(
   if (scopedPlugin) {
     // A selected registration owns absent capabilities too. Only explicit
     // activation may replace a setup shell; never borrow a same-id sender.
-    if (params.allowBootstrap !== true || channelPluginHasActivatedOutboundSurface(scopedPlugin)) {
+    if (params.allowBootstrap !== true || hasOutboundSurface(scopedPlugin, true)) {
       return scopedPlugin;
     }
     if (didBootstrap) {
@@ -194,7 +188,6 @@ export function resolveOutboundChannelPlugin(
 async function resolveOutboundChannelPluginAsync(
   params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
 ): Promise<ChannelPlugin | undefined> {
-  params.assertCurrent?.();
   const steps = resolveOutboundChannelPluginSteps(params);
   let step = steps.next();
   while (!step.done) {
@@ -202,7 +195,6 @@ async function resolveOutboundChannelPluginAsync(
       ...step.value,
       assertCurrent: params.assertCurrent,
     });
-    params.assertCurrent?.();
     step = steps.next(registry);
   }
   return step.value;

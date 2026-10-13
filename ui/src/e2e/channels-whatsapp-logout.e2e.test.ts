@@ -165,7 +165,7 @@ suite.define(() => {
         }
 
         await gateway.deferNext("config.set");
-        await detail.locator("wa-switch").first().click();
+        await detail.getByRole("switch", { name: "Enabled" }).click();
         await gateway.waitForRequest("config.set");
         await gateway.rejectDeferred("config.set", {
           code: "INVALID_REQUEST",

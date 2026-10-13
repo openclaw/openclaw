@@ -15,6 +15,7 @@ import {
   mountSidebar,
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -70,7 +71,7 @@ describe("AppSidebar agent chip", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
     expect(toggle?.textContent?.trim()).toContain("2");
@@ -108,6 +109,7 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Research sources"),
       expect.stringContaining("Check tests"),
     ]);
+    // This read-only fixture advertises no group-write capability.
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
     expect(
       childRows.every((row) => row.querySelector("[data-sidebar-session-archive]") !== null),
@@ -243,7 +245,7 @@ describe("AppSidebar agent chip", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
     toggle?.click();
@@ -307,7 +309,7 @@ describe("AppSidebar agent chip", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
@@ -368,7 +370,7 @@ describe("AppSidebar agent chip", () => {
         },
       });
     publishParent(10);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
@@ -380,7 +382,7 @@ describe("AppSidebar agent chip", () => {
     );
 
     publishParent(11);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(harness.list).toHaveBeenCalledTimes(2);
     expect(sidebar.querySelector('[data-child-session-error="agent:main:parent"]')).not.toBeNull();
 
@@ -415,7 +417,7 @@ describe("AppSidebar agent chip", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() => expect(original.list).toHaveBeenCalledOnce());
 

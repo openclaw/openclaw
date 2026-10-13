@@ -9,6 +9,7 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
@@ -59,7 +60,13 @@ export type SessionTranscriptContextSnapshot = {
 
 export type PreparedSessionTranscriptHydration =
   | { kind: "full"; snapshot: SessionTranscriptReadSnapshot }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
+  | {
+      kind: "bounded";
+      snapshot: SessionTranscriptBoundedActiveContext;
+      transcript?: SessionTranscriptAnchorFacts;
+      /** Byte and sequence facts for the actor's bounded context residency. */
+      residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+    };
 
 export type SessionPendingInputReceipt =
   | { runId: string; state: "pending"; cancelled?: true }

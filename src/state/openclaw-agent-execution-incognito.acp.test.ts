@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
@@ -13,7 +13,7 @@ import {
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
-import { readAcpSessionEntry, readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
@@ -21,6 +21,7 @@ import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.
 import { createDeferredCore } from "../shared/deferred.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import * as sharedWorker from "./openclaw-state-worker-store.js";
@@ -63,6 +64,65 @@ afterAll(async () => {
   vi.restoreAllMocks();
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
+});
+
+it("cancels queued ACP preparation without revoking a completed read", async ({ signal }) => {
+  const sessionKey = key("cancelled-preparation");
+  await actor.sessions.create(authority, { sessionKey, entry: entry("cancelled-preparation") });
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const held = runOpenClawAgentWorkerWrite(
+    { target: actor.identity, assertCurrent: () => actor.assertReadable() },
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  await entered.promise;
+  const requested = createDeferredCore();
+  const read = actor.sessions.read;
+  const observed = vi.spyOn(actor.sessions, "read").mockImplementationOnce((...args) => {
+    const pending = read(...args);
+    requested.resolve();
+    return pending;
+  });
+  const controller = new AbortController();
+  const reason = new Error("ACP preparation callback expired");
+  const preparing = actor.acp.prepareEntryRead({
+    authority,
+    cfg,
+    env,
+    sessionKey,
+    signal: controller.signal,
+  });
+  const rejected = expect(preparing).rejects.toBe(reason);
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(requested.promise, preparing, "ACP preparation skipped its read"),
+      signal,
+    );
+    controller.abort(reason);
+    await withinTest(rejected, signal);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([held, preparing.then((prepared) => prepared.release()), rejected]);
+    observed.mockRestore();
+  }
+  const admission = new AbortController();
+  const prepared = await actor.acp.prepareEntryRead({
+    authority,
+    cfg,
+    env,
+    sessionKey,
+    signal: admission.signal,
+  });
+  try {
+    admission.abort(reason);
+    expect(() => prepared.assertCurrent()).not.toThrow();
+    expect(prepared.session?.entry?.sessionId).toBe("cancelled-preparation");
+  } finally {
+    prepared.release();
+  }
 });
 
 it.each(["read", "upsert"] as const)(
@@ -461,7 +521,6 @@ it.each(["revision", "consume-release", "prepared-release"] as const)(
       await expect(
         withIncognitoSessionActor(borrowed, async () => {
           expect(() => readAcpSessionEntry(input)).toThrow("Await readAcpSessionEntryAsync");
-          expect(() => readAcpSessionMeta(input)).toThrow("Await readAcpSessionMetaAsync");
           if (change === "prepared-release") {
             const preparation = prepareAcpSessionEntryRead(input);
             assert(preparation);

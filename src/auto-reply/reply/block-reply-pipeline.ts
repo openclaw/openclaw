@@ -110,20 +110,19 @@ export function createBlockReplyPipeline(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
-  let didLogTimeout = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
-  const sourceOccurrenceKey = (payload: ReplyPayload) => {
+  const resolveDedupeIdentity = (payload: ReplyPayload, payloadKey: string) => {
+    const sourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
     const occurrence = readReplyPayloadSourceOccurrence(payload);
-    return occurrence
-      ? JSON.stringify([
-          occurrence.assistantMessageIndex,
-          occurrence.sourceRange[0],
-          occurrence.sourceRange[1],
-          occurrence.sourceText,
-        ])
-      : undefined;
+    const occurrenceKey = occurrence ? JSON.stringify(occurrence) : undefined;
+    return {
+      sourceText,
+      occurrenceKey,
+      key: occurrenceKey ?? payloadKey,
+      unkeyedSource: sourceText !== undefined && occurrenceKey === undefined,
+    };
   };
 
   const flushBufferedAssistantBlock = () => {
@@ -137,30 +136,26 @@ export function createBlockReplyPipeline(params: {
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
     const contentKey = createBlockReplyContentKey(payload);
-    const blockSourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
-    const occurrenceKey = sourceOccurrenceKey(payload);
-    const dedupeKey = occurrenceKey ?? payloadKey;
-    const carriesUnkeyedDistinctSource =
-      blockSourceText !== undefined && occurrenceKey === undefined;
-    if (!bypassSeenCheck && !carriesUnkeyedDistinctSource) {
-      if (seenKeys.has(dedupeKey)) {
+    const identity = resolveDedupeIdentity(payload, payloadKey);
+    if (!bypassSeenCheck && !identity.unkeyedSource) {
+      if (seenKeys.has(identity.key)) {
         return;
       }
-      seenKeys.add(dedupeKey);
+      seenKeys.add(identity.key);
     }
-    if (occurrenceKey) {
+    if (identity.occurrenceKey) {
       seenKeys.add(payloadKey);
     }
-    if (!carriesUnkeyedDistinctSource && (sentKeys.has(dedupeKey) || pendingKeys.has(dedupeKey))) {
+    if (!identity.unkeyedSource && (sentKeys.has(identity.key) || pendingKeys.has(identity.key))) {
       return;
     }
-    pendingKeys.add(dedupeKey);
+    pendingKeys.add(identity.key);
     const isTerminalContent = isReplyPayloadTerminalContent(payload);
     const reply = resolveSendableOutboundReplyParts(payload);
     const metadata = getReplyPayloadMetadata(payload);
     const attempt: BlockAttempt = {
       outcome: "cancelled",
-      sourceText: blockSourceText ?? reply.trimmedText,
+      sourceText: identity.sourceText ?? reply.trimmedText,
       contentKey,
       mediaUrls: reply.mediaUrls,
       terminal: isTerminalContent && hasOutboundReplyContent(payload, { trimText: true }),
@@ -205,7 +200,7 @@ export function createBlockReplyPipeline(params: {
           return;
         }
         if (delivery.source?.complete !== false) {
-          sentKeys.add(dedupeKey);
+          sentKeys.add(identity.key);
           if (isTerminalContent) {
             if (attempt.terminal) {
               attempt.terminalDeliveryConfirmed = true;
@@ -224,12 +219,9 @@ export function createBlockReplyPipeline(params: {
       .catch((err: unknown) => {
         if (timeoutSignal?.aborted) {
           aborted = true;
-          if (!didLogTimeout) {
-            didLogTimeout = true;
-            logVerbose(
-              `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
-            );
-          }
+          logVerbose(
+            `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
+          );
           return;
         }
         attempt.outcome = resolveReplyDispatchErrorOutcome(err);
@@ -237,7 +229,7 @@ export function createBlockReplyPipeline(params: {
         logVerbose(`block reply delivery failed: ${String(err)}`);
       })
       .finally(() => {
-        pendingKeys.delete(dedupeKey);
+        pendingKeys.delete(identity.key);
       });
   };
 
@@ -293,18 +285,14 @@ export function createBlockReplyPipeline(params: {
       flushBufferedAssistantBlock();
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    const occurrenceKey = sourceOccurrenceKey(payload);
-    const carriesUnkeyedDistinctSource =
-      getReplyPayloadMetadata(payload)?.blockSourceText !== undefined &&
-      occurrenceKey === undefined;
-    const dedupeKey = occurrenceKey ?? payloadKey;
-    if (!carriesUnkeyedDistinctSource && hasSeenOrQueuedPayloadKey(dedupeKey)) {
+    const identity = resolveDedupeIdentity(payload, payloadKey);
+    if (!identity.unkeyedSource && hasSeenOrQueuedPayloadKey(identity.key)) {
       return;
     }
-    if (!carriesUnkeyedDistinctSource) {
-      seenKeys.add(dedupeKey);
+    if (!identity.unkeyedSource) {
+      seenKeys.add(identity.key);
     }
-    if (occurrenceKey) {
+    if (identity.occurrenceKey) {
       seenKeys.add(payloadKey);
     }
     bufferedAssistantMessageIndex = assistantMessageIndex;
@@ -343,40 +331,36 @@ export function createBlockReplyPipeline(params: {
   // A final payload joins every text item of its physical assistant message, and each item
   // streamed under its own index (hidden commentary items take indexes without blocks), so
   // also match item runs back to the message start.
-  const matchingAttempts = (payload: ReplyPayload) => {
+  const matchingTerminalAttempts = function* (payload: ReplyPayload) {
     const index = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     if (index === undefined) {
-      return blockAttemptsByMessage.values();
+      for (const attempts of blockAttemptsByMessage.values()) {
+        yield attempts.filter((attempt) => attempt.terminal);
+      }
+      return;
     }
     const start = blockAttemptsByMessage.get(index)?.[0]?.messageStart ?? index;
-    const runs: BlockAttempt[][] = [];
     for (let item = index, run: BlockAttempt[] = []; item >= start; item--) {
       const attempts = blockAttemptsByMessage.get(item);
       if (attempts?.length) {
-        run = [...attempts, ...run];
-        runs.push(run);
+        run = [...attempts.filter((attempt) => attempt.terminal), ...run];
+        yield run;
       }
     }
-    return runs;
   };
   const normalizeSource = (text: string) => text.replace(/\s+/g, "");
   const combinedSource = (attempts: BlockAttempt[]) =>
     normalizeSource(attempts.map((attempt) => attempt.sourceText).join(""));
-  const matchesSource = (payload: ReplyPayload, attempts: BlockAttempt[]) => {
-    const reply = resolveSendableOutboundReplyParts(payload);
-    return (
-      !reply.hasMedia &&
-      Boolean(reply.trimmedText) &&
-      attempts.length > 0 &&
-      combinedSource(attempts) === normalizeSource(reply.trimmedText)
-    );
-  };
-  const hasAttemptSince = (
-    minimumAssistantMessageIndex: number,
+  const hasAttempt = (
     predicate: (attempt: BlockAttempt) => boolean,
+    minimumAssistantMessageIndex?: number,
   ) => {
     for (const [index, attempts] of blockAttemptsByMessage) {
-      if ((index ?? 0) >= minimumAssistantMessageIndex && attempts.some(predicate)) {
+      if (
+        (minimumAssistantMessageIndex === undefined ||
+          (index ?? 0) >= minimumAssistantMessageIndex) &&
+        attempts.some(predicate)
+      ) {
         return true;
       }
     }
@@ -390,17 +374,16 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     didStreamTerminalReply: (minimumAssistantMessageIndex = 0) =>
-      hasAttemptSince(
-        minimumAssistantMessageIndex,
+      hasAttempt(
         (attempt) => attempt.terminalDeliveryConfirmed === true,
+        minimumAssistantMessageIndex,
       ),
     isAborted: () => aborted,
     hasSentExactPayload: (payload) =>
       sentContentKeys.has(createIndexedBlockReplyContentKey(payload)),
     getSourceRecovery: (payload) => {
       const text = normalizeSource(resolveSendableOutboundReplyParts(payload).trimmedText);
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         if (
           text &&
           combinedSource(attempts) === text &&
@@ -416,8 +399,7 @@ export function createBlockReplyPipeline(params: {
       const reply = resolveSendableOutboundReplyParts(payload);
       const text = normalizeSource(reply.trimmedText);
       const textOnly = !hasOutboundReplyContent({ ...payload, text: undefined });
-      for (const group of matchingAttempts(payload)) {
-        const attempts = group.filter((attempt) => attempt.terminal);
+      for (const attempts of matchingTerminalAttempts(payload)) {
         const blocked = attempts.filter(hasBlockReplyDeliveryCustody);
         const sourcePrefix = combinedSource(attempts);
         if (
@@ -440,33 +422,30 @@ export function createBlockReplyPipeline(params: {
       if (!didStream) {
         return false;
       }
-      for (const attempts of matchingAttempts(payload)) {
-        if (
-          matchesSource(
-            payload,
-            attempts.filter(
-              (attempt) =>
-                attempt.terminal &&
-                attempt.outcome === "delivered" &&
-                !attempt.pending &&
-                attempt.source?.complete !== false,
-            ),
-          )
-        ) {
+      const reply = resolveSendableOutboundReplyParts(payload);
+      if (reply.hasMedia || !reply.trimmedText) {
+        return false;
+      }
+      const sourceText = normalizeSource(reply.trimmedText);
+      for (const group of matchingTerminalAttempts(payload)) {
+        const attempts = group.filter(
+          (attempt) =>
+            attempt.outcome === "delivered" &&
+            !attempt.pending &&
+            attempt.source?.complete !== false,
+        );
+        if (attempts.length > 0 && combinedSource(attempts) === sourceText) {
           return true;
         }
       }
       return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
-    hasRetryBlockedDelivery: () =>
-      Array.from(blockAttemptsByMessage.values()).some((attempts) =>
-        attempts.some(hasBlockReplyDeliveryCustody),
-      ),
+    hasRetryBlockedDelivery: () => hasAttempt(hasBlockReplyDeliveryCustody),
     hasRetryBlockedTerminalDelivery: (minimumAssistantMessageIndex = 0) =>
-      hasAttemptSince(
-        minimumAssistantMessageIndex,
+      hasAttempt(
         (attempt) => attempt.terminal && hasBlockReplyDeliveryCustody(attempt),
+        minimumAssistantMessageIndex,
       ),
     getRetryBlockedMediaUrls: () =>
       Array.from(

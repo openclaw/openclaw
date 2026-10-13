@@ -316,11 +316,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto" || policy === "ask") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
-  }
   return {
-    allowDestructiveActions: policy,
-    destructiveApprovalMode: policy ? "allow" : "deny",
+    allowDestructiveActions: policy !== false,
+    destructiveApprovalMode: typeof policy === "string" ? policy : policy ? "allow" : "deny",
   };
 }

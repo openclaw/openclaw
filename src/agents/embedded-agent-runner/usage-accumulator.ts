@@ -42,11 +42,10 @@ export const mergeUsageIntoAccumulator = (
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  if (usage.cacheRead !== undefined) {
-    target.cacheReadReported = true;
-  }
-  if (usage.cacheWrite !== undefined) {
-    target.cacheWriteReported = true;
+  for (const key of ["cacheRead", "cacheWrite"] as const) {
+    if (usage[key] !== undefined) {
+      target[`${key}Reported`] = true;
+    }
   }
   for (const key of USAGE_COST_COMPONENTS) {
     target[key] += usage[key] ?? 0;

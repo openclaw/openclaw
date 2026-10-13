@@ -94,6 +94,8 @@ When a channel supplies history, it wraps it with:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
+Thread starter and thread history notes use the same current-message marker after their context, keeping the request separate from earlier messages. Queued turns insert newly active goals before this marker. The marker is runtime context and does not change the saved user message. Ambient room events omit it and keep their optional-response policy.
+
 For non-direct chats (groups/channels/rooms), the current message body is prefixed with the sender label, matching the style used for history entries. Directive stripping only applies to the current-message section, so history stays intact. Channels that wrap history should set `BodyForCommands` (or the legacy `CommandBody` / `RawBody`) to the original message text and keep `Body` as the combined prompt.
 
 History buffers are pending-only: they include group messages that did not trigger a run (for example, mention-gated messages) and exclude messages already in the session transcript. Structured history, reply, forwarded, and channel metadata render as untrusted user-role context blocks during prompt assembly.
@@ -121,6 +123,8 @@ When a run is already active, inbound messages steer into it by default. `messag
 | `followup`        | Run the message after the active run finishes.      |
 | `collect`         | Batch compatible messages into one later turn.      |
 | `interrupt`       | Abort the active run, then start the newest prompt. |
+
+Messages with separate durable ingress admission, including Discord and Telegram messages, stay in separate followup turns even in `collect` mode. Compatible Gateway `chat.send` inputs can still combine.
 
 The queue uses a built-in 500ms debounce for steer, followup, and collect batching. `messages.queue.cap` defaults to 20 queued messages, and `messages.queue.drop` defaults to `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
 
@@ -157,11 +161,38 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those current fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
 - Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
+
+## Agent reactions to WebChat prompts
+
+During an admitted WebChat turn, the agent can acknowledge the current prompt with
+the existing message tool:
+
+```json
+{ "action": "react", "emoji": "👍" }
+```
+
+Omit the target and message ID: the host binds this action to the committed current
+prompt and the running agent's identity. Set `remove: true` with the same emoji to
+remove that agent's reaction. Repeating an add or removal is a no-op. The reaction
+appears in session history and live updates; it does not mirror to an inherited
+external channel. External reactions still require the normal channel routing and
+external message ID.
+
+Queued turns bind the reaction to their own committed prompt when execution
+begins. Steering updates the current prompt only after the new input is committed
+and consumed by the running agent; pending or rejected input does not retarget a
+reaction. Collected inputs use their committed combined prompt.
+
+Acknowledgment reactions do not replace the final answer. Omit `final` or set
+`final: false` when more work follows. Only an explicit `final: true` addition,
+requested as the complete response, can count as source-reply completion. Removals,
+no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies
 

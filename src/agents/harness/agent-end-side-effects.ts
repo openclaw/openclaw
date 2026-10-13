@@ -11,6 +11,10 @@ import {
 } from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
 import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
+import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
@@ -19,6 +23,7 @@ const log = createSubsystemLogger("agents/harness");
 
 type BaseAgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
+  [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
   /** Exact completed-turn boundary; context loading stays off the foreground path. */
   skillExperienceReviewSource?: Pick<
     TranscriptEntryAnchor,
@@ -70,8 +75,14 @@ function runCoreAgentEndSideEffects(
       return;
     }
     if (read === "worker") {
-      const assertCurrent = captureOwnedTranscriptWriteAssertion(source);
+      const committed = params[completedTurnMessageAnchor];
+      const assertCurrent =
+        committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
       assertCurrent();
+      if (committed) {
+        schedule(committed.anchor);
+        return;
+      }
       return readActiveTranscriptEntryAnchorAsync(source)
         .then((anchor) => {
           assertCurrent();

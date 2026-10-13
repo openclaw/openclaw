@@ -27,7 +27,7 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 60],
 ]);
 
-export type CodexBootstrapFile = Awaited<
+type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
 export type CodexWorkspaceBootstrapContext = {

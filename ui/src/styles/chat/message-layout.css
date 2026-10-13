@@ -28,6 +28,14 @@
   top: calc(var(--chat-position-rail-top) - var(--chat-thread-padding-top));
   width: 0;
   height: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 240ms ease-out;
+}
+
+.chat-position-rail[data-overflow] {
+  opacity: 1;
+  visibility: visible;
 }
 
 .chat-position-rail__track {
@@ -259,13 +267,17 @@
   }
 }
 
-.chat-message-images {
+.chat-message-images,
+.chat-assistant-attachments {
   display: flex;
   flex-direction: column;
-  flex-wrap: nowrap;
-  align-items: flex-start;
   width: 100%;
   gap: var(--chat-block-gap);
+}
+
+.chat-message-images {
+  flex-wrap: nowrap;
+  align-items: flex-start;
 }
 
 .chat-message-image-button {
@@ -622,11 +634,7 @@
 }
 
 .chat-assistant-attachments {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
   max-width: 100%;
-  gap: var(--chat-block-gap);
 }
 
 .chat-assistant-attachments--preview-chips {
@@ -698,12 +706,16 @@
   color: var(--text);
 }
 
-.chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card__header,
+.chat-assistant-attachment-card__identity {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   min-width: 0;
+}
+
+.chat-assistant-attachment-card__header {
+  justify-content: space-between;
   padding: 14px 16px;
 }
 
@@ -723,10 +735,6 @@
 }
 
 .chat-assistant-attachment-card__identity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
   flex: 1;
 }
 
@@ -760,15 +768,19 @@
   line-height: 1.2;
 }
 
-.chat-assistant-attachment-card__title {
+.chat-assistant-attachment-card__title,
+.chat-assistant-attachment-card__status-reason {
   min-width: 0;
-  flex: 1;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-assistant-attachment-card__title {
+  flex: 1;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-assistant-attachment-card__meta {
@@ -790,13 +802,6 @@
 .chat-assistant-attachment-card__status-badge,
 .chat-assistant-attachment-card__status-separator {
   flex: none;
-}
-
-.chat-assistant-attachment-card__status-reason {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 @media (max-width: 560px) {
@@ -1084,6 +1089,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-position-rail,
   .chat-position-rail__tick {
     transition: none;
   }

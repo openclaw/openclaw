@@ -360,6 +360,48 @@ describe("buildKnownAgentRunFailureReplyPayload", () => {
     ChatType: "direct",
   } as unknown as TemplateContext;
 
+  it.each([
+    { rawError: "Connection error. private-canary", code: undefined },
+    { rawError: "private-canary", code: "ECONNREFUSED" },
+    { rawError: "getaddrinfo ENOTFOUND private-canary", code: undefined },
+  ])("preserves transport guidance in a terminal timeout-bucket reply: %j", (facts) => {
+    const error = new FailoverError("Sanitized provider failure", {
+      ...facts,
+      reason: "timeout",
+      status: 408,
+      provider: "external",
+      model: "local-model",
+    });
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: error,
+      sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Couldn't connect to the AI service.");
+    expect(payload?.text).toContain(
+      "Check the conversation for any completed work before trying again.",
+    );
+    expect(payload?.text).not.toMatch(/took too long|private-canary|Sanitized provider failure/);
+  });
+
+  it("keeps HTTP server failures ahead of connection wording in provider details", () => {
+    const error = new FailoverError("503 connection error: private-canary", {
+      reason: "timeout",
+      status: 503,
+    });
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx,
+        resolvedVerboseLevel: "off",
+      })?.text,
+    ).toBe(
+      "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.",
+    );
+  });
+
   it("puts sanitized HTTP 400 prompt-size guidance in the terminal reply payload", () => {
     const raw = `400 ${JSON.stringify({
       error: {

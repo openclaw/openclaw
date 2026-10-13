@@ -122,6 +122,7 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
       "120",
       "--retry",
       "3",
+      "--retry-all-errors",
       "--retry-max-time",
       "120",
       "--output",

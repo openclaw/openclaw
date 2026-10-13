@@ -153,7 +153,6 @@ export class IMessageRpcClient {
   private terminalResolve: ((error: Error) => void) | null = null;
   private readonly reaped: Promise<void>;
   private reapedResolve: (() => void) | null = null;
-  private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stopPromise: Promise<void> | null = null;
   private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
@@ -194,19 +193,16 @@ export class IMessageRpcClient {
     });
     this.child = child;
 
-    child.stdout.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stdoutFramer.write(chunk);
-    });
-
-    child.stderr?.on("data", (chunk) => {
-      if (this.child !== child) {
-        return;
-      }
-      this.stderrFramer.write(chunk);
-    });
+    for (const [stream, framer] of [
+      [child.stdout, this.stdoutFramer],
+      [child.stderr, this.stderrFramer],
+    ] as const) {
+      stream.on("data", (chunk) => {
+        if (this.child === child) {
+          framer.write(chunk);
+        }
+      });
+    }
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
     // client once and terminate a helper whose pipe failed; otherwise the
@@ -356,7 +352,7 @@ export class IMessageRpcClient {
   }
 
   private async waitForReap(timeoutMs: number): Promise<boolean> {
-    if (this.isReaped) {
+    if (!this.reapedResolve) {
       return true;
     }
     return await raceWithTimeout(
@@ -492,10 +488,6 @@ export class IMessageRpcClient {
   }
 
   private markReaped(): void {
-    if (this.isReaped) {
-      return;
-    }
-    this.isReaped = true;
     const resolve = this.reapedResolve;
     this.reapedResolve = null;
     resolve?.();

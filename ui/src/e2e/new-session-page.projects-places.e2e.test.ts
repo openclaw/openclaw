@@ -117,36 +117,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps the Local destination visible when the Gateway is the only place", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "environments.list": {
-          environments: [gatewayEnvironment],
-          profiles: [],
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
-      await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Local" }).waitFor();
-      expect(await place.locator('[data-value^="device:"]').count()).toBe(0);
-      expect(await place.locator('[data-value^="cloud:"]').count()).toBe(0);
-      expect(await place.locator('[data-value="auto-device"]').count()).toBe(0);
-    } finally {
-      await context.close();
-    }
-  });
-
   it.each(["recovery scope", "system info"] as const)(
     "updates Gateway place labels after late %s",
     async (late) => {
@@ -181,10 +151,17 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
         workspaceGit: true,
-        featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "system.info"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.create",
+          "system.info",
+          "fs.listDir",
+        ],
         heldMethods: late === "system info" ? ["system.info"] : [],
         methodResponses: {
           "system.info": systemInfo,
+          "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
           "environments.list": {
             environments: [gatewayEnvironment],
             profiles: [],

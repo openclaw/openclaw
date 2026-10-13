@@ -9,6 +9,7 @@ import {
   readRuntimePromptImageOrder,
   readRuntimePromptMediaFacts,
 } from "../../media/media-facts.js";
+import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -23,6 +24,7 @@ import {
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
+  projectRuntimeContextFragments,
 } from "../internal-runtime-context.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
@@ -57,7 +59,7 @@ describe("AgentSession operator context ordering", () => {
     const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
     installAttemptPermissionPrompt({
       activeSession: session,
-      attempt: {},
+      attempt: { model: { api: "anthropic-messages" } },
       runAbortSignal: new AbortController().signal,
       setActiveSessionSystemPrompt: (systemPrompt) => {
         session.setBaseSystemPrompt(systemPrompt);
@@ -175,7 +177,7 @@ describe("AgentSession operator context ordering", () => {
       };
       installAttemptPermissionPrompt({
         activeSession: session,
-        attempt: {},
+        attempt: { model: { api: "anthropic-messages" } },
         runAbortSignal: new AbortController().signal,
         setActiveSessionSystemPrompt: (systemPrompt) => {
           session.setBaseSystemPrompt(systemPrompt);
@@ -218,6 +220,88 @@ describe("AgentSession operator context ordering", () => {
       ).toHaveLength(newUser ? 1 : 2);
     },
   );
+
+  it("keeps one Responses runtime-context carrier visible across three tool rounds", async () => {
+    const requests: Context[] = [];
+    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+      requests.push(context);
+      const callTool = requests.length <= 3;
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          callTool
+            ? [
+                {
+                  type: "toolCall",
+                  id: `refresh-${requests.length}`,
+                  name: "refresh",
+                  arguments: {},
+                },
+              ]
+            : [{ type: "text", text: "Done" }],
+          callTool ? "toolUse" : "stop",
+        ),
+      );
+    });
+    const { session } = await createTestSession({
+      customTools: [
+        {
+          name: "refresh",
+          label: "Refresh",
+          description: "Refresh current facts",
+          parameters: Type.Object({}),
+          execute: async () => ({ content: [{ type: "text", text: "Refreshed" }], details: {} }),
+        },
+      ],
+    });
+    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
+    session.agent.convertToLlm = (messages) =>
+      convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
+    installAttemptPermissionPrompt({
+      activeSession: session,
+      attempt: { model: { api: "openai-responses" } },
+      runAbortSignal: new AbortController().signal,
+      setActiveSessionSystemPrompt: (systemPrompt) => {
+        session.setBaseSystemPrompt(systemPrompt);
+        return systemPrompt;
+      },
+      prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
+    });
+    const carrierText = projectRuntimeContextFragments(
+      buildInterSessionPromptContext({
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:dashboard:parent",
+        sourceChannel: "webchat",
+        sourceTool: "sessions_send",
+      }).fragments,
+    );
+    session[agentSessionQueuePromptContext](
+      buildSystemUpdateMessage(carrierText, "runtime-context", true),
+    );
+
+    await session.prompt("Refresh the facts three times.");
+
+    expect(requests).toHaveLength(4);
+    expect(
+      requests.map(
+        (request) =>
+          request.messages.filter(
+            (message) =>
+              message.role === "user" &&
+              message.operatorMessage?.turnScoped === true &&
+              message.content === carrierText,
+          ).length,
+      ),
+    ).toEqual([1, 1, 1, 1]);
+    expect(
+      session.messages.filter(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === "openclaw.system-update" &&
+          message.content === carrierText,
+      ),
+    ).toHaveLength(1);
+  });
 });
 
 describe("AgentSession quoted steering context", () => {

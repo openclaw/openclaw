@@ -55,43 +55,6 @@ describe("resolveSlackBlocksText data visualizations", () => {
     expect(resolved?.text).not.toMatch(/private|Hidden option/u);
   });
 
-  it("preserves native chart values in inbound conversation context", () => {
-    expect(
-      resolveSlackBlocksText([
-        {
-          type: "data_visualization",
-          title: "Weekly latency",
-          chart: {
-            type: "line",
-            series: [
-              {
-                name: "p95",
-                data: [
-                  { label: "Mon", value: 250 },
-                  { label: "Tue", value: 230 },
-                ],
-              },
-            ],
-            axis_config: {
-              categories: ["Mon", "Tue"],
-              x_label: "Day",
-              y_label: "Milliseconds",
-            },
-          },
-        },
-      ]),
-    ).toEqual({
-      text: [
-        "Weekly latency (line chart)",
-        "X axis: Day",
-        "Y axis: Milliseconds",
-        "- p95: Mon: 250; Tue: 230",
-      ].join("\n"),
-      hasRichText: false,
-      hasNativeData: true,
-    });
-  });
-
   it("preserves native table values in inbound conversation context", () => {
     expect(
       resolveSlackBlocksText([

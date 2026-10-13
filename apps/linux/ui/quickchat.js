@@ -77,10 +77,7 @@ function canonicalInlineWidgetTarget(raw) {
   if (!target.startsWith("/") || target.startsWith("//") || target.includes("\\")) {
     return null;
   }
-  const suffixIndex = [target.indexOf("?"), target.indexOf("#")]
-    .filter((index) => index >= 0)
-    .reduce((lowest, index) => Math.min(lowest, index), target.length);
-  const path = target.slice(0, suffixIndex);
+  const path = target.split(/[?#]/u, 1)[0];
   if (!path.startsWith(`${INLINE_WIDGET_DOCUMENTS_PATH}/`)) {
     return null;
   }
@@ -149,11 +146,10 @@ function chatMessageWidgets(message) {
     .map(coerceInlineWidgetPreview)
     .filter(Boolean)
     .map((widget) => {
-      const base = widget.key.slice(0, 240);
       let key = widget.key;
       let suffix = 2;
       while (emitted.has(key)) {
-        key = `${base}-${suffix}`;
+        key = `${widget.key}-${suffix}`;
         suffix += 1;
       }
       emitted.add(key);
@@ -207,8 +203,7 @@ function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
   ) {
     return null;
   }
-  const prefix = surface.pathname.replace(/\/+$/u, "");
-  return `${surface.origin}${prefix}${target}`;
+  return `${surface.origin}${surface.pathname}${target}`;
 }
 
 const tauri = window["__TAURI__"];
@@ -305,24 +300,19 @@ function setError(message = "") {
   elements.composer.classList.toggle("has-error", Boolean(message));
 }
 
+const GATEWAY_STATUS_MESSAGES = new Map([
+  ["pairing-required", "Approve this device in the dashboard (Nodes)"],
+  ["credential-required", "Gateway requires a credential — open the dashboard on the gateway host"],
+  ["tls-failure", "Gateway TLS trust failed — check the certificate fingerprint"],
+]);
+
 function renderStatus() {
-  if (gatewayState === "pairing-required") {
-    setError(gatewayNotice || "Approve this device in the dashboard (Nodes)");
+  if (gatewayState === "up") {
+    setError(sendError);
     return;
   }
-  if (gatewayState === "credential-required") {
-    setError(
-      gatewayNotice || "Gateway requires a credential — open the dashboard on the gateway host",
-    );
-    return;
-  }
-  if (gatewayState === "tls-failure") {
-    setError("Gateway TLS trust failed — check the certificate fingerprint");
-    return;
-  }
-  setError(
-    gatewayState === "up" ? sendError : gatewayNotice || "Gateway unreachable — retrying",
-  );
+  const fallback = GATEWAY_STATUS_MESSAGES.get(gatewayState) || "Gateway unreachable — retrying";
+  setError(gatewayState === "tls-failure" ? fallback : gatewayNotice || fallback);
 }
 
 function setGatewayState(payload) {
@@ -508,39 +498,32 @@ function refreshCanvasSurface() {
   if (!requestedObservedUrl || Date.now() < canvasSurfaceRetryAt) {
     return Promise.resolve(canvasSurfaceUrl);
   }
+  const settle = (refreshed) => {
+    if (gatewayGeneration !== requestedGeneration ||
+        canvasSurfaceObservedUrl !== requestedObservedUrl ||
+        canvasSurfaceRefreshPromise !== pending) {
+      return canvasSurfaceUrl;
+    }
+    const next = refreshed?.gatewayGeneration === requestedGeneration &&
+      typeof refreshed.canvasSurfaceUrl === "string" && refreshed.canvasSurfaceUrl.trim()
+      ? refreshed.canvasSurfaceUrl : null;
+    if (next) {
+      canvasSurfaceObservedUrl = next;
+      canvasSurfaceUrl = next;
+      canvasSurfaceRefreshedAt = Date.now();
+      canvasSurfaceRetryAt = 0;
+    } else {
+      canvasSurfaceUrl = null;
+      canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
+    }
+    return canvasSurfaceUrl;
+  };
   const pending = invoke("quickchat_refresh_widget_surface", {
     gatewayGeneration: requestedGeneration,
     observedUrl: requestedObservedUrl,
   })
-    .then((refreshed) => {
-      if (gatewayGeneration !== requestedGeneration ||
-          canvasSurfaceObservedUrl !== requestedObservedUrl ||
-          canvasSurfaceRefreshPromise !== pending) {
-        return canvasSurfaceUrl;
-      }
-      const next = refreshed?.gatewayGeneration === requestedGeneration &&
-        typeof refreshed.canvasSurfaceUrl === "string" && refreshed.canvasSurfaceUrl.trim()
-        ? refreshed.canvasSurfaceUrl : null;
-      if (next) {
-        canvasSurfaceObservedUrl = next;
-        canvasSurfaceUrl = next;
-        canvasSurfaceRefreshedAt = Date.now();
-        canvasSurfaceRetryAt = 0;
-      } else {
-        canvasSurfaceUrl = null;
-        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
-      }
-      return canvasSurfaceUrl;
-    })
-    .catch(() => {
-      if (gatewayGeneration === requestedGeneration &&
-          canvasSurfaceObservedUrl === requestedObservedUrl &&
-          canvasSurfaceRefreshPromise === pending) {
-        canvasSurfaceUrl = null;
-        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
-      }
-      return canvasSurfaceUrl;
-    })
+    .then(settle)
+    .catch(() => settle(null))
     .finally(() => {
       if (gatewayGeneration !== requestedGeneration || canvasSurfaceRefreshPromise !== pending) {
         return;
@@ -664,14 +647,6 @@ function scheduleWidgetSync() {
   });
 }
 
-function selectReplyWidget(key) {
-  if (!activeReply?.widgets.some((widget) => widget.key === key)) {
-    return;
-  }
-  activeReply.activeWidgetKey = key;
-  renderReplyWidgets();
-}
-
 function renderReplyWidgets() {
   elements.replyWidgets.replaceChildren();
   const widgets = activeReply?.widgets || [];
@@ -695,7 +670,12 @@ function renderReplyWidgets() {
       tab.className = "inline-widget-tab";
       tab.classList.toggle("active", widget.key === activeKey);
       tab.textContent = widget.title;
-      tab.addEventListener("click", () => selectReplyWidget(widget.key));
+      tab.addEventListener("click", () => {
+        if (activeReply?.widgets.some((candidate) => candidate.key === widget.key)) {
+          activeReply.activeWidgetKey = widget.key;
+          renderReplyWidgets();
+        }
+      });
       tabs.append(tab);
     }
     elements.replyWidgets.append(tabs);
@@ -753,10 +733,6 @@ function updateReplyWidgets(message) {
   }
 }
 
-function stopReplyThinking() {
-  elements.replyThinking.hidden = true;
-}
-
 function terminalizeDisconnectedReply() {
   if (!activeReply || activeReply.terminal) {
     return;
@@ -764,7 +740,7 @@ function terminalizeDisconnectedReply() {
   // Chat events are not replayed after a socket gap. Unlock the composer instead of leaving a
   // reply waiting forever for a terminal frame that may have been lost while disconnected.
   activeReply.terminal = true;
-  stopReplyThinking();
+  elements.replyThinking.hidden = true;
   elements.reply.classList.add("has-error", "is-terminal");
   elements.replyState.textContent = "Interrupted";
   elements.replyError.textContent = "Connection lost before the reply completed.";
@@ -829,7 +805,7 @@ function applyChatEvent(payload) {
   }
 
   if (payload?.state === "delta") {
-    stopReplyThinking();
+    elements.replyThinking.hidden = true;
     return;
   }
   if (!["final", "aborted", "error"].includes(payload?.state)) {
@@ -838,7 +814,7 @@ function applyChatEvent(payload) {
 
   activeReply.terminal = true;
   pendingChatEvents = [];
-  stopReplyThinking();
+  elements.replyThinking.hidden = true;
   elements.reply.classList.add("is-terminal");
   if (payload.state === "final") {
     if (activeReply.textIncomplete) {

@@ -282,6 +282,22 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   params: ConfiguredPluginAutoEnableParams,
 ): PluginAutoEnableCandidate[] {
   const changes = resolveConfiguredChannelAutoEnableCandidates(params);
+  const findMatchingPluginIds = (
+    value: string,
+    selectValues: (plugin: PluginManifestRecord) => readonly string[],
+  ): string[] => {
+    const normalized = normalizeOptionalLowercaseString(value);
+    return normalized
+      ? params.registry.plugins
+          .filter((plugin) =>
+            selectValues(plugin).some(
+              (candidate) => normalizeOptionalLowercaseString(candidate) === normalized,
+            ),
+          )
+          .map((plugin) => plugin.id)
+          .toSorted((left, right) => left.localeCompare(right))
+      : [];
+  };
 
   for (const [providerId, pluginId] of Object.entries(
     resolveAutoEnableProviderPluginIds(params.registry),
@@ -312,24 +328,11 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   }
 
   for (const providerId of collectConfiguredSpeechProviderIds(params.config)) {
-    const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
-    if (!normalizedProviderId) {
-      continue;
-    }
-    const pluginIds = params.registry.plugins
-      .filter((plugin) =>
-        (plugin.contracts?.speechProviders ?? []).some(
-          (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
-        ),
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-    for (const pluginId of pluginIds) {
-      changes.push({
-        pluginId,
-        kind: "speech-provider-selected",
-        providerId,
-      });
+    for (const pluginId of findMatchingPluginIds(
+      providerId,
+      (plugin) => plugin.contracts?.speechProviders ?? [],
+    )) {
+      changes.push({ pluginId, kind: "speech-provider-selected", providerId });
     }
   }
 
@@ -370,24 +373,11 @@ export function resolveConfiguredPluginAutoEnableCandidates(
   }
 
   for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config)) {
-    const normalizedRuntime = normalizeOptionalLowercaseString(runtime);
-    if (!normalizedRuntime) {
-      continue;
-    }
-    const pluginIds = params.registry.plugins
-      .filter((plugin) =>
-        [...(plugin.activation?.onAgentHarnesses ?? []), ...(plugin.cliBackends ?? [])].some(
-          (entry) => normalizeOptionalLowercaseString(entry) === normalizedRuntime,
-        ),
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-    for (const pluginId of pluginIds) {
-      changes.push({
-        pluginId,
-        kind: "agent-harness-runtime-configured",
-        runtime,
-      });
+    for (const pluginId of findMatchingPluginIds(runtime, (plugin) => [
+      ...(plugin.activation?.onAgentHarnesses ?? []),
+      ...(plugin.cliBackends ?? []),
+    ])) {
+      changes.push({ pluginId, kind: "agent-harness-runtime-configured", runtime });
     }
   }
 

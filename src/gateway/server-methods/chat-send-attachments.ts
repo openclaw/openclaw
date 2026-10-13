@@ -181,19 +181,15 @@ async function prestageMediaPathOffloads(params: {
     const stagedMedia = stagingCtx.media ?? [];
     // Preserve request order while mixing sandbox-relative paths with managed
     // host paths used by pass-through or fallback PDFs.
-    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
-    refsToStage.forEach((ref, index) => {
-      resolvedByRef.set(ref, {
-        path: stagedMedia[index]?.path ?? ref.path,
-        mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
-      });
-    });
+    const resolvedByRef = new Map(
+      refsToStage.map((ref, index) => [ref, stagedMedia[index]] as const),
+    );
     return mediaPathRefs.map((ref) => {
-      const resolved = resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType };
+      const resolved = resolvedByRef.get(ref);
       return {
-        path: resolved.path,
+        path: resolved?.path ?? ref.path,
         url: ref.mediaRef,
-        contentType: resolved.mimeType,
+        contentType: resolved?.contentType ?? ref.mimeType,
         fileName: ref.label,
         workspaceDir: sandbox.workspaceDir,
       };

@@ -5,7 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
-import { createScriptTestHarness } from "./test-helpers.js";
+import { copyOxlintConfigFixture, createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
@@ -148,7 +148,7 @@ describe("oxlint config", () => {
             : ["eslint(no-eval)", "eslint(no-eval)"],
       })),
     ];
-    fs.copyFileSync(".oxlintrc.json", path.join(tempRoot, ".oxlintrc.json"));
+    copyOxlintConfigFixture(tempRoot);
     for (const fixture of fixtures) {
       const target = path.join(tempRoot, fixture.file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -209,7 +209,8 @@ describe("oxlint config", () => {
 
   it("checks unbound methods in TypeScript and CommonJS source test support", () => {
     const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-source-support-"));
-    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+    copyOxlintConfigFixture(tempRoot);
+    for (const file of ["tsconfig.json", "src/tsconfig.json"]) {
       if (fs.existsSync(file)) {
         const target = path.join(tempRoot, file);
         fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -290,6 +291,7 @@ describe("oxlint config", () => {
       fs.writeFileSync(target, content);
     };
     const copy = (file: string) => write(file, fs.readFileSync(file, "utf8"));
+    copyOxlintConfigFixture(root);
     const packageOwners = [
       "ai",
       "llm-core",
@@ -298,7 +300,6 @@ describe("oxlint config", () => {
       "plugin-sdk",
     ];
     for (const file of [
-      ".oxlintrc.json",
       "tsconfig.json",
       "ui/src/css.d.ts",
       ...packageOwners.map((owner) => `packages/${owner}/tsconfig.json`),
@@ -496,6 +497,7 @@ describe("oxlint config", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
     // Keep transient-config ownership inside this synthetic checkout.
     fs.mkdirSync(path.join(root, ".git"));
+    copyOxlintConfigFixture(root);
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     fs.writeFileSync(
       path.join(root, ".oxlintrc.json"),

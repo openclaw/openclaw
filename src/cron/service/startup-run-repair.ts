@@ -4,11 +4,10 @@ import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -34,10 +33,8 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
 export function markInterruptedStartupRun(params: {
   state: CronJobPolicyContext;
   job: CronJob;
-  taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
-  recoverInterruptedOneShot?: boolean;
   deferredNotifications: DeferredCronNotifications;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
@@ -87,13 +84,8 @@ export function markInterruptedStartupRun(params: {
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
-  // Only startup recovery with durable evidence of no delivery handoff may replay
-  // a started one-shot; an operator's distinct replacement stays scheduled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    !params.recoverInterruptedOneShot
-  ) {
+  // An uncertain started one-shot is never replayed; a distinct replacement keeps its slot.
+  if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
   }
   finalizeCronFailureNotifications(params.state, {
@@ -102,6 +94,7 @@ export function markInterruptedStartupRun(params: {
     result: {
       status: "error",
       error: STARTUP_INTERRUPTED_ERROR,
+      errorClassification: { kind: "aborted" },
       startedAt: runningAtMs,
     },
     completionStatus: "failed",
@@ -111,7 +104,6 @@ export function markInterruptedStartupRun(params: {
 
   return {
     jobId: job.id,
-    ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
@@ -142,7 +134,7 @@ export function restoreFinalizedStartupRun(params: {
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
   // Committed edits own scheduling even if the clock repeats or moves back.
-  // Keep the existing one-shot protection for older pending runs without a nonce.
+  // Older pending one-shots still retain a later replacement deadline.
   const scheduleOwnership =
     typeof job.state.runningScheduleChangeId === "string" ||
     (job.schedule.kind === "at" &&

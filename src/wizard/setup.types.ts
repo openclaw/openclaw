@@ -5,8 +5,6 @@ import type {
 } from "../config/types.gateway.js";
 import type { SecretInput } from "../config/types.secrets.js";
 
-// Shared setup wizard types for quickstart/advanced gateway flows and their
-// persisted defaults.
 export type WizardFlow = "quickstart" | "advanced";
 
 export type QuickstartGatewayDefaults = {

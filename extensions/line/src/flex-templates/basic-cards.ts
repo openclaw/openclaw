@@ -1,60 +1,33 @@
 import { normalizeLineAction } from "../actions.js";
-import { createCardBubble, createCardTitle } from "./common.js";
-import type {
-  Action,
-  FlexBox,
-  FlexBubble,
-  FlexButton,
-  FlexComponent,
-  FlexImage,
-  FlexText,
-  ListItem,
-} from "./types.js";
+import {
+  cardBox,
+  cardText,
+  createCardBubble,
+  createCardListItem,
+  createCardTitle,
+} from "./common.js";
+import type { Action, FlexBox, FlexBubble, FlexButton, FlexImage, ListItem } from "./types.js";
 
 export function createInfoCard(title: string, body: string, footer?: string): FlexBubble {
   return createCardBubble(
     [
-      {
-        type: "box",
-        layout: "horizontal",
-        contents: [
-          {
-            type: "box",
-            layout: "vertical",
-            contents: [],
-            width: "4px",
-            backgroundColor: "#06C755",
-            cornerRadius: "2px",
-          } as FlexBox,
-          {
-            ...createCardTitle(title),
-            flex: 1,
-            margin: "lg",
-          },
-        ],
-      } as FlexBox,
+      cardBox("horizontal", [
+        cardBox("vertical", [], { width: "4px", backgroundColor: "#06C755", cornerRadius: "2px" }),
+        {
+          ...createCardTitle(title),
+          flex: 1,
+          margin: "lg",
+        },
+      ]),
       // Body text in subtle container, only when there is a body to show:
       // LINE rejects the whole push when a Flex text is blank.
       ...(body
         ? [
-            {
-              type: "box",
-              layout: "vertical",
-              contents: [
-                {
-                  type: "text",
-                  text: body,
-                  size: "md",
-                  color: "#444444",
-                  wrap: true,
-                  lineSpacing: "6px",
-                } as FlexText,
-              ],
-              margin: "xl",
-              paddingAll: "lg",
-              backgroundColor: "#F8F9FA",
-              cornerRadius: "lg",
-            } as FlexBox,
+            cardBox(
+              "vertical",
+              [cardText(body, { size: "md", color: "#444444", wrap: true, lineSpacing: "6px" })],
+              { margin: "xl", paddingAll: "lg", backgroundColor: "#F8F9FA", cornerRadius: "lg" },
+            ),
           ]
         : []),
     ],
@@ -64,59 +37,25 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
 
 export function createListCard(title: string, items: ListItem[]): FlexBubble {
   const itemContents = items.slice(0, 8).map<FlexBox>((item, index) => {
-    const itemContentsLocal: FlexComponent[] = [
-      {
-        type: "text",
-        text: item.title,
-        size: "md",
-        weight: "bold",
-        color: "#1a1a1a",
-        wrap: true,
-      } as FlexText,
-    ];
-
-    if (item.subtitle) {
-      itemContentsLocal.push({
-        type: "text",
-        text: item.subtitle,
-        size: "sm",
-        color: "#888888",
-        wrap: true,
-        margin: "xs",
-      } as FlexText);
-    }
-
-    return {
-      type: "box",
-      layout: "horizontal",
-      contents: [
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "box",
-              layout: "vertical",
-              contents: [],
+    return cardBox(
+      "horizontal",
+      [
+        cardBox(
+          "vertical",
+          [
+            cardBox("vertical", [], {
               width: "8px",
               height: "8px",
               backgroundColor: index === 0 ? "#06C755" : "#DDDDDD",
               cornerRadius: "4px",
-            } as FlexBox,
+            }),
           ],
-          width: "20px",
-          alignItems: "center",
-          paddingTop: "sm",
-        } as FlexBox,
-        {
-          type: "box",
-          layout: "vertical",
-          contents: itemContentsLocal,
-          flex: 1,
-        } as FlexBox,
+          { width: "20px", alignItems: "center", paddingTop: "sm" },
+        ),
+        cardBox("vertical", createCardListItem(item.title, item.subtitle, "sm"), { flex: 1 }),
       ],
-      margin: index > 0 ? "lg" : undefined,
-    };
+      { margin: index > 0 ? "lg" : undefined },
+    );
   });
 
   return createCardBubble([
@@ -126,40 +65,19 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
       margin: "lg",
       color: "#EEEEEE",
     },
-    {
-      type: "box",
-      layout: "vertical",
-      contents: itemContents,
-      margin: "lg",
-    } as FlexBox,
+    cardBox("vertical", itemContents, { margin: "lg" }),
   ]);
 }
 
 function createTitleBody(title: string, body?: string): FlexBox {
-  const box: FlexBox = {
-    type: "box",
-    layout: "vertical",
-    contents: [
-      {
-        type: "text",
-        text: title,
-        weight: "bold",
-        size: "xl",
-        wrap: true,
-      },
-    ],
-    paddingAll: "lg",
-  };
+  const box: FlexBox = cardBox(
+    "vertical",
+    [cardText(title, { weight: "bold", size: "xl", wrap: true })],
+    { paddingAll: "lg" },
+  );
 
   if (body) {
-    box.contents.push({
-      type: "text",
-      text: body,
-      size: "md",
-      wrap: true,
-      margin: "md",
-      color: "#666666",
-    });
+    box.contents.push(cardText(body, { size: "md", wrap: true, margin: "md", color: "#666666" }));
   }
   return box;
 }
@@ -190,10 +108,9 @@ export function createActionCard(
   const bubble: FlexBubble = {
     type: "bubble",
     body: createTitleBody(title, body),
-    footer: {
-      type: "box",
-      layout: "vertical",
-      contents: actions.slice(0, 4).map(
+    footer: cardBox(
+      "vertical",
+      actions.slice(0, 4).map(
         (action, index) =>
           ({
             type: "button",
@@ -202,8 +119,8 @@ export function createActionCard(
             margin: index > 0 ? "sm" : undefined,
           }) as FlexButton,
       ),
-      paddingAll: "md",
-    },
+      { paddingAll: "md" },
+    ),
   };
 
   if (options?.imageUrl) {

@@ -21,6 +21,7 @@ import {
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { ChatOutboxAdmissions } from "./chat-outbox-admissions.ts";
 import { ChatOutboxHistory } from "./chat-outbox-history.ts";
 import {
   projectChatOutboxItem,
@@ -34,7 +35,6 @@ import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
-  updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
@@ -54,6 +54,7 @@ type LiveProjection = {
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 // One gateway owner merges durable, live, and pane-local rows for every subscribed pane.
 class ChatOutboxGatewayOwner {
+  readonly admissions = new ChatOutboxAdmissions();
   attentionRevision = 0;
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
@@ -126,9 +127,7 @@ class ChatOutboxGatewayOwner {
           entries.delete(id);
         }
       }
-      if (!entries.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, entries);
     }
     this.prune(host);
     this.publishAttention();
@@ -159,14 +158,18 @@ class ChatOutboxGatewayOwner {
       (live?.submissionIsCurrent && !live.submissionIsCurrent())
     ) {
       entries.delete(id);
-      if (!entries.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, entries);
       return undefined;
     }
     return live;
   }
+  private pruneLiveScope(key: string, entries: ReadonlyMap<string, LiveProjection>): void {
+    if (!entries.size) {
+      this.live.delete(key);
+    }
+  }
   private observeDurable(id: string): void {
+    this.admissions.release(id);
     // Admission supersedes every retained copy, even an offscreen pane now using
     // another account. Subsequent canonical removal must not resurrect its bytes.
     for (const [pane, projection] of this.hosts) {
@@ -254,11 +257,10 @@ class ChatOutboxGatewayOwner {
                   sendState: "unconfirmed",
                 });
               if (
-                !updateStoredChatComposerQueueItem(
+                !updateStoredChatComposerQueueItems(
                   host,
                   outbox.sessionKey,
-                  parked ? current : item,
-                  { ...current, ...result.update },
+                  [{ expected: parked ? current : item, next: { ...current, ...result.update } }],
                   outbox.agentId,
                 )
               ) {
@@ -277,11 +279,10 @@ class ChatOutboxGatewayOwner {
                 : {}),
             });
           } else {
-            updateStoredChatComposerQueueItem(
+            updateStoredChatComposerQueueItems(
               host,
               outbox.sessionKey,
-              current,
-              failOutboxPayload(current, result.reason),
+              [{ expected: current, next: failOutboxPayload(current, result.reason) }],
               outbox.agentId,
             );
           }
@@ -564,6 +565,7 @@ class ChatOutboxGatewayOwner {
       return null;
     }
     if (located) {
+      this.admissions.release(id);
       this.projectLive(host, located.scope, id);
       this.change(host, id);
     }
@@ -656,9 +658,7 @@ class ChatOutboxGatewayOwner {
       this.live.set(key, live);
     } else {
       live.delete(id);
-      if (!live.size) {
-        this.live.delete(key);
-      }
+      this.pruneLiveScope(key, live);
     }
     this.publish(host);
     this.prune(host);

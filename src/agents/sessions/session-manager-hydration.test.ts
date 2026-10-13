@@ -4,10 +4,8 @@ import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
-import {
-  upsertSessionEntryCore,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -26,8 +24,7 @@ import {
   recordOpenClawAgentDatabaseOpenFailure,
   clearOpenClawAgentDatabaseOpenFailure,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -101,7 +98,43 @@ it.each(["canonical", "shared"])(
         expect(detached.isPersisted()).toBe(false);
         expect(detached.buildSessionContext()).toEqual(expectedBounded);
         detached.appendMessage(makeUserMessage("detached only", 20));
-        await cold.reloadPersistedTranscriptAsync();
+        expect(probes.flatMap((probe) => probe.mock.calls)).toEqual([]);
+        // Warm admission must use the requested lane, not the cold reader's reserved-lane fallback.
+        const warm = openOpenClawAgentDatabase({ agentId: database.agentId, path: database.path });
+        expect(warm.db.isOpen).toBe(true);
+        probes.forEach((probe) => probe.mockClear());
+        const retirementEntered = createDeferredCore();
+        const releaseRetirement = createDeferredCore();
+        let following: Promise<void> | undefined;
+        const waitForWriter = () => {
+          following ??= runOpenClawAgentWriteAdmission(
+            { agentId: database.agentId, path: database.path },
+            () => {},
+          );
+          retirementEntered.resolve();
+          return Promise.race([following, releaseRetirement.promise]);
+        };
+        const close = vi
+          .spyOn(historyLane.pool, "closeResources")
+          .mockImplementation(waitForWriter);
+        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+        const reloading = runOpenClawAgentWriteAdmission(
+          { agentId: database.agentId, path: database.path },
+          () => cold.reloadPersistedTranscriptAsync(),
+        );
+        try {
+          await Promise.race([
+            reloading,
+            retirementEntered.promise.then(() => {
+              throw new Error("Manager reload cleanup waits on its own queued writer");
+            }),
+          ]);
+        } finally {
+          releaseRetirement.resolve();
+          await Promise.allSettled([reloading, following]);
+          close.mockRestore();
+          rotate.mockRestore();
+        }
         expect(cold.getCwd()).toBe("/runtime");
         expect(cold.getPersistedEntries()).toEqual(expected);
         const reader = prepareSessionTranscriptHydration(
@@ -696,7 +729,7 @@ it.each(["process", "explicit"])(
   },
 );
 
-it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])(
+it.each(["completed-drain", "active-drain", "terminal-owner"])(
   "preserves physical discovery authority across %s",
   async (transition) => {
     await withOpenClawTestState(
@@ -743,11 +776,7 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
           transition === "completed-drain"
             ? expect(pending).resolves.toBeInstanceOf(SessionManager)
             : expect(pending).rejects.toThrow(
-                transition === "active-drain"
-                  ? "resources are closing"
-                  : transition === "terminal-owner"
-                    ? "newly forbidden owner"
-                    : "read admission",
+                transition === "active-drain" ? "resources are closing" : "newly forbidden owner",
               );
         let closing: Promise<boolean> | undefined;
         try {
@@ -760,8 +789,6 @@ it.each(["completed-drain", "active-drain", "terminal-owner", "registry-close"])
               target.storePath,
               new Error("newly forbidden owner"),
             );
-          } else if (transition === "registry-close") {
-            await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
           } else {
             await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
           }

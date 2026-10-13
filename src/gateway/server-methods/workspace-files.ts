@@ -31,6 +31,7 @@ import {
   type WorkspaceRoot,
   updateWorkspaceFile,
   type WorkspaceFileUpdateResult,
+  workspaceRelativePath,
 } from "./workspace-fs.js";
 
 export type TouchedFile = { path: string; kind: "modified" | "read" };
@@ -60,10 +61,6 @@ const SEARCH_SKIP_DIRS = new Set([
   "dist",
   "node_modules",
 ]);
-
-function toDisplayPath(root: string, resolved: string): string {
-  return path.relative(root, resolved).split(path.sep).join("/");
-}
 
 function resolveTouchedFilePath(params: {
   root: string | undefined;
@@ -113,7 +110,7 @@ function buildSessionRelevanceMap(
     if (!resolved) {
       continue;
     }
-    relevance.set(toDisplayPath(root, resolved), file.kind);
+    relevance.set(workspaceRelativePath(root, resolved), file.kind);
   }
   return relevance;
 }
@@ -399,13 +396,11 @@ export async function listSessionWorkspaceFiles(
     ),
   );
   const browser = await buildBrowserResult({
+    ...params,
     root,
-    workspaceRoot,
     fileRoot: params.fileRoot,
-    path: params.path,
-    search: params.search,
+    workspaceRoot,
     files: workspaceFiles,
-    assertCurrent: params.assertCurrent,
   });
   return {
     ...(root ? { root } : {}),
@@ -427,55 +422,52 @@ export async function getSessionWorkspaceFile(
       outsideBoundary = true;
     },
   };
-  const exactTouched = params.files.find((file) => file.path === params.path);
-  if (exactTouched) {
-    const file = await toSessionFileEntry(exactTouched, params.root, params.fileRoot, options);
-    return {
-      ...(params.root ? { root: params.root } : {}),
-      file,
-      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
-    };
-  }
-  if (!params.root) {
-    return {};
-  }
-  // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
-  // rejection, and the 256 KB cap.
-  const candidates = resolveSessionFileCandidates({
-    root: params.root,
-    fileRoot: params.fileRoot,
-    filePath: params.path,
-  });
-  if (
-    candidates.length === 0 ||
-    !resolveTouchedFilePath({ root: params.root, fileRoot: params.fileRoot, filePath: params.path })
-  ) {
-    const file = await toSessionFileEntry(
-      { path: params.path, kind: "read" },
-      params.root,
-      params.fileRoot,
-      options,
-    );
-    return {
-      root: params.root,
-      file,
-      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
-    };
-  }
-  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
-  for (const candidate of candidates) {
-    const browserPath = toDisplayPath(params.root, candidate);
-    const sessionKind = relevance.get(browserPath);
-    const touched: TouchedFile = {
-      path: browserPath,
-      kind: sessionKind === "modified" ? "modified" : "read",
-    };
-    const file = await toSessionFileEntry(touched, params.root, params.root, options);
-    if (!file.missing) {
-      return { root: params.root, file };
+  let touched = params.files.find((file) => file.path === params.path);
+  if (!touched) {
+    if (!params.root) {
+      return {};
     }
+    // Any in-root file is previewable; fs-safe enforces containment and read bounds.
+    const candidates = resolveSessionFileCandidates({
+      root: params.root,
+      fileRoot: params.fileRoot,
+      filePath: params.path,
+    });
+    if (
+      candidates.length > 0 &&
+      resolveTouchedFilePath({
+        root: params.root,
+        fileRoot: params.fileRoot,
+        filePath: params.path,
+      })
+    ) {
+      const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
+      for (const candidate of candidates) {
+        const browserPath = workspaceRelativePath(params.root, candidate);
+        const sessionKind = relevance.get(browserPath);
+        const file = await toSessionFileEntry(
+          {
+            path: browserPath,
+            kind: sessionKind === "modified" ? "modified" : "read",
+          },
+          params.root,
+          params.root,
+          options,
+        );
+        if (!file.missing) {
+          return { root: params.root, file };
+        }
+      }
+      return { root: params.root };
+    }
+    touched = { path: params.path, kind: "read" };
   }
-  return { root: params.root };
+  const file = await toSessionFileEntry(touched, params.root, params.fileRoot, options);
+  return {
+    ...(params.root ? { root: params.root } : {}),
+    file,
+    ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
+  };
 }
 
 export type SessionWorkspaceWriteResult =
@@ -514,7 +506,7 @@ export async function setSessionWorkspaceFile(params: {
   });
   let browserPath: string | undefined;
   for (const candidate of candidates) {
-    const candidatePath = toDisplayPath(params.root, candidate);
+    const candidatePath = workspaceRelativePath(params.root, candidate);
     const stat = await statWorkspacePath(params.root, candidatePath);
     if (stat?.isFile) {
       browserPath = candidatePath;

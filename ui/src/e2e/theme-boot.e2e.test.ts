@@ -102,9 +102,99 @@ async function assertThemeFrames(
     ),
     `Every painted frame must use the resolved palette: ${JSON.stringify({ stable, surfaces })}`,
   ).toEqual([]);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const root = document.documentElement;
+        const style = getComputedStyle(root);
+        const narrowChat =
+          root.classList.contains("control-ui-chat-shell") &&
+          matchMedia(
+            "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+          ).matches;
+        const background =
+          (narrowChat && style.getPropertyValue("--bg-content").trim()) ||
+          style.getPropertyValue("--bg").trim();
+        const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')];
+        return {
+          meta:
+            metas.length > 0 &&
+            metas.every((meta) => meta.content === background && !meta.hasAttribute("media")),
+          statusBar:
+            style.getPropertyValue("--control-ui-system-chrome-background").trim() === background,
+        };
+      }),
+    )
+    .toEqual({ meta: true, statusBar: true });
 }
 
 suite.define(() => {
+  it("refreshes browser and status-bar colors on live theme, mode, accent, and breakpoint changes", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: [{ role: "assistant", content: "Chrome colors are ready." }],
+        });
+        await page.addInitScript({ content: themeFrameObserver });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByText("Chrome colors are ready.", { exact: true }).waitFor();
+        for (const prefs of [
+          { theme: "claw", themeMode: "light", accent: "#123456" },
+          { theme: "rose", themeMode: "light", accent: "#123456" },
+          { theme: "rose", themeMode: "dark", accent: "#123456" },
+          { theme: "rose", themeMode: "dark", accent: "#abcdef" },
+        ]) {
+          const config = { ui: { prefs } };
+          await gateway.setMethodResponse("config.get", {
+            config,
+            raw: JSON.stringify(config),
+            hash: JSON.stringify(prefs),
+          });
+          await gateway.emitGatewayEvent("config.changed", {});
+          await expect
+            .poll(() =>
+              page.evaluate(() => ({
+                theme: document.documentElement.dataset.theme,
+                mode: document.documentElement.dataset.themeMode,
+                accent: document.documentElement.style.getPropertyValue("--accent"),
+              })),
+            )
+            .toEqual({
+              theme:
+                prefs.theme === "claw"
+                  ? "light"
+                  : prefs.themeMode === "light"
+                    ? "rose-light"
+                    : "rose",
+              mode: prefs.themeMode,
+              accent: prefs.accent,
+            });
+          for (const viewport of [
+            { width: 1440, height: 900 },
+            { width: 390, height: 844 },
+            { width: 900, height: 450 },
+          ]) {
+            await page.setViewportSize(viewport);
+            // This case intentionally switches palettes; retain only the current frames.
+            await page.evaluate(() => {
+              window.themeBootFrames = [];
+            });
+            await assertThemeFrames(page, {
+              theme:
+                prefs.theme === "claw"
+                  ? "light"
+                  : prefs.themeMode === "light"
+                    ? "rose-light"
+                    : "rose",
+              mode: prefs.themeMode,
+            });
+          }
+        }
+      },
+    );
+  });
+
   for (const width of [1440, 390]) {
     it.each(variants)(
       `keeps every painted frame at ${width}px for system=$system mode=$mode saved=$saved`,
@@ -144,6 +234,7 @@ suite.define(() => {
                   kind: "direct",
                   label: "Second conversation",
                   updatedAt: 1,
+                  owner: { actor: { type: "human", id: profileId, label: "Theme Reader" } },
                 },
               ],
               deferredMethods: saved ? ["users.prefs.get"] : [],
@@ -239,7 +330,9 @@ suite.define(() => {
             await page.goBack();
             await page.locator(".agent-chat__composer-combobox textarea").waitFor();
             await assertThemeFrames(page, expectedAppearance);
-            const newThread = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
+            const newThread = page.locator(
+              "openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session",
+            );
             await page
               .locator(
                 `.sidebar-recent-session[data-session-key="${secondSessionKey}"] a.sidebar-recent-session__link`,

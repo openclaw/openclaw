@@ -315,7 +315,7 @@ function createHotJournal(journalPath: string) {
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
   it.each(["journal links", "journal mode", "control mode"] as const)(
-    "identifies unsafe %s through the failure report without changing recovery evidence",
+    "keeps unsafe %s details local and reports the code without changing recovery evidence",
     async (change) => {
       const f = await fixture();
       const control = resolvePackageActivationControl(f.anchor);
@@ -343,6 +343,7 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         `uid=${observed.uid}`,
         "expected owner-only mode",
         ...(change === "control mode" ? [] : ["nlink=1"]),
+        ...(change === "journal links" ? ["openclaw doctor --fix"] : []),
       ];
       const report = await prepareUpdateFailureReport(
         {
@@ -366,9 +367,12 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
         { env: {}, stateDir: root },
       );
       for (const text of expected) {
-        expect(fact.message).toContain(text);
-        expect(report.body).toContain(text);
+        expect(failure).toMatchObject({ message: expect.stringContaining(text) });
       }
+      expect(report.body).toContain(
+        "Failing check package-swap (package-recovery-permissions-unsafe)",
+      );
+      expect(report.body).not.toContain(fact.message);
       expect(fact.message!.length).toBeLessThanOrEqual(200);
       expect(report.body).not.toContain(root);
       expect(journalFiles(f.anchor)).toEqual(before);

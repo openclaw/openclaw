@@ -9,7 +9,10 @@ import {
   resolveConfiguredAgentId,
   tryResolveAgentOperationAgentId,
 } from "../../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../../channels/account-resolution.js";
+import {
+  describeChannelAccount,
+  resolveChannelAccount,
+} from "../../channels/account-resolution.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
@@ -172,9 +175,16 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     },
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
-    await params.beforePersistentEffect?.();
     const committed = await persistChannelPluginConfig({
       cfg: config,
+      setup: {
+        previousConfig: cfg,
+        beforePersistentEffect: params.beforePersistentEffect,
+        assertCurrent: () => {
+          writeSnapshot.writeOptions.assertConfigPathForWrite?.();
+          params.assertPersistentEffectCurrent?.();
+        },
+      },
       pluginInstalled: false,
       writeOptions: writeSnapshot.writeOptions,
       baseHash,
@@ -212,7 +222,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
           const account = (
             plugin ? await resolveChannelAccount({ plugin, cfg: nextConfig, accountId }) : undefined
           ) as { name?: string } | undefined;
-          const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
+          const snapshot = plugin
+            ? await describeChannelAccount({ plugin, account, cfg: nextConfig })
+            : undefined;
           const existingName = snapshot?.name ?? account?.name;
           const name = await prompter.text({
             message: `${channel} display name for account "${accountId}"`,

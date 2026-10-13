@@ -4,10 +4,8 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  appendSessionYieldContext,
-  composeSessionTranscriptWriteAssertion,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -40,6 +38,10 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { clearCodexBindingForClient } from "./session-binding.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
+import {
+  buildCodexMirrorDedupeIdentity,
+  buildCodexMirrorIdempotencyKey,
+} from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
@@ -57,7 +59,7 @@ export async function finalizeCodexAttempt(
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
 ): Promise<EmbeddedRunAttemptResult> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
   const { hookRunner } = context;
@@ -133,6 +135,16 @@ export async function finalizeCodexAttempt(
         ? turnRuntime.steeringQueueRef.current?.getAcceptedMessages()
         : undefined,
     });
+    const terminalAssistantSource = result.messagesSnapshot.find(
+      (message) => readMirrorIdentity(message) === `${activeTurnId}:assistant`,
+    );
+    const terminalSourceKey =
+      terminalAssistantSource?.role === "assistant"
+        ? buildCodexMirrorIdempotencyKey(
+            `codex-app-server:${resourceState.thread.threadId}`,
+            buildCodexMirrorDedupeIdentity(terminalAssistantSource),
+          )
+        : undefined;
     const projectedTerminal = attemptTerminal.project(result.terminal);
     // Transport loss aborts in-flight work mechanically, but its terminal outcome
     // must remain a failure unless the operator explicitly canceled the attempt.
@@ -295,9 +307,7 @@ export async function finalizeCodexAttempt(
       for (const message of [
         result.lastAssistant,
         result.currentAttemptAssistant,
-        result.messagesSnapshot.find(
-          (candidate) => readMirrorIdentity(candidate) === `${activeTurnId}:assistant`,
-        ),
+        terminalAssistantSource,
       ]) {
         if (message?.role === "assistant") {
           const providerRefusal = message.diagnostics?.some(
@@ -338,7 +348,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: composeSessionTranscriptWriteAssertion([], () => {
+        assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -351,7 +361,7 @@ export async function finalizeCodexAttempt(
           ) {
             throw new Error("Codex transcript terminal outcome changed before write");
           }
-        }),
+        }).assertLegacyCurrent,
         params,
         settlementWarning: warning,
         agentId: sessionAgentId,
@@ -614,8 +624,9 @@ export async function finalizeCodexAttempt(
       yieldDetected: toolState.yieldDetected,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
-    markTrajectoryEndRecorded();
+    resourceState.trajectoryEndRecorded = true;
     const terminalAssistantText = collectTerminalAssistantText(result);
+    const terminalAssistantItemId = assistantTranscriptIdempotencyKey ?? terminalSourceKey;
     if (
       terminalAssistantText &&
       (assistantTranscriptIdempotencyKey ||
@@ -627,11 +638,10 @@ export async function finalizeCodexAttempt(
         stream: "assistant",
         data: {
           text: terminalAssistantText,
-          // The receipt identifies the selected persisted occurrence, which can
-          // exclude candidates streamed before a native tool or sleep boundary.
-          ...(assistantTranscriptIdempotencyKey
+          // Source identity survives a receipt wait timeout without claiming durability.
+          ...(terminalAssistantItemId
             ? {
-                itemId: assistantTranscriptIdempotencyKey,
+                itemId: terminalAssistantItemId,
                 replace: true,
                 replaceable: true,
               }

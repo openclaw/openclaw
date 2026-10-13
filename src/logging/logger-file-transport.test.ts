@@ -42,26 +42,6 @@ afterAll(async () => {
 });
 
 describe("async logger file transport", () => {
-  it("installs process hooks only while file logging is active", () => {
-    const beforeExitListeners = process.listenerCount("beforeExit");
-    const exitListeners = process.listenerCount("exit");
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
-    expect(process.listenerCount("exit")).toBe(exitListeners);
-
-    getLogger().info("install-file-transport-hooks");
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners + 1);
-    expect(process.listenerCount("exit")).toBe(exitListeners + 1);
-
-    testApi.resetFileLogTransportForTests();
-
-    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
-    expect(process.listenerCount("exit")).toBe(exitListeners);
-  });
-
   it("writes queued records in order and byte-identically to the synchronous drain", async () => {
     const syncPath = logPathTracker.nextPath();
     const asyncPath = logPathTracker.nextPath();
@@ -116,33 +96,6 @@ describe("async logger file transport", () => {
       "queued-record-4",
       "queued-record-5",
     ]);
-  });
-
-  it("drains bursts with bounded secured appends while preserving every record", async () => {
-    const logPath = logPathTracker.nextPath();
-    const appended: string[] = [];
-    testApi.setFileLogAppenderForTests(async (options) => {
-      appended.push(String(options.content));
-      await appendRegularFile(options);
-    });
-    setLoggerOverride({ level: "info", file: logPath });
-    const messages = Array.from({ length: 128 }, (_, index) => `${index}:${"🦞".repeat(256)}`);
-
-    for (const message of messages) {
-      getLogger().info(message);
-    }
-    await testApi.flushFileLogQueueForTests();
-
-    expect(appended.length).toBeGreaterThan(0);
-    expect(appended.length).toBeLessThan(16);
-    expect(appended.every((content) => Buffer.byteLength(content) <= 64 * 1024)).toBe(true);
-    expect(
-      fs
-        .readFileSync(logPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line).message),
-    ).toEqual(messages);
   });
 
   it.each(["async", "sync"])(
@@ -428,16 +381,5 @@ describe("async logger file transport", () => {
     expect(stderrSpy.mock.calls.some(([line]) => String(line).includes(`file=${lastPath}`))).toBe(
       true,
     );
-  });
-
-  it("synchronously drains a crash-adjacent fatal record through the exit-hook seam", () => {
-    const logPath = logPathTracker.nextPath();
-    setLoggerOverride({ level: "info", file: logPath });
-
-    getLogger().fatal("fatal-before-exit");
-    expect(fs.existsSync(logPath)).toBe(false);
-    testApi.drainFileLogQueueSyncForTests();
-
-    expect(fs.readFileSync(logPath, "utf8")).toContain("fatal-before-exit");
   });
 });

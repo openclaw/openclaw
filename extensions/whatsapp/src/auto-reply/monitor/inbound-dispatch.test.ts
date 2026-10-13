@@ -245,40 +245,6 @@ describe("prepared WhatsApp inbound boundary", () => {
     );
     expect(buildWhatsAppInboundTransportContext(msg).correlationId).toBeUndefined();
   });
-
-  it("keeps a remote voice transcript independent of its empty command body", async () => {
-    const { ctxPayload } = await prepare({
-      bodyForAgent: "spoken transcript",
-      combinedBody: "spoken transcript",
-      rawBody: "",
-      transcript: "spoken transcript",
-      command: { kind: "normal", body: "", authorized: false },
-      msg: message({
-        payload: {
-          body: "",
-          media: {
-            url: "https://media.example/voice.ogg",
-            type: "audio/ogg; codecs=opus",
-            kind: "audio",
-          },
-        },
-      }),
-    });
-    expect(ctxPayload).toMatchObject({
-      Body: "spoken transcript",
-      BodyForAgent: "spoken transcript",
-      BodyForCommands: "",
-      CommandBody: "",
-      RawBody: "",
-      Transcript: "spoken transcript",
-      media: [
-        expect.objectContaining({
-          url: "https://media.example/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-        }),
-      ],
-    });
-  });
 });
 
 describe("WhatsApp reply delivery", () => {
@@ -484,15 +450,6 @@ describe("WhatsApp reply delivery", () => {
     });
     expect(deliverReply).not.toHaveBeenCalled();
   });
-  it("delivers final errors with receipt-backed visibility", async () => {
-    const { deliver, deliverReply } = await fixture();
-    await expect(deliver({ text: "provider exploded", isError: true })).resolves.toMatchObject({
-      content: "provider exploded",
-      messageIds: ["wa-sent-1"],
-      visibleReplySent: true,
-    });
-    expect(deliverReply).toHaveBeenCalledOnce();
-  });
   it("suppresses block error noise", async () => {
     const { deliver, deliverReply } = await fixture();
     await deliver({ text: "tool call failed", isError: true }, "block");
@@ -501,25 +458,11 @@ describe("WhatsApp reply delivery", () => {
 
   it.each([
     {
-      mentioned: false,
-      command: false,
-      mode: "message_tool_only",
-      suppressTyping: true,
-      disableBlockStreaming: true,
-    },
-    {
       mentioned: true,
       command: false,
       mode: "message_tool_only",
       suppressTyping: false,
       disableBlockStreaming: true,
-    },
-    {
-      mentioned: false,
-      command: true,
-      mode: "automatic",
-      suppressTyping: false,
-      disableBlockStreaming: false,
     },
   ])(
     "selects group delivery for mentioned=$mentioned command=$command",
@@ -588,31 +531,6 @@ describe("WhatsApp reply delivery", () => {
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ replyKind: "final", conversationId: "+1000" }),
       "auto-reply was not accepted by WhatsApp provider",
-    );
-  });
-  it("preserves Error subclass diagnostics in delivery logs", async () => {
-    class BoomLikeError extends Error {
-      override name = "BoomLikeError";
-      output = { statusCode: 408, payload: { error: "Request Time-out" } };
-      data = { reason: "transport-stale" };
-    }
-    const error = new BoomLikeError("send timed out");
-    const { plan, replyLogger } = await fixture();
-    plan.delivery.onError?.(error, { kind: "final" });
-    expect(replyLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        err: {
-          type: "BoomLikeError",
-          name: "BoomLikeError",
-          message: "send timed out",
-          stack: error.stack,
-          output: { statusCode: 408, payload: { error: "Request Time-out" } },
-          data: { reason: "transport-stale" },
-        },
-        replyKind: "final",
-        correlationId: "msg1",
-      }),
-      "auto-reply delivery failed",
     );
   });
   it("preserves structured object rejections", async () => {

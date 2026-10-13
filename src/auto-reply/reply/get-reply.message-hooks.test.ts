@@ -757,22 +757,15 @@ describe("getReplyFromConfig media staging", () => {
     },
   );
 
-  it.each([
-    { name: "ordinary session cwd", kind: "session", destination: "session-workspace" },
-    { name: "inherited subagent workspace", kind: "spawned", destination: "inherited-workspace" },
-  ] as const)("stages inbound media in the $name", async ({ kind, destination }) => {
+  it("stages inbound media in the ordinary session cwd", async () => {
     await withOpenClawTestState(
       { label: "reply-media-workspace", env: { OPENCLAW_TEST_FAST: undefined } },
       async (state) => {
         const configuredWorkspace = state.path("configured-workspace");
         const sessionCwd = state.path("session-workspace");
-        const inheritedWorkspace = state.path("inherited-workspace");
-        const sessionKey =
-          kind === "spawned"
-            ? "agent:main:subagent:upload-workspace"
-            : "agent:main:upload-workspace";
+        const sessionKey = "agent:main:upload-workspace";
         await Promise.all(
-          [configuredWorkspace, sessionCwd, inheritedWorkspace].map((directory) =>
+          [configuredWorkspace, sessionCwd].map((directory) =>
             fs.mkdir(directory, { recursive: true }),
           ),
         );
@@ -780,12 +773,6 @@ describe("getReplyFromConfig media staging", () => {
           sessionId: "session-media-workspace",
           updatedAt: 1,
           spawnedCwd: sessionCwd,
-          ...(kind === "spawned"
-            ? {
-                spawnedBy: "agent:main:main",
-                spawnedWorkspaceDir: inheritedWorkspace,
-              }
-            : {}),
         };
         const ctx = buildGetReplyCtx({
           Provider: "webchat",
@@ -804,7 +791,7 @@ describe("getReplyFromConfig media staging", () => {
         );
 
         expect(stageMedia).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ workspaceDir: state.path(destination) }),
+          expect.objectContaining({ workspaceDir: sessionCwd }),
         );
         expect(runReply).toHaveBeenCalledOnce();
       },

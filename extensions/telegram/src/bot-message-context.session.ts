@@ -9,27 +9,17 @@ import {
   toLocationContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type {
-  OpenClawConfig,
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { NormalizedAllowFrom } from "./bot-access.js";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type { resolveTelegramInboundBody } from "./bot-message-context.body.js";
+import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
   TelegramMediaRef,
-  TelegramMessageContextOptions,
   TelegramMessageContextSessionRuntimeOverrides,
-  TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -43,10 +33,8 @@ import {
   resolveTelegramPrimaryMedia,
   type TelegramMediaKind,
   type TelegramReplyTarget,
-  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import {
   resolveTelegramDirectToolPolicy,
@@ -79,7 +67,7 @@ type TelegramMessageContextSessionRuntime =
 
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
-  "readAmbientTranscriptWatermark",
+  "readAmbientTranscriptWatermarkAsync",
   "readSessionUpdatedAtAsync",
   "recordInboundSession",
   "resolveAmbientTranscriptWatermarkKey",
@@ -96,7 +84,7 @@ function hasCompleteSessionRuntime(
   );
 }
 
-async function loadTelegramMessageContextSessionRuntime(
+export async function loadTelegramMessageContextSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
 ): Promise<TelegramMessageContextSessionRuntime> {
   if (hasCompleteSessionRuntime(runtime)) {
@@ -106,17 +94,6 @@ async function loadTelegramMessageContextSessionRuntime(
     ...(await import("./bot-message-context.session.runtime.js")),
     ...runtime,
   };
-}
-
-export async function resolveTelegramMessageContextStorePath(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
-}): Promise<string> {
-  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
-  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
 }
 
 function replyTargetToChainEntry(
@@ -151,17 +128,6 @@ function replyTargetToChainEntry(
       ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
       : {}),
   };
-}
-
-function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReplyChainEntry {
-  const {
-    forwardedFrom: _forwardedFrom,
-    forwardedFromId: _forwardedFromId,
-    forwardedFromUsername: _forwardedFromUsername,
-    forwardedDate: _forwardedDate,
-    ...withoutForwarded
-  } = entry;
-  return withoutForwarded;
 }
 
 function formatTelegramForwardedMessageBody(params: {
@@ -199,21 +165,17 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
-const TELEGRAM_MEDIA_KINDS = new Set<TelegramMediaKind>([
+const TELEGRAM_MEDIA_KINDS: TelegramMediaKind[] = [
   "audio",
   "document",
   "image",
   "sticker",
   "video",
-]);
-
-function isTelegramMediaKind(value: string): value is TelegramMediaKind {
-  return TELEGRAM_MEDIA_KINDS.has(value as TelegramMediaKind);
-}
+];
 
 function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   const mediaType = entry.mediaType;
-  const nativeKind = mediaType && isTelegramMediaKind(mediaType) ? mediaType : undefined;
+  const nativeKind = TELEGRAM_MEDIA_KINDS.find((kind) => kind === mediaType);
   const kind = entry.mediaKind || nativeKind;
   return {
     ...(kind ? { kind } : {}),
@@ -221,35 +183,9 @@ function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   };
 }
 
-export async function buildTelegramInboundContextPayload(params: {
-  cfg: OpenClawConfig;
-  primaryCtx: TelegramContext;
-  msg: TelegramContext["message"];
-  allMedia: TelegramMediaRef[];
-  replyMedia: TelegramMediaRef[];
-  replyChain: TelegramReplyChainEntry[];
-  promptContext: TelegramPromptContextEntry[];
-  isGroup: boolean;
-  isForum: boolean;
-  chatId: number | string;
-  senderId: string;
-  senderUsername: string;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
-  threadSpec: TelegramThreadSpec;
-  route: ResolvedAgentRoute;
-  bodyResult: NonNullable<Awaited<ReturnType<typeof resolveTelegramInboundBody>>>;
-  historyLimit: number;
-  dmHistoryLimit: number;
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-  groupRequireMention: boolean;
-  options?: TelegramMessageContextOptions;
-  dmAllowFrom?: Array<string | number>;
-  effectiveGroupAllow?: NormalizedAllowFrom;
-  topicName?: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
-}): Promise<{
+export async function buildTelegramInboundContextPayload(
+  params: BuildTelegramInboundContextPayloadParams,
+): Promise<{
   ctxPayload: TelegramInboundContextPayload;
   skillFilter: string[] | undefined;
   turn: {
@@ -410,7 +346,13 @@ export async function buildTelegramInboundContextPayload(params: {
     const includeForwarded =
       visibleEntry.forwardedFrom &&
       shouldIncludeGroupSupplementalContext("forwarded", visibleEntry.forwardedFromId);
-    return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
+    if (!includeForwarded) {
+      delete visibleEntry.forwardedFrom;
+      delete visibleEntry.forwardedFromId;
+      delete visibleEntry.forwardedFromUsername;
+      delete visibleEntry.forwardedDate;
+    }
+    return [visibleEntry];
   });
   const bufferedBodySegments = shouldRenderBufferedBody
     ? bufferedMessages.flatMap((bufferedMessage) => {
@@ -452,7 +394,7 @@ export async function buildTelegramInboundContextPayload(params: {
     allMedia.length > 1
       ? `${unavailableMedia.length} of ${allMedia.length} attachments could not be downloaded`
       : unavailableMedia[0]?.reason === "oversize"
-        ? `file exceeds ${unavailableMedia[0].limitMb}MB limit`
+        ? `file exceeds ${unavailableMedia[0].limit} limit`
         : "download failed";
   const appendMediaUnavailableNotice = (text: string) =>
     unavailableMedia.length > 0
@@ -467,10 +409,9 @@ export async function buildTelegramInboundContextPayload(params: {
           .map(formatReplyChainEntry)
           .join("\n")}\n[/Reply chain]`
       : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
-    ? (groupLabel ?? `group:${chatId}`)
+    ? buildGroupLabel(msg, chatId, resolvedThreadId)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
   const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
@@ -491,7 +432,7 @@ export async function buildTelegramInboundContextPayload(params: {
         })
       : undefined;
   const ambientTranscriptWatermark = ambientTranscriptWatermarkKey
-    ? sessionRuntime.readAmbientTranscriptWatermark({
+    ? await sessionRuntime.readAmbientTranscriptWatermarkAsync({
         storePath,
         sessionKey: route.sessionKey,
         key: ambientTranscriptWatermarkKey,
@@ -622,6 +563,7 @@ export async function buildTelegramInboundContextPayload(params: {
       isBot: msg.from?.is_bot,
     },
     conversation: {
+      avatar: params.conversationAvatar,
       kind: conversationKind,
       id: String(chatId),
       routePeer: {

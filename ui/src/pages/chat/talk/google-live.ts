@@ -257,7 +257,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       () => this.inputPump.stop(),
       () => inputMeter?.stop(),
       () => this.camera.release(),
-      () => this.stopOutput(),
+      () => this.outputQueue.stop(this.outputContext),
       () => {
         void inputContext?.close();
       },
@@ -349,7 +349,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const content = message.serverContent;
     if (content?.interrupted) {
       this.interruptedTurn = true;
-      this.stopOutput();
+      this.outputQueue.stop(this.outputContext);
     }
     if (content?.inputTranscription && !this.appendTranscript("user", content.inputTranscription)) {
       return;
@@ -476,7 +476,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         ctx: this.ctx,
         text,
         emitTalkEvent: this.emitTalkEvent,
-        onControlResult: (result) => this.stopOutputForSuppressedControl(result),
+        onControlResult: (result) => {
+          if (shouldInterruptRealtimeTalkControlResponse(result)) {
+            this.outputQueue.stop(this.outputContext);
+          }
+        },
         speakControlResult: (message) => this.sendControlSpeechMessage(message),
         suppressSpeechForModes: ["cancel"],
       });
@@ -496,7 +500,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (result !== "overflow") {
       return;
     }
-    this.stopOutput();
+    this.outputQueue.stop(this.outputContext);
     this.emitTalkEvent({
       type: "turn.cancelled",
       final: true,
@@ -509,10 +513,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     // Google Live exposes server-driven interruption but no client response-cancel
     // frame, so closing the session is the only deterministic provider-side stop.
     this.stop();
-  }
-
-  private stopOutput(): void {
-    this.outputQueue.stop(this.outputContext);
   }
 
   private sendToolResult(callId: string, name: string, result: unknown): void {
@@ -610,27 +610,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private sendControlSpeechMessage(message: string): void {
-    this.stopOutput();
-    if (!this.gemini31LiveModel) {
-      this.send({
-        clientContent: {
-          turns: [{ role: "user", parts: [{ text: message }] }],
-          turnComplete: true,
-        },
-      });
-      return;
-    }
-    this.send({
-      realtimeInput: {
-        text: message,
-      },
-    });
-  }
-
-  private stopOutputForSuppressedControl(result: unknown): void {
-    if (shouldInterruptRealtimeTalkControlResponse(result)) {
-      this.stopOutput();
-    }
+    this.outputQueue.stop(this.outputContext);
+    this.send(
+      this.gemini31LiveModel
+        ? { realtimeInput: { text: message } }
+        : {
+            clientContent: {
+              turns: [{ role: "user", parts: [{ text: message }] }],
+              turnComplete: true,
+            },
+          },
+    );
   }
 }
 

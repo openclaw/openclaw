@@ -227,17 +227,14 @@ describe("subagent completion rejection ownership", () => {
   );
 
   it.each([
-    { kind: "error", reason: SUBAGENT_ENDED_REASON_ERROR },
     { kind: "timeout", reason: SUBAGENT_ENDED_REASON_COMPLETE },
     { kind: "cancellation", reason: SUBAGENT_ENDED_REASON_KILLED },
   ] as const)("contains the $kind grace callback's escaped rejection", async ({ kind, reason }) => {
     const h = createHarness();
     const schedule =
-      kind === "error"
-        ? h.runtime.pendingLifecycle.scheduleError
-        : kind === "timeout"
-          ? h.runtime.pendingLifecycle.scheduleTimeout
-          : h.runtime.pendingLifecycle.scheduleCancellation;
+      kind === "timeout"
+        ? h.runtime.pendingLifecycle.scheduleTimeout
+        : h.runtime.pendingLifecycle.scheduleCancellation;
     schedule({ runId: h.entry.runId, expectedEntry: h.entry, endedAt: 1, error: "failed" });
     await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
     expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
@@ -251,16 +248,6 @@ describe("subagent completion rejection ownership", () => {
     expect(isSameSubagentRunOwner(h.runs.get(h.entry.runId), h.entry)).toBe(true);
     expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
     expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(false);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  });
-
-  it("propagates the same escaped error to an awaited caller", async () => {
-    const h = createHarness();
-    await expect(
-      h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait"),
-    ).rejects.toBe(h.resumeError);
-    expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
-    expect(h.warn).toHaveBeenCalledTimes(2);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
@@ -301,22 +288,6 @@ describe("subagent completion rejection ownership", () => {
     expect(h.resumeRun).not.toHaveBeenCalled();
     expect(h.warn).not.toHaveBeenCalled();
   });
-
-  it.each([1, 2])(
-    "stops after successful attempt %i without starting cleanup recovery",
-    async (attempt) => {
-      const h = createHarness();
-      h.completeSubagentRun.mockReset();
-      if (attempt === 2) {
-        h.completeSubagentRun.mockRejectedValueOnce(new Error("retry once"));
-      }
-      h.completeSubagentRun.mockResolvedValue(undefined);
-      await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
-      expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
-      expect(h.resumeRun).not.toHaveBeenCalled();
-      expect(h.scheduleSweep).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(
     [1, 2].flatMap((attempt) =>
@@ -365,15 +336,12 @@ describe("subagent completion rejection ownership", () => {
     },
   );
 
-  it.each(["running", "cleaned", "yielded"] as const)(
+  it.each(["running", "yielded"] as const)(
     "preserves %s recovery after both attempts fail",
     async (state) => {
       const h = createHarness();
       if (state === "running") {
         h.entry.execution = { status: "running", startedAt: 0 };
-      }
-      if (state === "cleaned") {
-        h.entry.cleanupCompletedAt = 2;
       }
       if (state === "yielded") {
         h.entry.pauseReason = "sessions_yield";

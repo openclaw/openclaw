@@ -16,6 +16,7 @@ import {
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { WORKSPACE_PACKAGE_ALIAS_ENTRIES } from "./sdk-alias-workspace.js";
 import {
   preparePluginLoaderAliases,
   isPluginSdkAliasSpecifier,
@@ -44,17 +45,9 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
   {
     packageName: "@openclaw/markdown-core",
     packageDir: "markdown-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["code-spans", "code-spans.ts"],
-      ["fences", "fences.ts"],
-      ["frontmatter", "frontmatter.ts"],
-      ["ir", "ir.ts"],
-      ["render", "render.ts"],
-      ["render-aware-chunking", "render-aware-chunking.ts"],
-      ["tables", "tables.ts"],
-      ["types", "types.ts"],
-    ],
+    subpaths: WORKSPACE_PACKAGE_ALIAS_ENTRIES.filter(
+      (entry) => entry.packageDir === "markdown-core",
+    ).map((entry) => [entry.subpath, entry.srcFile] as const),
   },
   {
     // Mirrors packages/ai/package.json exports; dist file names do not follow
@@ -129,33 +122,9 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
 const normalizePathForBoundary = (targetPath: string) =>
   pluginCacheRealpathSync(targetPath) ?? path.resolve(targetPath);
 
-function findNearestPackageRoot(modulePath: string): string {
-  const normalizedModulePath = path.resolve(modulePath);
-  const roots = getPluginCache().sdk.native.nearestPackageRoots;
-  const cached = roots.get(normalizedModulePath);
-  if (cached) {
-    return cached;
-  }
-  let cursor = path.dirname(normalizedModulePath);
-  for (let i = 0; i < 12; i += 1) {
-    if (pluginCacheExistsSync(path.join(cursor, "package.json"))) {
-      roots.set(normalizedModulePath, cursor);
-      return cursor;
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    cursor = parent;
-  }
-  const fallback = path.dirname(normalizedModulePath);
-  roots.set(normalizedModulePath, fallback);
-  return fallback;
-}
-
 function findBundledPluginRoot(modulePath: string): string | undefined {
   const resolvedModulePath = normalizePathForBoundary(modulePath);
-  const packageRoot = normalizePathForBoundary(resolveLoaderPackageRootFromModulePath(modulePath));
+  const packageRoot = normalizePathForBoundary(findPackageRoot(modulePath, "host"));
   for (const relativeRoot of ["extensions", "dist/extensions", "dist-runtime/extensions"]) {
     const bundledRoot = path.join(packageRoot, relativeRoot);
     if (!isPathStrictlyInside(bundledRoot, resolvedModulePath)) {
@@ -170,37 +139,44 @@ function findBundledPluginRoot(modulePath: string): string | undefined {
   return undefined;
 }
 
-function resolveLoaderPackageRootFromModulePath(modulePath: string): string {
+function isNativeHostPackage(packageRoot: string): boolean {
+  const facts = getPluginSdkHostFacts(getPluginCache().sdk, packageRoot);
+  if (facts.nativePackage === undefined) {
+    try {
+      // This native host probe historically follows package.json symlinks.
+      // Keep that read contract distinct from checked SDK manifest reads.
+      const parsed: unknown = JSON.parse(
+        fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+      );
+      facts.nativePackage = isRecord(parsed)
+        ? {
+            ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+            hasOpenClawBin: isRecord(parsed.bin) && typeof parsed.bin.openclaw === "string",
+          }
+        : null;
+    } catch {
+      facts.nativePackage = null;
+    }
+  }
+  return facts.nativePackage?.name === "openclaw" || facts.nativePackage?.hasOpenClawBin === true;
+}
+
+function findPackageRoot(modulePath: string, kind: "nearest" | "host" = "nearest"): string {
   const normalizedModulePath = path.resolve(modulePath);
-  const roots = getPluginCache().sdk.native.loaderPackageRoots;
+  const native = getPluginCache().sdk.native;
+  const roots = kind === "host" ? native.loaderPackageRoots : native.nearestPackageRoots;
   const cached = roots.get(normalizedModulePath);
   if (cached) {
     return cached;
   }
   let cursor = path.dirname(normalizedModulePath);
-  for (let i = 0; i < 12; i += 1) {
-    const packageJsonPath = path.join(cursor, "package.json");
-    if (pluginCacheExistsSync(packageJsonPath)) {
-      const facts = getPluginSdkHostFacts(getPluginCache().sdk, cursor);
-      if (facts.nativePackage === undefined) {
-        try {
-          // This native host probe historically follows package.json symlinks.
-          // Keep that read contract distinct from checked SDK manifest reads.
-          const parsed: unknown = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-          facts.nativePackage = isRecord(parsed)
-            ? {
-                ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
-                hasOpenClawBin: isRecord(parsed.bin) && typeof parsed.bin.openclaw === "string",
-              }
-            : null;
-        } catch {
-          facts.nativePackage = null;
-        }
-      }
-      if (facts.nativePackage?.name === "openclaw" || facts.nativePackage?.hasOpenClawBin) {
-        roots.set(normalizedModulePath, cursor);
-        return cursor;
-      }
+  for (let depth = 0; depth < 12; depth += 1) {
+    if (
+      pluginCacheExistsSync(path.join(cursor, "package.json")) &&
+      (kind === "nearest" || isNativeHostPackage(cursor))
+    ) {
+      roots.set(normalizedModulePath, cursor);
+      return cursor;
     }
     const parent = path.dirname(cursor);
     if (parent === cursor) {
@@ -208,7 +184,8 @@ function resolveLoaderPackageRootFromModulePath(modulePath: string): string {
     }
     cursor = parent;
   }
-  const fallback = findNearestPackageRoot(modulePath);
+  const fallback =
+    kind === "host" ? findPackageRoot(modulePath) : path.dirname(normalizedModulePath);
   roots.set(normalizedModulePath, fallback);
   return fallback;
 }
@@ -220,9 +197,7 @@ function resolveInternalCorePackageHostRoot(modulePath: string): string {
   if (cached) {
     return cached;
   }
-  const packageRoot = normalizePathForBoundary(
-    resolveLoaderPackageRootFromModulePath(normalizedModulePath),
-  );
+  const packageRoot = normalizePathForBoundary(findPackageRoot(normalizedModulePath, "host"));
   internalCorePackageHostRoots.set(normalizedModulePath, packageRoot);
   return packageRoot;
 }
@@ -234,7 +209,7 @@ function resolveAllowedParentRoot(modulePath: string): string {
   if (cached) {
     return cached;
   }
-  const root = findBundledPluginRoot(modulePath) ?? findNearestPackageRoot(modulePath);
+  const root = findBundledPluginRoot(modulePath) ?? findPackageRoot(modulePath);
   roots.set(key, root);
   return root;
 }

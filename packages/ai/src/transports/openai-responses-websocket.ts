@@ -235,8 +235,7 @@ function acquireWebSocket(
   },
   connection: PreparedWebSocketConnection,
 ): WebSocketLease {
-  const useCache = params.mode !== "websocket" && Boolean(params.sessionId);
-  if (!useCache || !params.sessionId) {
+  if (params.mode === "websocket" || !params.sessionId) {
     return createTransientWebSocketLease(connection);
   }
 

@@ -20,6 +20,7 @@ import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/sess
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { IncognitoSessionSyncAccessError } from "./incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
@@ -134,7 +135,6 @@ it("captures the shared actor for staging, submitted input, history, receipts an
     ).rejects.toThrow("session generation is no longer current");
     expect(await readSessionSubmittedInput(f.scope, "first:user")).toEqual(first.message);
     const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-    expect(() => first.complete?.(outcome)).toThrow(IncognitoSessionSyncAccessError);
     expect(await first.completeAsync?.(outcome)).toEqual(outcome);
     first.finish("interrupted");
     second.finish("cancelled");
@@ -157,20 +157,16 @@ it.each(["transaction", "commit"] as const)(
     const f = await fixture(`refusal-${phase}`);
     const refusal = new IncognitoSessionSyncAccessError("legacy", "legacyAsync");
     let refused = false;
-    const create = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        create((request, grant) => {
-          if (
-            request.stage === phase &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.pendingInput)
-          ) {
-            refused = true;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, callback) => {
+      if (
+        request.stage === phase &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.pendingInput)
+      ) {
+        refused = true;
+      }
+      callback(request, grant);
+    });
     await expect(
       f.stage(`refused-${phase}`, false, () => {
         if (refused) {

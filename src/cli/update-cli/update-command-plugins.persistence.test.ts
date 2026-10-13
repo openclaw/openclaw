@@ -5,7 +5,7 @@ import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import {
@@ -40,6 +40,33 @@ async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
 }
 
 describe("updater plugin commit cancellation", () => {
+  it("prints each skipped plugin and its reason after the update counts", async () => {
+    await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      const message = "Package is managed outside OpenClaw.";
+      mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
+        config: candidate,
+        configChanges: [],
+        installedPluginIdRecovery: new Map(),
+        changes: [],
+        warnings: [],
+        errored: false,
+        smokeFailures: [],
+        installRecords: {},
+        outcomes: [{ pluginId: "cursor-cli", status: "skipped", message }],
+      }));
+      const log = vi.fn();
+      await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: {},
+        json: false,
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+      });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("1 skipped"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`cursor-cli: ${message}`));
+    });
+  });
+
   it("rolls back the tentative index after a config failure under a live owner", async () => {
     await withOpenClawTestState({ label: "updater-plugin-config-failed" }, async (state) => {
       const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
@@ -74,7 +101,9 @@ describe("updater plugin commit cancellation", () => {
       ).rejects.toBe(refusal);
       expect(controller.signal.aborted).toBe(false);
       expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({});
     });
   });
 });
@@ -113,7 +142,9 @@ describe("updater explicit reference intent", () => {
           expect(written.browser.executablePath).toBe(
             explicit ? "${BROWSER_BIN}" : "$${BROWSER_BIN}",
           );
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+          expect(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          ).toEqual({});
         },
       );
     },

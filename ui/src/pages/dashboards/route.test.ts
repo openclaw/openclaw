@@ -66,7 +66,7 @@ describe("dashboards route", () => {
 
       expect(refreshList).toHaveBeenCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        rowMode: "compact",
+        rowMode: "dashboard",
         source: "dashboard",
         excludeDock: true,
         hasBoard: true,
@@ -74,7 +74,7 @@ describe("dashboards route", () => {
       });
       expect(listSnapshot).toHaveBeenLastCalledWith({
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        rowMode: "compact",
+        rowMode: "dashboard",
         source: "dashboard",
         excludeDock: true,
         hasBoard: true,
