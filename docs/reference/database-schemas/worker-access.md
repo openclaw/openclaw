@@ -4345,9 +4345,13 @@ file caches only after acknowledged commit. Doctor relocation retains its native
 transaction. Schemas, retention, durability, and update behavior are unchanged.
 
 Session branch summaries retain compact counts, headlines, and their append
-certificate in the host, keyed by physical database identity and the transcript
-rewrite/append watermark. Read workers validate that snapshot before extending
-it, so worker retirement does not discard the cache. Workers also adopt the host's
+certificate in the host, keyed by database path and session key. The database
+owner's write receipt invalidates this cache without main-thread SQLite reads.
+The maintenance worker selects the current session and reads the transcript
+watermark in the same snapshot as the branch graph. It extends prior summaries
+only for the same physical database and transcript, so worker retirement does not
+discard the cache. A concurrent write may finish while a snapshot is being
+delivered; its receipt makes the next lookup refresh. Workers also adopt the host's
 live database validation receipt before canonical admission, preserving pending-row
 checks without repeating whole-store validation. Branch reads share the existing
 maintenance reader's prewarming, thirty-minute idle window, database custody, and

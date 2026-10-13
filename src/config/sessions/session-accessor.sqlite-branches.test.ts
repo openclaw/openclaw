@@ -5,12 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
@@ -23,22 +21,18 @@ import {
   replaceSessionEntry,
   rewindSessionToMessage,
   switchSessionBranch,
-  updateSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   invalidateSessionBranchCache,
-  readSessionBranchSummariesInWorker,
   type SessionBranchSummaryReadRequest,
 } from "./session-accessor.sqlite-branches.js";
-import { replaceSessionEntryInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
+import { readSessionBranchSummariesInWorker } from "./session-accessor.sqlite-branches.worker.js";
 import {
   agentId,
   sessionKey,
-  sourceExpectedState,
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
-import * as transcriptWatermark from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import * as coldStorage from "./session-cold-storage.js";
@@ -102,10 +96,8 @@ function trackBranchSummaryReads(): () => number {
   return () => reads;
 }
 
-function observeNextBranchWorker(options: { holdResponse?: boolean } = {}) {
+function observeNextBranchWorker() {
   const dispatched = createDeferredCore<Worker>();
-  const response = createDeferredCore<unknown>();
-  let releaseResponse = () => {};
   const postMessage: unknown = Object.getOwnPropertyDescriptor(
     Worker.prototype,
     "postMessage",
@@ -129,28 +121,6 @@ function observeNextBranchWorker(options: { holdResponse?: boolean } = {}) {
       "taskId" in message
     ) {
       spy.mockRestore();
-      if (options.holdResponse) {
-        const emit = this.emit.bind(this);
-        const emitSpy = vi.spyOn(this, "emit").mockImplementation((event, ...values: unknown[]) => {
-          const value = values[0];
-          if (
-            event === "message" &&
-            value &&
-            typeof value === "object" &&
-            "taskId" in value &&
-            value.taskId === message.taskId
-          ) {
-            releaseResponse = () => {
-              releaseResponse = () => {};
-              emitSpy.mockRestore();
-              emit(event, ...values);
-            };
-            response.resolve(value);
-            return true;
-          }
-          return emit(event, ...values);
-        });
-      }
       Reflect.apply(postMessage, this, args);
       dispatched.resolve(this);
       return;
@@ -159,8 +129,6 @@ function observeNextBranchWorker(options: { holdResponse?: boolean } = {}) {
   });
   return {
     dispatched: dispatched.promise,
-    response: response.promise,
-    releaseResponse: () => releaseResponse(),
   };
 }
 
@@ -184,41 +152,12 @@ describe("SQLite session branches", () => {
     expect(restore).not.toHaveBeenCalled();
   });
 
-  it("rejects cached summaries when the lifecycle changes during cache validation", async () => {
-    const { env, scope } = await createSession();
-    await expect(listSessionBranches(scope)).resolves.toMatchObject({ status: "ok" });
-    const readWatermark = transcriptWatermark.readSessionTranscriptHotWatermark;
-    vi.spyOn(transcriptWatermark, "readSessionTranscriptHotWatermark").mockImplementationOnce(
-      (database, sessionId) => {
-        const watermark = readWatermark(database, sessionId);
-        // Model a peer commit between selecting the session and delivering its cached summaries.
-        runOpenClawAgentWriteTransaction(
-          (writer) =>
-            replaceSessionEntryInDatabase(writer, scope.sessionKey, {
-              sessionId: scope.sessionId,
-              updatedAt: 1,
-              lifecycleRevision: "replacement-lifecycle",
-            }),
-          { agentId, env },
-        );
-        return watermark;
-      },
-    );
-    await expect(listSessionBranches(scope)).resolves.toEqual({ status: "failed" });
-  });
-
   it("carries summaries into fresh readers and invalidates changed transcripts", async () => {
     const { env, scope } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
-    const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof databaseIdentity !== "string") {
-      throw new Error("expected a persisted branch fixture");
-    }
     const request: SessionBranchSummaryReadRequest = {
       database: { agentId, path: database.path },
-      databaseIdentity,
       sessionKey,
-      ...sourceExpectedState,
     };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
     const counters: Array<{ loads: number; watermarks: number }> = [];
@@ -333,30 +272,15 @@ describe("SQLite session branches", () => {
       ]),
     });
     expect(rawLoads()).toBe(3);
-    expect(
-      readSessionBranchSummariesInWorker({ ...request, lifecycleRevision: "stale-lifecycle" }),
-    ).toEqual({ status: "failed" });
-    expect(
-      readSessionBranchSummariesInWorker({ ...request, databaseIdentity: "replaced-file" }),
-    ).toEqual({ status: "failed" });
-    expect(rawLoads()).toBe(3);
   });
 
   it("refuses cached worker summaries in cold storage and reuses them after restoration", async () => {
     const storePath = path.join(tempDirs.make("openclaw-branch-cold-"), "agent.sqlite");
     const fixture = await createSessionColdStorageFixture(storePath);
     await replaceSessionEntry(fixture.scope, { sessionId: historicalId, updatedAt: 1 });
-    const database = openOpenClawAgentDatabase(fixture.options);
-    const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof databaseIdentity !== "string") {
-      throw new Error("expected a persisted cold branch fixture");
-    }
     const request = {
       database: { agentId, path: storePath },
-      databaseIdentity,
       sessionKey: fixture.scope.sessionKey,
-      sessionId: historicalId,
-      lifecycleRevision: loadSessionEntry(fixture.scope)?.lifecycleRevision,
     };
     const first = readSessionBranchSummariesInWorker(request);
     expect(first).toMatchObject({
@@ -434,55 +358,6 @@ describe("SQLite session branches", () => {
     });
   });
 
-  it("refuses a completed branch snapshot when its session lifecycle changes before delivery", async () => {
-    const { scope } = await createSession();
-    const observed = observeNextBranchWorker({ holdResponse: true });
-    const reading = Promise.all(Array.from({ length: 3 }, () => listSessionBranches(scope)));
-    try {
-      await expect(observed.response).resolves.toMatchObject({
-        status: "ok",
-        value: {
-          ok: true,
-          value: {
-            kind: "branch-summaries",
-            result: {
-              status: "ok",
-              branches: expect.arrayContaining([
-                expect.objectContaining({
-                  active: true,
-                  leafEntryId: "assistant-2",
-                  headline: "second answer",
-                  messageCount: 4,
-                }),
-              ]),
-            },
-          },
-        },
-      });
-      // Only the session lifecycle changes; transcript rows and their watermark remain identical.
-      await updateSessionEntry(scope, () => ({ lifecycleRevision: "replacement-lifecycle" }));
-      const next = listSessionBranches(scope);
-      observed.releaseResponse();
-      await expect(reading).resolves.toEqual(
-        Array.from({ length: 3 }, () => ({ status: "failed" })),
-      );
-      await expect(next).resolves.toMatchObject({
-        status: "ok",
-        branches: expect.arrayContaining([
-          expect.objectContaining({
-            active: true,
-            leafEntryId: "assistant-2",
-            headline: "second answer",
-            messageCount: 4,
-          }),
-        ]),
-      });
-    } finally {
-      observed.releaseResponse();
-      await reading;
-    }
-  });
-
   it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
     const { env } = await createSession();
     const scopes = [];
@@ -537,12 +412,25 @@ describe("SQLite session branches", () => {
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
   });
 
-  it("recomputes branch summaries after an append advances the watermark", async () => {
+  it("refreshes appended and replaced sessions without main-thread SQL", async () => {
     const { env, scope } = await createSession();
+    const replacement = await createSiblingSession({
+      env,
+      sessionId: "replacement-source",
+      sessionKey: "agent:main:replacement-source",
+      headline: "replacement conversation",
+    });
+    await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
+    const database = openOpenClawAgentDatabase({ agentId, env });
+    const tracked = trackSqliteStatementExecutions(database.db, ["statements"], () => "statements");
+    diagnosticCleanups.push(tracked.restore);
+    const nativeOpen = vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase");
     const branchReads = trackBranchSummaryReads();
 
     const before = await listSessionBranches({ agentId, env, sessionKey });
     expect(branchReads()).toBe(1);
+    expect(tracked.counts.statements).toBe(0);
+    expect(nativeOpen).not.toHaveBeenCalled();
     await appendTranscriptMessage(scope, {
       eventId: "assistant-3",
       message: { role: "assistant", content: "third answer" },
@@ -550,7 +438,12 @@ describe("SQLite session branches", () => {
       parentId: "assistant-2",
     });
 
+    await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
+    const statementsAfterAppend = tracked.counts.statements;
+    nativeOpen.mockClear();
     const after = await listSessionBranches({ agentId, env, sessionKey });
+    expect(tracked.counts.statements).toBe(statementsAfterAppend);
+    expect(nativeOpen).not.toHaveBeenCalled();
     expect(branchReads()).toBe(2);
     expect(after).not.toEqual(before);
     expect(after.status).toBe("ok");
@@ -561,6 +454,16 @@ describe("SQLite session branches", () => {
       leafEntryId: "assistant-3",
       headline: "third answer",
     });
+
+    await replaceSessionEntry(scope, { sessionId: replacement.sessionId, updatedAt: 2 });
+    const statementsAfterReplacement = tracked.counts.statements;
+    nativeOpen.mockClear();
+    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
+      status: "ok",
+      branches: [{ headline: "replacement conversation", leafEntryId: "replacement-source-user" }],
+    });
+    expect(tracked.counts.statements).toBe(statementsAfterReplacement);
+    expect(nativeOpen).not.toHaveBeenCalled();
   });
 
   it.each(["rewind", "switch", "fork"] as const)(
