@@ -15,6 +15,7 @@ import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "../infra/sqlite-snapshot-source.js";
+import { isUpdateRehearsalPrivateDatabase } from "../infra/update-rehearsal-paths.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -194,6 +195,7 @@ export async function withDisposableOpenClawStateReads<T>(
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   return (
     isArtifactPreservingStateRead() &&
+    !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
     !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
   );
 }
@@ -282,6 +284,10 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
       value: withOpenClawStateReadOnlyLocation(operation, pathname, snapshot.location),
     };
   }
+  if (isArtifactPreservingStateRead() && isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
+    return { reused: false };
+  }
+
   return withCachedOpenClawStateDatabaseReadOnly(
     operation,
     pathname,

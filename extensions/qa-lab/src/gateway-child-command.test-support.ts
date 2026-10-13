@@ -35,6 +35,17 @@ if (fixtureVersion) {
   }
 }
 const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+if (args[0] === "models" || (args[0] === "update" && !args.includes("--help"))) {
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const portProbe = net.createServer();
+  await new Promise((resolve, reject) => {
+    portProbe.once("error", reject);
+    portProbe.listen(config.gateway.port, "127.0.0.1", resolve);
+  });
+  await new Promise((resolve, reject) => {
+    portProbe.close((error) => error ? reject(error) : resolve());
+  });
+}
 if (args[0] === "models") {
   let stdin = "";
   process.stdin.setEncoding("utf8");
@@ -97,14 +108,6 @@ if (args[0] === "update") {
     process.exit(2);
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const portProbe = net.createServer();
-  await new Promise((resolve, reject) => {
-    portProbe.once("error", reject);
-    portProbe.listen(config.gateway.port, "127.0.0.1", resolve);
-  });
-  await new Promise((resolve, reject) => {
-    portProbe.close((error) => error ? reject(error) : resolve());
-  });
   record({ kind: "plugins", args, authDbPath, configPath, stateDir, configPort: config.gateway.port });
   if (fixtureVersion) config.meta = { lastTouchedVersion: fixtureVersion };
   delete config.plugins.entries["qa-lab"];
