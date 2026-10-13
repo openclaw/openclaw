@@ -85,7 +85,7 @@ async function readCronState({
   const pool = new WorkerTaskPool<CronReadOnlyRequest, CronReadOnlyResult>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
     workerOptions: { env: environment },
-    maxWorkers: 1,
+    workerClass: "singleton",
     sharedCompute: true,
   });
   const controller = new AbortController();

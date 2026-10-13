@@ -103,12 +103,15 @@ type ExactConfiguredProviderRefParts = {
   modelRaw: string;
 };
 
-function resolveManifestPluginsForModelIdNormalization(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  manifestPlugins?: ModelManifestPlugins;
-  allowManifestNormalization?: boolean;
-}): ModelManifestPlugins {
+function resolveManifestPluginsForModelIdNormalization(
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    manifestPlugins?: ModelManifestPlugins;
+    allowManifestNormalization?: boolean;
+  },
+  scanWithoutWorkspace = true,
+): ModelManifestPlugins {
   if (params.manifestPlugins !== undefined) {
     return params.manifestPlugins;
   }
@@ -118,7 +121,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
       config: params.cfg,
       env: process.env,
     });
-    if (currentManifestPlugins) {
+    if (currentManifestPlugins || !scanWithoutWorkspace) {
       return currentManifestPlugins;
     }
   }
@@ -162,10 +165,10 @@ function listConfiguredModelMaps(cfg: OpenClawConfig, agentId?: string) {
 export function listModelAliasCandidates(cfg: OpenClawConfig, agentId?: string) {
   return listConfiguredModelMaps(cfg, agentId).flatMap((models) =>
     Object.entries(models ?? {}).flatMap(([keyRaw, entryRaw]) => {
-      if (parseModelPolicyWildcardRef(keyRaw)) {
+      if (!entryRaw || typeof entryRaw !== "object" || !Object.hasOwn(entryRaw, "alias")) {
         return [];
       }
-      if (!entryRaw || typeof entryRaw !== "object" || !Object.hasOwn(entryRaw, "alias")) {
+      if (parseModelPolicyWildcardRef(keyRaw)) {
         return [];
       }
       const alias = normalizeOptionalString((entryRaw as { alias?: unknown }).alias) ?? "";
@@ -564,21 +567,18 @@ export function resolveModelRefFromString(
     ? undefined
     : params.aliasIndex;
   const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch = aliasIndex?.byAlias.get(aliasKey);
+  const aliasMatch =
+    aliasIndex?.byAlias.get(aliasKey) ??
+    (slash > 0
+      ? (aliasIndex?.byProviderAlias?.get(
+          providerAliasKey(model.slice(0, slash), params.raw.trim().slice(slash + 1)),
+        ) ??
+        aliasIndex?.byProviderAlias?.get(
+          providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
+        ))
+      : undefined);
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-  }
-  if (slash > 0) {
-    const providerAliasMatch =
-      aliasIndex?.byProviderAlias?.get(
-        providerAliasKey(model.slice(0, slash), params.raw.trim().slice(slash + 1)),
-      ) ??
-      aliasIndex?.byProviderAlias?.get(
-        providerAliasKey(model.slice(0, slash), model.slice(slash + 1)),
-      );
-    if (providerAliasMatch) {
-      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
-    }
   }
   const parsed = parseModelRefWithCompatAlias({
     ...params,
@@ -720,7 +720,7 @@ export function resolveConfiguredModelRef(
       let inferredProviderManifestPlugins = manifestPlugins;
       if (
         (!inferredProvider || inferredProvider !== "openai") &&
-        (hasConfiguredProviderRowsNeedingManifestLookup(params.cfg) ||
+        (hasConfiguredProviderModelRows(params.cfg, "non-openai") ||
           hasConfiguredModelRefsNeedingManifestLookup(
             params.cfg,
             params.defaultProvider,
@@ -1071,22 +1071,18 @@ export function resolveAllowedModelRefFromAliasIndex(
   return { ref: resolved.ref, key: status.key };
 }
 
-function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  return Object.values(providers).some((provider) => Array.isArray(provider?.models));
-}
-
-function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
+function hasConfiguredProviderModelRows(
+  cfg: OpenClawConfig,
+  scope: "all" | "non-openai" = "all",
+): boolean {
   const providers = cfg.models?.providers;
   if (!providers || typeof providers !== "object") {
     return false;
   }
   return Object.entries(providers).some(
     ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
+      Array.isArray(provider?.models) &&
+      (scope === "all" || normalizeProviderId(providerRaw) !== "openai"),
   );
 }
 
@@ -1123,18 +1119,7 @@ function resolveConfiguredModelManifestPlugins(params: {
   if (!hasConfiguredProviderModelRows(params.cfg)) {
     return undefined;
   }
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  if (!workspaceDir) {
-    return getCurrentPluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    });
-  }
-  return loadManifestMetadataSnapshot({
-    config: params.cfg,
-    env: process.env,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  });
+  return resolveManifestPluginsForModelIdNormalization(params, false);
 }
 
 /** Build catalog entries from configured provider model rows. */

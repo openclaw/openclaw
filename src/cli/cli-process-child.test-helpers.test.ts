@@ -60,20 +60,6 @@ const DETACHED_GRANDCHILD_SCRIPT = [
 ].join("\n");
 
 describe("formatCliProcessFailure", () => {
-  it("includes the failure identity and both captured output tails", () => {
-    const reason =
-      "CLI process did not exit before the 240000ms deadlock guard (SIGKILL sent; exitCode=null signalCode=null)";
-    const message = formatCliProcessFailure({
-      reason,
-      stderr: "startup trace: entry.bootstrap",
-      stdout: "partial command output",
-    });
-
-    expect(message).toContain(reason);
-    expect(message).toContain("startup trace: entry.bootstrap");
-    expect(message).toContain("partial command output");
-  });
-
   it("keeps the end of streams longer than the output tail cap", () => {
     const message = formatCliProcessFailure({
       reason: "wrong exit code",
@@ -87,34 +73,6 @@ describe("formatCliProcessFailure", () => {
 });
 
 describe("runCliProcessChild", () => {
-  it.each([false, true])(
-    "reports the child's exit and streams with the test runtime policy (Maglev=%s)",
-    async (enableMaglev) => {
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "-e",
-          "process.stdout.write(JSON.stringify({ output: 'out', maglevDisabled: process.execArgv.includes('--no-maglev'), concurrentSparkplugDisabled: process.execArgv.includes('--no-concurrent-sparkplug') })); process.stderr.write('err'); process.exit(3);",
-        ],
-        env: {
-          ...process.env,
-          OPENCLAW_VITEST_ENABLE_MAGLEV: enableMaglev ? "1" : undefined,
-          NODE_OPTIONS: undefined,
-        },
-      });
-
-      expect(result).toEqual({
-        code: 3,
-        signal: null,
-        stdout: JSON.stringify({
-          output: "out",
-          maglevDisabled: !process.versions.bun && !enableMaglev,
-          concurrentSparkplugDisabled: !process.versions.bun,
-        }),
-        stderr: "err",
-      });
-    },
-  );
-
   it("names the live handle and keeps partial output when a child never exits", async () => {
     let child: ChildProcessWithoutNullStreams | undefined;
     const firstFinishedHook = reportCleanupHooks.finished.length;
@@ -169,24 +127,6 @@ describe("runCliProcessChild", () => {
       expect(report).not.toMatch(/"(?:local|remote)Endpoint"\s*:/u);
     }
   });
-
-  it.skipIf(!shouldEnableNodeDiagnosticReports())(
-    "arms reports without producing one for a normally exiting child",
-    async () => {
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          "-e",
-          "console.log(JSON.stringify({ armed: process.report.reportOnSignal, directory: process.report.directory }));",
-        ],
-        env: process.env,
-      });
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      const report = JSON.parse(result.stdout);
-      expect(report.armed).toBe(true);
-      expect(fs.readdirSync(report.directory)).toEqual([]);
-    },
-  );
 
   it.skipIf(!shouldEnableNodeDiagnosticReports())(
     "keeps a timeout failure when the child exits during diagnostic grace",

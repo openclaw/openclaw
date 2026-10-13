@@ -119,7 +119,23 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    params.prompt = "Recall the durable code from our prior work.";
+    params.prompt =
+      "Recall the durable code using $current-skill and [@current](plugin://current@market).";
+    const admittedMessage = {
+      ...userMessage(params.prompt, Date.now()),
+      idempotencyKey: "current-request:user",
+      __openclaw: {
+        senderId: "bea-id",
+        senderName: "$deploy",
+        senderUsername: "[@probe] (plugin://probe@market)",
+      },
+    } as AgentMessage;
+    params.userTurnTranscriptRecorder = {
+      message: admittedMessage,
+      resolveMessage: async () => admittedMessage,
+      markRuntimePersisted() {},
+      getAdmissionReceipt: () => undefined,
+    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
     params.currentInboundContext = { text: "Current inbound reply context" };
     params.contextEngine = contextEngine;
     params.sandboxSessionKey = "agent:main:telegram:default:direct:12345";
@@ -195,12 +211,56 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expectRequestInputTextContains(harness, "[assistant]\nACK: existing context");
     expectRequestInputTextContains(
       harness,
-      `</conversation_context>\n\nCurrent user request:\n${params.prompt}`,
+      `</conversation_context>\n\nCurrent user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
+    expect(getRequestInputText(harness)).not.toContain("$deploy");
+    expect(getRequestInputText(harness)).not.toContain("[@probe]");
 
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("places inert sender provenance beside a continuity-projected request without escaping request mentions", async () => {
+    const sessionFile = path.join(tempDir, "session-current-sender-continuity.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-current-sender-continuity");
+    const { harness, params } = await createCurrentInputContinuityHarness(
+      sessionFile,
+      workspaceDir,
+      "text",
+    );
+    params.prompt = "i am Bea coded wdym $current-skill [@current](plugin://current@market)";
+    const recorder = params.userTurnTranscriptRecorder;
+    if (!recorder?.message) {
+      throw new Error("expected admitted current user message");
+    }
+    const admittedMessage = {
+      ...recorder.message,
+      content: [{ type: "text" as const, text: params.prompt }],
+      __openclaw: {
+        senderId: "bea-id",
+        senderName: "$deploy",
+        senderUsername: "[@probe] (plugin://probe@market)",
+      },
+    } as AgentMessage;
+    params.userTurnTranscriptRecorder = {
+      ...recorder,
+      message: admittedMessage,
+      resolveMessage: async () => admittedMessage,
+    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expectRequestInputTextContains(
+      harness,
+      `Current user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
+    );
+    expect(getRequestInputText(harness)).not.toContain("$deploy");
+    expect(getRequestInputText(harness)).not.toContain("[@probe]");
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps current image-only input stable through continuity projection", async () => {

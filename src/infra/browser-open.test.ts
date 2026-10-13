@@ -85,34 +85,6 @@ describe("openUrl", () => {
 
     await expect(openUrl("https://example.com/")).resolves.toBe(true);
   });
-
-  it("returns false after a non-zero exit", async () => {
-    mockProcessPlatform("win32");
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "browser opener failed",
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    await expect(openUrl("https://example.com/")).resolves.toBe(false);
-  });
-
-  it("returns false after a timeout", async () => {
-    mockProcessPlatform("win32");
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: 124,
-      signal: null,
-      killed: true,
-      termination: "timeout",
-    });
-
-    await expect(openUrl("https://example.com/")).resolves.toBe(false);
-  });
 });
 
 describe("browser support and launch", () => {

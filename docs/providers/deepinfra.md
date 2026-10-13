@@ -93,6 +93,16 @@ deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
 
+## Prompt caching
+
+For the native `https://api.deepinfra.com/v1/openai` endpoint, OpenClaw sends a
+stable `prompt_cache_key` for related requests to improve automatic prefix cache
+reuse. An explicit request cache key takes precedence over the session ID.
+Setting `cacheRetention: "none"` suppresses this routing hint; it does not disable
+DeepInfra's automatic cache. Custom endpoints retain their configured behavior.
+OpenClaw does not enable paid cache retention automatically. See
+[DeepInfra prompt caching](https://docs.deepinfra.com/chat/prompt-caching).
+
 ## Price estimates
 
 Chat discovery keeps model membership, order, tags, and limits from DeepInfra's

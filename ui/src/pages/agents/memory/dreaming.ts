@@ -236,31 +236,22 @@ function buildDreamDiaryActionSuccessMessage(
     case "doctor.memory.dedupeDreamDiary": {
       const removed = payload?.dedupedEntries ?? payload?.removedEntries ?? 0;
       const kept = payload?.keptEntries;
-      if (kept !== undefined) {
-        return t(
-          removed === 1
-            ? "dreaming.actions.dedupeRemovedOneAndKept"
-            : "dreaming.actions.dedupeRemovedManyAndKept",
-          { removed: String(removed), kept: String(kept) },
-        );
-      }
       return t(
-        removed === 1 ? "dreaming.actions.dedupeRemovedOne" : "dreaming.actions.dedupeRemovedMany",
-        { removed: String(removed) },
+        `dreaming.actions.dedupeRemoved${removed === 1 ? "One" : "Many"}${kept === undefined ? "" : "AndKept"}`,
+        { removed: String(removed), ...(kept === undefined ? {} : { kept: String(kept) }) },
       );
     }
     case "doctor.memory.repairDreamingArtifacts": {
-      const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
-      if (payload?.archivedSessionCorpus === true) {
-        actions.push(t("dreaming.actions.repairArchivedThreadCorpus"));
-      }
-      if (payload?.archivedSessionIngestion === true) {
-        actions.push(t("dreaming.actions.repairArchivedIngestionState"));
-      }
-      if (payload?.archivedDreamsDiary === true) {
-        actions.push(t("dreaming.actions.repairArchivedDreamDiary"));
-      }
+      const actions = (
+        [
+          [payload?.archivedSessionCorpus, "dreaming.actions.repairArchivedThreadCorpus"],
+          [payload?.archivedSessionIngestion, "dreaming.actions.repairArchivedIngestionState"],
+          [payload?.archivedDreamsDiary, "dreaming.actions.repairArchivedDreamDiary"],
+        ] as const
+      )
+        .filter(([archived]) => archived === true)
+        .map(([, label]) => t(label));
       if (actions.length === 0) {
         return t("dreaming.actions.repairNoChanges");
       }

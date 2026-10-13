@@ -15,8 +15,9 @@ import type { SessionChildLink } from "./session-utils-core.js";
 import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
+  projectSessionRowChildLinks,
 } from "./session-utils-projection.js";
-import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
+import { refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
 export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
@@ -121,26 +122,22 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
       if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
         return true;
       }
       switch (change.scope) {
-        case "config-presentation":
-          return true;
         case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          return true;
         case "worker-environments":
         case "worker-placements":
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.

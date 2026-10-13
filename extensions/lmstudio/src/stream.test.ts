@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
+import { LmstudioModelLoadError } from "./models.fetch.js";
 
 let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
 let defaultBaseUrl: string;
@@ -18,7 +19,8 @@ const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 
-vi.mock("./models.fetch.js", () => ({
+vi.mock("./models.fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models.fetch.js")>()),
   prepareLmstudioModelForInference: (params: unknown) =>
     prepareLmstudioModelForInferenceMock(params),
 }));
@@ -384,9 +386,7 @@ describe("lmstudio stream wrapper", () => {
       id: `lmstudio/${canonicalKey}@q4_k_m`,
     };
     prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
-      Object.assign(new Error("load failed"), {
-        resolvedModelKey: canonicalKey,
-      }),
+      new LmstudioModelLoadError(canonicalKey, undefined, new Error("load failed")),
     );
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream);

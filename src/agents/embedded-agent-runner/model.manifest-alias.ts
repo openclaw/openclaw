@@ -40,35 +40,6 @@ function resolveConfiguredModelCatalogProviderRoute(params: {
   };
 }
 
-function hasUnconditionalManifestModelCatalogSuppression(params: {
-  provider: string;
-  modelId?: string;
-  plugin: Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  const modelId = params.modelId?.trim();
-  if (!provider || !modelId) {
-    return false;
-  }
-  return planManifestModelCatalogSuppressions({
-    registry: { plugins: [params.plugin] },
-    providerFilter: provider,
-    modelFilter: modelId,
-  }).suppressions.some(
-    (suppression) => !suppression.when && normalizeProviderId(suppression.provider) === provider,
-  );
-}
-
-type ManifestModelCatalogAliasPlugin = Pick<
-  PluginManifestRecord,
-  | "id"
-  | "origin"
-  | "enabledByDefault"
-  | "enabledByDefaultOnPlatforms"
-  | "providers"
-  | "modelCatalog"
->;
-
 type ManifestModelCatalogProviderTransport = Readonly<Pick<ModelCatalogAlias, "api" | "baseUrl">>;
 
 export type ManifestModelCatalogProviderAliasMetadata = {
@@ -78,7 +49,7 @@ export type ManifestModelCatalogProviderAliasMetadata = {
 };
 
 function resolveManifestAliasTargetApi(params: {
-  plugin: ManifestModelCatalogAliasPlugin;
+  plugin: Pick<PluginManifestRecord, "modelCatalog">;
   provider: string;
   modelId?: string;
 }): ModelCatalogAlias["api"] {
@@ -155,14 +126,17 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
       ) {
         continue;
       }
-      const hasModelId = Boolean(params.modelId?.trim());
+      const modelId = params.modelId?.trim();
       const hasApplicableSuppression =
-        hasModelId &&
-        hasUnconditionalManifestModelCatalogSuppression({
-          provider,
-          modelId: params.modelId,
-          plugin,
-        });
+        modelId &&
+        planManifestModelCatalogSuppressions({
+          registry: { plugins: [plugin] },
+          providerFilter: provider,
+          modelFilter: modelId,
+        }).suppressions.some(
+          (suppression) =>
+            !suppression.when && normalizeProviderId(suppression.provider) === provider,
+        );
       const configuredRoute = resolveConfiguredModelCatalogProviderRoute({
         provider,
         modelId: params.modelId,

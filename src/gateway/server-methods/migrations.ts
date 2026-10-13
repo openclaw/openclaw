@@ -131,12 +131,7 @@ async function planMemoryProvider(params: {
     ...(params.provider.description ? { description: params.provider.description } : {}),
   };
   try {
-    const { detection, plan } = await planProviderMemoryImport({
-      provider: params.provider,
-      config: params.config,
-      agentId: params.agentId,
-      overwrite: params.overwrite,
-    });
+    const { detection, plan } = await planProviderMemoryImport(params);
     if (detection && !detection.found) {
       return {
         ...base,

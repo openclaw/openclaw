@@ -472,7 +472,7 @@ export function bindCommandHarnessCompletionAssertion(params: {
   sessionKey: string;
   storePath?: string;
   opts: AgentCommandOpts;
-}): AgentCommandOpts {
+}): { opts: AgentCommandOpts } {
   const { claim, persisted, sessionKey, storePath, opts } = params;
   if (
     claim &&
@@ -483,7 +483,7 @@ export function bindCommandHarnessCompletionAssertion(params: {
     throw createSessionWorkStartChangedError(sessionKey);
   }
   if (!claim || !storePath) {
-    return opts;
+    return { opts };
   }
   const guarded = {
     ...opts,
@@ -496,6 +496,5 @@ export function bindCommandHarnessCompletionAssertion(params: {
       { recoveryReference: opts.assertSourceCurrent?.recoveryReference },
     ),
   };
-  guarded.assertSourceCurrent();
-  return guarded;
+  return { opts: guarded };
 }

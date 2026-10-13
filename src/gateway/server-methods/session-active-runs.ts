@@ -104,25 +104,6 @@ function isTrackedActiveSessionRunForKey(
   );
 }
 
-function isTrackedActiveSessionRunForSessionId(
-  active: TrackedActiveSessionRun,
-  sessionId: string,
-  agentId?: string,
-  defaultAgentId?: string,
-): boolean {
-  if (active.sessionId !== sessionId) {
-    return false;
-  }
-  const requestedAgentId = agentId ?? defaultAgentId;
-  if (!requestedAgentId) {
-    return false;
-  }
-  return chatRunBelongsToAgent(
-    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
-    requestedAgentId,
-  );
-}
-
 export function hasRegisteredChatRunForSessionKey(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   sessionKey: string;
@@ -176,16 +157,22 @@ export function resolveVisibleActiveSessionRunState(params: {
     parseAgentSessionKey(params.canonicalKey)?.agentId ??
     parseAgentSessionKey(params.requestedKey)?.agentId;
   const sessionKeys = [params.canonicalKey, params.requestedKey];
+  const sessionIdOwner = resolvedAgentId ?? params.defaultAgentId;
   const matchesRequestedSession = (active: TrackedActiveSessionRun) =>
     sessionKeys.some((key) =>
       isTrackedActiveSessionRunForKey(active, key, resolvedAgentId, params.defaultAgentId),
     ) ||
     (sessionId !== undefined &&
-      isTrackedActiveSessionRunForSessionId(
-        active,
-        sessionId,
-        resolvedAgentId,
-        params.defaultAgentId,
+      active.sessionId === sessionId &&
+      sessionIdOwner !== undefined &&
+      sessionIdOwner !== "" &&
+      chatRunBelongsToAgent(
+        {
+          agentId: active.agentId,
+          sessionKey: active.sessionKey,
+          defaultAgentId: params.defaultAgentId,
+        },
+        sessionIdOwner,
       ));
   const matchingTrackedRuns = (
     params.trackedActiveRuns ??

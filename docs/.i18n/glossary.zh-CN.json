@@ -4012,6 +4012,10 @@
     "target": "标准场景覆盖"
   },
   {
+    "source": "Scenario coverage",
+    "target": "场景覆盖"
+  },
+  {
     "source": "Channel QA reference",
     "target": "通道 QA 参考"
   },
@@ -5034,5 +5038,25 @@
   {
     "source": "Recommended models",
     "target": "推荐模型"
+  },
+  {
+    "source": "MCP Relay",
+    "target": "MCP Relay"
+  },
+  {
+    "source": "Mcp Relay plugin reference",
+    "target": "MCP Relay 插件参考"
+  },
+  {
+    "source": "mcp-relay",
+    "target": "mcp-relay"
+  },
+  {
+    "source": "Remote Control UI ingress",
+    "target": "远程 Control UI 入口"
+  },
+  {
+    "source": "Cloud environment file",
+    "target": "云环境文件"
   }
 ]

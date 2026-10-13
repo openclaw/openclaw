@@ -1,6 +1,9 @@
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 
@@ -22,16 +25,11 @@ describe("memory index identity", () => {
         model,
       }),
     );
-    const db = Reflect.get(manager, "db") as {
-      prepare: (sql: string) => {
-        get: (...params: unknown[]) => { value?: string } | undefined;
-        run: (...params: unknown[]) => void;
-      };
-    };
+    const db = memoryIndexFixtureWriter(manager);
     const metaRow = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get("memory_index_meta_v1");
-    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
+    const meta = JSON.parse(String(metaRow?.value ?? "{}")) as MemoryIndexMeta;
     db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
       JSON.stringify({ ...meta, model, providerKey }),
       "memory_index_meta_v1",

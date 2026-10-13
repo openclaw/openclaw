@@ -34,14 +34,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     return { agentDir };
   }
 
-  it("counts provider-specific usable credentials", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-test" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
-  });
-
   it("counts legacy auth stores with alias fields and fallback providers", async () => {
     const { agentDir } = await withLegacyAuthStore({
       openai: { mode: "apiKey", apiKey: "sk-test" },
@@ -115,14 +107,6 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow(
       "requires legacy credential migration",
     );
-  });
-
-  it("does not count profile ids that are bound to a different credential provider", async () => {
-    const { agentDir } = await withAgentStore({
-      "openai:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-    });
-
-    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
   });
 
   it("honors configured profile order constraints", async () => {

@@ -1,8 +1,11 @@
 import type { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import type { WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const workerHarness = vi.hoisted(() => ({
   instances: [] as unknown[],
+  entries: [] as { url: URL; options: WorkerOptions }[],
 }));
 
 vi.mock("node:worker_threads", async () => {
@@ -14,8 +17,9 @@ vi.mock("node:worker_threads", async () => {
       postMessage = vi.fn();
       terminate = vi.fn(async () => 1);
 
-      constructor() {
+      constructor(url: URL, options: WorkerOptions) {
         super();
+        workerHarness.entries.push({ url, options });
         workerHarness.instances.push(this);
       }
     },
@@ -49,6 +53,15 @@ describe("stopTelegramIngressWorker", () => {
   afterEach(() => {
     vi.useRealTimers();
     workerHarness.instances.length = 0;
+    workerHarness.entries.length = 0;
+  });
+
+  it("starts from an existing source entry with a TypeScript preload", () => {
+    createWorker();
+
+    const entry = workerHarness.entries.at(-1)!;
+    expect(existsSync(entry.url)).toBe(true);
+    expect(entry.options.execArgv).toEqual(["--import", expect.stringContaining("tsx")]);
   });
 
   it("preserves cooperative worker shutdown", async () => {

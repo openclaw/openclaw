@@ -47,7 +47,19 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
         overrides: { security: overridePolicy.security, ask: overridePolicy.ask },
       }).agent
     : undefined;
-  return applyOpenClawExecApprovalFloors(overridePolicy, approvalFloors);
+  if (!approvalFloors) {
+    return overridePolicy;
+  }
+  const nextSecurity = approvalFloors.security
+    ? execPolicy.minSecurity(overridePolicy.security, approvalFloors.security)
+    : overridePolicy.security;
+  const nextAsk = approvalFloors.ask
+    ? execPolicy.maxAsk(overridePolicy.ask, approvalFloors.ask)
+    : overridePolicy.ask;
+  if (nextSecurity === overridePolicy.security && nextAsk === overridePolicy.ask) {
+    return overridePolicy;
+  }
+  return resolveOpenClawExecPolicy({ security: nextSecurity, ask: nextAsk });
 }
 
 function applyOpenClawExecPolicyLayer(
@@ -67,23 +79,6 @@ function applyOpenClawExecPolicyLayer(
     return base;
   }
   return resolveOpenClawExecPolicy({ security: security ?? base.security, ask: ask ?? base.ask });
-}
-
-function applyOpenClawExecApprovalFloors(
-  base: OpenClawExecPolicyForCodexAppServer,
-  approvalFloors?: OpenClawExecApprovalFloorsForCodexAppServer,
-): OpenClawExecPolicyForCodexAppServer {
-  if (!approvalFloors) {
-    return base;
-  }
-  const nextSecurity = approvalFloors.security
-    ? execPolicy.minSecurity(base.security, approvalFloors.security)
-    : base.security;
-  const nextAsk = approvalFloors.ask ? execPolicy.maxAsk(base.ask, approvalFloors.ask) : base.ask;
-  if (nextSecurity === base.security && nextAsk === base.ask) {
-    return base;
-  }
-  return resolveOpenClawExecPolicy({ security: nextSecurity, ask: nextAsk });
 }
 
 function resolveOpenClawExecPolicy(

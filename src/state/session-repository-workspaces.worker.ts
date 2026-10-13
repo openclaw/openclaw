@@ -13,6 +13,7 @@ import {
   findSessionRepositoryWorkspaceInDatabase,
   readSessionRepositoryWorkspaceInDatabase,
 } from "./session-repository-workspaces.kernel.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
@@ -75,9 +76,12 @@ function mutate(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       admit("transaction", undefined);
-      const result = operation(db);
+      const { result, receipt } = repositoryWorkspacePublication.capture(db, () => operation(db));
       admit("commit", result);
-      deferSqliteWorkerCommitReceipt(db, result);
+      deferSqliteWorkerCommitReceipt(db, {
+        result,
+        receipt: repositoryWorkspacePublication.bound(receipt),
+      });
       return result;
     },
     { database },

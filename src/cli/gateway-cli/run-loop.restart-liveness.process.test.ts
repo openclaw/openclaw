@@ -30,7 +30,8 @@ const childScript = `
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
-    await runGatewayLoop({
+    process.once("beforeExit", () => process.stdout.write("natural-exit\\n"));
+    process.exitCode = await runGatewayLoop({
       ownsProcessLifecycle: true,
       start: async () => {
         const attempt = ++starts;
@@ -60,19 +61,19 @@ const childScript = `
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              return Promise.reject(error);
+              return new Promise((resolve, reject) => server.close(closeError => closeError ? reject(closeError) : resolve()))
+                .then(() => {
+                  process.stdout.write("http-closed:" + attempt + "\\n");
+                  throw error;
+                });
             }
             return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
               .then(() => process.stdout.write("closed:" + attempt + "\\n"));
           },
         };
       },
-      runtime: {
-        log: () => {},
-        error: (...args) => console.error(...args),
-        exit: code => process.exit(code),
-      },
     });
+    process.stdout.write("loop-returned:" + process.exitCode + "\\n");
   } catch (error) {
     console.error(error);
     process.exitCode = 1;
@@ -221,18 +222,21 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       await fixture.waitForOutput("ready:2");
       expect(fixture.child.kill("SIGTERM")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+      expect(fixture.output()).toContain("natural-exit");
     },
     60_000,
   );
 
   it.skipIf(process.platform !== "darwin")(
-    "exits before the hard watchdog when a shutdown-deadline log append stalls",
+    "retains the hard watchdog when shutdown and its log append never settle",
     async () => {
       const fixture = startFixture(false, "pending");
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGTERM")).toBe(true);
       await fixture.waitForOutput("close:pending");
-      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+      expect(await fixture.closed, fixture.output()).toEqual([null, "SIGKILL"]);
+      expect(fixture.output()).not.toContain("natural-exit");
+      expect(fixture.output()).not.toContain("loop-returned:");
       expect(fixture.output()).toContain("append:pending");
       const bundleDir = path.join(fixture.stateDir, "logs", "stability");
       const files = fs.readdirSync(bundleDir);
@@ -245,12 +249,16 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
   );
 
   posixIt(
-    "persists rejected close failures before a SIGUSR2 force-exit",
+    "naturally exits nonzero after native close settles with a reported failure",
     async () => {
       const fixture = startFixture(false, "rejected");
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       expect(await fixture.closed, fixture.output()).toEqual([1, null]);
+      expect(fixture.output()).toContain("http-closed:1");
+      expect(fixture.output()).toContain("loop-returned:1");
+      expect(fixture.output()).toContain("natural-exit");
+      expect(fixture.output()).not.toContain("shutdown deadline reached");
       const bundleDir = path.join(fixture.stateDir, "logs", "stability");
       const files = fs.readdirSync(bundleDir);
       expect(files).toHaveLength(1);

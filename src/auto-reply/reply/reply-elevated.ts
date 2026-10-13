@@ -152,14 +152,15 @@ export function resolveElevatedPermissions(params: {
     provider: params.provider,
     accountId: params.ctx.AccountId,
   });
-  const globalAllowed = isApprovedElevatedSender({
-    provider: params.provider,
-    ctx: params.ctx,
-    formatAllowFrom,
-    allowFrom: globalConfig?.allowFrom,
-    fallbackAllowFrom,
-  });
-  if (!globalAllowed) {
+  const isAllowed = (allowFrom: AgentElevatedAllowFromConfig | undefined) =>
+    isApprovedElevatedSender({
+      provider: params.provider,
+      ctx: params.ctx,
+      formatAllowFrom,
+      allowFrom,
+      fallbackAllowFrom,
+    });
+  if (!isAllowed(globalConfig?.allowFrom)) {
     failures.push({
       gate: "allowFrom",
       key: `tools.elevated.allowFrom.${params.provider}`,
@@ -167,15 +168,7 @@ export function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const agentAllowed = agentConfig?.allowFrom
-    ? isApprovedElevatedSender({
-        provider: params.provider,
-        ctx: params.ctx,
-        formatAllowFrom,
-        allowFrom: agentConfig.allowFrom,
-        fallbackAllowFrom,
-      })
-    : true;
+  const agentAllowed = agentConfig?.allowFrom ? isAllowed(agentConfig.allowFrom) : true;
   if (!agentAllowed) {
     failures.push({
       gate: "allowFrom",

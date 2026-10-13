@@ -8,6 +8,8 @@ export const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
 
 export type WakeResult = { eventOutcome: "queued" | "coalesced" };
 
+export class HookWakeUnavailableError extends Error {}
+
 const FAN_OUT_PENDING = Symbol("hook-fanout-pending");
 type FanOutSettled = HookAgentDispatchResult | typeof FAN_OUT_PENDING;
 

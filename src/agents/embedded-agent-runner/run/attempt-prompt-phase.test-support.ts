@@ -228,6 +228,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
     },
     setup: {
+      prepStages: { mark: vi.fn() },
       effectiveFsWorkspaceOnly: false,
       effectiveWorkspace: "/tmp/workspace",
       sandbox: null,
@@ -240,14 +241,20 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           activeSession,
           hookRunner: null,
           setActiveSessionSystemPrompt: vi.fn(),
-          settingsManager: { getCompactionReserveTokens: () => 77 },
+          settingsManager: {
+            getCompactionEnabled: () => true,
+            getCompactionReserveTokens: () => 77,
+          },
         },
         boundary: {
           includeBoundaryTimestamp: false,
           setCurrentUserTimestampOverride: vi.fn(),
         },
         cacheTrace: null,
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
+        contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
+          takePendingMidTurnPrecheckRequest: () => undefined,
+        },
         preparedUserTurnMessage: {
           role: "user",
           content: "hello",
@@ -295,7 +302,6 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
     preparedStreamRuntime: {
       cache: {},
       history: {
-        contextEngineAssemblySucceeded: false,
         contextEnginePromptAuthority: "assembled",
       },
       promptActiveSession: vi.fn(),

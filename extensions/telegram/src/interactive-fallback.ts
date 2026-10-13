@@ -72,22 +72,16 @@ function renderTelegramTableIsland(block: MessagePresentationTableBlock): string
   const caption = block.caption.trim()
     ? `<caption>${escapeTelegramTableCellText(block.caption)}</caption>`
     : "";
-  const headerRow = block.headers
-    .map((header) => `<th>${escapeTelegramTableCellText(header)}</th>`)
-    .join("");
-  const bodyRows = block.rows
-    .map(
-      (row) =>
-        `<tr>${row
-          .map((cell, index) =>
-            index === block.rowHeaderColumnIndex
-              ? `<th>${escapeTelegramTableCellText(cell)}</th>`
-              : `<td>${escapeTelegramTableCellText(cell)}</td>`,
-          )
-          .join("")}</tr>`,
-    )
-    .join("");
-  return `<table>${caption}<thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  const renderRow = (cells: readonly (string | number)[], header: "all" | number | undefined) =>
+    `<tr>${cells
+      .map((cell, index) => {
+        const tag = header === "all" || index === header ? "th" : "td";
+        return `<${tag}>${escapeTelegramTableCellText(cell)}</${tag}>`;
+      })
+      .join("")}</tr>`;
+  const headerRow = renderRow(block.headers, "all");
+  const bodyRows = block.rows.map((row) => renderRow(row, block.rowHeaderColumnIndex)).join("");
+  return `<table>${caption}<thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table>`;
 }
 
 // Context blocks are low-emphasis by contract; italics is Telegram's closest
@@ -258,11 +252,10 @@ export function canonicalizeTelegramPresentationPayload(
   );
   const buttons = existingButtons ?? presentationButtons;
 
+  const fallbackPresentation = { ...presentation, blocks: fallbackBlocks };
   const fallbackText = richTables
-    ? renderTelegramRichFallbackText({ ...presentation, blocks: fallbackBlocks })
-    : renderMessagePresentationFallbackText({
-        presentation: { ...presentation, blocks: fallbackBlocks },
-      });
+    ? renderTelegramRichFallbackText(fallbackPresentation)
+    : renderMessagePresentationFallbackText({ presentation: fallbackPresentation });
   const currentText =
     resolveLegacyInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
   const textIsFallback = payload.presentationTextMode === "fallback";

@@ -77,18 +77,6 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   return existing?.type === "oauth" && isSafeOAuthOwnerRefreshResult(existing, incoming);
 }
 
-export function shouldBootstrapFromExternalCliCredential(params: {
-  existing: OAuthCredential | undefined;
-  imported: OAuthCredential;
-  now?: number;
-}): boolean {
-  const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, { now })) {
-    return false;
-  }
-  return hasUsableOAuthCredential(params.imported, { now });
-}
-
 /** Overlays runtime external OAuth profiles on a cloned store. */
 export function overlayRuntimeExternalOAuthProfiles(
   store: AuthProfileStore,

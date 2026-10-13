@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { assertConversationRouteEligibleForAgent } from "./conversation-route-ownership.js";
+import { resolveConversationRouteEligibilitiesForAgent } from "./conversation-route-ownership.js";
+
+function resolveRoute(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  conversation: Parameters<
+    typeof resolveConversationRouteEligibilitiesForAgent
+  >[0]["conversations"][number];
+}) {
+  return resolveConversationRouteEligibilitiesForAgent({
+    ...params,
+    conversations: [params.conversation],
+  });
+}
 
 const baseConversation = {
   conversationRef: "conv_11111111111111111111111111111111",
@@ -18,8 +31,8 @@ function configWithBindings(bindings: NonNullable<OpenClawConfig["bindings"]>): 
   };
 }
 
-describe("assertConversationRouteEligibleForAgent", () => {
-  it("replays authoritative parent context when selecting the route owner", () => {
+describe("resolveConversationRouteEligibilitiesForAgent", () => {
+  it("replays authoritative parent context when selecting the route owner", async () => {
     const config = configWithBindings([
       {
         type: "route",
@@ -33,15 +46,15 @@ describe("assertConversationRouteEligibleForAgent", () => {
       routeContext: { parentPeerId: "parent-room" },
     };
 
-    expect(() =>
-      assertConversationRouteEligibleForAgent({ config, agentId: "main", conversation }),
-    ).toThrow("Conversation is not available to this agent");
-    expect(() =>
-      assertConversationRouteEligibleForAgent({ config, agentId: "finance", conversation }),
-    ).not.toThrow();
+    await expect(resolveRoute({ config, agentId: "main", conversation })).resolves.toEqual([
+      "denied",
+    ]);
+    await expect(resolveRoute({ config, agentId: "finance", conversation })).resolves.toEqual([
+      "eligible",
+    ]);
   });
 
-  it("does not treat an unrelated peer binding as a possible parent owner for a legacy thread", () => {
+  it("does not treat an unrelated peer binding as a possible parent owner for a legacy thread", async () => {
     const config = configWithBindings([
       {
         type: "route",
@@ -50,16 +63,16 @@ describe("assertConversationRouteEligibleForAgent", () => {
       },
     ]);
 
-    expect(() =>
-      assertConversationRouteEligibleForAgent({
+    await expect(
+      resolveRoute({
         config,
         agentId: "main",
         conversation: { ...baseConversation, threadId: "topic-7" },
       }),
-    ).not.toThrow();
+    ).resolves.toEqual(["eligible"]);
   });
 
-  it("replays a legacy thread parent binding from its retained route peer", () => {
+  it("replays a legacy thread parent binding from its retained route peer", async () => {
     const config = configWithBindings([
       {
         type: "route",
@@ -69,15 +82,15 @@ describe("assertConversationRouteEligibleForAgent", () => {
     ]);
     const conversation = { ...baseConversation, peerId: "parent-room", threadId: "topic-7" };
 
-    expect(() =>
-      assertConversationRouteEligibleForAgent({ config, agentId: "main", conversation }),
-    ).toThrow("Conversation is not available to this agent");
-    expect(() =>
-      assertConversationRouteEligibleForAgent({ config, agentId: "finance", conversation }),
-    ).not.toThrow();
+    await expect(resolveRoute({ config, agentId: "main", conversation })).resolves.toEqual([
+      "denied",
+    ]);
+    await expect(resolveRoute({ config, agentId: "finance", conversation })).resolves.toEqual([
+      "eligible",
+    ]);
   });
 
-  it("fails closed for a matching contextual wildcard when legacy context is absent", () => {
+  it("fails closed for a matching contextual wildcard when legacy context is absent", async () => {
     const config = configWithBindings([
       {
         type: "route",
@@ -86,20 +99,20 @@ describe("assertConversationRouteEligibleForAgent", () => {
       },
     ]);
 
-    expect(() =>
-      assertConversationRouteEligibleForAgent({
+    await expect(
+      resolveRoute({
         config,
         agentId: "main",
         conversation: baseConversation,
       }),
-    ).toThrow("Conversation is not available to this agent");
+    ).resolves.toEqual(["denied"]);
 
-    expect(() =>
-      assertConversationRouteEligibleForAgent({
+    await expect(
+      resolveRoute({
         config,
         agentId: "main",
         conversation: { ...baseConversation, routeContextObserved: true },
       }),
-    ).not.toThrow();
+    ).resolves.toEqual(["eligible"]);
   });
 });

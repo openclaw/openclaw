@@ -20,7 +20,8 @@ type FloorCase = {
   baseUrl?: string;
   params?: Record<string, unknown>;
   reasoning?: boolean;
-  expected: string | false | undefined;
+  thinkingLevelMap?: ProviderRuntimeModel["thinkingLevelMap"];
+  expected: string | boolean | undefined;
 };
 
 afterEach(() => {
@@ -33,6 +34,7 @@ function createModel({
   baseUrl,
   params,
   reasoning,
+  thinkingLevelMap,
 }: FloorCase): ProviderRuntimeModel {
   return {
     id,
@@ -45,6 +47,7 @@ function createModel({
     contextWindow: 131072,
     maxTokens: 8192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(params ? { params } : {}),
   };
 }
@@ -114,6 +117,17 @@ describe("Ollama models that cannot disable thinking", () => {
       expected: "low",
     },
     {
+      name: "discovered floor with hidden reasoning",
+      provider: "ollama",
+      id: "mandatory-thinking",
+      baseUrl: localBaseUrl,
+      level: "high",
+      params: { think: false },
+      reasoning: false,
+      thinkingLevelMap: { off: "true", high: "true" },
+      expected: true,
+    },
+    {
       name: "High on glm-5.3",
       provider: "ollama-cloud",
       id: "glm-5.3",
@@ -159,6 +173,16 @@ describe("Ollama models that cannot disable thinking", () => {
       id: "glm-5.3",
       params: { think: false },
       expected: "low",
+    },
+    {
+      name: "discovered floor with hidden reasoning",
+      provider: "ollama",
+      id: "mandatory-thinking",
+      baseUrl: localBaseUrl,
+      params: { think: false },
+      reasoning: false,
+      thinkingLevelMap: { off: "true" },
+      expected: true,
     },
     {
       name: "configured false on glm-5.2, which lists false",

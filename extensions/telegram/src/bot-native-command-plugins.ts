@@ -4,7 +4,7 @@ import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-co
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   formatSqliteSessionFileMarker,
-  getSessionEntry,
+  getSessionEntryAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,11 +14,7 @@ import {
   resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
-import {
-  buildTelegramRoutingTarget,
-  buildTelegramGroupFrom,
-  buildTelegramThreadParams,
-} from "./bot/helpers.js";
+import { buildTelegramRoutingTarget, buildTelegramGroupFrom } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -35,8 +31,7 @@ type TelegramNativeReplyChannelData = {
 
 function inspectTelegramNativeReply(result: TelegramNativeReplyPayload) {
   const telegramData = result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
-  const reactionEmoji = telegramData?.reaction?.emoji;
-  const hasReaction = typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
+  const hasReaction = Boolean(normalizeOptionalString(telegramData?.reaction?.emoji));
   const { channelData: _channelData, ...portableContent } = result;
   return {
     telegramData,
@@ -66,7 +61,7 @@ async function resolveTelegramCommandTranscriptContext(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const entry = getSessionEntry({ agentId: params.agentId, sessionKey, storePath });
+    const entry = await getSessionEntryAsync({ agentId: params.agentId, sessionKey, storePath });
     const sessionId = entry?.sessionId?.trim() || randomUUID();
     const sessionFile = formatSqliteSessionFileMarker({
       agentId: params.agentId,
@@ -108,10 +103,6 @@ export async function executeTelegramPluginCommand(
   if (!dispatch) {
     return;
   }
-  const targetSessionEntry = dispatch.nativeCommandRuntime.getSessionEntry({
-    agentId: dispatch.route.agentId,
-    sessionKey: dispatch.targetSessionKey,
-  });
   const from = dispatch.isGroup
     ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
     : `telegram:${dispatch.chatId}`;
@@ -145,7 +136,7 @@ export async function executeTelegramPluginCommand(
           dispatch.bot.api.sendMessage(
             dispatch.chatId,
             params.candidate.progressMessage!,
-            buildTelegramThreadParams(dispatch.threadSpec),
+            dispatch.threadParams,
           ),
       });
       progressMessageId = sent.message_id;
@@ -168,7 +159,7 @@ export async function executeTelegramPluginCommand(
     sessionKey: dispatch.targetSessionKey,
     sessionId: transcriptContext.sessionId,
     sessionFile: transcriptContext.sessionFile,
-    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    authProfileId: transcriptContext.authProfileId,
     commandBody,
     config: dispatch.runtimeCfg,
     from,
@@ -192,14 +183,12 @@ export async function executeTelegramPluginCommand(
       ? { ...result, replyToId: String(dispatch.msg.message_id) }
       : result
     : { text: EMPTY_RESPONSE_FALLBACK };
-  const progressResultText =
-    typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
-      ? deliverableResult.text
-      : null;
+  const progressResultText = deliverableResult.text;
   if (
     progressMessageId != null &&
     dispatch.telegramDeps.editMessageTelegram &&
-    progressResultText &&
+    typeof progressResultText === "string" &&
+    progressResultText.trim().length > 0 &&
     (!renderable || editable)
   ) {
     try {
@@ -229,17 +218,25 @@ export async function executeTelegramPluginCommand(
         isGroup: dispatch.isGroup,
         groupId: dispatch.isGroup ? String(dispatch.chatId) : undefined,
       });
+      await dispatch.recordDeliveredReply(
+        commandBody,
+        progressResultText,
+        String(progressMessageId),
+      );
       return;
     } catch {
       // Fall through to cleanup + normal delivered reply if editing fails.
     }
   }
   await cleanupProgressPlaceholder();
-  await deliverReplies({
+  const delivered = await deliverReplies({
     replies: [deliverableResult],
     ...dispatch.deliveryOptions,
     ...(hasReaction ? { replyToMode: "all" as const } : {}),
     silent:
       dispatch.runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
   });
+  if (delivered.delivered && deliverableResult.text) {
+    await dispatch.recordDeliveredReply(commandBody, deliverableResult.text, "final");
+  }
 }

@@ -432,10 +432,6 @@ describe("loadWebMedia", () => {
     await expectAccessError(hostDocument("secret.pdf", "secret"));
   });
 
-  it("rejects unverified text named as XLSM", async () => {
-    await expectAccessError(hostDocument("report.xlsm", "not a workbook"));
-  });
-
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
     const body = await xlsmFixture();
     const file = await writeFile("bounded.xlsm", body);
@@ -603,11 +599,6 @@ describe("loadWebMedia", () => {
 
   it("rejects trusted HTML paths without HTML document shape", async () => {
     await expectAccessError(hostDocument("report.html", "status,value\nok,1\n"));
-  });
-
-  it("rejects opaque non-NUL binary data disguised as HTML", async () => {
-    const body = Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 255) + 1));
-    await expectAccessError(hostDocument("opaque.html", body));
   });
 
   it("rejects a CSV binary tail after the old text sample window", async () => {

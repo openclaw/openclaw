@@ -1,12 +1,6 @@
 // Gateway Talk handoff registry.
 // Manages short-lived browser Talk rooms, tokens, events, and turn ownership.
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
 import {
@@ -60,10 +54,8 @@ const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
 /** Creates a short-lived Talk room and returns the only plaintext join token. */
 export function createTalkHandoff(params: TalkHandoffCreateParams) {
   pruneExpiredTalkHandoffs();
-  const rawCreatedAt = Date.now();
-  const createdAt = resolveDateTimestampMs(rawCreatedAt);
-  const ttlMs = normalizeTtlMs(params.ttlMs);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawCreatedAt }) ?? 0;
+  const createdAt = Date.now();
+  const expiresAt = createdAt + normalizeTtlMs(params.ttlMs);
   const id = randomUUID();
   const roomId = `talk_${id}`;
   const token = randomBytes(32).toString("base64url");
@@ -140,13 +132,10 @@ function normalizeTtlMs(value: number | undefined): number {
   return Math.min(Math.max(Math.trunc(value), 1000), MAX_TALK_HANDOFF_TTL_MS);
 }
 
-function pruneExpiredTalkHandoffs(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    return;
-  }
+function pruneExpiredTalkHandoffs(): void {
+  const now = Date.now();
   for (const [id, record] of handoffs) {
-    if (!isFutureDateTimestampMs(record.expiresAt, { nowMs: validNow })) {
+    if (record.expiresAt <= now) {
       record.room.talk.emit({
         type: "session.closed",
         payload: { reason: "expired", handoffId: id, roomId: record.roomId },

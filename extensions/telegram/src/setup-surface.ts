@@ -4,7 +4,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
   hasConfiguredSecretInput,
-  patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
@@ -14,10 +13,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
+  applyTelegramAllowFrom,
   getTelegramTokenHelpLines,
   getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
-  telegramSetupAdapter,
 } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
@@ -83,19 +82,8 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: t("wizard.telegram.allowFromInvalid"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
-      }),
     apply: async ({ cfg, accountId, allowFrom }) =>
-      patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId,
-        patch: { dmPolicy: "allowlist", allowFrom },
-        setupSurface: telegramSetupAdapter,
-      }),
+      applyTelegramAllowFrom(cfg, accountId, allowFrom),
   }),
   finalize: async ({ cfg, accountId, prompter }) => {
     if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {

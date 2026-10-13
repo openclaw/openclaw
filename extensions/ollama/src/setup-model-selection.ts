@@ -1,8 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
+import { getOllamaLatestDedupeKey } from "./model-id.js";
 import {
-  buildDefaultOllamaCloudModelDefinition,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
@@ -15,11 +14,11 @@ import {
   type OllamaModelWithContext,
 } from "./provider-models.js";
 
+export { findAvailableOllamaModelName } from "./model-id.js";
+
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
 export const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
-
-type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
 
 export function normalizeOllamaModelName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -29,11 +28,6 @@ export function normalizeOllamaModelName(value: string | undefined): string | un
   return trimmed.toLowerCase().startsWith("ollama/")
     ? trimmed.slice("ollama/".length).trim() || undefined
     : trimmed;
-}
-
-function getOllamaLatestDedupeKey(name: string): string {
-  const normalized = name.trim().toLowerCase();
-  return normalized.endsWith(":latest") ? normalized.slice(0, -":latest".length) : normalized;
 }
 
 export function mergeUniqueModelNames(...groups: string[][]): string[] {
@@ -52,19 +46,6 @@ export function mergeUniqueModelNames(...groups: string[][]): string[] {
     }
   }
   return [...mergedByKey.values()];
-}
-
-export function findAvailableOllamaModelName(
-  modelName: string,
-  availableModelNames: Iterable<string>,
-): string | undefined {
-  const wantedKey = getOllamaLatestDedupeKey(modelName);
-  for (const available of availableModelNames) {
-    if (getOllamaLatestDedupeKey(available) === wantedKey) {
-      return available;
-    }
-  }
-  return undefined;
 }
 
 export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string[] {
@@ -110,27 +91,20 @@ export function selectAppGuidedOllamaModelFromDiscovery(
 export function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
-  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ) {
-  return modelNames.map((name) => {
+  return modelNames.flatMap((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
-    // Match through the suffix for context/capabilities, but keep the requested id: the
-    // suffixed spelling is what gets written into config.
-    const defaultModel = defaultModels.find(
-      (model) => model.id === normalizeOllamaCloudModelId(name),
-    );
-    if (defaultModel && !discovered && defaultModel.id === name) {
-      return buildDefaultOllamaCloudModelDefinition(defaultModel);
+    if (discovered && isOllamaEmbeddingOnlyModel(discovered)) {
+      return [];
     }
-    const capabilities =
-      discovered?.capabilities ?? (defaultModel ? [...defaultModel.capabilities] : undefined);
-    return buildOllamaModelDefinition(
-      name,
-      discovered?.contextWindow ?? defaultModel?.contextWindow,
-      capabilities,
-      { showInspectionFailed: discovered?.showInspectionFailed },
-    );
+    return [
+      buildOllamaModelDefinition(
+        name,
+        discovered?.contextWindow,
+        discovered?.capabilities,
+        discovered,
+      ),
+    ];
   });
 }
 

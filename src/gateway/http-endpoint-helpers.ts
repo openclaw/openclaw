@@ -52,7 +52,7 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes);
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes, 60_000);
   if (body === undefined) {
     return undefined;
   }

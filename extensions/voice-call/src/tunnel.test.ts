@@ -30,12 +30,12 @@ const mocks = vi.hoisted(() => ({
   cleanupTailscaleExposureRoute: vi.fn(),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+// mock-isolation: Replace the SDK spawn boundary without loading its process owners and workers.
+vi.mock("openclaw/plugin-sdk/process-runtime", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   mocks.realSpawn = actual.spawn;
   return {
-    ...actual,
-    spawn: mocks.spawn,
+    spawnOomScoreAdjusted: mocks.spawn,
   };
 });
 
@@ -219,16 +219,6 @@ describe("voice-call tunnels", () => {
     await expect(result).rejects.toThrow(`ngrok error: ${message}`);
   });
 
-  it("preserves UTF-8 across real child stdout pipe chunks", async () => {
-    const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
-    const { splitAt } = midEmojiSplit(line);
-    mockSpawnUtf8SplitChild({ stream: "stdout", text: line, splitAt });
-    const tunnel = await startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-
-    expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
-    await tunnel.stop();
-  });
-
   it("routes Tailscale Funnel setup and cleanup through the shared exposure owner", async () => {
     mocks.setupTailscaleExposureRoutes.mockResolvedValue(
       "https://host.tailnet.ts.net:8443/voice/webhook",
@@ -288,14 +278,6 @@ describe("voice-call tunnels", () => {
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
     proc.stdout.emit("error", new Error("EPIPE"));
     await expect(result).rejects.toThrow("ngrok stdout error: EPIPE");
-    expect(proc.killedWith).toBe("SIGKILL");
-  });
-
-  it("rejects when ngrok stderr emits an error before the tunnel is ready", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-    proc.stderr.emit("error", new Error("EIO"));
-    await expect(result).rejects.toThrow("ngrok stderr error: EIO");
     expect(proc.killedWith).toBe("SIGKILL");
   });
 

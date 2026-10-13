@@ -582,6 +582,37 @@ describe("OpenRouter OAuth", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it.each(["progress", "log"])(
+    "closes the local callback when %s reporting throws before waiting",
+    async (reporter) => {
+      const failure = new Error(`${reporter} reporter failed`);
+      const fail = () => {
+        throw failure;
+      };
+      const { ctx, log } = createOpenRouterOAuthContext({
+        isRemote: false,
+        ...(reporter === "progress" ? { onProgress: fail } : {}),
+      });
+      if (reporter === "log") {
+        log.mockImplementation(fail);
+      }
+      const waitForCallback = vi.fn();
+      const close = vi.fn(async () => undefined);
+      await expect(
+        loginOpenRouterOAuth(ctx, {
+          createState: () => "state-1",
+          startCallback: async () => ({
+            waitForCallback,
+            complete: async () => undefined,
+            close,
+          }),
+        }),
+      ).rejects.toThrow(failure.message);
+      expect(waitForCallback).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
   it("falls back to a pasted redirect when the local listener cannot start", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "sk-or-v1-test" }));
     const startCallback = vi.fn(async () => {
@@ -604,6 +635,29 @@ describe("OpenRouter OAuth", () => {
       expect.objectContaining({ message: "Paste the OpenRouter redirect URL" }),
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a failed callback before falling back to a pasted redirect", async () => {
+    const { ctx, text } = createOpenRouterOAuthContext({ isRemote: false });
+    const close = vi.fn(async () => undefined);
+    text.mockImplementationOnce(async () => {
+      expect(close).toHaveBeenCalledOnce();
+      return `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=AUTHCODE`;
+    });
+    await expect(
+      loginOpenRouterOAuth(ctx, {
+        createState: () => "state-1",
+        fetchImpl: async () => jsonResponse({ key: "fixture-key" }),
+        startCallback: async () => ({
+          waitForCallback: async () => {
+            throw new Error("OAuth callback timeout");
+          },
+          complete: async () => undefined,
+          close,
+        }),
+      }),
+    ).resolves.toMatchObject({ profiles: [{ credential: { key: "fixture-key" } }] });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("exposes stable auth choice metadata", () => {

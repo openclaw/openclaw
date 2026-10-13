@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveUserTurns,
+  shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
 } from "./embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -159,6 +159,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   }
 
   function makeOpenAiCompatibleReasoningModel(
@@ -426,6 +427,39 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
+  it("limits OpenAI prompt updates to native Responses routes across cached policy reads", () => {
+    const config = {} as OpenClawConfig;
+    for (const [provider, api, baseUrl, expected] of [
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+      ["openai", "openai-responses", "https://proxy.example.test/v1", false],
+      ["openai", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex", false],
+      ["openai", "azure-openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-completions", "https://api.openai.com/v1", false],
+      ["custom-openai", "openai-responses", "https://api.openai.com/v1", false],
+      ["openai", "openai-responses", "https://api.openai.com/v1", true],
+    ] as const) {
+      const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config,
+        provider,
+        modelApi: api,
+        modelId: model.id,
+        model,
+        runtimeHandle: {
+          provider,
+          plugin: {
+            id: provider,
+            label: provider,
+            auth: [],
+            buildReplayPolicy: () => ({ inHistorySystemUpdates: true }),
+          },
+        },
+      });
+      expect(policy.inHistorySystemUpdates).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+    }
+  });
+
   it.each([false, true])(
     "constrains explicit plugin updates to host route eligibility (direct API key=%s)",
     (directApiKey) => {
@@ -529,14 +563,14 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "ollama",
     });
     expect(policy.preserveSignatures).toBe(false);
-    expect(policy.appendOnlyRuntimeContext).toBe(false);
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
 
   it.each([
     ["claude-fable-5-1", true],
     ["claude-mythos-5-1", false],
     ["claude-fable-5", false],
-  ])("scopes persisted context and user-turn merging for %s", (modelId, appendOnly) => {
+  ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
     const messages: AgentMessage[] = [
       { role: "user", content: "First request", timestamp: 1 },
       { role: "user", content: "Second request", timestamp: 2 },
@@ -546,7 +580,7 @@ describe("resolveTranscriptPolicy", () => {
         const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
         expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
         const replay = validateAnthropicTurns(messages, {
-          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, modelApi),
+          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
         });
         expect(replay).toEqual(
           appendOnly && modelApi === "anthropic-messages"

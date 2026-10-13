@@ -358,16 +358,12 @@ impl QuickChatState {
         Ok((catalog, agents))
     }
 
-    async fn agents(&self, gateway: &GatewayClient) -> Result<Vec<QuickChatAgent>, String> {
-        self.agent_catalog(gateway).await.map(|(_, agents)| agents)
-    }
-
     async fn selected_agent(
         &self,
         gateway: &GatewayClient,
         on_missing: MissingSelection,
     ) -> Result<(QuickChatAgent, AgentsListResult), String> {
-        // Snapshot the pin before agents() refreshes the cache: a refresh clears a
+        // Snapshot the pin before refreshing the catalog: a refresh clears a
         // stale pin, and the send path must see that the pin existed so it can fail
         // instead of silently rerouting the message to the default agent.
         let pinned = self
@@ -386,7 +382,7 @@ impl QuickChatState {
     ) -> Result<QuickChatAgent, String> {
         let agent_id = agent_id.trim();
         let generation = gateway.generation();
-        let agents = self.agents(gateway).await?;
+        let (_, agents) = self.agent_catalog(gateway).await?;
         let selected = agents
             .iter()
             .find(|agent| agent.id == agent_id)
@@ -420,14 +416,11 @@ impl QuickChatState {
     }
 
     fn shortcut_status(&self) -> Result<QuickChatShortcutStatus, String> {
-        let active = self
-            .active_shortcut
-            .lock()
-            .map_err(|_| "Quick Chat shortcut state is unavailable.".to_string())?;
+        let active = self.active_shortcut()?;
         Ok(QuickChatShortcutStatus {
             supported: self.shortcuts_supported,
             enabled: active.registered,
-            accelerator: active.accelerator.clone(),
+            accelerator: active.accelerator,
         })
     }
 
@@ -1047,7 +1040,10 @@ pub async fn quickchat_agents(
     state: State<'_, QuickChatState>,
 ) -> Result<Vec<QuickChatAgent>, String> {
     require_quickchat_webview(&webview)?;
-    state.agents(gateway.inner()).await
+    state
+        .agent_catalog(gateway.inner())
+        .await
+        .map(|(_, agents)| agents)
 }
 
 #[tauri::command]
@@ -1648,7 +1644,7 @@ mod tests {
                     let refreshing = {
                         let state = state.clone();
                         let gateway = fixture.client.clone();
-                        tokio::spawn(async move { state.agents(&gateway).await })
+                        tokio::spawn(async move { state.agent_catalog(&gateway).await })
                     };
                     fixture
                         .request("agents.list")

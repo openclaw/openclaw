@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -18,11 +18,12 @@ import {
 } from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
-import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
+import { commandReply, matchCommandPrefix, rejectNonOwnerCommand } from "./command-gates.js";
+import { buildPluginCommandContext } from "./commands-context.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
+  buildCommandExecApprovalDefaults,
   deliverPrivateCommandReply,
-  resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,7 +54,13 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   if (!allowTextCommands) {
     return null;
   }
-  const args = parseDiagnosticsArgs(params.command.commandBodyNormalized);
+  const args = matchCommandPrefix(
+    params.command.commandBodyNormalized.trim(),
+    DIAGNOSTICS_COMMAND,
+    {
+      allowColon: true,
+    },
+  );
   if (args == null) {
     return null;
   }
@@ -74,11 +81,12 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
         ...params,
         sessionStore: {
           ...Object.fromEntries(
-            listSessionEntriesReadOnly({
-              agentId: params.agentId,
-              storePath: params.storePath,
-              projection: "list",
-            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+            (
+              await readSessionEntrySummariesInWorker({
+                agentId: params.agentId,
+                storePath: params.storePath,
+              })
+            ).map(({ sessionKey, entry }) => [sessionKey, entry]),
           ),
           ...params.sessionStore,
         },
@@ -92,10 +100,7 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
     if (commandParams.isGroup) {
       return await deliverGroupDiagnosticsReplyPrivately(commandParams, reply);
     }
-    return {
-      shouldContinue: false,
-      reply,
-    };
+    return commandReply(reply);
   }
 
   if (commandParams.isGroup) {
@@ -116,7 +121,7 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   }
 
   const reply = await buildDiagnosticsReply(commandParams, args);
-  return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
+  return reply ? commandReply(reply) : { shouldContinue: false };
 };
 
 async function deliverGroupDiagnosticsReplyPrivately(
@@ -134,20 +139,6 @@ async function deliverGroupDiagnosticsReplyPrivately(
     reply,
   });
   return commandReply(DIAGNOSTICS_PRIVATE_ROUTE_REPLIES[outcome]);
-}
-
-function parseDiagnosticsArgs(commandBody: string): string | undefined {
-  const trimmed = commandBody.trim();
-  if (trimmed === DIAGNOSTICS_COMMAND) {
-    return "";
-  }
-  if (
-    trimmed.startsWith(`${DIAGNOSTICS_COMMAND} `) ||
-    trimmed.startsWith(`${DIAGNOSTICS_COMMAND}:`)
-  ) {
-    return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
-  }
-  return undefined;
 }
 
 function buildDiagnosticsPreamble(): string[] {
@@ -199,29 +190,14 @@ async function buildDiagnosticsReply(
   const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
     const execTool = createExecTool({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
+      ...buildCommandExecApprovalDefaults(params, options.privateApprovalTarget),
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
       approvalWarningText: buildDiagnosticsApprovalWarning(codexDiagnostics.approvalText),
       approvalFollowup: codexDiagnostics.approvalFollowup,
       approvalFollowupMode: "direct",
-      allowBackground: true,
       timeoutSec,
-      cwd: params.workspaceDir,
       agentId,
-      sessionKey: params.sessionKey,
-      eventRouting: {
-        mainKey: params.cfg.session?.mainKey,
-        sessionScope: params.cfg.session?.scope,
-      },
-      ...resolveCommandExecApprovalRoute({
-        commandParams: params,
-        privateApprovalTarget: options.privateApprovalTarget,
-      }),
-      notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
-      notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
@@ -350,30 +326,11 @@ async function executeCodexDiagnosticsAddon(
   return await executePluginCommand({
     command: match.command,
     args: match.args,
-    senderId: params.command.senderId,
-    channel: params.command.channel,
-    channelId: params.command.channelId,
-    isAuthorizedSender: params.command.isAuthorizedSender,
-    senderIsOwner: params.command.senderIsOwner,
-    assertOwnerCurrent: params.command.assertOwnerCurrent,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
-    config: params.cfg,
-    from: params.command.from,
-    to: params.command.to,
-    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
-    accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
-    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
     ...(options.diagnosticsUploadApproved === undefined
       ? {}

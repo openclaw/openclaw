@@ -12,6 +12,7 @@ import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worke
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { getGatewayContextLifetime } from "../plugins/runtime/gateway-context-binding.js";
 import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -19,19 +20,24 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import type { GatewayHttpRequestLifetime } from "./http-request-authority.js";
 import {
   createGatewayUnattributableProxyReporter,
   type GatewayIngressTransport,
   type GatewayTailscaleIngressEndpoint,
   type GatewayTailscaleIngressMode,
 } from "./ingress-attribution.js";
-import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
+import {
+  createSandboxHostHttpRequestHandler,
+  createSandboxHostHttpServer,
+} from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
+import { bindGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
-import { createGatewayHttpServer } from "./server-http.js";
+import { createGatewayHttpServer, getGatewayHttpRequestHandler } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -97,6 +103,7 @@ export async function createGatewayHttpTransport(params: {
   getPluginRouteRegistry?: () => PluginRegistry;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  httpRequestLifetime?: GatewayHttpRequestLifetime;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
@@ -104,6 +111,7 @@ export async function createGatewayHttpTransport(params: {
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
+  waitForRequestRuntime?: () => Promise<void>;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
@@ -282,7 +290,7 @@ export async function createGatewayHttpTransport(params: {
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
       "⚠️  Gateway is binding to a non-loopback address. " +
-        "Ensure authentication is configured before exposing to public networks.",
+        "Configure authentication before exposing to public networks.",
     );
   }
   if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
@@ -322,6 +330,7 @@ export async function createGatewayHttpTransport(params: {
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
+  let controlUiUpgradeHandler: ReturnType<typeof attachGatewayUpgradeHandler> | undefined;
   const createGatewayListener = (
     ingressTransport: GatewayIngressTransport,
     tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
@@ -354,14 +363,17 @@ export async function createGatewayHttpTransport(params: {
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
+      httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
       tlsOptions,
       ingressTransport,
       reportUnattributableProxy,
     });
-    attachGatewayUpgradeHandler({
+    const upgradeHandler = attachGatewayUpgradeHandler({
       httpServer,
+      controlUiBasePath: params.controlUiBasePath,
       wss,
       handlePluginUpgrade,
       shouldEnforcePluginGatewayAuth,
@@ -378,10 +390,14 @@ export async function createGatewayHttpTransport(params: {
       desktopSessionRegistry: params.desktopSessionRegistry,
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      waitForRequestRuntime: params.waitForRequestRuntime,
       isStartupPending: params.isStartupPending,
       ingressTransport,
       reportUnattributableProxy,
     });
+    if (ingressTransport.kind === "ordinary") {
+      controlUiUpgradeHandler ??= upgradeHandler;
+    }
     return httpServer;
   };
   for (const host of bindHosts) {
@@ -404,6 +420,22 @@ export async function createGatewayHttpTransport(params: {
   const httpServer = gatewayHttpServers[0];
   if (!httpServer) {
     throw new Error("Gateway HTTP server failed to start");
+  }
+  if (params.getGatewayRequestContext && controlUiUpgradeHandler) {
+    const gatewayLifetime = getGatewayContextLifetime(params.getGatewayRequestContext).signal;
+    const requestLifetime = params.httpRequestLifetime?.requestEntryLifetime?.signal;
+    bindGatewayControlUiIngressHost(params.getGatewayRequestContext, {
+      resolveGatewayContext: params.getGatewayRequestContext,
+      controlUiBasePath: params.controlUiBasePath,
+      getResolvedAuth: params.getResolvedAuth,
+      getRuntimeConfig: loadRuntimeConfig,
+      handleRequest: getGatewayHttpRequestHandler(httpServer),
+      handleUpgrade: controlUiUpgradeHandler,
+      handleSandboxRequest: createSandboxHostHttpRequestHandler(resolvePluginRouteRegistry),
+      signal: requestLifetime
+        ? AbortSignal.any([gatewayLifetime, requestLifetime])
+        : gatewayLifetime,
+    });
   }
   let mcpAppSandboxPort: number | undefined;
   let sandboxHostStartPromise: Promise<number> | null = null;

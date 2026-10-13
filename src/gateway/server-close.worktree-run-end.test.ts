@@ -15,6 +15,7 @@ import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "../agents/worktrees/service.test-support.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -67,32 +68,20 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     let acceptedSignal: AbortSignal | undefined;
     let claimPaused = false;
     let holdRunLeaseRelease = false;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "worktrees.releaseRunLease" && holdRunLeaseRelease) {
-                  holdRunLeaseRelease = false;
-                  releaseEntered.resolve();
-                  await releaseLease.promise;
-                }
-                if (command.type === "worktrees.claimRemoval" && !claimPaused) {
-                  claimPaused = true;
-                  acceptedSignal = getAsyncWorkSignal();
-                  entered.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "worktrees.releaseRunLease" && holdRunLeaseRelease) {
+        holdRunLeaseRelease = false;
+        releaseEntered.resolve();
+        await releaseLease.promise;
+      }
+      if (command.type === "worktrees.claimRemoval" && !claimPaused) {
+        claimPaused = true;
+        acceptedSignal = getAsyncWorkSignal();
+        entered.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, executeOptions);
+    });
     restoreWorker = () => worker.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({

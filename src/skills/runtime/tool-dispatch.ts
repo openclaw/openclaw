@@ -5,6 +5,7 @@ import type { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -107,27 +108,30 @@ export async function resolveSkillDispatchTools(
     providerProfileAlsoAllow,
   );
   const groupId = params.sessionEntry?.groupId ?? params.groupId;
-  const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    subagentSessionKey: params.sessionKey,
-    agentId: resolvedAgentId,
-    spawnedBy: params.sessionEntry?.spawnedBy,
-    messageProvider: channel,
-    groupId,
-    groupChannel: params.sessionEntry?.groupChannel,
-    groupSpace: params.sessionEntry?.space,
-    accountId: params.message.accountId,
-    senderId: params.message.senderId ?? params.senderId,
-    senderName: params.message.senderName,
-    senderUsername: params.message.senderUsername,
-    senderE164: params.message.senderE164,
-  });
+  const requesterPolicies = await withPreparedSessionCapabilityRead(() =>
+    resolveRequesterToolPolicies({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      subagentSessionKey: params.sessionKey,
+      agentId: resolvedAgentId,
+      spawnedBy: params.sessionEntry?.spawnedBy,
+      messageProvider: channel,
+      groupId,
+      groupChannel: params.sessionEntry?.groupChannel,
+      groupSpace: params.sessionEntry?.space,
+      accountId: params.message.accountId,
+      senderId: params.message.senderId ?? params.senderId,
+      senderName: params.message.senderName,
+      senderUsername: params.message.senderUsername,
+      senderE164: params.message.senderE164,
+    }),
+  );
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     agentId: resolvedAgentId,
     sessionKey: params.sessionKey,
+    preparedSessionEntry: params.sessionEntry ?? null,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const ownerOnlyCoreToolPolicy = !params.senderIsOwner

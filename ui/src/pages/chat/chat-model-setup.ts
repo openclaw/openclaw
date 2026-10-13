@@ -1,4 +1,4 @@
-import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
   chatModelUnavailableMessage,
@@ -33,21 +33,41 @@ export function resolveChatModelSetup(
       ? undefined
       : (state.activeSession?.model ?? state.agentModel);
   const modelSetupRequired = requiresChatModelSetup(state);
-  const modelUnavailableBanner = chatModelUnavailableBanner(
-    model,
-    policy?.restricted ? undefined : state.activeSession?.modelProvider,
-    state.chatModelCatalog,
-    state.onSetup,
-    {
-      retired: state.catalogRetired === true,
-      error: state.catalogError,
-      modelSelectionPolicy: policy,
-      inference:
-        state.activeSession?.placement?.state === "active"
-          ? state.activeSession.placement.inference
-          : undefined,
-    },
-  );
+  const provider = policy?.restricted ? undefined : state.activeSession?.modelProvider;
+  const catalog = state.chatModelCatalog;
+  const onSetup = state.onSetup;
+  const retired = state.catalogRetired === true;
+  const error = state.catalogError;
+  const inference =
+    state.activeSession?.placement?.state === "active"
+      ? state.activeSession.placement.inference
+      : undefined;
+  let modelUnavailableBanner: ChatComposerDisabledBanner | undefined;
+  if (retired) {
+    modelUnavailableBanner = {
+      kind: "above-composer",
+      text: t(error ? "chat.modelControls.modelsUnavailable" : "chat.modelControls.loadingModels"),
+    };
+  } else if (
+    policy?.restricted &&
+    policy.defaultModel === null &&
+    !hasChatModelCatalogSelection(model, provider, catalog)
+  ) {
+    modelUnavailableBanner = {
+      kind: "above-composer",
+      text: t(
+        catalog.some((entry) => entry.manualSelectionAllowed !== false)
+          ? "chat.modelControls.selectionRequired"
+          : "chat.modelControls.noPermittedModels",
+      ),
+    };
+  } else {
+    const message = chatModelUnavailableMessage(
+      resolveChatModelUnavailableReason(model, provider, catalog),
+      inference,
+    );
+    modelUnavailableBanner = message ? createChatModelSetupBanner(onSetup, message) : undefined;
+  }
   return {
     modelSetupRequired,
     modelUnavailableBanner,
@@ -82,47 +102,4 @@ export function createChatModelSetupBanner(
     actionLabel: t("modelSetup.required.action"),
     onAction,
   };
-}
-
-function chatModelUnavailableBanner(
-  model: string | null | undefined,
-  provider: string | null | undefined,
-  catalog: ModelCatalogEntry[],
-  onSetup: () => void,
-  catalogState?: {
-    retired: boolean;
-    error: string | null;
-    modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
-    inference?: "worker";
-  },
-): ChatComposerDisabledBanner | undefined {
-  if (catalogState?.retired) {
-    return {
-      kind: "above-composer",
-      text: t(
-        catalogState.error
-          ? "chat.modelControls.modelsUnavailable"
-          : "chat.modelControls.loadingModels",
-      ),
-    };
-  }
-  if (
-    catalogState?.modelSelectionPolicy?.restricted &&
-    catalogState.modelSelectionPolicy.defaultModel === null &&
-    !hasChatModelCatalogSelection(model, provider, catalog)
-  ) {
-    return {
-      kind: "above-composer",
-      text: t(
-        catalog.some((entry) => entry.manualSelectionAllowed !== false)
-          ? "chat.modelControls.selectionRequired"
-          : "chat.modelControls.noPermittedModels",
-      ),
-    };
-  }
-  const message = chatModelUnavailableMessage(
-    resolveChatModelUnavailableReason(model, provider, catalog),
-    catalogState?.inference,
-  );
-  return message ? createChatModelSetupBanner(onSetup, message) : undefined;
 }

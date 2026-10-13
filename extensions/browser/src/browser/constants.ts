@@ -11,6 +11,8 @@ export const DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS = 20_000;
 export const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000;
 export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 export const DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION = 8;
+/** Maximum single WebSocket message the browser extension relay accepts. */
+export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES = 5;
 /**
  * Age after which a tracked tab whose browser stays unreachable is retired

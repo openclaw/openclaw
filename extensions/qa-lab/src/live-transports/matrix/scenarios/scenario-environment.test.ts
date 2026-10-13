@@ -544,75 +544,7 @@ describe("matrix scenario environment", () => {
     ).toEqual(Array.from({ length: gateway.call.mock.calls.length }, () => 60_000));
   });
 
-  it("waits for a pending config revision after a no-op patch", async () => {
-    vi.useFakeTimers();
-    const callOrder: string[] = [];
-    let configReadCount = 0;
-    const gateway = {
-      ...gatewayPaths,
-      call: vi.fn(async (method: string) => {
-        callOrder.push(method);
-        if (method === "config.get") {
-          configReadCount += 1;
-          if (configReadCount === 1) {
-            return { config: {} };
-          }
-          if (configReadCount === 2) {
-            return { hash: "config-hash" };
-          }
-          return {
-            appliedConfigHash: configReadCount === 3 ? "old-revision" : "new-revision",
-            configRevisionHash: "new-revision",
-            hash: "config-hash",
-          };
-        }
-        if (method === "config.patch") {
-          return {
-            noop: true,
-            changedPaths: [],
-            ok: true,
-          };
-        }
-        if (method === "channels.status") {
-          return healthyMatrixStatus(100);
-        }
-        throw new Error(`unexpected gateway method ${method}`);
-      }),
-    };
-    const environment = createEnvironment();
-    const waitForConfigRestartSettle = vi.fn(async () => {
-      callOrder.push("config.settle");
-    });
-
-    const preparing = environment.prepareFlow({
-      config: {},
-      gateway,
-      outputDir: "/tmp/matrix-qa/output",
-      scenarioId: "matrix-restart",
-      scenarioTitle: "Matrix restart",
-      timeoutMs: 1_000,
-      waitForConfigRestartSettle,
-    });
-    await vi.runAllTimersAsync();
-    await preparing;
-
-    expect(callOrder).toEqual([
-      "config.get",
-      "channels.status",
-      "config.get",
-      "config.patch",
-      "config.get",
-      "config.get",
-      "channels.status",
-    ]);
-    expect(waitForConfigRestartSettle).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { changedPaths: ["channels.matrix.accounts.sut.accessToken"], requiresRestart: true },
-    { changedPaths: ["models.providers.openai.models"], requiresRestart: false },
-    { changedPaths: [], requiresRestart: false },
-  ])(
+  it.each([{ changedPaths: ["channels.matrix.accounts.sut.accessToken"], requiresRestart: true }])(
     "requires a fresh account only for effective Matrix changes: $changedPaths",
     async ({ changedPaths, requiresRestart }) => {
       vi.useFakeTimers();

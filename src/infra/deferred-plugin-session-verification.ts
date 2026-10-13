@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
+} from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
@@ -17,7 +21,9 @@ import {
   readMigrationArtifactIdentity,
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";
+import { canonicalMigrationFilePath } from "./session-sqlite-migration-manifest.js";
 import {
+  type TranscriptFileFingerprint,
   readLegacyPrimaryTranscriptIdentity,
   readOnlySqliteDbStats,
   readOnlySqliteValidationSnapshot,
@@ -27,6 +33,42 @@ import {
   databaseFileIdentityKey,
   readDatabaseIdentityBirthtime,
 } from "./sqlite-worker-identity.js";
+
+/** Capture originals before deferral; settlement may only archive these verified identities. */
+export function captureDeferredPluginSessionSources(params: {
+  storePath: string;
+  indexIdentity?: MigrationArtifactIdentity;
+  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
+  unreferencedJsonlFiles: readonly string[];
+  referencedPaths?: ReadonlySet<string>;
+}): Array<{ path: string; identity: MigrationArtifactIdentity }> {
+  const sources = new Map<string, MigrationArtifactIdentity>(
+    params.indexIdentity ? [[path.resolve(params.storePath), params.indexIdentity]] : [],
+  );
+  for (const file of params.unreferencedJsonlFiles) {
+    if (!params.referencedPaths?.has(canonicalMigrationFilePath(file))) {
+      sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
+    }
+  }
+  for (const record of params.records) {
+    if (!record.transcriptPath || !record.sourceFingerprint) {
+      continue;
+    }
+    sources.set(
+      path.resolve(record.transcriptPath),
+      readMigrationArtifactIdentity(record.transcriptPath, 1n, record.sourceFingerprint),
+    );
+    for (const file of [
+      resolveTrajectoryPath(record.transcriptPath),
+      resolveTrajectoryPointerPath(record.transcriptPath),
+    ]) {
+      if (file && fs.existsSync(file)) {
+        sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
+      }
+    }
+  }
+  return [...sources].map(([sourcePath, identity]) => ({ path: sourcePath, identity }));
+}
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
 export async function verifyDeferredSessionDatabase(params: {

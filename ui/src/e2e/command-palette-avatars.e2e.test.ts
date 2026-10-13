@@ -13,6 +13,7 @@ const owner = {
   id: "profile-alex",
   identity: { type: "profile" as const, id: "profile-alex" },
   label: "Alex Rivera",
+  avatarUrl: "/api/users/profile-alex/avatar?v=1",
 };
 const rows = [
   {
@@ -49,6 +50,15 @@ suite.define(() => {
       await suite.withPage({ viewport: { width, height }, colorScheme: mode }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "agent.identity.get": {
+              cases: [
+                {
+                  match: { agentId: "main" },
+                  response: { agentId: "main", name: "Lobster", avatar: "/avatar/main" },
+                },
+                { response: { agentId: "reviewer", name: "Review bot", avatar: "" } },
+              ],
+            },
             "sessions.list": {
               cases: [
                 {
@@ -100,7 +110,7 @@ suite.define(() => {
         await page.route("**/avatar/main", (route) =>
           route.fulfill({ contentType: "image/svg+xml", body: agentAvatar }),
         );
-        await page.route("**/api/users/profile-alex/avatar", (route) =>
+        await page.route("**/api/users/profile-alex/avatar*", (route) =>
           route.fulfill({ contentType: "image/svg+xml", body: ownerAvatar }),
         );
         await page.goto(suite.server.baseUrl + "chat");

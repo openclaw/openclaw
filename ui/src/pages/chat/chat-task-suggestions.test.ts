@@ -98,18 +98,6 @@ describe("chat task suggestions", () => {
     expect(onAccept).not.toHaveBeenCalled();
   });
 
-  it("allows dismissal while requiring admin access to start", () => {
-    const { container } = renderSuggestion({
-      canAcceptTaskSuggestions: false,
-      canDismissTaskSuggestions: true,
-    });
-
-    const start = container.querySelector<HTMLButtonElement>(".task-suggestion__start");
-    expect(start?.disabled).toBe(true);
-    expect(start?.title).toBe("Administrator access is required to start suggested tasks.");
-    expect(container.querySelector(".task-suggestion__dismiss")).not.toBeNull();
-  });
-
   it("keeps reactive navigation active across rerenders and restarts repeated animations", () => {
     const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
     const container = document.createElement("div");
@@ -175,18 +163,6 @@ describe("chat task suggestions", () => {
     cards = [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-prev]"));
     container.remove();
-  });
-
-  it("dismisses the currently active task", () => {
-    const secondSuggestion = { ...suggestion, id: "task_456", title: "Trim old fixtures" };
-    const { container, onDismiss } = renderSuggestion({
-      taskSuggestions: [suggestion, secondSuggestion],
-      activeTaskSuggestionId: secondSuggestion.id,
-    });
-
-    const active = container.querySelector<HTMLElement>(".task-suggestion:not([hidden])");
-    active?.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
-    expect(onDismiss).toHaveBeenCalledWith(secondSuggestion);
   });
 
   it("strips bidi controls from every displayed field", () => {

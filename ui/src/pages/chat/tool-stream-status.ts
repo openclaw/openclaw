@@ -308,9 +308,7 @@ function handleLifecycleFallbackEvent(host: ToolStreamHost, payload: AgentEventP
   const active =
     resolveModelLabel(data.activeProvider, data.activeModel) ??
     resolveModelLabel(data.toProvider, data.toModel);
-  const previous =
-    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
-    toTrimmedString(data.previousActiveModel);
+  const previous = resolveModelLabel(data.previousActiveProvider, data.previousActiveModel);
   if (!selected || !active) {
     return;
   }
@@ -371,6 +369,19 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream === "lifecycle" && payload.data.phase === "fallback_step") {
+    const model = toTrimmedString(payload.data.fallbackStepToModel);
+    if (payload.data.fallbackStepFinalOutcome === "next_fallback" && model) {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "fallback",
+        message: formatUiExternalText(truncateUtf16Safe(model, 256)),
+        seq: payload.seq,
+      });
+    }
+    return true;
+  }
   if (payload.stream === "run_status" && payload.data.phase === "retrying") {
     const message = toTrimmedString(payload.data.message);
     if (message) {
@@ -379,6 +390,9 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         runId: payload.runId,
         phase: "retrying",
         message: formatUiExternalText(truncateUtf16Safe(message, 256)),
+        ...(typeof payload.data.retryAt === "number" && Number.isFinite(payload.data.retryAt)
+          ? { retryAt: payload.data.retryAt }
+          : {}),
         seq: payload.seq,
       });
     }
@@ -397,12 +411,9 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
       return true;
     }
     handleLifecycleCompactionEvent(host, payload);
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
+  } else if (payload.stream !== "fallback") {
+    return false;
   }
-  if (payload.stream === "fallback") {
-    handleLifecycleFallbackEvent(host, payload);
-    return true;
-  }
-  return false;
+  handleLifecycleFallbackEvent(host, payload);
+  return true;
 }

@@ -1,10 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  TLON_PENDING_APPROVAL_LIMIT,
-  type PendingApproval,
-  type TlonSettingsStore,
-} from "../settings.js";
+import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 
 function createApproval(index: number): PendingApproval {
@@ -20,7 +16,12 @@ function createFixture() {
   const approvals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT }, (_, index) =>
     createApproval(index),
   );
-  let pendingApprovals = approvals;
+  const state: Parameters<typeof createTlonApprovalRuntime>[0]["state"] = {
+    pendingApprovals: approvals,
+    currentSettings: {},
+    effectiveDmAllowlist: [],
+    effectiveOwnerShip: "~owner",
+  };
   const poke = vi.fn().mockResolvedValue(undefined);
   const api = {
     poke,
@@ -31,22 +32,11 @@ function createFixture() {
     log: vi.fn(),
     exit: vi.fn(),
   } satisfies RuntimeEnv;
-  let currentSettings: TlonSettingsStore = {};
   const approvalRuntime = createTlonApprovalRuntime({
     api,
     runtime,
     botShipName: "~bot",
-    getPendingApprovals: () => pendingApprovals,
-    setPendingApprovals: (nextApprovals) => {
-      pendingApprovals = nextApprovals;
-    },
-    getCurrentSettings: () => currentSettings,
-    setCurrentSettings: (settings) => {
-      currentSettings = settings;
-    },
-    getEffectiveDmAllowlist: () => [],
-    setEffectiveDmAllowlist: vi.fn(),
-    getEffectiveOwnerShip: () => "~owner",
+    state,
     processApprovedMessage: vi.fn().mockResolvedValue(undefined),
     refreshWatchedChannels: vi.fn().mockResolvedValue(0),
   });
@@ -55,7 +45,7 @@ function createFixture() {
     poke,
     runtime,
     approvalRuntime,
-    getPendingApprovals: () => pendingApprovals,
+    getPendingApprovals: () => state.pendingApprovals,
   };
 }
 

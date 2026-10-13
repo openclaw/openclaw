@@ -181,7 +181,12 @@ export class TelegramPollingSession {
     );
   }
 
-  #drainPendingDeliveriesAfterReconnect() {
+  #maybeDrainPendingDeliveries(finishedAt: number) {
+    if (finishedAt < this.#nextDeliveryDrainAt) {
+      return;
+    }
+    // Match the queue's first retry window, including while an earlier drain is still active.
+    this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
     if (this.#deliveryDrainInFlight) {
       return;
     }
@@ -209,16 +214,6 @@ export class TelegramPollingSession {
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });
-  }
-
-  #maybeDrainPendingDeliveries(finishedAt: number) {
-    if (finishedAt < this.#nextDeliveryDrainAt) {
-      return;
-    }
-    // Match the queue's first retry window. This keeps healthy polling useful
-    // as a recovery driver without reopening the drain on every long poll.
-    this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
-    this.#drainPendingDeliveriesAfterReconnect();
   }
 
   async #createPollingBot(cycleAbortController: AbortController): Promise<TelegramBot | undefined> {
@@ -456,13 +451,6 @@ export class TelegramPollingSession {
       void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
-    // Fail closed when the spool stops making progress: keeping any claim live would
-    // prevent a healthy process from recovering a wedged drain.
-    const stopBot = () => {
-      return Promise.resolve(bot.stop())
-        .then(() => undefined)
-        .catch(() => undefined);
-    };
     const clearForceCycleTimer = () => {
       if (!forceCycleTimer) {
         return;
@@ -575,7 +563,13 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      await waitForGracefulStop(stopBot);
+      // Fail closed when the spool stops making progress: keeping any claim live would
+      // prevent a healthy process from recovering a wedged drain.
+      await waitForGracefulStop(() =>
+        Promise.resolve(bot.stop())
+          .then(() => undefined)
+          .catch(() => undefined),
+      );
     }
   }
 }

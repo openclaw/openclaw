@@ -24,18 +24,15 @@ export function findChannelPluginInRegistry(
   if (!normalizedChannel) {
     return undefined;
   }
-  for (const entry of registry.channels) {
+  return registry.channels.find((entry) => {
     const plugin = entry?.plugin;
-    if (
+    return (
       normalizeOptionalLowercaseString(plugin?.id) === normalizedChannel ||
       plugin?.meta?.aliases?.some(
         (alias) => normalizeOptionalLowercaseString(alias) === normalizedChannel,
       )
-    ) {
-      return plugin;
-    }
-  }
-  return undefined;
+    );
+  })?.plugin;
 }
 
 // Message CLI actions run against a scoped registry handle without process-root

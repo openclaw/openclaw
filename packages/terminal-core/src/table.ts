@@ -58,15 +58,8 @@ function padCell(text: string, width: number, align: Align): string {
     return content;
   }
   const pad = width - w;
-  if (align === "right") {
-    return `${repeat(" ", pad)}${content}`;
-  }
-  if (align === "center") {
-    const left = Math.floor(pad / 2);
-    const right = pad - left;
-    return `${repeat(" ", left)}${content}${repeat(" ", right)}`;
-  }
-  return `${content}${repeat(" ", pad)}`;
+  const left = align === "right" ? pad : align === "center" ? Math.floor(pad / 2) : 0;
+  return `${repeat(" ", left)}${content}${repeat(" ", pad - left)}`;
 }
 
 const ESC = "\u001b";
@@ -228,7 +221,8 @@ function wrapLine(text: string, width: number): string[] {
   const flushAt = (breakAt: number | null) => {
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
-    const left = breakAt == null || breakAt <= 0 ? buf : buf.splice(0, breakAt);
+    const keepsSuffix = breakAt != null && breakAt > 0;
+    const left = keepsSuffix ? buf.splice(0, breakAt) : buf;
     // Only the emitted prefix determines continuation state; the buffered suffix
     // belongs to the next line.
     const content: string[] = [];
@@ -258,31 +252,23 @@ function wrapLine(text: string, width: number): string[] {
       lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
       logicalLineHasOutput = true;
     }
-    if (breakAt == null || breakAt <= 0) {
-      buf.length = 0;
-      if (openOsc8) {
-        buf.push({ kind: "ansi", value: openOsc8, width: 0 });
-      }
-      for (const state of activeSgr) {
-        buf.push({ kind: "ansi", value: state.open, width: 0 });
-      }
-      bufVisible = 0;
-      lastBreakIndex = null;
-      return;
-    }
-
+    const continuation: AnsiToken[] = activeSgr.map((state) => ({
+      kind: "ansi",
+      value: state.open,
+      width: 0,
+    }));
     if (openOsc8) {
-      buf.unshift({ kind: "ansi", value: openOsc8, width: 0 });
+      const link: AnsiToken = { kind: "ansi", value: openOsc8, width: 0 };
+      if (keepsSuffix) {
+        continuation.push(link);
+      } else {
+        continuation.unshift(link);
+      }
     }
-    if (activeSgr.length > 0) {
-      buf.unshift(
-        ...activeSgr.map((state) => ({
-          kind: "ansi" as const,
-          value: state.open,
-          width: 0,
-        })),
-      );
+    if (!keepsSuffix) {
+      buf.length = 0;
     }
+    buf.unshift(...continuation);
 
     bufVisible = buf.reduce((acc, token) => acc + token.width, 0);
     lastBreakIndex = null;
@@ -482,8 +468,7 @@ export function renderTable(opts: RenderTableOptions): string {
   // If we have room and any flex columns, expand them to fill the available width.
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
-    const sepCountLocal = columns.length + 1;
-    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
     let extra = maxWidth - currentTotal;
     if (extra > 0) {
       let flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));

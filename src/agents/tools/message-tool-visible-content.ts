@@ -8,10 +8,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
-import {
-  parseInteractiveParam,
-  parseJsonMessageParam,
-} from "../../infra/outbound/message-action-params.js";
+import { parseJsonMessageParam } from "../../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -246,7 +243,7 @@ export function sanitizeMessageToolVisiblePayload(
     return trim ? sanitized.text.trim() : sanitized.text;
   };
   parseJsonMessageParam(params, "presentation");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
   for (const field of [
     "text",
     "content",

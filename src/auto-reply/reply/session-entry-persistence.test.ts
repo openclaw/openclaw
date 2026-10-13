@@ -1,6 +1,10 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   loadSessionEntry,
@@ -78,16 +82,25 @@ describe("persistReplySessionEntry", () => {
       };
       await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
 
-      const result = await persistReplySessionEntry({
-        storePath,
-        sessionKey,
-        initialEntry,
-        entry: {
-          ...initialEntry,
-          thinkingLevel: "high",
-          updatedAt: 250,
-        },
-      });
+      const hostSql = observeHostDataSql();
+      let result: Awaited<ReturnType<typeof persistReplySessionEntry>>;
+      try {
+        result = await persistReplySessionEntry({
+          storePath,
+          sessionKey,
+          initialEntry,
+          entry: {
+            ...initialEntry,
+            thinkingLevel: "high",
+            updatedAt: 250,
+          },
+          skipMaintenance: true,
+          validateCommit: () => undefined,
+        });
+      } finally {
+        hostSql.restore();
+      }
+      expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
 
       expect(result.status).toBe("current");
       if (result.status !== "current") {

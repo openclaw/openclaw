@@ -188,10 +188,7 @@ export async function prepareSkillBinaryProbe(
       hasBin: recordBinaryRequirement,
     });
     if (needsBinaries) {
-      for (const bin of entry.metadata?.requires?.bins ?? []) {
-        bins.add(bin);
-      }
-      for (const bin of entry.metadata?.requires?.anyBins ?? []) {
+      for (const bin of resolveSkillRequiredBins(entry)) {
         bins.add(bin);
       }
     }
@@ -209,4 +206,8 @@ export async function prepareSkillBinaryProbe(
     },
     needsRetry: () => unprepared || !facts.isCurrent(),
   };
+}
+
+export function resolveSkillRequiredBins(entry: SkillEntry): string[] {
+  return (entry.metadata?.requires?.bins ?? []).concat(entry.metadata?.requires?.anyBins ?? []);
 }

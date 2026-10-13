@@ -8,7 +8,6 @@ import {
   type SessionData,
   type SessionEntry,
   templateCss,
-  templateHtml,
 } from "../../../../test/helpers/export-html-template.js";
 
 function selectorSpecificity(selector: string): [number, number, number] {
@@ -41,18 +40,6 @@ function firstSelectorForDisplay(css: string, display: string, startAt: number):
 }
 
 describe("export html sidebar trigger affordance", () => {
-  it("keeps the hamburger sidebar trigger accessible and visibly interactive", () => {
-    expect(templateHtml).toContain('id="hamburger" class="sidebar-menu-trigger"');
-    expect(templateHtml).toContain('aria-label="Open sidebar"');
-    expect(templateHtml).toContain('<line x1="4" x2="20" y1="6" y2="6" />');
-    expect(templateHtml).toContain('<line x1="4" x2="20" y1="12" y2="12" />');
-    expect(templateHtml).toContain('<line x1="4" x2="20" y1="18" y2="18" />');
-    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger {");
-    expect(templateCss).toContain("cursor: pointer;");
-    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:hover {");
-    expect(templateCss).toContain("background: var(--container-bg);");
-    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:focus-visible {");
-  });
 
   it("lets the mobile hamburger display rule win the CSS cascade", () => {
     const baseSelector = "#hamburger.sidebar-menu-trigger";
@@ -646,6 +633,7 @@ describe("export html security hardening", () => {
     expect(copyBtn.hasAttribute("data-entry-id")).toBe(true);
     // No stray attributes from the payload
     expect(copyBtn.hasAttribute("data-x")).toBe(false);
+    expect((copyBtn as HTMLElement).dataset.entryId).toBe(xssId);
 
     // The user message element must not have attribute breakout either
     const userMsg = requireElement(
@@ -653,6 +641,7 @@ describe("export html security hardening", () => {
       "user message element missing",
     );
     expect(userMsg.getAttribute("data-x")).toBeNull();
+    expect(document.getElementById(`entry-${xssId}`)).toBe(userMsg);
     // The element id must start with entry- (the payload is contained within)
     const elementId = userMsg.getAttribute("id") ?? "";
     expect(elementId.startsWith("entry-")).toBe(true);
@@ -690,45 +679,6 @@ describe("export html security hardening", () => {
     );
   });
 
-  it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
-    // IDs with characters that need HTML escaping but should round-trip correctly
-    const specialId = `msg-with"quotes&amp's`;
-    const session: SessionData = {
-      header: { id: "session-roundtrip", timestamp: now() },
-      entries: [
-        {
-          id: specialId,
-          parentId: null,
-          timestamp: now(),
-          type: "message",
-          message: { role: "user", content: "test" },
-        },
-      ],
-      leafId: specialId,
-      systemPrompt: "",
-      tools: [],
-    };
-
-    const { document } = await renderTemplate(session);
-    const messages = requireElement(document.getElementById("messages"), "messages root missing");
-
-    // The copy-link button should exist
-    const copyBtn = requireElement(
-      messages.querySelector(".copy-link-btn"),
-      "copy-link button missing",
-    );
-
-    // Browser decodes HTML entities in dataset reads, so dataset.entryId
-    // must return the RAW entry.id (not the HTML-escaped version).
-    // This is essential for buildShareUrl() to produce the correct URL.
-    const datasetValue = (copyBtn as HTMLElement).dataset.entryId;
-    expect(datasetValue).toBe(specialId);
-
-    // The DOM element id must also round-trip: getElementById should find it
-    const userMsg = document.getElementById(`entry-${specialId}`);
-    expect(userMsg).not.toBeNull();
-    expect(userMsg?.classList.contains("user-message")).toBe(true);
-  });
 
   it("escapes markdown data-image attributes", async () => {
     const dataImage = "data:image/png;base64,AAAA";

@@ -12,6 +12,11 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "gateway-ingress": {
+    category: "core",
+  },
+  "database-engine-runtime": { category: "runtime" },
+  "database-engine-worker-runtime": { category: "runtime" },
   "control-ui-link-reader": {
     category: "core",
   },

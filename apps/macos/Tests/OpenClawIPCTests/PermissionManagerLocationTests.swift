@@ -29,6 +29,21 @@ struct PermissionManagerLocationTests {
         #expect(coordinator.pendingRequestCount == 0)
     }
 
+    @Test func `delayed location recovery loses authority when its caller retires`() async {
+        let coordinator = LocationPermissionRequestCoordinator()
+        let enqueued = AsyncTestGate()
+        var isCurrent = true
+        let request = Task { @MainActor in
+            await coordinator.wait(isCurrent: { isCurrent }) { _ in enqueued.open() }
+        }
+        await enqueued.wait()
+        #expect(coordinator.hasCurrentRequests)
+        isCurrent = false
+        #expect(!coordinator.hasCurrentRequests)
+        coordinator.finish(status: .denied)
+        #expect(await request.value == .denied)
+    }
+
     @Test
     func `authorizedAlways counts for both modes`() {
         #expect(PermissionManager.isLocationAuthorized(status: .authorizedAlways, requireAlways: false))

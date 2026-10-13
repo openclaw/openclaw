@@ -40,7 +40,7 @@ fn verify_native_request(expected: bool) {
         .output()
         .expect("read macOS power assertions");
     assert!(result.status.success());
-    let output = String::from_utf8(result.stdout).unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
     let owner = format!("pid {}(", std::process::id());
     let owned: Vec<_> = output
         .lines()

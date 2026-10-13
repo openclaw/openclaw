@@ -41,16 +41,13 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  const lines = [
+  return [
     "Codex models:",
     ...result.models.map(
       (model) => `- ${formatCodexDisplayText(model.id)}${model.isDefault ? " (default)" : ""}`,
     ),
-  ];
-  if (result.truncated) {
-    lines.push("- More models available; output truncated.");
-  }
-  return lines.join("\n");
+    ...(result.truncated ? ["- More models available; output truncated."] : []),
+  ].join("\n");
 }
 
 export function formatThreads(response: JsonValue | undefined): string {
@@ -326,10 +323,7 @@ function summarizeAccount(value: JsonValue | undefined): string {
 
 function summarizeArrayLike(value: JsonValue | undefined): string {
   const entries = extractArray(value);
-  if (entries.length === 0) {
-    return "none returned";
-  }
-  return `${entries.length}`;
+  return entries.length === 0 ? "none returned" : `${entries.length}`;
 }
 
 function readEnabledCodexSkills(value: JsonValue | undefined): {

@@ -14,7 +14,7 @@ import "../test-helpers/app-sidebar-cases/session-mutations.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-scroll.ts";
 import "../test-helpers/app-sidebar-cases/transient-menus.ts";
 
-it.each([0, 1])("resolves %i sidebar rows before agent selection is available", (count) => {
+it("resolves sidebar rows before agent selection is available", () => {
   const sidebar = document.createElement("openclaw-app-sidebar");
   if (!(sidebar instanceof AppSidebarSessionNavigationElement)) {
     throw new Error("expected the registered sidebar");
@@ -25,9 +25,9 @@ it.each([0, 1])("resolves %i sidebar rows before agent selection is available", 
   sidebar.sessionData.sessionsResult = {
     ts: 1,
     path: "",
-    count,
+    count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: count === 0 ? [] : [{ key, kind: "direct", updatedAt: 1 }],
+    sessions: [{ key, kind: "direct", updatedAt: 1 }],
   };
   const navigation = sidebar.getSessionNavigationState();
   expect(navigation.selectedAgentId).toBe("main");

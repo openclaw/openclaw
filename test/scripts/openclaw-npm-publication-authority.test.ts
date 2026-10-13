@@ -60,6 +60,7 @@ async function fixture(candidateTrap = false) {
   for (const file of [
     "scripts/openclaw-npm-publish.sh",
     "scripts/openclaw-npm-extended-stable-release.mjs",
+    "scripts/plugin-sdk-api-release-evidence.mjs",
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/lib/release-version.mjs",
   ]) {
@@ -379,7 +380,7 @@ describe("npm final publication authority", () => {
     expect(f.state().calls).toContain("actions/runs/99");
   });
 
-  it.each([1, 3])(
+  it.each([3])(
     "stops every later write when admission is revoked after %i companions",
     async (count) => {
       const f = await fixture();

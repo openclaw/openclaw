@@ -1,4 +1,3 @@
-// Cached, model-phrased caretaker greetings over deterministic gateway facts.
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
@@ -75,10 +74,6 @@ export function createSystemAgentGreetingCache(
   const reader = createSqliteAuditRecordReader<SystemAgentGreetingCacheRecord>(options);
   const writer = createSqliteAuditRecordWriter<SystemAgentGreetingCacheRecord>(options);
   return { ...reader, compareAndSet: writer.compareAndSet };
-}
-
-function openConfigAuditStore(env?: NodeJS.ProcessEnv): SystemAgentGreetingConfigAuditStore {
-  return createSqliteAuditRecordReader<ConfigAuditRecord>({ scope: CONFIG_AUDIT_SCOPE, env });
 }
 
 async function tryOr<T>(fallback: T, read: () => T | Promise<T>): Promise<T> {
@@ -179,7 +174,12 @@ export async function loadSystemAgentGreetingFacts(
     // Unavailable cache state leaves the audit cursor unacknowledged.
   }
   try {
-    auditStore = opts.configAuditStore ?? openConfigAuditStore(opts.env);
+    auditStore =
+      opts.configAuditStore ??
+      createSqliteAuditRecordReader<ConfigAuditRecord>({
+        scope: CONFIG_AUDIT_SCOPE,
+        env: opts.env,
+      });
   } catch {
     // Unavailable audit state cannot advance delivery's cursor.
   }

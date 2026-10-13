@@ -4,7 +4,7 @@ import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -89,20 +89,12 @@ export function requireChatSessionAction(
   host: ChatCommandHost,
   action: "abort" | "compact" | "reset",
 ): boolean {
-  const access = readChatSessionActionAccess(
-    currentSessionAccessSnapshot(host),
-    Boolean(host.chatRunId),
-    {
-      session: host.sessionsResult?.sessions.find((row) =>
-        visibleSessionMatches(
-          host,
-          row.key,
-          row.agentId ?? host.sessionsResultAgentId ?? undefined,
-        ),
-      ),
-      sessionAbortable: host.chatRunSessionAbortable === true,
-    },
-  )[action];
+  // Typed Stop is session-scoped, so it needs sessions.abort even while a run is local.
+  const access = readChatSessionActionAccess(currentSessionAccessSnapshot(host), false, {
+    session: host.sessionsResult?.sessions.find((row) =>
+      visibleSessionMatches(host, row.key, row.agentId ?? host.sessionsResultAgentId ?? undefined),
+    ),
+  })[action];
   if (access.allowed) {
     return true;
   }
@@ -311,13 +303,14 @@ export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
   args: string,
+  attachments?: readonly ChatAttachment[],
 ): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
       if (!requireChatSessionAction(host, "abort")) {
         return "failed";
       }
-      await handleAbortChat(host);
+      await handleAbortChat(host, { scope: "session" });
       return "completed";
     case "new":
       if (!host.createChatSession) {
@@ -364,7 +357,8 @@ export async function dispatchChatSlashCommand(
       return "completed";
   }
 
-  if (!host.client || !host.connected) {
+  const target = captureChatCommandTarget(host);
+  if (!target) {
     setChatError(host, "Gateway not connected");
     injectCommandResult(
       host,
@@ -376,15 +370,12 @@ export async function dispatchChatSlashCommand(
     return "failed";
   }
 
-  const target = captureChatCommandTarget(host);
-  if (!target) {
-    return "failed";
-  }
   const targetIsCurrent = () => isChatCommandTargetCurrent(host, target);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {
     result = await executeSlashCommand(target.client, target.sessionKey, name, args, {
       sessions: host.sessions,
+      attachments,
       sessionAccessSnapshot: currentSessionAccessSnapshot(host),
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
@@ -420,8 +411,6 @@ export async function dispatchChatSlashCommand(
   if (result.trackRunId && targetIsCurrent()) {
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
-    host.chatStreamItemId = undefined;
-    host.chatStreamItemStartOffset = undefined;
     host.chatSending = false;
   }
 

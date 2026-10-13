@@ -151,16 +151,23 @@ export class SubagentLifecycleController {
 
   pruneRetiredRuns = (changedRunIds?: readonly string[]): void => {
     const changed = changedRunIds && new Set(changedRunIds);
+    const changedOwners = changedRunIds && new Set<object>();
+    for (const runId of changedRunIds ?? []) {
+      const entry = this.options.runs.get(runId);
+      if (entry) {
+        changedOwners?.add(getSubagentRunRuntimeKey(entry));
+      }
+    }
     for (const [identity, observed] of this.runtimeRuns) {
-      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (
         changed &&
         !changed.has(observed.runId) &&
         !(observed.collect && observed.swarmRunId && changed.has(observed.swarmRunId)) &&
-        !(current && changed.has(current.runId))
+        !changedOwners?.has(identity)
       ) {
         continue;
       }
+      const current = getCurrentSubagentRunOwner(this.options.runs, observed);
       if (current) {
         this.runtimeRuns.set(identity, current);
       }
@@ -339,14 +346,6 @@ export class SubagentLifecycleController {
     this.scheduledResumeTimers.clear();
     for (const scheduled of this.scheduledRequesterSettleWakeTimers.values()) {
       clearTimeout(scheduled.timer);
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(scheduled.entry))
-        ?.initialTransfer?.retire();
-    }
-    for (const entry of this.options.runs.values()) {
-      this.pendingRequesterSettleWakeCommits
-        .get(getSubagentRunRuntimeKey(entry))
-        ?.initialTransfer?.retire();
     }
     this.scheduledRequesterSettleWakeTimers.clear();
     this.pendingRequesterSettleWakeRearms = new Set();
@@ -379,6 +378,15 @@ export class SubagentLifecycleController {
   isCleanupAttemptCurrent = (entry: SubagentRunRecord, generation: number): boolean =>
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
     this.isCleanupGenerationCurrent(entry, generation);
+  /** Completion hands cleanup off synchronously, so these spans cover the whole live tail. */
+  isTerminalTailActive = (entry: SubagentRunRecord): boolean => {
+    const identity = getSubagentRunRuntimeKey(entry);
+    return (
+      this.terminalEffectUsers.has(identity) ||
+      this.cleanupReservations.has(identity) ||
+      this.activeCleanupAttempts.has(identity)
+    );
+  };
   isCleanupOwnerCurrent = (entry: SubagentRunRecord): boolean => {
     const current = this.liveRow(entry);
     return (
@@ -600,8 +608,6 @@ export class SubagentLifecycleController {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
           assertCurrent?.();
         },
-        scheduleRetry: (entry) =>
-          scheduleRequesterSettleWake(this, entry.runId, entry, stateContext),
       });
   }
 

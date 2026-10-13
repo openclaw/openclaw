@@ -79,6 +79,7 @@ describe("plugin SDK sandbox process ownership", () => {
     const root = roots.make("openclaw-sdk-state-owner-");
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
+    vi.stubEnv("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0");
     const env = {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
@@ -87,8 +88,13 @@ describe("plugin SDK sandbox process ownership", () => {
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: path.join(root, "state"),
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_TEST_LOG_FILE: path.join(
+        roots.make("openclaw-sdk-state-owner-logs-"),
+        "sdk-owner.log",
+      ),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
     };
     let parentOwner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     expect(parentOwner).not.toBeNull();

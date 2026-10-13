@@ -4,13 +4,10 @@ import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  readSessionColdTranscript,
-  SessionTranscriptColdError,
-} from "../config/sessions/session-cold-storage-state.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -156,13 +153,11 @@ it("restores cold Talk history through its existing owner before bounded hydrati
         config: maintenanceConfig(fixture.scope.storePath),
       }),
     ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-    await expect(
-      readSessionPreviewItemsFromTranscriptAsync(fixture.scope, 16, 800, "model-context"),
-    ).rejects.toBeInstanceOf(SessionTranscriptColdError);
+    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
     await replaceSessionEntry(fixture.scope, { sessionId: fixture.scope.sessionId, updatedAt: 1 });
     expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
     const items = await readTalkRealtimeInitialItems(
-      { ...fixture.scope, canonicalKey: fixture.scope.sessionKey },
+      { ...fixture.scope, canonicalKey: fixture.scope.sessionKey, assertCurrent: vi.fn() },
       () => undefined,
     );
     expect(items).toEqual(expected);
@@ -203,13 +198,14 @@ it("rejects Talk history when its live authority is revoked during real hydratio
         };
       });
     let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("Synthetic Talk authority revoked");
+      }
+    };
     const pending = readTalkRealtimeInitialItems(
-      { ...scope, canonicalKey: scope.sessionKey },
-      () => {
-        if (!current) {
-          throw new Error("Synthetic Talk authority revoked");
-        }
-      },
+      { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
+      assertCurrent,
     );
     const rejected = expect(pending).rejects.toThrow("Synthetic Talk authority revoked");
     try {

@@ -62,6 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -102,6 +103,7 @@ export type SubagentAnnounceDirectParams = {
   requesterIsSubagent: boolean;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  onDeliveryError?: (error: unknown) => void;
   signal?: AbortSignal;
   onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -121,6 +123,29 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
+  return withSubagentRequesterSource(
+    params.targetRequesterSessionKey,
+    params.requesterAgentId,
+    async (
+      isRequesterCurrent,
+    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return sendSubagentAnnounceDirectlyBound(guardedParams);
+    },
+  );
+}
+
+async function sendSubagentAnnounceDirectlyBound(
+  params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
+): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
     return { delivered: false, path: "none" };
   }
@@ -144,7 +169,7 @@ export async function sendSubagentAnnounceDirectly(
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requester = loadRequesterSessionEntry(
+    const requester = await loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
@@ -294,6 +319,7 @@ export async function sendSubagentAnnounceDirectly(
         agentResult,
         signal: params.signal,
         onDeliveryResult: params.onDeliveryResult,
+        onDeliveryError: params.onDeliveryError,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     // A private settle turn never delivers; automatic only keeps a tool-only mode from
@@ -377,7 +403,7 @@ export async function sendSubagentAnnounceDirectly(
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(
         params.targetRequesterSessionKey,
-        loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
       ).isActive &&
       !agentMediatedCompletion
     ) {
@@ -548,6 +574,7 @@ export async function sendSubagentAnnounceDirectly(
           return textDelivery;
         }
       }
+      params.onDeliveryError?.(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -640,6 +667,7 @@ export async function sendSubagentAnnounceDirectly(
       ? settledRecovery.delivery
       : classifyResponse({ status: "ok", result: settledRecovery.result });
   } catch (err) {
+    params.onDeliveryError?.(err);
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"
       : isPermanentAnnounceDeliveryError(err)

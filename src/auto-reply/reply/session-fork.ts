@@ -28,15 +28,12 @@ type ParentForkDecisionParams = {
   storePath?: string;
 };
 
-type ForkSessionFromParentParams = {
+type ForkSessionFromParentParams = ParentForkDecisionParams & {
   maxTokens?: number;
   parentSessionKey: string;
-  parentEntry: SessionEntry;
   agentId: string;
   commitGuard?: () => void;
-  config?: OpenClawConfig;
   sessionKey: string;
-  storePath?: string;
   forkFrom?: "last-completed";
 
   /** Cross-agent forks land the child transcript in the target agent's store. */
@@ -50,11 +47,9 @@ type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "paren
     sessionStoreKeys?: readonly string[];
   };
 
-function resolveParentForkStorePath(params: {
-  agentId?: string;
-  config?: OpenClawConfig;
-  storePath?: string;
-}): string {
+function resolveParentForkStorePath(
+  params: Pick<ParentForkDecisionParams, "agentId" | "config" | "storePath">,
+): string {
   return (
     params.storePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId })

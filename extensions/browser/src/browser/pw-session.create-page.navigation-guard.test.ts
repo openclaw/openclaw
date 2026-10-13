@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
-import { chromium } from "playwright-core";
+import { chromium, errors } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import * as chromeModule from "./chrome.js";
@@ -297,6 +297,126 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(route.continue).toHaveBeenCalledTimes(1);
     expect(f.pageGoto).toHaveBeenCalledTimes(1);
     expect(f.pageClose).not.toHaveBeenCalled();
+  });
+  it("opens a slow page within the requested navigation budget", async () => {
+    f.pageGoto.mockImplementationOnce(async (_url, options) => {
+      const { timeout } = options as { timeout: number };
+      if (timeout < 40_000) {
+        throw new errors.TimeoutError("load took longer than the navigation budget");
+      }
+      f.pageUrl.mockReturnValue(publicUrl);
+      return null;
+    });
+    await expect(create({ timeoutMs: 60_000 })).resolves.toMatchObject({
+      targetId: "TARGET_1",
+      url: publicUrl,
+    });
+    expect(await getPage("TARGET_1")).toBe(f.page);
+  });
+  it("returns a committed tab when its load event times out", async () => {
+    f.pageGoto.mockImplementationOnce(async () => {
+      f.pageUrl.mockReturnValue(publicUrl);
+      throw new errors.TimeoutError("load event timed out");
+    });
+    const opened = await create();
+    expect(opened).toMatchObject({ targetId: "TARGET_1", url: publicUrl });
+    expect(await getPage(opened.targetId)).toBe(f.page);
+    expect(f.pageClose).not.toHaveBeenCalled();
+    await opened.close();
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+  });
+  it("closes an uncommitted tab when navigation times out", async () => {
+    const error = new errors.TimeoutError("navigation never committed");
+    f.pageGoto.mockRejectedValueOnce(error);
+    await expect(create()).rejects.toBe(error);
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
+  it("checks the committed URL before retaining a timed-out tab", async () => {
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+    });
+    f.pageGoto.mockImplementationOnce(async () => {
+      f.pageUrl.mockReturnValue(privateUrl);
+      throw new errors.TimeoutError("load event timed out");
+    });
+    await denied(create({ ssrfPolicy: strictPolicy }));
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
+  it("closes a timed-out tab if its caller was cancelled", async () => {
+    const controller = new AbortController();
+    const error = new Error("caller cancelled");
+    f.pageGoto.mockImplementationOnce(async () => {
+      f.pageUrl.mockReturnValue(publicUrl);
+      controller.abort(error);
+      throw new errors.TimeoutError("load event timed out");
+    });
+    await expect(create({ signal: controller.signal })).rejects.toBe(error);
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
+  it("closes the created page to interrupt an opening navigation on cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const started = createDeferred<void>();
+    const navigation = createDeferred<null>();
+    const closed = new Error("Target page has been closed");
+    f.pageGoto.mockImplementationOnce(() => {
+      started.resolve();
+      return navigation.promise;
+    });
+    const closePage = f.pageClose.getMockImplementation();
+    if (!closePage) {
+      throw new Error("missing page cleanup fixture");
+    }
+    f.pageClose.mockImplementationOnce(async () => {
+      await closePage();
+      navigation.reject(closed);
+    });
+    const result = create({ signal: controller.signal }).catch((error: unknown) => error);
+    await started.promise;
+    try {
+      controller.abort(reason);
+      expect(f.pageClose).toHaveBeenCalledOnce();
+      expect(await result).toBe(reason);
+      expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    } finally {
+      navigation.reject(closed);
+      await result;
+    }
+  });
+  it("closes a page allocated after cancellation without starting navigation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled during allocation");
+    const allocating = createDeferred<void>();
+    const allocation = createDeferred<import("playwright-core").Page>();
+    vi.spyOn(f.page.context(), "newPage").mockImplementationOnce(() => {
+      allocating.resolve();
+      return allocation.promise;
+    });
+    const result = create({ signal: controller.signal }).catch((error: unknown) => error);
+    await allocating.promise;
+    controller.abort(reason);
+    f.pushOpenPage();
+    allocation.resolve(f.page);
+    expect(await result).toBe(reason);
+    expect(f.pageGoto).not.toHaveBeenCalled();
+    expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
+  it("releases cancellation cleanup when a committed timed-out page is handed off", async () => {
+    const controller = new AbortController();
+    f.pageGoto.mockImplementationOnce(async () => {
+      f.pageUrl.mockReturnValue(publicUrl);
+      throw new errors.TimeoutError("load event timed out");
+    });
+    const owned = await create({ signal: controller.signal });
+    controller.abort(new Error("caller finished"));
+    expect(await getPage(owned.targetId)).toBe(f.page);
+    expect(f.pageClose).not.toHaveBeenCalled();
+    await owned.close();
+    expect(f.pageClose).toHaveBeenCalledOnce();
   });
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     blockedRedirect({ url: "file:///etc/passwd" });

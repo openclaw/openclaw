@@ -228,6 +228,21 @@ export function projectWorkerSessionTurnClaim(
     : undefined;
 }
 
+export function projectPlacementTurnClaim(
+  record: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>,
+): WorkerSessionTurnClaim | undefined {
+  const claim = record.turnClaim;
+  return claim
+    ? {
+        sessionId: record.sessionId,
+        claimId: claim.claimId,
+        runId: claim.runId,
+        placementGeneration: claim.generation,
+        owner: placementTurnOwner(record),
+      }
+    : undefined;
+}
+
 export type WorkerSessionPlacementTransitionPatch = Partial<
   Omit<TerminalPlacementMetadata, "terminalAtMs"> & { recoveryError: string | null }
 >;

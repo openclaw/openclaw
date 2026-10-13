@@ -46,10 +46,13 @@ function settingsRow(page: Page, title: string): Locator {
     .first();
 }
 
-async function selectValue(locator: Locator): Promise<string> {
-  return locator.evaluate((element) =>
-    String((element as HTMLElement & { value?: unknown }).value),
-  );
+async function selectValue(locator: Locator): Promise<string | null> {
+  return locator.locator('[role="option"][aria-selected="true"]').getAttribute("data-value");
+}
+
+async function selectLanguage(locator: Locator, value: string): Promise<void> {
+  await locator.locator(".picker-select__trigger").click();
+  await locator.locator(`[role="option"][data-value="${value}"]`).click();
 }
 
 async function readPersistedSettings(page: Page): Promise<Record<string, unknown>> {
@@ -120,55 +123,6 @@ async function captureViewport(page: Page, filename: string): Promise<void> {
 }
 
 suite.define(() => {
-  it("shows task progress auto-collapse off by default and persists the opt-in", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "config.get": configResponse({}, "appearance-task-progress-1"),
-          },
-        });
-
-        const response = await page.goto(
-          `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
-        );
-        expect(response?.status()).toBe(200);
-        await waitForControlUiSettingsTakeover(page);
-        await gateway.waitForRequest("config.get");
-
-        const row = settingsRow(page, "Collapse task progress by default on desktop");
-        const toggle = row.locator("wa-switch");
-        await row.scrollIntoViewIfNeeded();
-        await expect
-          .poll(() =>
-            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-          )
-          .toBe(false);
-        await expect.poll(() => row.textContent()).not.toContain("Using default:");
-        await captureViewport(page, "11-task-progress-collapse-off.png");
-
-        await row.click();
-        await expect
-          .poll(() =>
-            toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
-          )
-          .toBe(true);
-        await expect
-          .poll(() => readPersistedSettings(page))
-          .toMatchObject({
-            chatCollapseTaskProgress: true,
-          });
-        await captureViewport(page, "12-task-progress-collapse-on.png");
-      },
-    );
-  });
-
   it("removes synced and browser-local overrides, then reloads inherited defaults", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -216,14 +170,14 @@ suite.define(() => {
       const themeSection = page.locator("#settings-appearance-theme");
       const colorModeRow = settingsRow(page, "Color mode");
       const textSizeSection = page.locator("#settings-appearance-text-size");
-      const languageSelect = languageRow.locator("wa-select");
-      const colorModeGroup = colorModeRow.locator("wa-radio-group");
+      const languageSelect = languageRow.locator("openclaw-select-picker");
+      const colorModeGroup = colorModeRow.getByRole("radiogroup");
 
       await expect.poll(() => selectValue(languageSelect)).toBe("en");
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("dark");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
       await expect
         .poll(() =>
           textSizeSection
@@ -243,12 +197,7 @@ suite.define(() => {
       const withoutLocale = { ...initialPrefs };
       delete withoutLocale.locale;
       await resetSyncedPreference({
-        click: () =>
-          languageSelect.evaluate((element) => {
-            const select = element as HTMLElement & { value: string };
-            select.value = "system";
-            select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-          }),
+        click: () => selectLanguage(languageSelect, "system"),
         expectedKey: "locale",
         gateway,
         hash: "appearance-defaults-2",
@@ -275,7 +224,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           colorModeRow
-            .locator('wa-radio[value="system"]')
+            .getByRole("radio", { name: "System", exact: true })
             .click()
             .then(() => undefined),
         expectedKey: "themeMode",
@@ -291,7 +240,7 @@ suite.define(() => {
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"))
         .toBe("true");
-      await expect.poll(() => selectValue(colorModeGroup)).toBe("system");
+      await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("system");
       await expect
         .poll(() =>
           textSizeSection
@@ -309,14 +258,18 @@ suite.define(() => {
       const reloadedColorModeRow = settingsRow(page, "Color mode");
       const reloadedTextSizeSection = page.locator("#settings-appearance-text-size");
 
-      await expect.poll(() => selectValue(reloadedLanguageRow.locator("wa-select"))).toBe("system");
+      await expect
+        .poll(() => selectValue(reloadedLanguageRow.locator("openclaw-select-picker")))
+        .toBe("system");
       await expect
         .poll(() =>
           reloadedThemeSection.locator(".settings-theme-card--claw").getAttribute("aria-pressed"),
         )
         .toBe("true");
       await expect
-        .poll(() => selectValue(reloadedColorModeRow.locator("wa-radio-group")))
+        .poll(() =>
+          reloadedColorModeRow.getByRole("radiogroup").locator("input:checked").inputValue(),
+        )
         .toBe("system");
       await expect
         .poll(() =>
@@ -526,7 +479,7 @@ suite.define(() => {
         await gateway.waitForRequest("config.get");
 
         const languageRow = page.locator("#settings-language .settings-row");
-        const languageSelect = languageRow.locator("wa-select");
+        const languageSelect = languageRow.locator("openclaw-select-picker");
         const themeSection = page.locator("#settings-appearance-theme");
         const themeDescription = themeSection.locator(":scope > .settings-section__desc");
         const followUpSelect = page.locator("[data-settings-follow-up-mode]");
@@ -562,11 +515,7 @@ suite.define(() => {
           .toContain("Stored in this browser only");
 
         await gateway.deferNext("config.patch");
-        await languageSelect.evaluate((element) => {
-          const select = element as HTMLElement & { value: string };
-          select.value = "fr";
-          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        });
+        await selectLanguage(languageSelect, "fr");
         await waitForRequestCount(gateway, "config.patch", 2);
         expect(
           patchPrefs((await gateway.getRequests("config.patch"))[1] as MockGatewayRequest),
@@ -599,11 +548,7 @@ suite.define(() => {
           .toContain("Stocké uniquement dans ce navigateur");
 
         await themeSection.locator(".settings-theme-card--claw").click();
-        await languageSelect.evaluate((element) => {
-          const select = element as HTMLElement & { value: string };
-          select.value = "system";
-          select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        });
+        await selectLanguage(languageSelect, "system");
         await followUpRow.locator("button.btn--sm").click();
 
         await expect
@@ -690,23 +635,29 @@ suite.define(() => {
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
-      const customizeMenu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const usage = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="route:usage"]'),
+      });
+      const pinnedUsage = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]');
+      const pinsBefore = await sidebar
+        .locator(".sidebar-rail__pin")
+        .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+      expect(await pinnedUsage.count()).toBe(0);
+      await usage.getByRole("button", { name: "Pin", exact: true }).click();
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
+      // Personal navigation has no global config fallback. With no writable
+      // profile, prove browser-local provenance through storage and both write boundaries.
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      const usage = customizeMenu.getByRole("menuitemcheckbox", { name: "Usage" });
-      await usage.click();
-      await expect.poll(() => usage.getAttribute("aria-checked")).toBe("true");
-      await page.waitForTimeout(100);
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await page.reload();
       await viewMenuTrigger.click();
@@ -722,22 +673,17 @@ suite.define(() => {
         )
         .toBe("false");
 
-      await sidebar.getByRole("button", { name: "Edit pinned items", exact: true }).click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+      await pinnedUsage.getByRole("link", { name: "Usage", exact: true }).waitFor();
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      await usage.getByRole("button", { name: "Unpin", exact: true }).waitFor();
       await expect
-        .poll(() => customizeMenu.locator(".sidebar-customize-menu__provenance").textContent())
-        .toContain("Stored in this browser only");
-      await expect
-        .poll(() =>
-          customizeMenu
-            .getByRole("menuitemcheckbox", { name: "Usage" })
-            .getAttribute("aria-checked"),
-        )
-        .toBe("true");
+        .poll(() => readPersistedSettings(page))
+        .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
       await context.close();
     }

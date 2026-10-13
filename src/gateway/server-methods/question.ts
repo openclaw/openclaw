@@ -43,7 +43,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { managerError, QuestionRequestValidationError } from "./question.errors.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -98,7 +98,6 @@ export function createQuestionHandlers(
     options: GatewayRequestHandlerOptions,
     id: string,
     access: "read" | "mutate",
-    respond: RespondFn,
   ) => {
     readGatewayRequestMutationAuthority(options).assertCurrent();
     const question = canSelectQuestion(manager, id, options.client) ? manager.get(id) : null;
@@ -119,7 +118,7 @@ export function createQuestionHandlers(
           ([prepared]) => {
             const error = authorize.authorize(prepared);
             if (error) {
-              respond(false, undefined, error);
+              options.respond(false, undefined, error);
               return undefined;
             }
             return consume();
@@ -451,7 +450,7 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "read", respond);
+        const selected = prepareSelectedQuestion(options, request.id, "read");
         if (!selected) {
           return;
         }
@@ -479,7 +478,7 @@ export function createQuestionHandlers(
       }
       const request = params;
       try {
-        const selected = prepareSelectedQuestion(options, request.id, "mutate", respond);
+        const selected = prepareSelectedQuestion(options, request.id, "mutate");
         if (!selected) {
           return;
         }
@@ -627,7 +626,7 @@ export function createQuestionHandlers(
       if (!assertValidParams(params, validateQuestionGetParams, "question.get", respond)) {
         return;
       }
-      const selected = prepareSelectedQuestion(options, params.id, "read", respond);
+      const selected = prepareSelectedQuestion(options, params.id, "read");
       if (!selected) {
         return;
       }

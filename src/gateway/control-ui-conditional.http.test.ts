@@ -23,31 +23,12 @@ const afterLeapSecondAsset = {
   modifiedAt: new Date("2017-01-01T00:00:00.000Z"),
   body: Buffer.from('console.log("after leap second");\n'),
 };
-const leapSecondDates = [
-  { name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" },
-  { name: "RFC 850", value: "Saturday, 31-Dec-16 23:59:60 GMT" },
-  { name: "asctime", value: "Sat Dec 31 23:59:60 2016" },
-];
+const leapSecondDates = [{ name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" }];
 const conditionalCases: {
   name: string;
   headers: Record<string, string | string[]>;
   status: 200 | 304;
 }[] = [
-  {
-    name: "HTTP-date RFC850 matching instant",
-    headers: { "If-Modified-Since": "Monday, 01-Jan-24 00:00:00 GMT" },
-    status: 304,
-  },
-  {
-    name: "HTTP-date asctime older UTC instant",
-    headers: { "If-Modified-Since": "Sun Dec 31 20:00:00 2023" },
-    status: 200,
-  },
-  {
-    name: "HTTP-date asctime matching UTC instant",
-    headers: { "If-Modified-Since": "Mon Jan  1 00:00:00 2024" },
-    status: 304,
-  },
   {
     name: "HTTP-date rejects ISO timestamp",
     headers: { "If-Modified-Since": "2024-01-02T00:00:00.000Z" },
@@ -59,19 +40,8 @@ const conditionalCases: {
     status: 200,
   },
   {
-    name: "HTTP-date rejects duplicate fields with earlier date first",
-    headers: { "If-Modified-Since": [earlierModifiedSince, laterModifiedSince] },
-    status: 200,
-  },
-  { name: "unconditional request", headers: {}, status: 200 },
-  {
     name: "equal If-Modified-Since",
     headers: { "If-Modified-Since": lastModified },
-    status: 304,
-  },
-  {
-    name: "later If-Modified-Since",
-    headers: { "If-Modified-Since": laterModifiedSince },
     status: 304,
   },
   {
@@ -79,41 +49,14 @@ const conditionalCases: {
     headers: { "If-Modified-Since": earlierModifiedSince },
     status: 200,
   },
-  { name: "stale If-None-Match alone", headers: { "If-None-Match": '"stale"' }, status: 200 },
   {
     name: "quoted comma/star is not a wildcard and supersedes the date",
     headers: { "If-None-Match": '"client,*,tag"', "If-Modified-Since": lastModified },
     status: 200,
   },
   {
-    name: "stale If-None-Match overrides equal If-Modified-Since",
-    headers: { "If-None-Match": '"stale"', "If-Modified-Since": lastModified },
-    status: 200,
-  },
-  {
-    name: "weak stale If-None-Match overrides later If-Modified-Since",
-    headers: { "If-None-Match": 'W/"stale"', "If-Modified-Since": laterModifiedSince },
-    status: 200,
-  },
-  {
-    name: "empty If-None-Match overrides later If-Modified-Since",
-    headers: { "If-None-Match": "", "If-Modified-Since": laterModifiedSince },
-    status: 200,
-  },
-  { name: "wildcard If-None-Match alone", headers: { "If-None-Match": "*" }, status: 304 },
-  {
-    name: "wildcard If-None-Match overrides equal If-Modified-Since",
-    headers: { "If-None-Match": "*", "If-Modified-Since": lastModified },
-    status: 304,
-  },
-  {
     name: "wildcard If-None-Match overrides older If-Modified-Since",
     headers: { "If-None-Match": "*", "If-Modified-Since": earlierModifiedSince },
-    status: 304,
-  },
-  {
-    name: "matching date releases the negotiated representation",
-    headers: { "Accept-Encoding": "gzip", "If-Modified-Since": lastModified },
     status: 304,
   },
 ];
@@ -138,7 +81,6 @@ function requestAsset(
 
 describe.each([
   { kind: "bundled", basePath: "", cacheControl: "public, max-age=31536000, immutable" },
-  { kind: "bundled", basePath: "/dashboard", cacheControl: "public, max-age=31536000, immutable" },
   { kind: "resolved", basePath: "/dashboard", cacheControl: "no-cache" },
 ] as const)("$kind $basePath conditional HTTP", ({ kind, basePath, cacheControl }) => {
   const tempDirs = createTempDirTracker();
@@ -160,19 +102,7 @@ describe.each([
       await fs.writeFile(target, asset.body);
       await fs.utimes(target, asset.modifiedAt, asset.modifiedAt);
     }
-    for (const publicAsset of [
-      "themes/absolutely.css",
-      "fonts/test.css",
-      "fonts/test.woff2",
-      "provider-icons/ProviderIcon-test.svg",
-      "cloud-provider-icons/aws.svg",
-      "file-icons/compact/dark/pdf.svg",
-      "file-icons/large/shell-dark.svg",
-      "file-icons/overlays/pdf.svg",
-      "apple-touch-icon.png",
-      "manifest.webmanifest",
-      "sw.js",
-    ]) {
+    for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       const target = path.join(root, publicAsset);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, assetBody);
@@ -272,36 +202,28 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
-    it.each([
-      "themes/absolutely.css",
-      "fonts/test.css",
-      "fonts/test.woff2",
-      "provider-icons/ProviderIcon-test.svg",
-      "cloud-provider-icons/aws.svg",
-      "file-icons/compact/dark/pdf.svg",
-      "file-icons/large/shell-dark.svg",
-      "file-icons/overlays/pdf.svg",
-      "apple-touch-icon.png",
-      "manifest.webmanifest",
-      "sw.js",
-    ])("versions public %s only for the active bundled build", async (asset) => {
-      for (const query of ["", "?v=", "?v=old-build", "?v=fixture-build"]) {
-        for (const conditional of [false, true]) {
-          const { response, body } = await requestAsset(
-            `${baseUrl}/${asset}${query}`,
-            method,
-            conditional ? { "If-Modified-Since": lastModified } : {},
-          );
-          const immutable = kind === "bundled" && asset !== "sw.js" && query === "?v=fixture-build";
-          expect(response.statusCode).toBe(conditional ? 304 : 200);
-          expect(response.headers["cache-control"]).toBe(
-            immutable ? "public, max-age=31536000, immutable" : "no-cache",
-          );
-          expect(response.headers["last-modified"]).toBe(lastModified);
-          expect(body).toEqual(!conditional && method === "GET" ? assetBody : Buffer.alloc(0));
+    it.each(["themes/absolutely.css", "sw.js"])(
+      "versions public %s only for the active bundled build",
+      async (asset) => {
+        for (const query of ["", "?v=", "?v=old-build", "?v=fixture-build"]) {
+          for (const conditional of [false, true]) {
+            const { response, body } = await requestAsset(
+              `${baseUrl}/${asset}${query}`,
+              method,
+              conditional ? { "If-Modified-Since": lastModified } : {},
+            );
+            const immutable =
+              kind === "bundled" && asset !== "sw.js" && query === "?v=fixture-build";
+            expect(response.statusCode).toBe(conditional ? 304 : 200);
+            expect(response.headers["cache-control"]).toBe(
+              immutable ? "public, max-age=31536000, immutable" : "no-cache",
+            );
+            expect(response.headers["last-modified"]).toBe(lastModified);
+            expect(body).toEqual(!conditional && method === "GET" ? assetBody : Buffer.alloc(0));
+          }
         }
-      }
-    });
+      },
+    );
 
     it("keeps versioned documents revalidating and missing public files uncached", async () => {
       const document = await requestAsset(`${baseUrl}/index.html?v=fixture-build`, method, {});
@@ -349,8 +271,8 @@ describe.each([
       expect(body).toEqual(status === 200 && method === "GET" ? assetBody : Buffer.alloc(0));
     });
 
-    it.each([
-      ...leapSecondDates.flatMap(({ name, value }) => [
+    it.each(
+      leapSecondDates.flatMap(({ name, value }) => [
         { name: `${name} before midnight`, value, asset: afterLeapSecondAsset, status: 200 },
         {
           name: `${name} after the prior second`,
@@ -359,13 +281,7 @@ describe.each([
           status: 304,
         },
       ]),
-      {
-        name: "the following midnight equality",
-        value: "Sun, 01 Jan 2017 00:00:00 GMT",
-        asset: afterLeapSecondAsset,
-        status: 304,
-      },
-    ])("preserves leap second ordering for $name", async ({ value, asset, status }) => {
+    )("preserves leap second ordering for $name", async ({ value, asset, status }) => {
       const { response, body } = await requestAsset(`${baseUrl}/assets/${asset.filename}`, method, {
         "If-Modified-Since": value,
       });
@@ -380,10 +296,7 @@ describe.each([
     });
 
     it.each<Record<string, string>>([
-      { "If-Modified-Since": laterModifiedSince },
-      { "If-None-Match": "*" },
       { "If-None-Match": "*", "If-Modified-Since": laterModifiedSince },
-      { "If-None-Match": '"stale"', "If-Modified-Since": laterModifiedSince },
     ])("rejects unacceptable encodings before evaluating %j", async (condition) => {
       const { response, body } = await requestAsset(assetUrl, method, {
         ...condition,

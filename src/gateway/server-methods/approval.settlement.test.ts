@@ -9,6 +9,7 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -29,7 +30,7 @@ import {
 } from "./approval.test-support.js";
 
 const resultDelivery = vi.hoisted(() => ({
-  loseResult: undefined as "worker" | "native" | undefined,
+  loseResult: undefined as "worker" | undefined,
   hideReceipt: false,
   wrapRefusal: false,
   wrappedRefusal: undefined as Error | undefined,
@@ -106,22 +107,6 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
           }),
         options,
       ),
-  };
-});
-vi.mock("../operator-approval-store.native.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../operator-approval-store.native.js")>();
-  return {
-    ...actual,
-    executeNativeOperatorApproval: (
-      ...args: Parameters<typeof actual.executeNativeOperatorApproval>
-    ) => {
-      const result = actual.executeNativeOperatorApproval(...args);
-      if (args[0] === "operatorApprovals.resolve" && resultDelivery.loseResult === "native") {
-        resultDelivery.loseResult = undefined;
-        throw new SqliteWorkerError("synthetic committed result delivery loss", "outcome-unknown");
-      }
-      return result;
-    },
   };
 });
 
@@ -214,21 +199,17 @@ it.each(["resolve", "deny"] as const)(
       },
     });
     let transactions = 0;
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "transaction") {
-            transactions += 1;
-            if (transactions === 1) {
-              connection.abort();
-            }
-          } else if (request.stage === "commit" && transactions === 2) {
-            invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
-          }
-          return admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        transactions += 1;
+        if (transactions === 1) {
+          connection.abort();
+        }
+      } else if (request.stage === "commit" && transactions === 2) {
+        invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
+      }
+      return admit(request, grant);
+    });
     resultDelivery.wrapRefusal = true;
     expect(await invocation.invoke()).toMatchObject({ ok: false });
     expect(transactions).toBe(2);
@@ -364,7 +345,7 @@ it.each(["worker", "native", "missing-receipt"] as const)(
       settled = true;
     });
     const readback = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
-    resultDelivery.loseResult = variant === "native" ? "native" : "worker";
+    resultDelivery.loseResult = "worker";
     resultDelivery.hideReceipt = variant === "missing-receipt";
     await expect(
       manager.resolveAutoReview(
@@ -374,9 +355,7 @@ it.each(["worker", "native", "missing-receipt"] as const)(
         variant === "native"
           ? {
               family: "native-compatibility",
-              assertCurrent: () => {
-                getOperatorApproval({ id: record.id, databaseOptions });
-              },
+              assertCurrent() {},
             }
           : undefined,
       ),

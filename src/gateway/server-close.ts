@@ -9,12 +9,10 @@ import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/sessio
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
-import { drainCronReceiptAuthority } from "../cron/store/receipt-authority-owner.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
@@ -25,7 +23,6 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { withAgentDatabaseCloseFence } from "../state/openclaw-agent-db-resources.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -156,6 +153,7 @@ async function closeHttpListener(params: {
 }
 
 export type GatewayCloseParams = {
+  retainSharedState?: boolean;
   resolveGatewayContext: GatewayRunShutdownParams["resolveGatewayContext"];
   closePluginRegistry: ReturnType<typeof createPluginRegistryOwner>["close"];
   pluginMetadata: Pick<GatewayPluginMetadataOwner, "beginClose" | "close">;
@@ -199,7 +197,6 @@ export type GatewayCloseParams = {
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
-  drainPersistence: () => Promise<void>;
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
   getPendingReplyCount: () => number;
@@ -256,11 +253,9 @@ export async function prepareGatewayClose(
   try {
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
-    if (!opts?.onProcessExitReady) {
-      await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
-      if (restart) {
-        await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
-      }
+    await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+    if (restart) {
+      await triggerLifecycleHook("pre-restart", GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     }
     const drainTimeoutMs =
       typeof opts?.drainTimeoutMs === "number" && Number.isFinite(opts.drainTimeoutMs)
@@ -285,16 +280,6 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "memory-managers");
     });
-    if (opts?.onProcessExitReady) {
-      await measureCloseStep("terminal-persistence", params.drainPersistence);
-      await memoryPreparation;
-      // Keep every path fenced through host lock release and exit: a per-path
-      // idle receipt alone does not prevent accepted cleanup from reopening it.
-      await withAgentDatabaseCloseFence({}, async () => {
-        await measureCloseStep("agent-databases", () => closeOpenClawAgentDatabasesAsync());
-        await measureCloseStep("process-exit", opts.onProcessExitReady!);
-      });
-    }
     return { start, notice, restart, warnings, cleanupWork };
   } catch (error) {
     await measureCloseStep("preparation-cleanup", () => cleanupWork.drain());
@@ -432,7 +417,6 @@ async function closeGatewayResources(
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );
     await shutdownStep("cron-maintenance", () => params.stopCronMaintenance?.());
-    await shutdownStep("cron-receipt-authority", () => drainCronReceiptAuthority());
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
@@ -572,12 +556,11 @@ async function closeGatewayResources(
               await measureCloseStep("debug-proxy", () =>
                 finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
               );
-              if (mediaCleanupStopResult !== undefined) {
-                await measureCloseStep("plugin-state-database", closePluginStateDatabaseAsync);
-              }
               try {
                 await measureCloseStep("global-singletons", () =>
-                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close"),
+                  drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
+                    retainSharedState: params.retainSharedState,
+                  }),
                 );
               } finally {
                 try {

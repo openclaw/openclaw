@@ -54,6 +54,15 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
+CLI `login`, `logout`, `probe`, `doctor --probe`, and saved-server mutations
+(`add`, `set`, `configure`, `tools`, `unset`) require the local Gateway to be
+stopped. They acquire exclusive state ownership before loading writable state
+and retain it through OAuth callbacks, credential refresh, and cleanup. If a
+Gateway owns the selected state directory, the command refuses with stop-and-retry
+guidance before attempting a local write. Use the Control UI for supported live
+MCP settings and sign-in operations. `list`, `show`, `status`, and `doctor`
+without `--probe` remain available while the Gateway runs.
+
 ### Saved MCP server definitions
 
 Commands:
@@ -86,7 +95,7 @@ Notes:
 - `login` runs the OAuth flow for HTTP servers with `auth: "oauth"`, including servers contributed by enabled plugins. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server, including plugin-contributed servers, without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
-- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
+- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same current config format for compatibility.
 - `unset` fails if the named server does not exist.
 
 Examples:

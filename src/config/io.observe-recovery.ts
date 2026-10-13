@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
 import {
-  appendConfigAuditRecordSync,
+  enqueueConfigAuditRecord,
   captureConfigAuditAppender,
   createConfigObserveAuditRecord,
 } from "./io.audit.js";
@@ -500,7 +500,7 @@ function* planSuspiciousConfigRead(
         }),
       };
       yield {
-        sync: () => appendConfigAuditRecordSync(audit),
+        sync: () => enqueueConfigAuditRecord(audit),
         async: (_health, appendAudit) => appendAudit(audit.record),
       };
       if (restoredFromBackup) {

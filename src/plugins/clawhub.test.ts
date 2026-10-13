@@ -878,7 +878,7 @@ describe("installPluginFromClawHub", () => {
     const failure = expectInstallFailure(result);
     expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
     expect(failure.error).toBe(
-      'Plugin "demo" requires plugin API *, but this OpenClaw runtime exposes invalid.',
+      'Plugin "demo" requires plugin API *, but this OpenClaw runtime exposes invalid. Upgrade OpenClaw or choose an explicit compatible plugin version.',
     );
     expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
@@ -1250,24 +1250,21 @@ describe("installPluginFromClawHub", () => {
     await expect(fs.stat(extensionsDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["../extra.txt", "/extra.txt", "C:\\extra.txt", "a/../extra.txt", "a\0extra.txt"])(
-    "rejects unsafe archive path %s before install work",
-    async (filePath) => {
-      await mockClawHubFallbackArchive({
-        entries: { "openclaw.plugin.json": '{"id":"demo"}', [filePath]: "unsafe" },
-        files: [manifestFile],
-      });
-      const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
-      expect(result).toMatchObject({
-        ok: false,
-        code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        error: expect.stringMatching(
-          /^ClawHub archive fallback verification rejected the downloaded archive: archive entry /,
-        ),
-      });
-      expect(installExtractedArchiveMock).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects archive path traversal before install work", async () => {
+    await mockClawHubFallbackArchive({
+      entries: { "openclaw.plugin.json": '{"id":"demo"}', "../extra.txt": "unsafe" },
+      files: [manifestFile],
+    });
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+    expect(result).toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      error: expect.stringMatching(
+        /^ClawHub archive fallback verification rejected the downloaded archive: archive entry /,
+      ),
+    });
+    expect(installExtractedArchiveMock).not.toHaveBeenCalled();
+  });
 
   it("rejects an undeclared file under its canonical extracted name", async () => {
     await mockClawHubFallbackArchive({

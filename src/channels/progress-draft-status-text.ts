@@ -1,6 +1,5 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -56,18 +55,10 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
       continue;
     }
     hasTags = true;
-    if (match[1]) {
-      if (inReasoning) {
-        chunks.push(text.slice(cursor, offset));
-      }
-      inReasoning = false;
-      cursor = offset + match[0].length;
-      continue;
-    }
     if (inReasoning) {
       chunks.push(text.slice(cursor, offset));
     }
-    inReasoning = true;
+    inReasoning = !match[1];
     cursor = offset + match[0].length;
   }
   if (!hasTags) {
@@ -127,7 +118,7 @@ export function sanitizeProgressStatusText(text: string): string {
   if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
     return "";
   }
-  return redactToolPayloadText(cleaned);
+  return cleaned;
 }
 
 export function normalizeCommentaryProgressText(text: string): string {
@@ -237,7 +228,7 @@ export function createReasoningProgressAccumulator() {
         return "";
       }
       rawText = mergeReasoningProgressText(rawText, text, options);
-      return redactToolPayloadText(normalizeReasoningProgressLine(rawText));
+      return normalizeReasoningProgressLine(rawText);
     },
   };
 }

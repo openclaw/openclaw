@@ -43,7 +43,7 @@ sidebarTitle: "Setup"
         openclaw onboard
         ```
 
-        Select **Ollama**, then pick a mode: **Cloud + Local**, **Cloud only**, or **Local only**.
+        Select **Ollama**, then pick a mode: **Cloud + Local** or **Local only**. For hosted models without a local Ollama host, choose **Ollama Cloud** instead.
 
         On a fresh guided setup, OpenClaw first checks the default or configured
         Ollama host. Automatic discovery considers only models already loaded in
@@ -59,7 +59,7 @@ sidebarTitle: "Setup"
         check without requiring it to be loaded already.
       </Step>
       <Step title="Select a model">
-        `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` prompt for an Ollama base URL and inspect installed models. If no tools-capable model is found, setup can ask permission to pull a recommended model. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
+        `Cloud + Local` and `Local only` prompt for an Ollama base URL and inspect installed models; an `ollama.com` URL is rejected there because hosted access belongs to **Ollama Cloud**. If no tools-capable model is found, setup can ask permission to pull a recommended model. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.
       </Step>
       <Step title="Verify">
         ```bash
@@ -77,13 +77,22 @@ sidebarTitle: "Setup"
       --custom-model-id "qwen3.5:27b"
     ```
 
-    `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
+    `--custom-base-url` and `--custom-model-id` are optional. Omitting the base URL
+    uses the local default host. Without a model ID, setup prefers an installed
+    model with tool support and at least 16K of context, favoring non-reasoning
+    models and then smaller models. If none qualifies, it tries the `gemma4`
+    suggested model.
 
     A local model advertised as embedding-only cannot be selected as the chat
     default. Setup reports an error and leaves the existing configuration intact;
     reset preflight also rejects an explicitly selected embedding-only model or
     an inventory advertised as entirely embedding-only. Models that support both
     completion and embeddings remain eligible.
+
+    Existing configured embedding rows are not deleted. Remove them from
+    `models.providers.ollama.models`, or rerun Ollama onboarding to rebuild the
+    list. Re-onboarding replaces that provider's model catalog, so preserve any
+    custom model entries you want to keep before running it.
 
   </Tab>
 
@@ -155,8 +164,6 @@ openclaw onboard --auth-choice ollama-cloud
 openclaw models set ollama-cloud/minimax-m2.7:cloud
 ```
 
-The cloud model list shown during `openclaw onboard` is populated live from
-`https://ollama.com/api/tags`, capped at 500 entries, so the picker reflects
-the current hosted catalog. If `ollama.com` is unreachable or returns no
-models at setup time, OpenClaw falls back to its hardcoded suggested list so
-onboarding still completes.
+The Ollama Cloud model list comes from live `https://ollama.com/api/tags`
+discovery with your key, so the picker reflects the current hosted catalog.
+Without a usable key, OpenClaw shows its bundled Ollama Cloud catalog.

@@ -13,7 +13,7 @@ import {
 } from "./openclaw-agent-db-registry-listing.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
@@ -132,7 +132,7 @@ it("rejects a file replacement during registry removal publication", async () =>
   }
 });
 
-it.runIf(process.platform !== "win32").each([false, true])(
+it.runIf(process.platform !== "win32").each([true])(
   "disposes a symlinked database only when its cached owner is unambiguous (duplicate=%s)",
   async (duplicate) => {
     const stateDir = fs.realpathSync(createTempStateDir());

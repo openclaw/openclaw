@@ -8,7 +8,7 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
-import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
@@ -97,7 +97,7 @@ export function repairCanonicalSqliteIndexes(
   }
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
   // One read snapshot also avoids a network lock round trip per metadata query.
-  runSqlitePinnedReadSnapshotSync(db, () => {
+  runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
     for (const tableName of getCanonicalSqliteTableNames(schemaSql)) {
       assertSqliteIdentifier(tableName);
@@ -147,7 +147,9 @@ export function repairCanonicalSqliteIndexes(
       db.exec("SAVEPOINT repair_canonical_index;");
       try {
         db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-        db.exec(createIndexSql(index, index.name));
+        assertSqliteIdentifier(index.name);
+        const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
+        db.exec(`${create} main.${index.name} ${index.definition};`);
       } catch (error) {
         db.exec("ROLLBACK TO SAVEPOINT repair_canonical_index;");
         if (options.allowMissingColumns && isMissingColumnError(error)) {
@@ -259,12 +261,6 @@ export function repairSqliteIndexCorruption(
       },
     },
   );
-}
-
-function createIndexSql(index: CanonicalSqliteNamedIndexContract, name: string): string {
-  assertSqliteIdentifier(name);
-  const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
-  return `${create} main.${name} ${index.definition};`;
 }
 
 function assertSqliteIdentifier(identifier: string): void {

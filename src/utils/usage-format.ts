@@ -370,7 +370,7 @@ export function estimateUsageCost(params: {
 }): number | undefined {
   const usage = params.usage;
   const cost = params.cost;
-  if (!usage || !cost) {
+  if (!usage || !cost || usage.usageReport?.state === "unavailable") {
     return undefined;
   }
   const total = calculateUsageCost(usage, cost).total;
@@ -385,6 +385,9 @@ export function estimateAggregateUsageCost(
   },
 ): number | undefined {
   const usage = params.usage;
+  if (usage?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
   if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
     return usage.cost.total;
   }

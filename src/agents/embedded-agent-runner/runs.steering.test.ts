@@ -120,8 +120,8 @@ describe("embedded-agent active-run steering", () => {
       const runId = "hidden-question-owner",
         ownerRun = createQueueTestRun({ prompt: "pending question" });
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(ownerRun));
-      const fingerprint = operation.bindToolAuthorityRoute({
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(ownerRun));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: ownerRun.run.provider,
         model: ownerRun.run.model,
       });

@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  normalizeAutomation,
-  normalizeDiagnosticAction,
-} from "./metadata-contract-normalization.ts";
+import { definedFields } from "../../../record-fields.js";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -15,7 +12,6 @@ import {
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
-  type WorkboardDiagnosticAction,
   type WorkboardEvent,
   type WorkboardExecution,
   type WorkboardMetadata,
@@ -40,14 +36,59 @@ function tolerantArray<T>(schema: z.ZodType<T>) {
     .catch(undefined);
 }
 
-function omitUndefinedFields<T extends Record<string, unknown>>(value: T): T {
-  for (const key of Object.keys(value)) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
+function sparseObject<Shape extends z.ZodRawShape>(shape: Shape) {
+  return z.object(shape).transform(definedFields);
 }
+
+const automationNumberSchema = z
+  .custom<number>((value) => typeof value === "number")
+  .optional()
+  .catch(undefined);
+const automationStringsSchema = tolerantArray(z.string().refine((value) => value.trim() !== ""));
+const automationSchema = sparseObject({
+  tenant: optionalStringSchema,
+  boardId: optionalStringSchema,
+  createdByCardId: optionalStringSchema,
+  idempotencyKey: optionalStringSchema,
+  skills: automationStringsSchema,
+  createdCardIds: automationStringsSchema,
+  workspace: sparseObject({
+    kind: z.enum(["scratch", "dir", "worktree"]),
+    path: optionalStringSchema,
+    branch: optionalStringSchema,
+    sourcePath: optionalStringSchema,
+    sourceBranch: optionalStringSchema,
+  })
+    .optional()
+    .catch(undefined),
+  workspaceAccess: z
+    .union([
+      z.object({ unrestricted: z.literal(true) }),
+      z.object({
+        unrestricted: z.literal(false),
+        roots: z
+          .array(z.unknown())
+          .transform((roots) => roots.filter((root): root is string => typeof root === "string")),
+        writable: z.boolean(),
+      }),
+    ])
+    .optional()
+    .catch(undefined),
+  maxRuntimeSeconds: automationNumberSchema,
+  maxRetries: automationNumberSchema,
+  scheduledAt: automationNumberSchema,
+  summary: optionalStringSchema,
+  dispatchCount: automationNumberSchema,
+  lastDispatchAt: automationNumberSchema,
+})
+  .transform((value) => (Object.keys(value).length ? value : undefined))
+  .optional()
+  .catch(undefined);
+
+const diagnosticActionSchema = z.object({
+  kind: z.enum(["claim", "unblock", "promote", "reclaim", "reassign", "add_proof", "open_session"]),
+  label: z.string(),
+});
 
 const workboardExecutionSchema = z
   .object({
@@ -74,114 +115,94 @@ const workboardExecutionSchema = z
     ...(value.runId !== undefined ? { runId: value.runId } : {}),
   }));
 
-const workboardEventSchema = z
-  .object({
-    id: trimmedRequiredStringSchema,
-    kind: z.enum(WORKBOARD_EVENT_KINDS),
-    at: z
-      .number()
-      .finite()
-      .refine((value) => value !== 0),
-    fromStatus: z.enum(WORKBOARD_STATUSES).optional().catch(undefined),
-    toStatus: z.enum(WORKBOARD_STATUSES).optional().catch(undefined),
-    sessionKey: optionalStringSchema,
-    runId: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
+const workboardEventSchema = sparseObject({
+  id: trimmedRequiredStringSchema,
+  kind: z.enum(WORKBOARD_EVENT_KINDS),
+  at: z
+    .number()
+    .finite()
+    .refine((value) => value !== 0),
+  fromStatus: z.enum(WORKBOARD_STATUSES).optional().catch(undefined),
+  toStatus: z.enum(WORKBOARD_STATUSES).optional().catch(undefined),
+  sessionKey: optionalStringSchema,
+  runId: optionalStringSchema,
+});
 const workboardEventsSchema = tolerantArray(workboardEventSchema);
 
-const attemptSchema = z
-  .object({
-    id: z.string(),
-    status: z.enum(WORKBOARD_ATTEMPT_STATUSES).catch("running"),
-    startedAt: z.number(),
-    endedAt: optionalNumberSchema,
-    engine: optionalStringSchema.transform((value) => value?.trim() || undefined),
-    mode: z.enum(WORKBOARD_EXECUTION_MODES).optional().catch(undefined),
-    model: optionalStringSchema,
-    sessionKey: optionalStringSchema,
-    runId: optionalStringSchema,
-    error: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const commentSchema = z
-  .object({
-    id: z.string(),
-    body: z.string(),
-    createdAt: z.number(),
-    updatedAt: optionalNumberSchema,
-  })
-  .transform(omitUndefinedFields);
-const linkSchema = z
-  .object({
-    id: z.string(),
-    type: z.enum(WORKBOARD_LINK_TYPES).catch("relates_to"),
-    createdAt: z.number(),
-    targetCardId: optionalStringSchema,
-    title: optionalStringSchema,
-    url: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const proofSchema = z
-  .object({
-    id: z.string(),
-    status: z.enum(WORKBOARD_PROOF_STATUSES).catch("unknown"),
-    createdAt: z.number(),
-    label: optionalStringSchema,
-    command: optionalStringSchema,
-    url: optionalStringSchema,
-    note: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const artifactSchema = z
-  .object({
-    id: z.string(),
-    createdAt: z.number(),
-    label: optionalStringSchema,
-    url: optionalStringSchema,
-    path: optionalStringSchema,
-    mimeType: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const attachmentSchema = z
-  .object({
-    id: z.string(),
-    cardId: z.string(),
-    fileName: z.string(),
-    byteSize: z.number(),
-    createdAt: z.number(),
-    mimeType: optionalStringSchema,
-    note: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const workerLogSchema = z
-  .object({
-    id: z.string(),
-    level: z.enum(["info", "warning", "error"]).catch("info"),
-    message: z.string(),
-    createdAt: z.number(),
-    sessionKey: optionalStringSchema,
-    runId: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
-const workerProtocolSchema = z
-  .object({
-    state: z.enum(["idle", "running", "completed", "blocked", "violated"]),
-    updatedAt: z.number().catch(() => Date.now()),
-    detail: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields)
+const attemptSchema = sparseObject({
+  id: z.string(),
+  status: z.enum(WORKBOARD_ATTEMPT_STATUSES).catch("running"),
+  startedAt: z.number(),
+  endedAt: optionalNumberSchema,
+  engine: optionalStringSchema.transform((value) => value?.trim() || undefined),
+  mode: z.enum(WORKBOARD_EXECUTION_MODES).optional().catch(undefined),
+  model: optionalStringSchema,
+  sessionKey: optionalStringSchema,
+  runId: optionalStringSchema,
+  error: optionalStringSchema,
+});
+const commentSchema = sparseObject({
+  id: z.string(),
+  body: z.string(),
+  createdAt: z.number(),
+  updatedAt: optionalNumberSchema,
+});
+const linkSchema = sparseObject({
+  id: z.string(),
+  type: z.enum(WORKBOARD_LINK_TYPES).catch("relates_to"),
+  createdAt: z.number(),
+  targetCardId: optionalStringSchema,
+  title: optionalStringSchema,
+  url: optionalStringSchema,
+});
+const proofSchema = sparseObject({
+  id: z.string(),
+  status: z.enum(WORKBOARD_PROOF_STATUSES).catch("unknown"),
+  createdAt: z.number(),
+  label: optionalStringSchema,
+  command: optionalStringSchema,
+  url: optionalStringSchema,
+  note: optionalStringSchema,
+});
+const artifactSchema = sparseObject({
+  id: z.string(),
+  createdAt: z.number(),
+  label: optionalStringSchema,
+  url: optionalStringSchema,
+  path: optionalStringSchema,
+  mimeType: optionalStringSchema,
+});
+const attachmentSchema = sparseObject({
+  id: z.string(),
+  cardId: z.string(),
+  fileName: z.string(),
+  byteSize: z.number(),
+  createdAt: z.number(),
+  mimeType: optionalStringSchema,
+  note: optionalStringSchema,
+});
+const workerLogSchema = sparseObject({
+  id: z.string(),
+  level: z.enum(["info", "warning", "error"]).catch("info"),
+  message: z.string(),
+  createdAt: z.number(),
+  sessionKey: optionalStringSchema,
+  runId: optionalStringSchema,
+});
+const workerProtocolSchema = sparseObject({
+  state: z.enum(["idle", "running", "completed", "blocked", "violated"]),
+  updatedAt: z.number().catch(() => Date.now()),
+  detail: optionalStringSchema,
+})
   .optional()
   .catch(undefined);
-const claimSchema = z
-  .object({
-    ownerId: z.string(),
-    token: z.string(),
-    claimedAt: z.number(),
-    lastHeartbeatAt: z.number(),
-    expiresAt: optionalNumberSchema,
-  })
-  .transform(omitUndefinedFields)
+const claimSchema = sparseObject({
+  ownerId: z.string(),
+  token: z.string(),
+  claimedAt: z.number(),
+  lastHeartbeatAt: z.number(),
+  expiresAt: optionalNumberSchema,
+})
   .optional()
   .catch(undefined);
 const diagnosticSchema = z
@@ -193,15 +214,7 @@ const diagnosticSchema = z
     firstSeenAt: optionalNumberSchema,
     lastSeenAt: optionalNumberSchema,
     count: optionalNumberSchema,
-    actions: z
-      .array(z.unknown())
-      .transform((actions) =>
-        actions
-          .map(normalizeDiagnosticAction)
-          .filter((action): action is WorkboardDiagnosticAction => action !== null),
-      )
-      .optional()
-      .catch(undefined),
+    actions: tolerantArray(diagnosticActionSchema),
   })
   .transform((value) => ({
     kind: value.kind,
@@ -213,17 +226,15 @@ const diagnosticSchema = z
     count: value.count ?? 1,
     actions: value.actions ?? [],
   }));
-const notificationSchema = z
-  .object({
-    id: z.string(),
-    kind: z.enum(WORKBOARD_NOTIFICATION_KINDS),
-    message: z.string(),
-    createdAt: z.number(),
-    sequence: optionalNumberSchema,
-    sessionKey: optionalStringSchema,
-    runId: optionalStringSchema,
-  })
-  .transform(omitUndefinedFields);
+const notificationSchema = sparseObject({
+  id: z.string(),
+  kind: z.enum(WORKBOARD_NOTIFICATION_KINDS),
+  message: z.string(),
+  createdAt: z.number(),
+  sequence: optionalNumberSchema,
+  sessionKey: optionalStringSchema,
+  runId: optionalStringSchema,
+});
 const staleSchema = z
   .object({
     detectedAt: optionalNumberSchema,
@@ -250,7 +261,7 @@ const workboardMetadataSchema = z
     attachments: tolerantArray(attachmentSchema),
     workerLogs: tolerantArray(workerLogSchema),
     workerProtocol: workerProtocolSchema,
-    automation: z.unknown().transform(normalizeAutomation).optional(),
+    automation: automationSchema,
     claim: claimSchema,
     diagnostics: tolerantArray(diagnosticSchema),
     notifications: tolerantArray(notificationSchema),
@@ -266,7 +277,7 @@ const workboardMetadataSchema = z
     failureCount: optionalNumberSchema,
   })
   .transform((value): WorkboardMetadata | undefined => {
-    const metadata = omitUndefinedFields(value);
+    const metadata = definedFields(value);
     return Object.keys(metadata).length ? metadata : undefined;
   });
 

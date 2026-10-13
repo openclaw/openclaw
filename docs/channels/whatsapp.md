@@ -183,7 +183,7 @@ mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
+    Add `$HOME/.local/bin` to the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
 
   </Step>
 
@@ -237,7 +237,7 @@ WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`)
 
 ## Question reactions
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the canonical option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the stored option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
 
 ## Plugin hooks and privacy
 
@@ -356,7 +356,7 @@ WhatsApp supports persistent ACP bindings via top-level `bindings[]`:
 }
 ```
 
-Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw ensures the bound ACP session exists. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
+Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw creates the bound ACP session if needed. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
 
 ### Personal-number and self-chat behavior
 
@@ -551,9 +551,9 @@ opt-in status surface described above.
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (backup: `creds.json.bak`)
     - Doctor moves implicit legacy default auth from `~/.openclaw/credentials/` into the account directory after preserving exact private `.migrated` backups. Runtime account selection uses the account directory; run `openclaw doctor --fix` after replacing an older installation directly.
-    - Explicit `authDir` settings remain authoritative, including an account that deliberately uses the shared credentials root. Doctor leaves those directories in place. Differing canonical and legacy credentials stay intact with an actionable conflict warning; Doctor never mixes two credential sets.
+    - Explicit `authDir` settings remain authoritative, including an account that deliberately uses the shared credentials root. Doctor leaves those directories in place. Differing current and legacy credentials stay intact with an actionable conflict warning; Doctor never mixes two credential sets.
     - Doctor records a credential migration receipt before writing the account directory. If an interrupted import's complete destination is later missing or changed, Doctor preserves the remaining sources and backups and asks for explicit recovery. It does not recreate a logged-out account.
-    - Canonical account credentials still work on OpenClaw 2026.9.7. Shared-root repair needs a host with offline Doctor migration authority and source backups. If Doctor asks you to upgrade the host, update OpenClaw core before retrying; the plugin leaves the original credentials untouched.
+    - Account-directory credentials still work on OpenClaw 2026.9.7. Shared-root repair needs a host with offline Doctor migration authority and source backups. If Doctor asks you to upgrade the host, update OpenClaw core before retrying; the plugin leaves the original credentials untouched.
 
   </Accordion>
 

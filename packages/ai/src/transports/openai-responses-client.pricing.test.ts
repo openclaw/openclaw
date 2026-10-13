@@ -59,13 +59,14 @@ const model = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
-function completedResponse(serviceTier: string | null | undefined): SdkResponse {
+function completedResponse(serviceTier: string | null | undefined, cachedTokens = 0): SdkResponse {
   return {
     data: (async function* () {
       yield {
         type: "response.completed",
         response: {
           id: "resp_priced",
+          model: "gpt-5.5",
           status: "completed",
           service_tier: serviceTier,
           output: [
@@ -77,7 +78,12 @@ function completedResponse(serviceTier: string | null | undefined): SdkResponse 
               content: [{ type: "output_text", text: "ok", annotations: [] }],
             },
           ],
-          usage: { input_tokens: 1_000_000, output_tokens: 1_000_000, total_tokens: 2_000_000 },
+          usage: {
+            input_tokens: 1_000_000,
+            input_tokens_details: { cached_tokens: cachedTokens },
+            output_tokens: 1_000_000,
+            total_tokens: 2_000_000,
+          },
         },
       };
     })(),
@@ -103,39 +109,45 @@ describe("managed Responses transport service-tier pricing", () => {
     expect(result.usage.cost.total).toBeCloseTo(30, 6);
   });
 
-  describe.each(["managed", "simple"] as const)(
-    "%s Responses service-tier observations",
-    (route) => {
-      it.each(["ultrafast", "default", null, undefined, "x".repeat(65)])(
-        "observes raw terminal tier %s against the final payload",
-        async (responseTier) => {
-          sseState.outcomes.push(completedResponse(responseTier));
-          const observations: ResponsesServiceTierObservation[] = [];
-          const options = {
-            apiKey: "test-key",
-            transport: "sse" as const,
-            serviceTier: "priority" as const,
-            onPayload: (payload: unknown) => ({
-              ...(payload as Record<string, unknown>),
-              service_tier: "ultrafast",
-            }),
-          };
-          responsesServiceTierObserver.set(options, (observation) =>
-            observations.push(observation),
-          );
-          const streamFn =
-            route === "managed"
-              ? createOpenAIResponsesTransportStreamFn()
-              : streamSimpleOpenAIResponses;
-          const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
-          expect((await stream.result()).stopReason).toBe("stop");
-          expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
-          expect(observations).toEqual(
-            responseTier === "ultrafast" || responseTier === "default"
-              ? [{ requestedTier: "ultrafast", responseTier }]
-              : [],
-          );
-        },
+  it.each([
+    { route: "managed", responseTier: "ultrafast" },
+    { route: "simple", responseTier: "default" },
+    { route: "simple", responseTier: undefined },
+  ])(
+    "observes $route terminal tier $responseTier against the final payload",
+    async ({ route, responseTier }) => {
+      sseState.outcomes.push(completedResponse(responseTier, 640_000));
+      const observations: ResponsesServiceTierObservation[] = [];
+      const options = {
+        apiKey: "test-key",
+        transport: "sse" as const,
+        serviceTier: "priority" as const,
+        onPayload: (payload: unknown) => ({
+          ...(payload as Record<string, unknown>),
+          service_tier: "ultrafast",
+        }),
+      };
+      responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+      const streamFn =
+        route === "managed"
+          ? createOpenAIResponsesTransportStreamFn()
+          : streamSimpleOpenAIResponses;
+      const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
+      expect((await stream.result()).stopReason).toBe("stop");
+      expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
+      expect(observations).toEqual(
+        responseTier === "ultrafast" || responseTier === "default"
+          ? [
+              {
+                requestedTier: "ultrafast",
+                responseTier,
+                responseId: "resp_priced",
+                responseModel: "gpt-5.5",
+                inputTokens: 1_000_000,
+                cachedTokens: 640_000,
+              },
+            ]
+          : [],
       );
     },
   );

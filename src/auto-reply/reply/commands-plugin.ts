@@ -5,7 +5,6 @@
  * This handler is called before built-in command handlers.
  */
 
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -17,6 +16,7 @@ import {
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { handleCompactCommand } from "./commands-compact.js";
+import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
 
 /**
@@ -68,31 +68,12 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
     : undefined;
 
   const result = await executePluginCommandDispatch(dispatch, {
-    senderId: command.senderId,
-    channel: command.channel,
-    channelId: command.channelId,
-    isAuthorizedSender: command.isAuthorizedSender,
-    senderIsOwner: command.senderIsOwner,
-    assertOwnerCurrent: command.assertOwnerCurrent,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: targetAgentId,
-    sessionKey: params.sessionKey,
+    ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionTarget,
     sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
-    config: cfg,
-    from: command.from,
-    to: command.to,
-    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
-    accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
-    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     ...(sessionTarget
       ? {
           runtimeContext: {

@@ -76,18 +76,23 @@ export async function collectGatewayDaemonFindings(
   );
   const ownerHint = serviceOwner ? formatInstallOwnerMessage(serviceOwner) : undefined;
   const findings: HealthFinding[] = [];
-  if (state.loadState.status === "unknown") {
+  const warn = (message: string, fixHint: string, path = state.command?.sourcePath) => {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
-      message: `Gateway service status could not be determined: ${state.loadState.detail}`,
-      path: state.command?.sourcePath,
+      message,
+      path,
       target: service.label,
-      fixHint:
-        ownerHint ??
+      fixHint,
+    });
+  };
+  if (state.loadState.status === "unknown") {
+    warn(
+      `Gateway service status could not be determined: ${state.loadState.detail}`,
+      ownerHint ??
         service.unsupportedReason ??
         "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
-    });
+    );
     return findings;
   }
   if (!state.installed) {
@@ -104,14 +109,11 @@ export async function collectGatewayDaemonFindings(
         },
       ];
     }
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      target: service.label,
-      fixHint: "Run `openclaw gateway install` to install the service.",
-    });
+    warn(
+      "Gateway service is not installed.",
+      "Run `openclaw gateway install` to install the service.",
+      "gateway.mode",
+    );
     return findings;
   }
   const nodePath = state.command?.programArguments[0];
@@ -144,60 +146,39 @@ export async function collectGatewayDaemonFindings(
     }
   }
   if (state.loadState.status === "not-loaded") {
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service is installed but not loaded.",
-      path: state.command?.sourcePath,
-      target: service.label,
-      fixHint: ownerHint ?? "Start the installed service with `openclaw gateway start`.",
-    });
+    warn(
+      "Gateway service is installed but not loaded.",
+      ownerHint ?? "Start the installed service with `openclaw gateway start`.",
+    );
   }
   const runtime = state.runtime;
   const status = runtime?.status ?? runtime?.state ?? runtime?.subState;
   if (state.loadState.status === "loaded" && !state.running) {
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: status
+    warn(
+      status
         ? `Gateway service runtime is ${status}, not running.`
         : "Gateway service is loaded but runtime status could not confirm it is running.",
-      path: state.command?.sourcePath,
-      target: service.label,
-      fixHint:
-        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
-    });
+      "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    );
   }
   if (state.runtime?.missingGuiSession) {
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service cannot attach to the user GUI session.",
-      path: state.command?.sourcePath,
-      target: service.label,
-      fixHint: state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
-    });
+    warn(
+      "Gateway service cannot attach to the user GUI session.",
+      state.runtime.detail ?? "Log into a GUI session, then rerun doctor.",
+    );
   }
   if (state.runtime?.missingUnit) {
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service supervision metadata is missing.",
-      path: state.command?.sourcePath,
-      target: service.label,
-      fixHint: ownerHint ?? state.runtime.detail ?? "Reinstall or reload the Gateway service.",
-    });
+    warn(
+      "Gateway service supervision metadata is missing.",
+      ownerHint ?? state.runtime.detail ?? "Reinstall or reload the Gateway service.",
+    );
   }
   const hygiene = getSystemdCgroupHygieneSummary(state.runtime?.systemd);
   if (hygiene) {
-    findings.push({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: `Gateway systemd service has risky ${hygiene}.`,
-      path: state.command?.sourcePath,
-      target: service.label,
-      fixHint: "Repair the systemd unit so stale child processes are cleaned up reliably.",
-    });
+    warn(
+      `Gateway systemd service has risky ${hygiene}.`,
+      "Repair the systemd unit so stale child processes are cleaned up reliably.",
+    );
   }
   return findings;
 }
@@ -330,6 +311,18 @@ function collectProviderCatalogResultFindings(params: {
   pluginId?: string;
   result: unknown;
 }): HealthFinding[] {
+  const readValue = (value: unknown, key: string, providerId = params.providerId) =>
+    readProviderCatalogValue({ value, key, providerId, pluginId: params.pluginId });
+  const collectModels = (value: unknown, providerId = params.providerId) => {
+    const models = readValue(value, "models", providerId);
+    return models.ok
+      ? collectProviderCatalogModelFindings({
+          providerId,
+          pluginId: params.pluginId,
+          models: models.value,
+        })
+      : [models.finding];
+  };
   if (params.result == null) {
     return [];
   }
@@ -354,12 +347,7 @@ function collectProviderCatalogResultFindings(params: {
       ),
     ];
   }
-  const provider = readProviderCatalogValue({
-    value: params.result,
-    key: "provider",
-    providerId: params.providerId,
-    pluginId: params.pluginId,
-  });
+  const provider = readValue(params.result, "provider");
   if (!provider.ok) {
     return [provider.finding];
   }
@@ -373,23 +361,10 @@ function collectProviderCatalogResultFindings(params: {
     ];
   }
   if (isReadableRecord(provider.value)) {
-    const models = readProviderCatalogValue({
-      value: provider.value,
-      key: "models",
-      providerId: params.providerId,
-      pluginId: params.pluginId,
-    });
-    return models.ok
-      ? collectProviderCatalogModelFindings({ ...params, models: models.value })
-      : [models.finding];
+    return collectModels(provider.value);
   }
 
-  const providers = readProviderCatalogValue({
-    value: params.result,
-    key: "providers",
-    providerId: params.providerId,
-    pluginId: params.pluginId,
-  });
+  const providers = readValue(params.result, "providers");
   if (!providers.ok) {
     return [providers.finding];
   }
@@ -426,12 +401,7 @@ function collectProviderCatalogResultFindings(params: {
       );
       continue;
     }
-    const providerConfig = readProviderCatalogValue({
-      value: providers.value,
-      key: providerId,
-      providerId,
-      pluginId: params.pluginId,
-    });
+    const providerConfig = readValue(providers.value, providerId, providerId);
     if (!providerConfig.ok) {
       findings.push(providerConfig.finding);
       continue;
@@ -446,21 +416,7 @@ function collectProviderCatalogResultFindings(params: {
       );
       continue;
     }
-    const models = readProviderCatalogValue({
-      value: providerConfig.value,
-      key: "models",
-      providerId,
-      pluginId: params.pluginId,
-    });
-    findings.push(
-      ...(models.ok
-        ? collectProviderCatalogModelFindings({
-            providerId,
-            pluginId: params.pluginId,
-            models: models.value,
-          })
-        : [models.finding]),
-    );
+    findings.push(...collectModels(providerConfig.value, providerId));
   }
   return findings;
 }

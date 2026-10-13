@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readDatabase } from "./observations.mjs";
 
 const NOW = "2026-07-29T00:00:00.000Z";
 const WORKSHOP_ROOT = "agents/main/agent/workshop-skills";
@@ -192,8 +193,7 @@ export function captureWorkshopLegacyState(stateDir, fixture) {
     }),
   );
   const exportRoot = path.join(stateDir, EXPORT_ROOT);
-  const database = new DatabaseSync(databasePath(stateDir), { readOnly: true });
-  try {
+  return readDatabase(databasePath(stateDir), (database) => {
     const tables = {};
     for (const table of RETIRED_WORKSHOP_TABLES) {
       if (
@@ -210,9 +210,7 @@ export function captureWorkshopLegacyState(stateDir, fixture) {
       proposalsDir: fs.existsSync(path.join(stateDir, PROPOSALS_DIR)),
       tables,
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 /** Pending/quarantined drafts are exported, applied skills stay live, retired storage is gone. */

@@ -25,6 +25,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
@@ -227,8 +231,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
 });
 
 async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
-  const prepare =
-    params.prepareMessageAfterIdempotencyCheckAsync ?? params.prepareMessageAfterIdempotencyCheck;
+  const prepare = params.preparation?.prepareMessage;
   const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {
@@ -265,12 +268,7 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
 }
 
 function flushAsync() {
-  // Pump enough microtasks for the attempt to settle past every
-  // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // BYOK proxy setup, loadCopilotWorkspaceInstructions,
-  // createSession, etc.).
-  // Each chained `then` is one tick; tests rely on this to observe
-  // `sdk.sessions[0]` being populated before they emit deltas.
+  // Drain the in-flight delta and timeout continuations after SDK startup.
   const tick = () => Promise.resolve();
   return tick().then(tick).then(tick).then(tick).then(tick);
 }
@@ -344,6 +342,8 @@ function makeParams(
     agentDir: "C:\\copilot-home",
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
+    authProfileStore: { version: 1, profiles: {} },
+    config: {},
     disableTools: true,
     hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
@@ -382,8 +382,13 @@ function makeFinalizationParams(
   return params;
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -542,7 +547,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("hands the foreground prompt context to agent-end side effects", async () => {
-    const runAgentEndSideEffects = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffects");
+    const runAgentEnd = vi.spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync");
     const params = makeParams({
       memberRoleIds: ["maintainer-role"],
       messageChannel: "discord",
@@ -550,7 +555,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(params, { pool: makeFakePool(makeFakeSdk()) });
 
-    const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+    const ctx = runAgentEnd.mock.calls.at(-1)?.[0]?.ctx;
     expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
     expect(ctx?.foregroundPromptContext?.agentDir).toBe(params.agentDir);
   });
@@ -857,6 +862,7 @@ describe("runCopilotAttempt", () => {
       layout: "state-only",
       prefix: "copilot-offloaded-image-",
     });
+    setRuntimeConfigSnapshot({});
     const inboundDir = openClawState.statePath("media", "inbound");
     const mediaId = "telegram-photo.png";
     await fsp.mkdir(inboundDir, { recursive: true });
@@ -1604,7 +1610,7 @@ describe("runCopilotAttempt", () => {
             config,
             disableTools: false,
             hostCapabilities: createCopilotTestHostCapabilities(() => [
-              ...["tool_search", "tool_describe", "tool_call"].map(makeTool),
+              ...["tool_search", "tool_describe", "dispatch_action"].map(makeTool),
               ...["read", "fixture_allowed", "fixture_denied"].map(makeTool),
             ]),
           }),
@@ -1634,7 +1640,7 @@ describe("runCopilotAttempt", () => {
           expect(content).toContain("Allowed catalog capability.");
           expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
           expect(content).toContain("Deferred names are not directly callable.");
-          expect(content).toContain("Call tool_call");
+          expect(content).toContain("Call dispatch_action");
           expect(content).not.toContain("Call a unique deferred tool name directly");
           expect(content.includes("fixture_denied")).toBe(toolsAllow === undefined);
         }
@@ -1691,7 +1697,7 @@ describe("runCopilotAttempt", () => {
       expect(content).toContain("## Skill Workshop");
       expect(content).toContain("## Delegation");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("You can participate in the conversation throughout your work.");
+      expect(content).toContain("is your complete reply.");
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
         expect.any(Object),
@@ -1785,13 +1791,17 @@ describe("runCopilotAttempt", () => {
     // without waiting for them. Round-5 awaits the delta chain inside
     // the timeout branch so the recorded assistantTexts reflect what
     // the model actually streamed.
+    const sendStarted = createDeferred<FakeSession>();
     const sendDeferred = createDeferred<SessionEventShape | undefined>();
     const release = createDeferred<void>();
     const onAssistantDelta = vi.fn(async (_payload: { delta: string }) => {
       await release.promise;
     });
     const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockReturnValue(sendDeferred.promise);
+      session.sendAndWait.mockImplementationOnce(() => {
+        sendStarted.resolve(session);
+        return sendDeferred.promise;
+      });
     });
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(async () => createStubToolBridge());
@@ -1800,8 +1810,7 @@ describe("runCopilotAttempt", () => {
       createToolBridge,
       pool,
     });
-    await flushAsync();
-    const session = requireSession(sdk);
+    const session = await sendStarted.promise;
     session.emit("assistant.message_delta", { deltaContent: "partial-", messageId: "msg-1" });
     await flushAsync();
     // SDK timer fires before the slow delta consumer resolves.

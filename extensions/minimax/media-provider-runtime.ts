@@ -3,6 +3,8 @@ import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type postJsonRequest,
   type ProviderOperationRetryStage,
   type ProviderOperationTimeoutMs,
@@ -13,7 +15,7 @@ import {
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
+const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
 
 export type MinimaxBaseResp = {
   status_code?: number;
@@ -25,12 +27,35 @@ export type MinimaxRequestPolicy = Pick<
   "allowPrivateNetwork" | "dispatcherPolicy"
 >;
 
-export function resolveMinimaxMediaBaseUrl(
+function resolveMinimaxMediaBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
   providerId: string,
 ): string {
   const configured = normalizeOptionalString(cfg?.models?.providers?.[providerId]?.baseUrl);
   return URL.parse(configured ?? "")?.origin ?? DEFAULT_MINIMAX_MEDIA_BASE_URL;
+}
+
+export function resolveMinimaxMediaRequestConfig(params: {
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"];
+  providerId: string;
+  apiKey: string;
+  capability: "image" | "audio" | "video";
+  baseUrl?: string;
+}) {
+  return resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl ?? resolveMinimaxMediaBaseUrl(params.cfg, params.providerId),
+    defaultBaseUrl: DEFAULT_MINIMAX_MEDIA_BASE_URL,
+    defaultHeaders: {
+      Authorization: `Bearer ${params.apiKey}`,
+      ...(params.capability !== "audio" ? { "Content-Type": "application/json" } : {}),
+    },
+    provider: params.providerId,
+    capability: params.capability,
+    transport: "http",
+    request: sanitizeConfiguredModelProviderRequest(
+      params.cfg?.models?.providers?.[params.providerId]?.request,
+    ),
+  });
 }
 
 export function assertMinimaxBaseResp(value: unknown, context: string): void {

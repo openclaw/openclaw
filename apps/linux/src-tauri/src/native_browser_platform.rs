@@ -84,17 +84,35 @@ async fn response<T>(
         .map_err(|_| "The browser tab closed before the operation completed.".to_string())?
 }
 
-async fn native<T: Send + 'static>(
+type Reply<T = Value> = tokio::sync::oneshot::Sender<Result<T, String>>;
+
+fn native_reply<T: Send + 'static>(
     webview: &Webview,
-    operation: impl FnOnce(tauri::webview::PlatformWebview) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
+    start: impl FnOnce(tauri::webview::PlatformWebview, Reply<T>) + Send + 'static,
+) -> Result<tokio::sync::oneshot::Receiver<Result<T, String>>, String> {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     webview
-        .with_webview(move |platform| {
-            let _ = reply.send(operation(platform));
-        })
+        .with_webview(move |platform| start(platform, reply))
         .map_err(|error| error.to_string())?;
-    response(receiver).await
+    Ok(receiver)
+}
+
+#[cfg(target_os = "windows")]
+type NativeError = windows::core::Error;
+#[cfg(not(target_os = "windows"))]
+type NativeError = String;
+
+async fn native<T: Send + 'static>(
+    webview: &Webview,
+    operation: impl FnOnce(tauri::webview::PlatformWebview) -> Result<T, NativeError> + Send + 'static,
+) -> Result<T, String> {
+    response(native_reply(webview, move |platform, reply| {
+        let result = operation(platform);
+        #[cfg(target_os = "windows")]
+        let result = result.map_err(|error| error.to_string());
+        let _ = reply.send(result);
+    })?)
+    .await
 }
 
 /// Capture one native navigation state on the UI thread so overlapping events cannot mix pages.
@@ -104,24 +122,17 @@ pub async fn navigation_state(webview: &Webview) -> Result<(String, String, bool
         unsafe {
             use webview2_com::take_pwstr;
             use windows::core::{BOOL, PWSTR};
-            let browser = platform
-                .controller()
-                .CoreWebView2()
-                .map_err(|e| e.to_string())?;
+            let browser = platform.controller().CoreWebView2()?;
             let mut url = PWSTR::null();
-            browser.Source(&mut url).map_err(|e| e.to_string())?;
+            browser.Source(&mut url)?;
             let url = take_pwstr(url);
             let mut title = PWSTR::null();
-            browser
-                .DocumentTitle(&mut title)
-                .map_err(|e| e.to_string())?;
+            browser.DocumentTitle(&mut title)?;
             let title = take_pwstr(title);
             let mut back = BOOL::default();
             let mut forward = BOOL::default();
-            browser.CanGoBack(&mut back).map_err(|e| e.to_string())?;
-            browser
-                .CanGoForward(&mut forward)
-                .map_err(|e| e.to_string())?;
+            browser.CanGoBack(&mut back)?;
+            browser.CanGoForward(&mut forward)?;
             Ok((url, title, back.as_bool(), forward.as_bool()))
         }
         #[cfg(target_os = "linux")]
@@ -170,40 +181,31 @@ pub async fn observe_navigation(
                 DocumentTitleChangedEventHandler, HistoryChangedEventHandler,
                 SourceChangedEventHandler,
             };
-            let browser = platform
-                .controller()
-                .CoreWebView2()
-                .map_err(|e| e.to_string())?;
+            let browser = platform.controller().CoreWebView2()?;
             let callback = changed.clone();
             let mut token = 0;
-            browser
-                .add_HistoryChanged(
-                    &HistoryChangedEventHandler::create(Box::new(move |_, _| {
-                        callback();
-                        Ok(())
-                    })),
-                    &mut token,
-                )
-                .map_err(|e| e.to_string())?;
+            browser.add_HistoryChanged(
+                &HistoryChangedEventHandler::create(Box::new(move |_, _| {
+                    callback();
+                    Ok(())
+                })),
+                &mut token,
+            )?;
             let callback = changed.clone();
-            browser
-                .add_SourceChanged(
-                    &SourceChangedEventHandler::create(Box::new(move |_, _| {
-                        callback();
-                        Ok(())
-                    })),
-                    &mut token,
-                )
-                .map_err(|e| e.to_string())?;
-            browser
-                .add_DocumentTitleChanged(
-                    &DocumentTitleChangedEventHandler::create(Box::new(move |_, _| {
-                        changed();
-                        Ok(())
-                    })),
-                    &mut token,
-                )
-                .map_err(|e| e.to_string())?;
+            browser.add_SourceChanged(
+                &SourceChangedEventHandler::create(Box::new(move |_, _| {
+                    callback();
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            browser.add_DocumentTitleChanged(
+                &DocumentTitleChangedEventHandler::create(Box::new(move |_, _| {
+                    changed();
+                    Ok(())
+                })),
+                &mut token,
+            )?;
         }
         #[cfg(target_os = "linux")]
         {
@@ -256,52 +258,44 @@ pub async fn observe_navigation_events(
                 NavigationCompletedEventHandler, NavigationStartingEventHandler,
             };
             use windows::core::BOOL;
-            let browser = platform
-                .controller()
-                .CoreWebView2()
-                .map_err(|e| e.to_string())?;
+            let browser = platform.controller().CoreWebView2()?;
             let latest = Rc::new(Cell::new(None));
             let started = latest.clone();
             let starting = changed.clone();
             let mut token = 0;
-            browser
-                .add_NavigationStarting(
-                    &NavigationStartingEventHandler::create(Box::new(move |_, args| {
-                        if let Some(args) = args {
-                            let mut id = 0;
-                            args.NavigationId(&mut id)?;
-                            started.set(Some(id));
-                            starting(NavigationEvent::Started);
-                        }
-                        Ok(())
-                    })),
-                    &mut token,
-                )
-                .map_err(|e| e.to_string())?;
-            browser
-                .add_NavigationCompleted(
-                    &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-                        if let Some(args) = args {
-                            let mut success = BOOL::default();
-                            let mut id = 0;
-                            let mut error = COREWEBVIEW2_WEB_ERROR_STATUS::default();
-                            args.IsSuccess(&mut success)?;
-                            args.NavigationId(&mut id)?;
-                            args.WebErrorStatus(&mut error)?;
-                            if latest.get() == Some(id) {
-                                if success.as_bool() {
-                                    changed(NavigationEvent::Succeeded);
-                                } else if error != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
-                                {
-                                    changed(NavigationEvent::Failed);
-                                }
+            browser.add_NavigationStarting(
+                &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    if let Some(args) = args {
+                        let mut id = 0;
+                        args.NavigationId(&mut id)?;
+                        started.set(Some(id));
+                        starting(NavigationEvent::Started);
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            browser.add_NavigationCompleted(
+                &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+                    if let Some(args) = args {
+                        let mut success = BOOL::default();
+                        let mut id = 0;
+                        let mut error = COREWEBVIEW2_WEB_ERROR_STATUS::default();
+                        args.IsSuccess(&mut success)?;
+                        args.NavigationId(&mut id)?;
+                        args.WebErrorStatus(&mut error)?;
+                        if latest.get() == Some(id) {
+                            if success.as_bool() {
+                                changed(NavigationEvent::Succeeded);
+                            } else if error != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED {
+                                changed(NavigationEvent::Failed);
                             }
                         }
-                        Ok(())
-                    })),
-                    &mut token,
-                )
-                .map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
         }
         #[cfg(target_os = "linux")]
         {
@@ -356,16 +350,12 @@ pub(crate) async fn navigate(webview: &Webview, action: Navigation) -> Result<()
     native(webview, move |platform| {
         #[cfg(target_os = "windows")]
         unsafe {
-            let browser = platform
-                .controller()
-                .CoreWebView2()
-                .map_err(|e| e.to_string())?;
+            let browser = platform.controller().CoreWebView2()?;
             match action {
                 Navigation::Back => browser.GoBack(),
                 Navigation::Forward => browser.GoForward(),
                 Navigation::Stop => browser.Stop(),
             }
-            .map_err(|e| e.to_string())
         }
         #[cfg(target_os = "linux")]
         {
@@ -445,72 +435,66 @@ pub async fn snapshot(webview: &Webview) -> Result<Value, String> {
 async fn snapshot_png(webview: &Webview) -> Result<String, String> {
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     use windows::core::w;
-    let (reply, receiver) = tokio::sync::oneshot::channel();
-    let reply = std::sync::Arc::new(std::sync::Mutex::new(Some(reply)));
-    webview
-        .with_webview(move |platform| {
-            let completion = reply.clone();
-            let result = (|| unsafe {
-                let browser = platform.controller().CoreWebView2()?;
-                browser.CallDevToolsProtocolMethod(
-                    w!("Page.captureScreenshot"),
-                    w!("{\"format\":\"png\",\"captureBeyondViewport\":false}"),
-                    &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
-                        move |status, result| {
-                            let result = status.map_err(|e| e.to_string()).and_then(|_| {
-                                let value: Value =
-                                    serde_json::from_str(&result).map_err(|e| e.to_string())?;
-                                value["data"]
-                                    .as_str()
-                                    .filter(|data| !data.is_empty())
-                                    .map(str::to_owned)
-                                    .ok_or_else(|| {
-                                        "The browser returned an empty screenshot.".to_string()
-                                    })
-                            });
-                            if let Some(reply) =
-                                completion.lock().ok().and_then(|mut reply| reply.take())
-                            {
-                                let _ = reply.send(result);
-                            }
-                            Ok(())
-                        },
-                    )),
-                )
-            })();
-            if let Err(error) = result {
-                if let Some(reply) = reply.lock().ok().and_then(|mut reply| reply.take()) {
-                    let _ = reply.send(Err(error.to_string()));
-                }
+    response(native_reply(webview, move |platform, reply| {
+        let reply = std::sync::Arc::new(std::sync::Mutex::new(Some(reply)));
+        let completion = reply.clone();
+        let result = (|| unsafe {
+            let browser = platform.controller().CoreWebView2()?;
+            browser.CallDevToolsProtocolMethod(
+                w!("Page.captureScreenshot"),
+                w!("{\"format\":\"png\",\"captureBeyondViewport\":false}"),
+                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                    move |status, result| {
+                        let result = status.map_err(|e| e.to_string()).and_then(|_| {
+                            let value: Value =
+                                serde_json::from_str(&result).map_err(|e| e.to_string())?;
+                            value["data"]
+                                .as_str()
+                                .filter(|data| !data.is_empty())
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    "The browser returned an empty screenshot.".to_string()
+                                })
+                        });
+                        if let Some(reply) =
+                            completion.lock().ok().and_then(|mut reply| reply.take())
+                        {
+                            let _ = reply.send(result);
+                        }
+                        Ok(())
+                    },
+                )),
+            )
+        })();
+        if let Err(error) = result {
+            if let Some(reply) = reply.lock().ok().and_then(|mut reply| reply.take()) {
+                let _ = reply.send(Err(error.to_string()));
             }
-        })
-        .map_err(|e| e.to_string())?;
-    response(receiver).await
+        }
+    })?)
+    .await
 }
 
 #[cfg(target_os = "linux")]
 async fn snapshot_png(webview: &Webview) -> Result<String, String> {
     use base64::Engine;
     use webkit2gtk::WebViewExt;
-    let (reply, receiver) = tokio::sync::oneshot::channel();
-    webview
-        .with_webview(move |platform| {
-            platform.inner().snapshot(
-                webkit2gtk::SnapshotRegion::Visible,
-                webkit2gtk::SnapshotOptions::NONE,
-                None::<&gtk::gio::Cancellable>,
-                move |result| {
-                    let result = result.map_err(|e| e.to_string()).and_then(|surface| {
-                        let mut png = Vec::new();
-                        surface.write_to_png(&mut png).map_err(|e| e.to_string())?;
-                        Ok(base64::engine::general_purpose::STANDARD.encode(png))
-                    });
-                    let _ = reply.send(result);
-                },
-            );
-        })
-        .map_err(|e| e.to_string())?;
-    response(receiver).await
+    response(native_reply(webview, move |platform, reply| {
+        platform.inner().snapshot(
+            webkit2gtk::SnapshotRegion::Visible,
+            webkit2gtk::SnapshotOptions::NONE,
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                let result = result.map_err(|e| e.to_string()).and_then(|surface| {
+                    let mut png = Vec::new();
+                    surface.write_to_png(&mut png).map_err(|e| e.to_string())?;
+                    Ok(base64::engine::general_purpose::STANDARD.encode(png))
+                });
+                let _ = reply.send(result);
+            },
+        );
+    })?)
+    .await
 }
 
 #[cfg(target_os = "macos")]
@@ -519,43 +503,37 @@ async fn snapshot_png(webview: &Webview) -> Result<String, String> {
     use objc2::AnyThread;
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
     use objc2_foundation::{NSDictionary, NSError};
-    let (reply, receiver) = tokio::sync::oneshot::channel();
-    webview
-        .with_webview(move |platform| unsafe {
-            let reply = std::cell::RefCell::new(Some(reply));
-            let completion =
-                block2::RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
-                    let result = (|| {
-                        if !error.is_null() {
-                            return Err((&*error).localizedDescription().to_string());
-                        }
-                        let image = image
-                            .as_ref()
-                            .ok_or("The browser returned an empty screenshot.")?;
-                        let tiff = image
-                            .TIFFRepresentation()
-                            .ok_or("Could not encode the browser screenshot.")?;
-                        let bitmap =
-                            NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
-                                .ok_or("Could not encode the browser screenshot.")?;
-                        let png = bitmap
-                            .representationUsingType_properties(
-                                NSBitmapImageFileType::PNG,
-                                &NSDictionary::new(),
-                            )
-                            .ok_or("Could not encode the browser screenshot.")?;
-                        Ok(base64::engine::general_purpose::STANDARD
-                            .encode(png.as_bytes_unchecked()))
-                    })();
-                    if let Some(reply) = reply.borrow_mut().take() {
-                        let _ = reply.send(result);
-                    }
-                });
-            let browser = &*platform.inner().cast::<objc2_web_kit::WKWebView>();
-            browser.takeSnapshotWithConfiguration_completionHandler(None, &completion);
-        })
-        .map_err(|e| e.to_string())?;
-    response(receiver).await
+    response(native_reply(webview, move |platform, reply| unsafe {
+        let reply = std::cell::RefCell::new(Some(reply));
+        let completion = block2::RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+            let result = (|| {
+                if !error.is_null() {
+                    return Err((&*error).localizedDescription().to_string());
+                }
+                let image = image
+                    .as_ref()
+                    .ok_or("The browser returned an empty screenshot.")?;
+                let tiff = image
+                    .TIFFRepresentation()
+                    .ok_or("Could not encode the browser screenshot.")?;
+                let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
+                    .ok_or("Could not encode the browser screenshot.")?;
+                let png = bitmap
+                    .representationUsingType_properties(
+                        NSBitmapImageFileType::PNG,
+                        &NSDictionary::new(),
+                    )
+                    .ok_or("Could not encode the browser screenshot.")?;
+                Ok(base64::engine::general_purpose::STANDARD.encode(png.as_bytes_unchecked()))
+            })();
+            if let Some(reply) = reply.borrow_mut().take() {
+                let _ = reply.send(result);
+            }
+        });
+        let browser = &*platform.inner().cast::<objc2_web_kit::WKWebView>();
+        browser.takeSnapshotWithConfiguration_completionHandler(None, &completion);
+    })?)
+    .await
 }
 
 #[cfg(target_os = "windows")]
@@ -602,7 +580,6 @@ mod windows_download {
         },
     };
 
-    type Reply = tokio::sync::oneshot::Sender<Result<Value, String>>;
     thread_local! {
         // WebView2 COM objects stay on the thread that owns the WebView.
         static TRANSFERS: RefCell<HashMap<String, Rc<Transfer>>> = RefCell::new(HashMap::new());
@@ -970,29 +947,26 @@ mod windows_download {
             if !self.pending() {
                 return Ok(());
             }
-            if self.operation.borrow().is_some() {
+            let reject_unmatched = || {
                 if self.permission_consumed.get() {
                     args.SetCancel(true).map_err(|e| e.to_string())?;
                 }
-                return Ok(());
+                Ok(())
+            };
+            if self.operation.borrow().is_some() {
+                return reject_unmatched();
             }
             let operation = args.DownloadOperation().map_err(|e| e.to_string())?;
             let mut uri = PWSTR::null();
             operation.Uri(&mut uri).map_err(|e| e.to_string())?;
             let Ok(mut uri) = tauri::Url::parse(&take_pwstr(uri)) else {
-                if self.permission_consumed.get() {
-                    args.SetCancel(true).map_err(|e| e.to_string())?;
-                }
-                return Ok(());
+                return reject_unmatched();
             };
             uri.set_fragment(None);
             let mut requested = self.url.clone();
             requested.set_fragment(None);
             if uri != requested {
-                if self.permission_consumed.get() {
-                    args.SetCancel(true).map_err(|e| e.to_string())?;
-                }
-                return Ok(());
+                return reject_unmatched();
             }
             if let Err(error) = self.authority.ensure_current() {
                 let _ = args.SetCancel(true);
@@ -1058,8 +1032,7 @@ mod windows_download {
         let url = download_url(webview)?;
         let label = webview.label().to_owned();
         let app = webview.app_handle().clone();
-        let (reply, receiver) = tokio::sync::oneshot::channel();
-        webview.with_webview(move |platform| unsafe {
+        native_reply(webview, move |platform, reply| unsafe {
             if let Err(error) = authority.ensure_current() { let _ = reply.send(Err(error)); return; }
             let browser = match platform.controller().CoreWebView2().and_then(|browser| browser.cast::<ICoreWebView2_4>()) {
                 Ok(browser) => browser,
@@ -1118,8 +1091,7 @@ mod windows_download {
                     }
                 });
             });
-        }).map_err(|e| e.to_string())?;
-        receiver
+        })?
             .await
             .map_err(|_| "The browser closed before saving completed.".to_string())?
     }
@@ -1198,155 +1170,151 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
     let authority = DownloadAuthority::new(webview, generation);
     authority.ensure_current()?;
     let url = download_url(webview)?;
-    let (reply, receiver) = tokio::sync::oneshot::channel();
-    webview
-        .with_webview(move |platform| {
-            if let Err(error) = authority.ensure_current() {
-                let _ = reply.send(Err(error));
-                return;
+    native_reply(webview, move |platform, reply| {
+        if let Err(error) = authority.ensure_current() {
+            let _ = reply.send(Err(error));
+            return;
+        }
+        let browser = platform.inner();
+        let Some(download) = browser.download_uri(url.as_str()) else {
+            let _ = reply.send(Err("Could not start the download.".to_string()));
+            return;
+        };
+        let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(reply)));
+        let destination = std::rc::Rc::new(std::cell::RefCell::new(
+            None::<(std::path::PathBuf, std::path::PathBuf)>,
+        ));
+        let dialog = std::rc::Rc::new(std::cell::RefCell::new(None::<gtk::FileChooserNative>));
+        let cancellation = reply.clone();
+        let cancelled_download = download.downgrade();
+        let cancelled_dialog = dialog.clone();
+        let cancelled_destination = destination.clone();
+        let destroy_handler = browser.connect_destroy(move |_| {
+            if let Some(reply) = cancellation.borrow_mut().take() {
+                let _ = reply.send(Ok(json!({"ok": true, "cancelled": true})));
             }
-            let browser = platform.inner();
-            let Some(download) = browser.download_uri(url.as_str()) else {
-                let _ = reply.send(Err("Could not start the download.".to_string()));
-                return;
-            };
-            let reply = std::rc::Rc::new(std::cell::RefCell::new(Some(reply)));
-            let destination = std::rc::Rc::new(std::cell::RefCell::new(
-                None::<(std::path::PathBuf, std::path::PathBuf)>,
-            ));
-            let dialog = std::rc::Rc::new(std::cell::RefCell::new(None::<gtk::FileChooserNative>));
-            let cancellation = reply.clone();
-            let cancelled_download = download.downgrade();
-            let cancelled_dialog = dialog.clone();
-            let cancelled_destination = destination.clone();
-            let destroy_handler = browser.connect_destroy(move |_| {
-                if let Some(reply) = cancellation.borrow_mut().take() {
-                    let _ = reply.send(Ok(json!({"ok": true, "cancelled": true})));
-                }
-                if let Some(dialog) = cancelled_dialog.borrow_mut().take() {
-                    dialog.destroy();
-                }
-                if let Some(download) = cancelled_download.upgrade() {
-                    download.cancel();
-                }
-                if let Some((staging, _)) = cancelled_destination.borrow_mut().take() {
-                    let _ = std::fs::remove_file(staging);
-                }
-            });
-            let destroy_handler = std::rc::Rc::new(std::cell::RefCell::new(Some(destroy_handler)));
-            let completion = reply.clone();
-            let completed_destination = destination.clone();
-            let completed_browser = browser.downgrade();
-            let completed_handler = destroy_handler.clone();
-            let completed_authority = authority.clone();
-            download.connect_finished(move |_| {
-                if let Some(reply) = completion.borrow_mut().take() {
-                    let result = completed_authority.save(
-                        completed_destination.borrow_mut().take().as_ref(),
-                        "The browser did not select a download destination.",
-                        true,
-                    );
-                    let _ = reply.send(result);
-                }
-                if let (Some(browser), Some(handler)) = (
-                    completed_browser.upgrade(),
-                    completed_handler.borrow_mut().take(),
-                ) {
-                    browser.disconnect(handler);
-                }
-            });
-            let completion = reply.clone();
-            let failed_destination = destination.clone();
-            let failed_browser = browser.downgrade();
-            let failed_dialog = dialog.clone();
-            download.connect_failed(move |_, error| {
-                let reply = completion.borrow_mut().take();
-                let dialog = failed_dialog.borrow_mut().take();
-                if let Some(dialog) = dialog {
-                    dialog.destroy();
-                }
-                if let Some((staging, _)) = failed_destination.borrow_mut().take() {
-                    let _ = std::fs::remove_file(staging);
-                }
-                if let (Some(browser), Some(handler)) = (
-                    failed_browser.upgrade(),
-                    destroy_handler.borrow_mut().take(),
-                ) {
-                    browser.disconnect(handler);
-                }
-                if let Some(reply) = reply {
-                    let _ = reply.send(Err(format!("Could not download this asset: {error}")));
-                }
-            });
-            let parent = browser
-                .toplevel()
-                .and_then(|widget| widget.downcast::<gtk::Window>().ok());
-            download.connect_decide_destination(move |download, filename| {
-                let current = || {
-                    if reply.borrow().is_none() {
-                        return false;
-                    }
-                    if let Err(error) = authority.ensure_current() {
-                        if let Some(reply) = reply.borrow_mut().take() {
-                            let _ = reply.send(Err(error));
-                        }
-                        return false;
-                    }
-                    true
-                };
-                if !current() {
-                    download.cancel();
-                    return true;
-                }
-                if download
-                    .response()
-                    .is_some_and(|response| !(200..300).contains(&response.status_code()))
-                {
-                    if let Some(reply) = reply.borrow_mut().take() {
-                        let _ = reply.send(Err(
-                            "The server did not return a downloadable asset.".to_string()
-                        ));
-                    }
-                    download.cancel();
-                    return true;
-                }
-                let chooser = gtk::FileChooserNative::new(
-                    Some("Save browser asset"),
-                    parent.as_ref(),
-                    gtk::FileChooserAction::Save,
-                    Some("Save"),
-                    Some("Cancel"),
+            if let Some(dialog) = cancelled_dialog.borrow_mut().take() {
+                dialog.destroy();
+            }
+            if let Some(download) = cancelled_download.upgrade() {
+                download.cancel();
+            }
+            if let Some((staging, _)) = cancelled_destination.borrow_mut().take() {
+                let _ = std::fs::remove_file(staging);
+            }
+        });
+        let destroy_handler = std::rc::Rc::new(std::cell::RefCell::new(Some(destroy_handler)));
+        let completion = reply.clone();
+        let completed_destination = destination.clone();
+        let completed_browser = browser.downgrade();
+        let completed_handler = destroy_handler.clone();
+        let completed_authority = authority.clone();
+        download.connect_finished(move |_| {
+            if let Some(reply) = completion.borrow_mut().take() {
+                let result = completed_authority.save(
+                    completed_destination.borrow_mut().take().as_ref(),
+                    "The browser did not select a download destination.",
+                    true,
                 );
-                chooser.set_current_name(filename);
-                chooser.set_do_overwrite_confirmation(true);
-                dialog.replace(Some(chooser.clone()));
-                let accepted = chooser.run() == gtk::ResponseType::Accept;
-                dialog.borrow_mut().take();
-                if !current() {
-                    download.cancel();
-                    return true;
+                let _ = reply.send(result);
+            }
+            if let (Some(browser), Some(handler)) = (
+                completed_browser.upgrade(),
+                completed_handler.borrow_mut().take(),
+            ) {
+                browser.disconnect(handler);
+            }
+        });
+        let completion = reply.clone();
+        let failed_destination = destination.clone();
+        let failed_browser = browser.downgrade();
+        let failed_dialog = dialog.clone();
+        download.connect_failed(move |_, error| {
+            let reply = completion.borrow_mut().take();
+            let dialog = failed_dialog.borrow_mut().take();
+            if let Some(dialog) = dialog {
+                dialog.destroy();
+            }
+            if let Some((staging, _)) = failed_destination.borrow_mut().take() {
+                let _ = std::fs::remove_file(staging);
+            }
+            if let (Some(browser), Some(handler)) = (
+                failed_browser.upgrade(),
+                destroy_handler.borrow_mut().take(),
+            ) {
+                browser.disconnect(handler);
+            }
+            if let Some(reply) = reply {
+                let _ = reply.send(Err(format!("Could not download this asset: {error}")));
+            }
+        });
+        let parent = browser
+            .toplevel()
+            .and_then(|widget| widget.downcast::<gtk::Window>().ok());
+        download.connect_decide_destination(move |download, filename| {
+            let current = || {
+                if reply.borrow().is_none() {
+                    return false;
                 }
-                if accepted {
-                    if let Some(path) = chooser.filename() {
-                        let staging = path
-                            .with_file_name(format!(".openclaw-download-{}", uuid::Uuid::new_v4()));
-                        let uri = gtk::gio::File::for_path(&staging).uri();
-                        destination.replace(Some((staging, path)));
-                        download.set_destination(uri.as_str());
-                        return true;
+                if let Err(error) = authority.ensure_current() {
+                    if let Some(reply) = reply.borrow_mut().take() {
+                        let _ = reply.send(Err(error));
                     }
+                    return false;
                 }
+                true
+            };
+            if !current() {
+                download.cancel();
+                return true;
+            }
+            if download
+                .response()
+                .is_some_and(|response| !(200..300).contains(&response.status_code()))
+            {
                 if let Some(reply) = reply.borrow_mut().take() {
-                    let _ = reply.send(Ok(json!({"ok": true, "cancelled": true})));
+                    let _ = reply.send(Err(
+                        "The server did not return a downloadable asset.".to_string()
+                    ));
                 }
                 download.cancel();
-                true
-            });
-        })
-        .map_err(|e| e.to_string())?;
-    receiver
-        .await
-        .map_err(|_| "The browser closed before saving completed.".to_string())?
+                return true;
+            }
+            let chooser = gtk::FileChooserNative::new(
+                Some("Save browser asset"),
+                parent.as_ref(),
+                gtk::FileChooserAction::Save,
+                Some("Save"),
+                Some("Cancel"),
+            );
+            chooser.set_current_name(filename);
+            chooser.set_do_overwrite_confirmation(true);
+            dialog.replace(Some(chooser.clone()));
+            let accepted = chooser.run() == gtk::ResponseType::Accept;
+            dialog.borrow_mut().take();
+            if !current() {
+                download.cancel();
+                return true;
+            }
+            if accepted {
+                if let Some(path) = chooser.filename() {
+                    let staging =
+                        path.with_file_name(format!(".openclaw-download-{}", uuid::Uuid::new_v4()));
+                    let uri = gtk::gio::File::for_path(&staging).uri();
+                    destination.replace(Some((staging, path)));
+                    download.set_destination(uri.as_str());
+                    return true;
+                }
+            }
+            if let Some(reply) = reply.borrow_mut().take() {
+                let _ = reply.send(Ok(json!({"ok": true, "cancelled": true})));
+            }
+            download.cancel();
+            true
+        });
+    })?
+    .await
+    .map_err(|_| "The browser closed before saving completed.".to_string())?
 }
 
 #[cfg(target_os = "macos")]
@@ -1628,8 +1596,6 @@ mod mac_download {
     use objc2_web_kit::{WKDownload, WKDownloadDelegate, WKWebView};
     use std::{cell::RefCell, collections::HashMap, path::PathBuf, ptr::NonNull};
 
-    type Reply = tokio::sync::oneshot::Sender<Result<Value, String>>;
-
     // WKDownload's delegate is weak. This registry retains delegates only while WebKit owns a transfer.
     thread_local! {
         static TRANSFERS: RefCell<HashMap<String, Retained<BrowserDownloadDelegate>>> = RefCell::new(HashMap::new());
@@ -1813,55 +1779,50 @@ mod mac_download {
         authority.ensure_current()?;
         let label = webview.label().to_owned();
         let url = download_url(webview)?.to_string();
-        let (reply, receiver) = tokio::sync::oneshot::channel();
-        webview
-            .with_webview(move |platform| unsafe {
-                if let Err(error) = authority.ensure_current() {
-                    let _ = reply.send(Err(error));
+        native_reply(webview, move |platform, reply| unsafe {
+            if let Err(error) = authority.ensure_current() {
+                let _ = reply.send(Err(error));
+                return;
+            }
+            let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) else {
+                let _ = reply.send(Err("The browser URL is invalid.".to_string()));
+                return;
+            };
+            let Some(mtm) = MainThreadMarker::new() else {
+                let _ = reply.send(Err(
+                    "The browser is not on the application thread.".to_string()
+                ));
+                return;
+            };
+            let id = uuid::Uuid::new_v4().to_string();
+            let delegate = BrowserDownloadDelegate::new(mtm, id.clone(), label, authority, reply);
+            TRANSFERS.with(|transfers| {
+                transfers.borrow_mut().insert(id, delegate.clone());
+            });
+            let completion = RcBlock::new(move |download: NonNull<WKDownload>| {
+                if delegate.ivars().reply.borrow().is_none() {
+                    download.as_ref().cancel(None);
                     return;
                 }
-                let Some(url) = NSURL::URLWithString(&NSString::from_str(&url)) else {
-                    let _ = reply.send(Err("The browser URL is invalid.".to_string()));
+                delegate.ivars().download.replace(Some(
+                    Retained::retain(download.as_ptr()).expect("WebKit provided a download"),
+                ));
+                if let Err(error) = delegate.ivars().authority.ensure_current() {
+                    delegate.finish(Err(error));
                     return;
-                };
-                let Some(mtm) = MainThreadMarker::new() else {
-                    let _ = reply.send(Err(
-                        "The browser is not on the application thread.".to_string()
-                    ));
-                    return;
-                };
-                let id = uuid::Uuid::new_v4().to_string();
-                let delegate =
-                    BrowserDownloadDelegate::new(mtm, id.clone(), label, authority, reply);
-                TRANSFERS.with(|transfers| {
-                    transfers.borrow_mut().insert(id, delegate.clone());
-                });
-                let completion = RcBlock::new(move |download: NonNull<WKDownload>| {
-                    if delegate.ivars().reply.borrow().is_none() {
-                        download.as_ref().cancel(None);
-                        return;
-                    }
-                    delegate.ivars().download.replace(Some(
-                        Retained::retain(download.as_ptr()).expect("WebKit provided a download"),
-                    ));
-                    if let Err(error) = delegate.ivars().authority.ensure_current() {
-                        delegate.finish(Err(error));
-                        return;
-                    }
-                    download
-                        .as_ref()
-                        .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-                });
-                let browser = &*platform.inner().cast::<WKWebView>();
-                browser.startDownloadUsingRequest_completionHandler(
-                    &NSURLRequest::requestWithURL(&url),
-                    &completion,
-                );
-            })
-            .map_err(|e| e.to_string())?;
-        receiver
-            .await
-            .map_err(|_| "The browser closed before saving completed.".to_string())?
+                }
+                download
+                    .as_ref()
+                    .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            });
+            let browser = &*platform.inner().cast::<WKWebView>();
+            browser.startDownloadUsingRequest_completionHandler(
+                &NSURLRequest::requestWithURL(&url),
+                &completion,
+            );
+        })?
+        .await
+        .map_err(|_| "The browser closed before saving completed.".to_string())?
     }
 
     pub unsafe fn cancel(label: &str) {

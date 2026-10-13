@@ -42,6 +42,13 @@ export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, stor
   );
 }
 
+export function resolveStoredCronJobOwner(job: Record<string, unknown> | undefined) {
+  return tryResolveCronJobEffectiveAgentId({
+    agentId: normalizeOptionalString(job?.agentId),
+    sessionKey: normalizeOptionalString(job?.sessionKey),
+  });
+}
+
 /** Pins only ownerless definitions, retaining every other authored and runtime field. */
 export async function repairLegacyCronJobOwnersForDoctor(
   scope: DoctorCronScope,
@@ -56,12 +63,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   const changes: Array<{ jobId: string; agentId: string; definition: string }> = [];
   for (const row of rows) {
     const job = safeParseJsonRecord(row.job_json);
-    if (
-      tryResolveCronJobEffectiveAgentId({
-        agentId: normalizeOptionalString(job?.agentId),
-        sessionKey: normalizeOptionalString(job?.sessionKey),
-      })
-    ) {
+    if (resolveStoredCronJobOwner(job)) {
       continue;
     }
     if (!job) {

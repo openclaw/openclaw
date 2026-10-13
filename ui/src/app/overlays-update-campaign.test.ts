@@ -41,38 +41,6 @@ describe("application update campaign overlays", () => {
     }
   });
 
-  it("owns the running interlock while an automatic campaign applies", async () => {
-    const request = vi.fn<RequestFn>(async () => ({}));
-    const harness = createAutomaticUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      harness.emitEvent("update.available", {
-        schedule: {
-          ...AUTO_UPDATE_SCHEDULE,
-          campaign: {
-            ...AUTO_UPDATE_SCHEDULE.campaign,
-            state: "applying",
-            updatedAtMs: 61_000,
-          },
-        },
-      });
-
-      // This published fact also suspends writes at the app-lifetime config owner.
-      expect(overlays.snapshot.updateRunning).toBe(true);
-      await overlays.runUpdate();
-      await expect(overlays.holdUpdate()).resolves.toBe(false);
-      expect(request.mock.calls.map(([method]) => method)).not.toContain("update.run");
-      expect(request.mock.calls.map(([method]) => method)).not.toContain("update.hold");
-
-      harness.emitEvent("update.available", {
-        schedule: { channel: "stable", autoEnabled: true },
-      });
-      expect(overlays.snapshot.updateRunning).toBe(false);
-    } finally {
-      overlays.dispose();
-    }
-  });
-
   it("reads the recorded outcome when an automatic campaign ends between polls", async () => {
     vi.useFakeTimers();
     const request = vi.fn<RequestFn>(async (method) =>
@@ -124,57 +92,7 @@ describe("application update campaign overlays", () => {
     }
   });
 
-  it.each(["manual refresh", "campaign poll"])(
-    "does not let a %s replace a newer campaign event",
-    async (source) => {
-      vi.useFakeTimers();
-      const updateStatus = deferred<unknown>();
-      const request = vi.fn<RequestFn>((method) =>
-        method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-      );
-      const harness = createAutomaticUpdateHarness(request);
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        const refresh = source === "manual refresh" ? overlays.refreshUpdateStatus() : undefined;
-        if (source === "campaign poll") {
-          await vi.advanceTimersByTimeAsync(5_000);
-        }
-        expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
-          source === "manual refresh" ? 3 : 2,
-        );
-        harness.emitEvent("update.available", {
-          schedule: {
-            ...AUTO_UPDATE_SCHEDULE,
-            campaign: {
-              ...AUTO_UPDATE_SCHEDULE.campaign,
-              state: "applying",
-              updatedAtMs: 61_000,
-            },
-          },
-        });
-        updateStatus.resolve({
-          sentinel: {
-            kind: "update",
-            status: "error",
-            ts: 500,
-            stats: { reason: "previous-build-failed" },
-          },
-          schedule: AUTO_UPDATE_SCHEDULE,
-        });
-        expect(await refresh).toBe(source === "manual refresh" ? false : undefined);
-        await flushMicrotasks();
-
-        expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");
-        expect(overlays.snapshot.updateStatusBanner).toBeNull();
-        expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
-      } finally {
-        updateStatus.resolve({});
-        overlays.dispose();
-      }
-    },
-  );
-
-  it.each(["campaign ended", "disconnect", "dispose"])(
+  it.each(["disconnect", "dispose"])(
     "does not restart an in-flight campaign poll after %s",
     async (boundary) => {
       vi.useFakeTimers();
@@ -187,11 +105,7 @@ describe("application update campaign overlays", () => {
       try {
         await vi.advanceTimersByTimeAsync(5_000);
         expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
-        if (boundary === "campaign ended") {
-          harness.emitEvent("update.available", {
-            schedule: { channel: "stable", autoEnabled: true },
-          });
-        } else if (boundary === "disconnect") {
+        if (boundary === "disconnect") {
           harness.update({ phase: "reconnecting" });
         } else {
           overlays.dispose();
@@ -331,43 +245,16 @@ describe("application update campaign overlays", () => {
 
     await overlays.refreshUpdateStatus();
 
-    expect(request).toHaveBeenCalledWith("update.status", { refreshCheckout: true }, undefined);
+    expect(request).toHaveBeenCalledWith(
+      "update.status",
+      { refreshCheckout: true },
+      { timeoutMs: null },
+    );
+    expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: 5_000 });
     expect(overlays.snapshot.updateSchedule?.install?.git).toEqual({
       status: "behind",
       commitsBehind: 12,
     });
-    overlays.dispose();
-  });
-
-  it("publishes pending and error state when a manual status refresh fails", async () => {
-    const updateStatus = deferred<unknown>();
-    const request = vi.fn<RequestFn>((method) =>
-      method === "update.status" ? updateStatus.promise : Promise.resolve({}),
-    );
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    const refresh = overlays.refreshUpdateStatus();
-    expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
-
-    updateStatus.reject(new Error("Gateway unavailable"));
-    await refresh;
-
-    expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
-    expect(overlays.snapshot.updateStatusBanner).toBeNull();
-    expect(overlays.snapshot.updateStatusCheckBanner).toEqual({
-      mode: "manual",
-      tone: "warn",
-      text: "Could not check for updates: Gateway unavailable",
-    });
-    request.mockResolvedValue({});
-    await overlays.refreshUpdateStatus();
-    expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
     overlays.dispose();
   });
 
@@ -392,88 +279,6 @@ describe("application update campaign overlays", () => {
     } finally {
       overlays.dispose();
     }
-  });
-
-  it("hydrates campaign state from hello and update.available events", () => {
-    const harness = createGatewayHarness(client(async () => ({})));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        snapshot: {
-          updateSchedule: {
-            channel: "stable",
-            autoEnabled: true,
-            target: { kind: "package", version: "2.0.0" },
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              forceAtMs: 901_000,
-              updatedAtMs: 1_000,
-            },
-          },
-        },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("waiting-for-idle");
-
-    harness.emitEvent("update.available", {
-      updateAvailable: {
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "stable",
-      },
-      schedule: {
-        channel: "stable",
-        autoEnabled: true,
-        target: { kind: "package", version: "2.0.0" },
-        campaign: {
-          id: "campaign-1",
-          state: "countdown",
-          announcedAtMs: 1_000,
-          applyAtMs: 62_000,
-          forceAtMs: 901_000,
-          updatedAtMs: 2_000,
-        },
-      },
-    });
-
-    expect(overlays.snapshot.updateAvailable?.latestVersion).toBe("2.0.0");
-    expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("countdown");
-    overlays.dispose();
-  });
-
-  it("keeps an expired hold consumed after reconnect", async () => {
-    const request = vi.fn<RequestFn>(async () => ({}));
-    const harness = createGatewayHarness(client(request));
-    harness.update({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        snapshot: {
-          updateSchedule: {
-            channel: "stable",
-            autoEnabled: true,
-            target: { kind: "package", version: "2.0.0" },
-            campaign: {
-              id: "campaign-held",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              holdUntilMs: 2_000,
-              forceAtMs: 902_000,
-              updatedAtMs: 2_000,
-            },
-          },
-        },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    expect(overlays.snapshot.heldUpdateCampaignId).toBe("campaign-held");
-    await expect(overlays.holdUpdate()).resolves.toBe(false);
-    expect(request.mock.calls.filter(([method]) => method === "update.hold")).toHaveLength(0);
-    overlays.dispose();
   });
 
   it("polls update.status only for administrators with an active campaign", async () => {

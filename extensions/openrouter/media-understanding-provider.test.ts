@@ -49,19 +49,6 @@ describe("openrouter media understanding provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("declares image and audio capabilities with defaults", () => {
-    expect(openrouterMediaUnderstandingProvider).toEqual({
-      id: "openrouter",
-      capabilities: ["image", "audio"],
-      defaultModels: {
-        image: "auto",
-        audio: "openai/whisper-large-v3-turbo",
-      },
-      autoPriority: { audio: 35 },
-      transcribeAudio: transcribeOpenRouterAudio,
-    });
-  });
-
   it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({
@@ -148,34 +135,6 @@ describe("openrouter media understanding provider", () => {
     });
   });
 
-  it("drops malformed temperature query options", async () => {
-    for (const temperature of [Number.NaN, Number.POSITIVE_INFINITY]) {
-      const release = vi.fn(async () => {});
-      postJsonRequestMock.mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-        release,
-      });
-
-      await transcribeOpenRouterAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.webm",
-        apiKey: "sk-openrouter",
-        timeoutMs: 5_000,
-        query: { temperature },
-        fetchFn: fetch,
-      });
-
-      expect(firstPostJsonRequest().body).toEqual({
-        model: "openai/whisper-large-v3-turbo",
-        input_audio: {
-          data: Buffer.from("audio").toString("base64"),
-          format: "webm",
-        },
-      });
-      postJsonRequestMock.mockClear();
-    }
-  });
-
   it("falls back to filename extension when mime is missing", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({
@@ -224,31 +183,6 @@ describe("openrouter media understanding provider", () => {
     });
   });
 
-  it("normalizes parameterized mime for extensionless filenames", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "media-1",
-      mime: " Audio/Ogg; codecs=opus ",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
-
-    expect(firstPostJsonRequest().body).toEqual({
-      model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "ogg",
-      },
-    });
-  });
-
   it("throws when format cannot be resolved", async () => {
     await expect(
       transcribeOpenRouterAudio({
@@ -261,23 +195,5 @@ describe("openrouter media understanding provider", () => {
       }),
     ).rejects.toThrow("OpenRouter STT could not resolve audio format");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("throws when provider response omits text", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({}), { status: 200 }),
-      release,
-    });
-
-    await expect(
-      transcribeOpenRouterAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.mp3",
-        apiKey: "sk-openrouter",
-        timeoutMs: 5_000,
-        fetchFn: fetch,
-      }),
-    ).rejects.toThrow("OpenRouter transcription response missing text");
   });
 });

@@ -424,13 +424,16 @@ async function readPluginDetail(
   summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
-  if (marketplace.remoteMarketplaceName && !summary.remotePluginId) {
+  const unavailable = (message: () => string) => {
     diagnostics.push({
       code: "plugin_detail_unavailable",
       plugin: pluginPolicy,
-      message: `${pluginPolicy.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
+      message: `${pluginPolicy.pluginName} detail unavailable: ${message()}`,
     });
     return undefined;
+  };
+  if (marketplace.remoteMarketplaceName && !summary.remotePluginId) {
+    return unavailable(() => "Codex did not return a remote plugin id.");
   }
   try {
     const response = (await params.request(
@@ -444,14 +447,7 @@ async function readPluginDetail(
     )) as v2.PluginReadResponse;
     return response.plugin;
   } catch (error) {
-    diagnostics.push({
-      code: "plugin_detail_unavailable",
-      plugin: pluginPolicy,
-      message: `${pluginPolicy.pluginName} detail unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    });
-    return undefined;
+    return unavailable(() => (error instanceof Error ? error.message : String(error)));
   }
 }
 

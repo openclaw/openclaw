@@ -440,6 +440,7 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     runId: params.runId,
     stream: "assistant",
     data: {
+      itemId: params.runId,
       text: params.text,
       delta: params.delta,
     },

@@ -212,22 +212,6 @@ function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsS
   };
 }
 
-function isCurrentChannelRefresh(
-  state: ChannelsState,
-  client: ChannelGatewayClient,
-  refreshSeq: number,
-): boolean {
-  return state.client === client && state.channelsRefreshSeq === refreshSeq;
-}
-
-function isCurrentPairingRefresh(
-  state: ChannelsState,
-  client: ChannelGatewayClient,
-  refreshSeq: number,
-): boolean {
-  return state.connected && state.client === client && state.pairingRefreshSeq === refreshSeq;
-}
-
 function invalidatePairingRefresh(state: ChannelsState): void {
   // A mutation must supersede any list that started before it; otherwise that
   // stale list can put the resolved request back until the next poll.
@@ -249,22 +233,24 @@ async function loadChannelPairing(
     return;
   }
   const refreshSeq = state.pairingRefreshSeq + 1;
+  const isCurrent = () =>
+    state.connected && state.client === client && state.pairingRefreshSeq === refreshSeq;
   state.pairingRefreshSeq = refreshSeq;
   state.pairingLoading = true;
   state.pairingError = null;
   try {
     const snapshot = await client.request<ChannelsPairingListResult>("channels.pairing.list", {});
-    if (!isCurrentPairingRefresh(state, client, refreshSeq)) {
+    if (!isCurrent()) {
       return;
     }
     state.pairingSnapshot = snapshot;
     state.pairingLastSuccess = Date.now();
   } catch (error) {
-    if (isCurrentPairingRefresh(state, client, refreshSeq)) {
+    if (isCurrent()) {
       state.pairingError = formatUiError(error);
     }
   } finally {
-    if (isCurrentPairingRefresh(state, client, refreshSeq)) {
+    if (isCurrent()) {
       state.pairingLoading = false;
     }
   }
@@ -471,6 +457,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       return;
     }
     const refreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
+    const isCurrent = () => state.client === client && state.channelsRefreshSeq === refreshSeq;
     state.channelsRefreshSeq = refreshSeq;
     state.channelsLoading = true;
     state.channelsLoadingProbe = probe;
@@ -482,14 +469,14 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
         probe,
         timeoutMs: 8000,
       });
-      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+      if (!isCurrent()) {
         return;
       }
       state.channelsSnapshot = res;
       state.channelsError = null;
       state.channelsLastSuccess = Date.now();
     } catch (err) {
-      if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
+      if (!isCurrent()) {
         return;
       }
       if (isMissingOperatorReadScopeError(err)) {
@@ -499,7 +486,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
         state.channelsError = formatUiError(err);
       }
     } finally {
-      if (isCurrentChannelRefresh(state, client, refreshSeq)) {
+      if (isCurrent()) {
         state.channelsLoading = false;
         state.channelsLoadingProbe = null;
         if (channelsInvalidated) {

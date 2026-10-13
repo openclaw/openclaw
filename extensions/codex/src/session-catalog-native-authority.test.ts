@@ -1,16 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
-import { createClientHarness } from "./app-server/test-support.js";
-import {
-  codexCatalogResidentHomeKey,
-  observeCodexCatalogClient,
-} from "./session-catalog-events.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
 
@@ -92,92 +85,6 @@ async function fixture() {
 }
 
 describe("native catalog metadata authority", () => {
-  it.each(["publish", "archive", "delete"])(
-    "keeps a turn-start reservation through a file-fenced read (%s)",
-    async (outcome) => {
-      const { root, file, thread } = await fixture();
-      const native = { ...thread, recencyAt: createdAt + 100 };
-      const peer = { ...native, id: "tied-peer", path: undefined };
-      const startOptions: CodexAppServerStartOptions = {
-        transport: "stdio",
-        command: "codex",
-        args: ["app-server"],
-        env: { CODEX_HOME: path.dirname(root) },
-        headers: {},
-        homeScope: "user",
-      };
-      let reads = 0;
-      const harness = createClientHarness({
-        onWrite(value, send) {
-          const request = JSON.parse(value);
-          expect(request).toMatchObject({ method: "thread/read", params: { threadId: native.id } });
-          if (++reads > 1) {
-            send({ id: request.id, result: { thread: native } });
-          }
-        },
-      });
-      const { index } = catalog(root, [peer, native], {
-        homeId: await codexCatalogResidentHomeKey({ startOptions }),
-      });
-      try {
-        await observeCodexCatalogClient(harness.client, { startOptions });
-        await index.initialize();
-        harness.send({
-          method: "turn/started",
-          params: {
-            threadId: native.id,
-            turn: { id: "same-second", startedAt: native.recencyAt, items: [] },
-          },
-        });
-        const firstRead = JSON.parse(await harness.waitForWrite(0));
-        expect(firstRead).toMatchObject({ method: "thread/read", params: { threadId: native.id } });
-        await fs.appendFile(
-          file,
-          line("event_msg", {
-            type: "turn_started",
-            turn_id: "same-second",
-            started_at: native.recencyAt,
-          }),
-        );
-        await fs.utimes(file, createdAt + 500, createdAt + 500);
-        await index.reconcile();
-        expect(index.get(native.id)?.page.sessions[0]?.cwd).toBe(native.cwd);
-        if (outcome !== "publish") {
-          harness.send({ method: "turn/completed", params: { threadId: native.id, turn: {} } });
-          harness.send({
-            method: outcome === "archive" ? "thread/archived" : "thread/deleted",
-            params: { threadId: native.id },
-          });
-        }
-        harness.send({
-          id: firstRead.id,
-          result: { thread: { ...native, cwd: "/workspace/stale-read" } },
-        });
-        await nextTurn();
-        if (outcome === "publish") {
-          await vi.waitFor(async () =>
-            expect((await index.list({})).sessions[0]).toMatchObject({
-              threadId: native.id,
-              cwd: native.cwd,
-            }),
-          );
-          expect(reads).toBeLessThanOrEqual(2);
-        } else {
-          expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([peer.id]);
-          expect(harness.writes).toHaveLength(1);
-          expect(index.get(native.id)?.page.sessions[0]?.cwd).not.toBe("/workspace/stale-read");
-          if (outcome === "archive") {
-            expect(index.get(native.id)?.archived).toBe(true);
-          } else {
-            expect(index.get(native.id)).toBeUndefined();
-          }
-        }
-      } finally {
-        harness.client.close();
-      }
-    },
-  );
-
   it.each([null, createdAt + 100])(
     "moves a file-observed turn ahead of a native timestamp tie (previous recency: %s)",
     async (recencyAt) => {

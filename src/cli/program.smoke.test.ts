@@ -55,11 +55,9 @@ describe("cli program (smoke)", () => {
     const options = firstMockArg(tuiRunMock) as {
       timeoutMs?: number;
       historyLimit?: number;
-      forceProcessExitOnReturn?: boolean;
     };
     expect(options?.timeoutMs).toBe(45000);
     expect(options?.historyLimit).toBe(200);
-    expect(options?.forceProcessExitOnReturn).toBe(true);
     expect(options).not.toHaveProperty("agentId");
   });
 

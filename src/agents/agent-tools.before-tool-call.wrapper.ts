@@ -13,12 +13,13 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { captureDiagnosticToolProgress } from "../logging/diagnostic-run-activity.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
   captureAgentToolExecutionBudget,
   copyAgentToolSourceExecutionGuard,
-  runAgentToolSourceExecutionGuard,
+  runWithBoundAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
 import {
   recordGenericToolActionDecision,
@@ -39,10 +40,7 @@ import {
   summarizeToolParams,
   startToolExecutionLiveness,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import {
-  consumeFinalClientVoiceToolConfirmation,
-  runBeforeToolCallHook,
-} from "./agent-tools.before-tool-call.policy.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -112,6 +110,10 @@ export async function prepareBeforeToolCallExecutionParams(params: {
   signal?: AbortSignal;
 }): Promise<unknown> {
   const prepare = params.tool.prepareBeforeToolCallParams;
+  if (prepare && params.ctx?.awaitSessionDiffBaseline) {
+    await params.ctx.awaitSessionDiffBaseline();
+    params.signal?.throwIfAborted();
+  }
   return prepare
     ? await prepare(params.params, {
         ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
@@ -218,13 +220,7 @@ export function recordStructuredReplayTrustForToolCall(
     return;
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
-  while (structuredReplaySafeToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = structuredReplaySafeToolCallIds.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    structuredReplaySafeToolCallIds.delete(oldest);
-  }
+  pruneTrackedToolCallIds(structuredReplaySafeToolCallIds);
 }
 
 const preExecutionBlockedToolResults = new WeakSet<object>();
@@ -476,31 +472,8 @@ export function wrapToolWithBeforeToolCallHook(
         }
         onImplementationStart = decision.start;
       }
-      // A voice grant binds the post-finalizer execution shape. Consume it only
-      // after steering can no longer suppress the prepared call.
-      const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
-        toolCallId,
-        toolName,
-        toolKind: hookMetadata?.toolKind,
-        params: executeParams,
-        ctx,
-      });
-      if (!voiceConfirmation.allowed) {
-        return await blockToolCall({
-          reason: voiceConfirmation.reason,
-          deniedReason: "client-voice-confirmation",
-          toolParams: executeParams,
-        });
-      }
-      // Host capabilities can close while hooks, approval, validation, or
-      // steering awaits. Recheck at the final synchronous source boundary.
-      signal?.throwIfAborted();
-      assertAgentPluginRuntimeCurrent();
-      runAgentToolSourceExecutionGuard(tool);
-      admitExecution?.();
-      onImplementationStart?.();
-      recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      const recordProgress = captureDiagnosticToolProgress(eventBase);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
       const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
@@ -508,7 +481,16 @@ export function wrapToolWithBeforeToolCallHook(
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
           const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
-          const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
+          const invoke = () =>
+            runWithBoundAgentToolSourceExecutionScope(tool, () => {
+              // Charge the invocation after the source read, at the effect boundary.
+              signal?.throwIfAborted();
+              assertAgentPluginRuntimeCurrent();
+              admitExecution?.();
+              onImplementationStart?.();
+              recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
+              return liveness.run(() => (execute as ForwardedToolExecution)(...args));
+            });
           result = outcome.ownerDecision
             ? await invoke()
             : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
@@ -542,6 +524,9 @@ export function wrapToolWithBeforeToolCallHook(
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
         const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
+        if (terminalDiagnostic.type === "tool.execution.completed" && !signal?.aborted) {
+          recordProgress?.();
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -690,11 +675,15 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
     return;
   }
   preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+  pruneTrackedToolCallIds(preExecutionBlockedToolCallIds);
+}
+
+function pruneTrackedToolCallIds(ids: Set<string>): void {
+  while (ids.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+    const oldest = ids.values().next().value;
     if (!oldest) {
       break;
     }
-    preExecutionBlockedToolCallIds.delete(oldest);
+    ids.delete(oldest);
   }
 }

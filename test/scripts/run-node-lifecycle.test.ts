@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -8,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -29,7 +31,7 @@ import {
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
-import { withinTest } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { formatShimResult, withShimFixture } from "./direct-run-entrypoints.test-support.js";
@@ -135,6 +137,131 @@ function writePrebuiltRuntime(root: string) {
   writeBuildStamp({ cwd: root });
   writeRuntimePostBuildStamp({ cwd: root });
 }
+
+it.runIf(process.platform !== "win32").for(["runner", "shim"] as const)(
+  "preserves %s interruption while waiting for cleanup custody release",
+  async (mode, { signal }) => {
+    await withShimFixture("scripts/run-node.mjs", async (fixture) => {
+      const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath } = fixture;
+      const interruptedReceipt = path.join(fixtureRoot, "interrupted");
+      const signalPreload = path.join(fixtureRoot, "signal-receipt.mjs");
+      writeFileSync(
+        signalPreload,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+process.on("SIGTERM", () => sendReceipt(${JSON.stringify(interruptedReceipt)}, "interrupted"));
+`,
+      );
+      mkdirSync(path.join(checkoutRoot, "dist"));
+      writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
+      writeFileSync(path.join(checkoutRoot, "dist/entry.js"), "export {};\n");
+      const sourceRoot = process.cwd();
+      const implementationUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
+      writeFileSync(
+        implementationPath,
+        mode === "runner"
+          ? `import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(implementationUrl)});
+childProcess.spawn = (_command, args) => {
+  if (!args.includes("openclaw.mjs")) throw new Error("prebuilt fixture unexpectedly requested a build");
+  const child = new EventEmitter();
+  queueMicrotask(() => {
+    process.stdout.write("fixture child completed successfully\\n");
+    child.emit("exit", 0, null);
+  });
+  return child;
+};
+syncBuiltinESMExports();
+const outcome = await runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, args: ["gateway", "stop"] });
+if (typeof outcome === "string") process.kill(process.pid, outcome);
+else process.exit(outcome);
+`
+          : `import { writeSync } from "node:fs";
+writeSync(1, "fixture implementation signaled\\n");
+process.kill(process.pid, "SIGKILL");
+`,
+      );
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OPENCLAW_RUNNER_LOG: "0",
+        NODE_OPTIONS: `--import=${pathToFileURL(signalPreload).href}`,
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+      };
+      delete env.OPENCLAW_FORCE_BUILD;
+      delete env.OPENCLAW_FORCE_RUNTIME_POSTBUILD;
+      const runnerEnv = prepareRunnerEnv(env, [implementationPath]);
+      const releasePending = createDeferred();
+      let runner: ChildProcess | undefined;
+      let handoff: Socket | undefined;
+      const command = runNodeScript(
+        [mode === "runner" ? implementationPath : wrapperPath],
+        runnerEnv,
+        undefined,
+        {
+          cwd: checkoutRoot,
+          signal,
+          requireProcessTreeExit: true,
+          onReady(child) {
+            runner = child;
+            const channel = child.stdio[3];
+            if (!(channel instanceof Socket)) {
+              throw new Error("Source runner did not receive a cleanup custody channel");
+            }
+            handoff = channel;
+            let frames = "";
+            let releaseObserved = false;
+            channel.prependListener("data", (chunk: string) => {
+              frames += chunk;
+              if (!releaseObserved && /(?:^|\n)release [^\n]+\n/u.test(frames)) {
+                releaseObserved = true;
+                // Hold the real acknowledgement before the normal owner writes it.
+                channel.cork();
+                releasePending.resolve();
+              }
+            });
+          },
+        },
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            releasePending.promise,
+            command,
+            "Source runner exited before releasing cleanup custody",
+          ),
+          signal,
+        );
+        expect(runner!.kill("SIGTERM")).toBe(true);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            receipts.waitFor(interruptedReceipt, "interrupted"),
+            command,
+            "Source runner exited before observing interruption",
+          ),
+          signal,
+        );
+        handoff!.uncork();
+        const result = await withinTest(command, signal);
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(143);
+        expect(result.stdout).toContain(
+          mode === "runner"
+            ? "fixture child completed successfully\n"
+            : "fixture implementation signaled\n",
+        );
+      } finally {
+        handoff?.uncork();
+        await command;
+      }
+    });
+  },
+);
 
 it.runIf(process.platform !== "win32")(
   "stops gateway watch when a compile-cache respawn child dies from a signal",

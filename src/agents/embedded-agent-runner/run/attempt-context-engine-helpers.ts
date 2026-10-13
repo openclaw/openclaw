@@ -1,5 +1,6 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import {
   isHeartbeatLifecycleRunKind,
   type BootstrapContextRunKind,
@@ -10,32 +11,20 @@ import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usa
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
-  bootstrapFiles: TBootstrapFile[];
-  contextFiles: TContextFile[];
-};
-
 /**
  * Resolves bootstrap/context files for this attempt and reports whether the
  * caller should persist a completed bootstrap marker. Continuation-skip mode
  * intentionally suppresses reinjection after a full bootstrap turn has already
  * been recorded for the session.
  */
-export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
+export async function resolveAttemptBootstrapContext(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
   hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => Promise<
-    AttemptBootstrapContext<TBootstrapFile, TContextFile>
-  >;
-}): Promise<
-  AttemptBootstrapContext<TBootstrapFile, TContextFile> & {
-    isContinuationTurn: boolean;
-    shouldRecordCompletedBootstrapTurn: boolean;
-  }
-> {
+  resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
+}) {
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&

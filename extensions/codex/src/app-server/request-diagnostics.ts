@@ -25,13 +25,6 @@ type RegisteredTransportIdentity = ReturnType<
 >;
 
 type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
-function readInitializeSnapshot(read: ReadInitializeSnapshot | undefined, beforeClose = false) {
-  try {
-    return read?.(beforeClose);
-  } catch {
-    return undefined;
-  }
-}
 
 /** Counts awaited APIs, not native execution or proof that a request was written. */
 export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
@@ -76,9 +69,9 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           if (observation.boundary === "cleanup") {
             if (current.acquireLastObservedBoundary !== "cleanup") {
               current.acquireBoundaryBeforeCleanup = current.acquireLastObservedBoundary;
-              const snapshot = readInitializeSnapshot(current.initializeSnapshot);
+              const snapshot = current.initializeSnapshot?.();
               current.initializeBeforeCleanup = snapshot?.clientClosed
-                ? readInitializeSnapshot(current.initializeSnapshot, true)
+                ? current.initializeSnapshot?.(true)
                 : snapshot;
               current.initializeBeforeCleanupSource = current.initializeBeforeCleanup
                 ? snapshot?.clientClosed
@@ -101,36 +94,18 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
             return;
           }
           // Fallback can replace this client; this identity is an observation, not a lease.
-          current.lastStartedClientInstanceId = undefined;
-          current.lastStartedTransportIdentity = undefined;
-          current.initializeSnapshot = undefined;
           current.initializeBeforeCleanup = undefined;
           current.initializeBeforeCleanupSource = undefined;
-          try {
-            current.lastStartedClientInstanceId = client.getInstanceId();
-            current.initializeSnapshot = (beforeClose) =>
-              client.getInitializeDiagnostic(beforeClose);
-          } catch {
-            // A diagnostic identity cannot invalidate startup.
-          }
-          try {
-            const identity = client.getRegisteredTransportIdentity();
-            current.lastStartedTransportIdentity = identity
-              ? { pid: identity.pid, startedAt: identity.startedAt }
-              : undefined;
-          } catch {
-            // Optional transport evidence must not suppress initialize diagnostics.
-          }
+          current.lastStartedClientInstanceId = client.getInstanceId();
+          current.initializeSnapshot = (beforeClose) => client.getInitializeDiagnostic(beforeClose);
+          const identity = client.getRegisteredTransportIdentity();
+          current.lastStartedTransportIdentity = identity;
         },
       };
     },
     acquired(client: CodexAppServerClient) {
       attempt.phase = "callback";
-      try {
-        attempt.clientInstanceId = client.getInstanceId();
-      } catch {
-        // A missing diagnostic identity cannot invalidate the acquired lease.
-      }
+      attempt.clientInstanceId = client.getInstanceId();
     },
     request(method: string) {
       const current = attempt;
@@ -156,7 +131,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
         }
         const methods = [...attempt.methods].toSorted(([a], [b]) => a.localeCompare(b));
         const pending = methods.reduce((count, [, active]) => count + active, 0);
-        const initialize = readInitializeSnapshot(attempt.initializeSnapshot);
+        const initialize = attempt.initializeSnapshot?.();
         embeddedAgentLog.warn("codex app-server scope timed out", {
           phase: attempt.phase === "callback" && pending > 0 ? "client-request" : attempt.phase,
           timeoutMs,

@@ -1,3 +1,4 @@
+import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import {
   providerOwnsDynamicModelPreparation,
   resolveProviderAuthProfileId,
@@ -6,8 +7,8 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -39,6 +40,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   workspaceDir: string;
   requestStreamTransportOverrides?: "present";
   nativeModelOwned: boolean;
+  /** Picker routes for a native-owned model; its placeholder transport is not an observation. */
+  observedRoutes?: readonly ProviderModelRouteSource[];
   nativeSessionRuntime?: PreparedNativeSessionRuntime;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
@@ -64,11 +67,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     params.getEffectiveModel().api === "openai-chatgpt-responses";
   const resolveExternalCliAuthScope = (store?: AuthProfileStore) =>
     resolveExternalCliAuthOverlayScopeFromSelection({
-      provider: params.provider,
+      ...params,
       cfg: runParams.config,
       agentId: runParams.agentId,
-      modelId: params.modelId,
-      workspaceDir: params.workspaceDir,
       ...(store ? { store } : {}),
       userPinnedAuthProfileId:
         runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
@@ -89,7 +90,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   };
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
-    noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(
+    noExternalAuthStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
       params.agentDir,
       authStoreOptions,
     );
@@ -105,9 +106,15 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       ? undefined
       : externalCliAuthScope.providerIds;
   const attemptAuthProfileStore = externalCliProviderIds
-    ? ensureAuthProfileStore(params.agentDir, { ...authStoreOptions, externalCliProviderIds })
+    ? await ensureAuthProfileStoreAsync(params.agentDir, {
+        ...authStoreOptions,
+        externalCliProviderIds,
+      })
     : (noExternalAuthStore ??
-      ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, authStoreOptions));
+      (await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+        params.agentDir,
+        authStoreOptions,
+      )));
   params.markStage?.("store");
 
   const requestedProfileId = runParams.authProfileId?.trim() || undefined;
@@ -135,8 +142,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     return prepareAgentRuntimeAuth({
       provider: params.provider,
       modelId: params.modelId,
-      modelApi: params.model.api,
-      modelBaseUrl: params.model.baseUrl,
+      ...(params.observedRoutes
+        ? { observedRoutes: params.observedRoutes }
+        : { modelApi: params.model.api, modelBaseUrl: params.model.baseUrl }),
       requestTransportOverrides: params.requestStreamTransportOverrides,
       config: runParams.config,
       env: process.env,
@@ -164,11 +172,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     });
   };
   const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
-    provider: params.provider,
-    modelId: params.modelId,
+    ...params,
     config: runParams.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
   });
   const providerOwnsDynamicModelRefresh = providerOwnsDynamicModelPreparation({
     provider: params.provider,
@@ -177,13 +182,10 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   });
   const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
     createPreparedRuntimeModelMaterializer({
-      provider: params.provider,
-      modelId: params.modelId,
+      ...params,
       config: runParams.config,
-      workspaceDir: params.workspaceDir,
       metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
-      nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
       providerOwnsDynamicModelRefresh,
@@ -205,26 +207,25 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     });
 
   let resolvedAuthPreparation = createAuthPreparation();
-  params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
-  params.markStage?.("prepare-plan");
-
-  const finalizedHarness = params.selectHarnessForPreparedAttempts(
-    params.getEffectiveModel(),
-    resolvedAuthPreparation.attempts,
-  );
-  if (finalizedHarness.id !== params.getAgentHarness().id) {
-    params.setAgentHarness(finalizedHarness);
-    resolvedAuthPreparation = createAuthPreparation();
+  for (let preparation = 0; ; preparation += 1) {
     params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
-    const confirmedHarness = params.selectHarnessForPreparedAttempts(
+    if (preparation === 0) {
+      params.markStage?.("prepare-plan");
+    }
+    const selectedHarness = params.selectHarnessForPreparedAttempts(
       params.getEffectiveModel(),
       resolvedAuthPreparation.attempts,
     );
-    if (confirmedHarness.id !== params.getAgentHarness().id) {
+    if (selectedHarness.id === params.getAgentHarness().id) {
+      break;
+    }
+    if (preparation > 0) {
       throw new Error(
         `Prepared auth route did not converge on one agent harness for ${params.provider}/${params.modelId}.`,
       );
     }
+    params.setAgentHarness(selectedHarness);
+    resolvedAuthPreparation = createAuthPreparation();
   }
   params.markStage?.("harness");
 

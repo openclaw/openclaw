@@ -192,50 +192,13 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
-  it("ignores older verbosity from the admitted session generation", async () => {
-    const currentEntry = {
-      sessionId: "session",
-      lifecycleRevision: "owned",
-      updatedAt: 2,
-      verboseLevel: "off" as const,
-    };
+  it("uses turn-owned preference updates for awaited visibility", async () => {
+    let verboseLevel: "off" | "full" = "off";
     const turn = createTurn({
       session: {
         kind: "session",
         key: "main",
-        storePath: "/tmp/sessions.json",
-        current: () => currentEntry,
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    state.loadEntryReadOnly.mockReturnValue({
-      ...currentEntry,
-      updatedAt: 1,
-      verboseLevel: "full",
-    });
-
-    await executeTestTurn({
-      turn,
-    });
-
-    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
-    expect(call.resolvedVerboseLevel).toBe("off");
-  });
-
-  it("refreshes awaited visibility without native reads or replacement-session verbosity", async () => {
-    const entry = {
-      sessionId: "session",
-      lifecycleRevision: "owned",
-      updatedAt: 1,
-      verboseLevel: "off" as const,
-    };
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        storePath: "/tmp/sessions.json",
-        current: () => entry,
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
         publish: () => undefined,
         adopt: () => undefined,
       },
@@ -247,56 +210,16 @@ describe("executeFollowupTurn", () => {
         opts: {
           onVerboseProgressVisibility: legacy,
           onVerboseProgressVisibilityAsync: async (isActive) => {
-            state.readEntry.mockResolvedValue(entry);
             expect(await isActive()).toBe(false);
-            state.readEntry.mockResolvedValue({ ...entry, verboseLevel: "full" });
+            verboseLevel = "full";
             expect(await isActive()).toBe(true);
-            state.readEntry.mockResolvedValue({
-              ...entry,
-              lifecycleRevision: "replacement",
-              verboseLevel: "full",
-            });
+            turn.queued.run.verboseLevelOverride = "off";
             expect(await isActive()).toBe(false);
-            expect(state.loadEntryReadOnly).not.toHaveBeenCalled();
           },
         },
       },
     });
     expect(legacy).not.toHaveBeenCalled();
-  });
-
-  it("rejects awaited visibility when the followup is revoked during its read", async () => {
-    const pending = Promise.withResolvers<undefined>();
-    const entered = Promise.withResolvers<void>();
-    const abort = new AbortController();
-    const turn = createTurn();
-    turn.operation = { ...turn.operation, abortSignal: abort.signal };
-    turn.session = {
-      ...turn.session,
-      kind: "session",
-      key: "main",
-      storePath: "/tmp/sessions.json",
-    };
-    state.readEntry.mockImplementation(() => {
-      entered.resolve();
-      return pending.promise;
-    });
-    const execution = executeTestTurn({
-      turn,
-      defaults: {
-        opts: {
-          onVerboseProgressVisibilityAsync: async (isActive) => {
-            await isActive();
-          },
-        },
-      },
-    });
-    const rejected = expect(execution).rejects.toThrow("followup revoked");
-    await entered.promise;
-    abort.abort(new Error("followup revoked"));
-    pending.resolve(undefined);
-    await rejected;
-    expect(state.execute).not.toHaveBeenCalled();
   });
 
   it("freezes commentary ownership for a queued on-to-off transition", async () => {

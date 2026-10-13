@@ -13,6 +13,7 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -23,13 +24,16 @@ import type {
   TranscriptMessageWriteSnapshot,
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
+import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
 import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
-} from "./session-accessor.sqlite-pending-inputs.js";
-import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload } from "./session-history-read.types.js";
-import type { SessionTranscriptWriterFence } from "./transcript-write-context.js";
+} from "./session-pending-input.types.js";
+import type {
+  InitialSessionTranscriptWriter,
+  SessionTranscriptWriterFence,
+} from "./session-transcript-writer.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
 type MetadataTarget = Omit<SessionTranscriptWriteScope, "env"> & SessionTranscriptRuntimeTarget;
@@ -42,7 +46,10 @@ export type SessionManagerIncognitoDatabase = {
   withMetadata<T>(
     assertCurrent: () => void,
     operation: (scope: Pick<SqliteWorkerStore<SessionMetadataOperations>, "execute">) => Promise<T>,
-    controls?: { beforeFreshMessageCommit?: () => void },
+    controls?: {
+      beforeFreshMessageCommit?: () => void;
+      initialWriter?: InitialSessionTranscriptWriter;
+    },
   ): Promise<T>;
 };
 
@@ -136,6 +143,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         scope: MetadataTarget;
         messageJson: string;
         cwd: string;
+        cliWriter?: CliHistoryWriterFacts;
       } & SessionMetadataMessageControl;
       output: {
         snapshot: Result<
@@ -160,6 +168,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
       input: {
         scope: MetadataTarget;
         event: Omit<SessionMessageEntry, "message"> | string;
+        cliWriter?: CliHistoryWriterFacts;
         message?: {
           messageJson: string;
           cwd: string;
@@ -171,6 +180,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
           loadedVersion?: SessionTranscriptContextVersion;
           limits?: SessionManagerBoundedContextLimits;
           admission?: UserTurnTranscriptAdmissionReceipt;
+          questionAnswers?: readonly UserTurnTranscriptAdmissionReceipt[];
         };
       };
       output: {

@@ -27,6 +27,7 @@ import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-projector-values.js";
 import type { CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
+import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 import { resolveCodexPromptError } from "./usage-limit-error.js";
 
 export type CodexAppServerToolTelemetry = Partial<
@@ -41,6 +42,7 @@ export type CodexAppServerToolTelemetry = Partial<
   > & {
     didDeliverSourceReplyViaMessageTool?: boolean;
     sourceReplyDelivered?: true;
+    finalSourceReplyDelivered?: true;
     confirmedMediaDeliveries?: Readonly<
       AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
     >;
@@ -163,10 +165,15 @@ export abstract class CodexTurnProjection {
     );
     this.assistantProjection = new CodexAssistantProjection(
       this.settlement.params,
-      (event) => this.emitAgentEvent(event),
+      (event) => {
+        if (!options.hasDeliveredFinalSourceReply?.()) {
+          this.emitAgentEvent(event);
+        }
+      },
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
       this.transcriptCheckpoint.enqueueCommentary,
+      options.hasDeliveredFinalSourceReply,
     );
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
@@ -227,7 +234,9 @@ export abstract class CodexTurnProjection {
     // Close this turn's audit scope without inventing process completion. The
     // existing unknown-outcome diagnostic remains distinct from execution failure.
     this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
-    const assistantTexts = this.assistantProjection.collectAssistantTexts();
+    const assistantTexts = toolTelemetry.finalSourceReplyDelivered
+      ? []
+      : this.assistantProjection.collectAssistantTexts();
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
     const reasoningText = this.reasoningProjection.reasoningText();
@@ -276,9 +285,27 @@ export abstract class CodexTurnProjection {
             assistantMessageOptions,
           )
         : undefined;
-    const currentAttemptAssistant = providerRefusal
-      ? lastAssistant
-      : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    let currentAttemptAssistant = toolTelemetry.finalSourceReplyDelivered
+      ? undefined
+      : providerRefusal
+        ? lastAssistant
+        : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    // Tool-authored completion belongs to this native turn, not another input's
+    // projected answer. Preserve the same identity even for a tool-only turn.
+    if (
+      toolTelemetry.messagingToolSourceReplyPayloads?.some(
+        (reply) => reply.toolAuthoredForTurnId === turnId,
+      )
+    ) {
+      currentAttemptAssistant ??= this.assistantProjection.createAssistantMessage(
+        "",
+        assistantMessageOptions,
+      );
+      currentAttemptAssistant = { ...currentAttemptAssistant, turnId };
+      if (lastAssistant) {
+        lastAssistant.turnId = turnId;
+      }
+    }
     // Stable turn/item identities deduplicate retries and cross-turn replays
     // without collapsing identical text from distinct turns. Codex owns history;
     // this mirror supports OpenClaw history, search, and harness switching.
@@ -291,7 +318,12 @@ export abstract class CodexTurnProjection {
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
       steeringMessages: options?.steeringMessages,
-      lastAssistant,
+      lastAssistant: lastAssistant
+        ? attachCodexAssistantItemIds(
+            lastAssistant,
+            this.assistantProjection.collectTerminalAssistantItemIds(),
+          )
+        : undefined,
       turnTainted,
     });
     const turnFailed = completedTurn?.status === "failed";

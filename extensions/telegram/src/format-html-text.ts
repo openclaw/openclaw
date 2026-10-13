@@ -26,26 +26,6 @@ export function transformUnprotectedTelegramHtmlText(
   return result + transform(html.slice(lastIndex));
 }
 
-function getFileReferencePatterns() {
-  if (fileReferencePatterns) {
-    return fileReferencePatterns;
-  }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
-    .map(escapeRegExp)
-    .join("|");
-  fileReferencePatterns = {
-    standalone: new RegExp(
-      `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
-      "gi",
-    ),
-    orphanedTld: new RegExp(
-      `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
-      "g",
-    ),
-  };
-  return fileReferencePatterns;
-}
-
 function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
   if (filename.startsWith("//") || /https?:\/\/$/i.test(prefix)) {
     return match;
@@ -57,7 +37,22 @@ function wrapSegmentFileRefs(text: string): string {
   if (!text.includes(".")) {
     return text;
   }
-  const patterns = getFileReferencePatterns();
+  if (!fileReferencePatterns) {
+    const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+      .map(escapeRegExp)
+      .join("|");
+    fileReferencePatterns = {
+      standalone: new RegExp(
+        `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
+        "gi",
+      ),
+      orphanedTld: new RegExp(
+        `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
+        "g",
+      ),
+    };
+  }
+  const patterns = fileReferencePatterns;
   const wrappedStandalone = text.replace(patterns.standalone, wrapStandaloneFileRef);
   return wrappedStandalone.replace(patterns.orphanedTld, (match, prefix: string, tld: string) =>
     prefix === ">" ? match : `${prefix}<code>${escapeTelegramHtml(tld)}</code>`,

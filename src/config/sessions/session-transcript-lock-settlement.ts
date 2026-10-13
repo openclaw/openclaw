@@ -1,9 +1,19 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { createAbortError } from "../../infra/abort-signal.js";
 
 type QueueTranscriptOperation = <R>(
   operation: () => Promise<R>,
   signal?: AbortSignal,
 ) => Promise<R>;
+
+function transcriptAbortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error
+    ? reason
+    : createAbortError(typeof reason === "string" ? reason : "Transcript operation aborted", {
+        cause: reason,
+      });
+}
 
 /** Keep accepted work in the reservation after the callback closes its context. */
 export async function withTranscriptLockSettlement<T>(
@@ -16,8 +26,7 @@ export async function withTranscriptLockSettlement<T>(
       return Promise.reject(new Error("Transcript write context is closed"));
     }
     if (signal?.aborted) {
-      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve caller-owned AbortSignal reasons, including non-Error values.
-      return Promise.reject(signal.reason);
+      return Promise.reject(transcriptAbortError(signal));
     }
     let detach = () => {};
     const pending = tail.then(() => {
@@ -33,8 +42,7 @@ export async function withTranscriptLockSettlement<T>(
       return pending;
     }
     return new Promise((resolve, reject) => {
-      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve caller-owned AbortSignal reasons, including non-Error values.
-      const abort = () => reject(signal.reason);
+      const abort = () => reject(transcriptAbortError(signal));
       signal.addEventListener("abort", abort, { once: true });
       detach = () => signal.removeEventListener("abort", abort);
       void pending.then(resolve, reject);

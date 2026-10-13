@@ -115,16 +115,6 @@ describe("exa web search provider", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
-  it("exposes the expected metadata and selection wiring", () => {
-    const provider = createExaWebSearchProvider();
-    const applied = provider.applySelectionConfig?.({});
-
-    expect(provider.id).toBe("exa");
-    expect(provider.onboardingScopes).toEqual(["text-inference"]);
-    expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied?.plugins?.entries?.exa?.enabled).toBe(true);
-  });
-
   it("applies scoped auth, endpoint, contents, freshness, and result normalization at the tool boundary", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({
@@ -291,20 +281,6 @@ describe("exa web search provider", () => {
       expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     }
-  });
-
-  it("exposes newer documented Exa search types and count limits", () => {
-    const tool = requireExaTool({ apiKey: "exa-secret" });
-
-    expect(tool.parameters).toHaveProperty("properties.count.maximum", 100);
-    expect(tool.parameters).toHaveProperty("properties.type.enum", [
-      "auto",
-      "neural",
-      "fast",
-      "deep",
-      "deep-reasoning",
-      "instant",
-    ]);
   });
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {

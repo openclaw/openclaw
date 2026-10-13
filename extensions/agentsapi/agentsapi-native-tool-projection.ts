@@ -533,18 +533,5 @@ export class AgentsApiNativeToolProjection {
 }
 
 function nativeTerminalProjectionHash(snapshot: Record<string, unknown>): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify(snapshot, (_key, value: unknown) => {
-        if (value === null || typeof value !== "object" || Array.isArray(value)) {
-          return value;
-        }
-        return Object.fromEntries(
-          Object.entries(value).toSorted(([left], [right]) =>
-            left < right ? -1 : left > right ? 1 : 0,
-          ),
-        );
-      }),
-    )
-    .digest("hex");
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }

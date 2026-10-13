@@ -96,10 +96,7 @@ async function setupArchivedPageWithSelection(
   const { context, changeScope } = withNotifyingAgentSelection(baseContext, scopeId);
   const page = await createRenderedPage(
     context,
-    {
-      count: 1,
-      sessions: [{ key: "agent:writer:old-1", archived: true }],
-    } as SessionsListResult,
+    sessionsResult([{ key: "agent:writer:old-1", kind: "direct", archived: true }], 1),
     "archived",
     expandedSessionKey,
   );
@@ -197,15 +194,12 @@ describe("sessions page agent-scope retirement", () => {
     changeScope("main");
     changeScope("writer");
     listResponse.resolve({
-      count: writerKeys.length,
+      ...sessionsResult(
+        writerKeys.map((key) => ({ key, kind: "direct", updatedAt: 1, archived: true })),
+        1,
+      ),
       totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({
-        key,
-        kind: "direct",
-        updatedAt: 1,
-        archived: true,
-      })),
-    } as SessionsListResult);
+    });
     await operation;
 
     expect(showConfirmDialog).not.toHaveBeenCalled();
@@ -215,13 +209,15 @@ describe("sessions page agent-scope retirement", () => {
 
   it("retires pending confirmation after switching away and back", async () => {
     const writerKeys = ["agent:writer:old-1", "agent:writer:old-2"];
-    const list = vi.fn(async () => ({
-      count: writerKeys.length,
+    const list = vi.fn<SessionCapability["list"]>(async () => ({
+      ...sessionsResult(
+        writerKeys.map((key) => ({ key, kind: "direct", archived: true })),
+        1,
+      ),
       totalCount: writerKeys.length,
-      sessions: writerKeys.map((key) => ({ key, archived: true })),
       hasMore: false,
       nextOffset: null,
-    })) as unknown as SessionCapability["list"];
+    }));
     const deleteMany = vi.fn(async () => ({
       deleted: writerKeys,
       errors: [],

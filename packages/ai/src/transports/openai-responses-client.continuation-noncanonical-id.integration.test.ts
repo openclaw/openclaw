@@ -4,34 +4,10 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import { normalizeOpenAIResponsesFunctionCallId } from "./openai-responses-tool-call-id-shape.js";
 
-// Real loopback HTTP + SSE server, same harness as
-// openai-responses-client.continuation.integration.test.ts, but this time the
-// scripted backend returns a genuinely NON-canonical function_call.call_id/id
-// pair -- like a real moonshotai/kimi-k2.5-via-openrouter connection would
-// (see the "functions.gateway:0|fc_tmp_..." fixture in
-// src/agents/embedded-agent-helpers/openai.test.ts). This is the only shape
-// that can exercise this PR's raw-ID canonicalization/restoration branch at
-// all: a real native api.openai.com connection always generates already-
-// canonical call_*/fc_* ids itself, so canonicalizeCachedCallId's reshaping
-// is a permanent no-op there (see the sibling unsafe-integer live test's own
-// note on this). Only a compat/proxy backend with its own non-canonical ID
-// scheme makes the reshape-then-restore path do real work.
-//
-// normalizeOpenAIResponsesFunctionCallId is called directly here (not the
-// AgentMessage-walking normalizeOpenAIResponsesToolCallIds wrapper, which
-// lives in src/agents and can't be imported into packages/ai) to reproduce
-// exactly what that wrapper does to a single id: pair call_id|item_id, then
-// reshape. Production always runs this before the transport ever sees the
-// replayed message, mutating the stored tool-call id in place -- this test
-// does the same mutation by hand to stay real without crossing the
-// packages/ai -> src/agents import boundary.
-//
-// #128633 (compat.supportsResponsesContinuation, merged onto main) widened
-// eligibility to compat/proxy endpoints like customEndpointModel below --
-// this test was describe.skip'd until this branch stacked on top of that
-// prerequisite; now rebased past it, so it runs for real.
+// Proxy backends can return noncanonical IDs; replay must restore their raw wire IDs.
 class ScriptedResponsesServer {
   readonly requests: Array<Record<string, unknown>> = [];
   private readonly script: Array<(request: Record<string, unknown>) => string>;
@@ -93,81 +69,50 @@ function attachModelProviderRequestTransport<TModel extends object>(
   };
 }
 
-// Matches the real fixture in openai.test.ts ("assigns distinct call ids to
-// repeated native Kimi calls across turns"): a raw, non-canonical call_id
-// (contains "." and ":", which call_*'s [A-Za-z0-9_-] shape rejects) paired
-// with an already-fc_*-shaped item id.
 const RAW_CALL_ID = "functions.gateway:0";
 const RAW_ITEM_ID = "fc_tmp_kegospxl46";
 
-function collidingToolCallsCompletedFrame(responseId: string): string {
+function completedFrame(responseId: string, output: unknown[]): string {
   return JSON.stringify({
     type: "response.completed",
     response: {
       id: responseId,
       status: "completed",
-      output: [
-        {
-          id: "fc_1",
-          call_id: " x",
-          type: "function_call",
-          status: "completed",
-          name: "first",
-          arguments: "{}",
-        },
-        {
-          id: "fc_1",
-          call_id: "x",
-          type: "function_call",
-          status: "completed",
-          name: "second",
-          arguments: "{}",
-        },
-      ],
+      output,
       usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
     },
   });
 }
 
-function toolCallCompletedFrame(responseId: string): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output: [
-        {
-          id: RAW_ITEM_ID,
-          call_id: RAW_CALL_ID,
-          type: "function_call",
-          status: "completed",
-          name: "gateway",
-          arguments: "{}",
-        },
-      ],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  });
+function toolCallCompletedFrame(responseId: string, colliding = false): string {
+  const calls = colliding
+    ? [
+        { id: "fc_1", call_id: " x", name: "first" },
+        { id: "fc_1", call_id: "x", name: "second" },
+      ]
+    : [{ id: RAW_ITEM_ID, call_id: RAW_CALL_ID, name: "gateway" }];
+  return completedFrame(
+    responseId,
+    calls.map((call) =>
+      Object.assign(call, {
+        type: "function_call",
+        status: "completed",
+        arguments: "{}",
+      }),
+    ),
+  );
 }
 
 function textCompletedFrame(responseId: string, content: string): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
+  return completedFrame(responseId, [
+    {
+      id: `msg_${responseId}`,
+      type: "message",
       status: "completed",
-      output: [
-        {
-          id: `msg_${responseId}`,
-          type: "message",
-          status: "completed",
-          content: [{ type: "output_text", text: content, annotations: [] }],
-          role: "assistant",
-        },
-      ],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+      content: [{ type: "output_text", text: content, annotations: [] }],
+      role: "assistant",
     },
-  });
+  ]);
 }
 
 function userMessage(text: string, timestamp: number) {
@@ -229,15 +174,9 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
       if (!toolCall) {
         throw new Error("Expected a completed tool call");
       }
-      // resolveResponsesToolCallId pairs the wire call_id/id verbatim,
-      // unreshaped -- confirms the scripted server's raw ids really did
-      // round-trip into OpenClaw's own internal representation unchanged.
       expect(toolCall.id).toBe(`${RAW_CALL_ID}|${RAW_ITEM_ID}`);
 
-      // Production mutates the stored tool-call id to this same reshaped
-      // form before ever replaying it (normalizeOpenAIResponsesToolCallIds,
-      // src/agents/embedded-agent-helpers/openai.ts) -- reproduced by hand
-      // here since packages/ai can't import that wrapper.
+      // Match the agent's transcript normalization without importing its wrapper.
       const reshapedId = normalizeOpenAIResponsesFunctionCallId(toolCall.id);
       expect(reshapedId).not.toBe(toolCall.id);
       expect(reshapedId.endsWith(`|${RAW_ITEM_ID}`)).toBe(true);
@@ -255,15 +194,9 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
       const afterToolResult = await run(model, { messages: round1Messages, tools: [] }, sessionId);
       expect(afterToolResult.stopReason).toBe("stop");
 
-      // Exactly two requests reached the server: a fallback to full-history
-      // resend (history_changed, the bug this PR fixes) would show up as a
-      // third request with no previous_response_id.
       expect(server.requests).toHaveLength(2);
       const secondRequest = server.requests[1];
       expect(secondRequest).toHaveProperty("previous_response_id", "resp_1");
-      // The wire delta must carry the RAW id the scripted backend actually
-      // returned (RAW_CALL_ID), not the reshaped one and not the paired
-      // internal id -- restoreRawCallIdsInDelta's whole job.
       expect(secondRequest?.input).toEqual([
         {
           type: "function_call_output",
@@ -278,7 +211,7 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
 
   it("resends full history when distinct cached calls share a replay ID shape", async () => {
     const server = new ScriptedResponsesServer([
-      () => collidingToolCallsCompletedFrame("resp_1"),
+      () => toolCallCompletedFrame("resp_1", true),
       () => textCompletedFrame("resp_2", "recorded"),
     ]);
     const baseUrl = await server.listen();
@@ -323,6 +256,47 @@ describe("HTTP continuation across a non-canonical replayed tool-call id (loopba
       const input = secondRequest?.input as Array<Record<string, unknown>>;
       expect(input.some((item) => item.type === "function_call")).toBe(true);
       expect(input.some((item) => item.type === "function_call_output")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stores and advances only new messages across three real chained turns", async () => {
+    const questions = ["first question", "second question", "third question"];
+    const server = new ScriptedResponsesServer(
+      questions.map(
+        (_, index) => () => textCompletedFrame(`resp_${index + 1}`, `answer ${index + 1}`),
+      ),
+    );
+    const model = customEndpointModel(await server.listen());
+    try {
+      const context: Context = { messages: [], tools: [] };
+      for (const [index, content] of questions.entries()) {
+        context.messages.push({ role: "user", content, timestamp: index + 1 });
+        const options = {
+          apiKey: "test-key",
+          sessionId: "real-sse-store-policy",
+          transport: "sse",
+          reasoningEffort: "low",
+        } satisfies OpenAIResponsesOptions;
+        const stream = await createOpenAIResponsesTransportStreamFn()(model, context, options);
+        context.messages.push(await stream.result());
+      }
+      const { requests } = server;
+      expect(requests).toHaveLength(3);
+      expect(requests.map((request) => request.store)).toEqual([true, true, true]);
+      expect(requests[0]).not.toHaveProperty("previous_response_id");
+      expect(requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(requests[2]).toMatchObject({ previous_response_id: "resp_2" });
+      expect(requests.slice(1).map((request) => request.input)).toEqual(
+        ["second question", "third question"].map((text) => [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        ]),
+      );
     } finally {
       await server.close();
     }

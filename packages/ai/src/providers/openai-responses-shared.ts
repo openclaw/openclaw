@@ -178,8 +178,9 @@ export function applyCommonResponsesParams<TApi extends Api>(
 function cleanStreamingScratchBuffers(output: AssistantMessage): void {
   for (const block of output.content) {
     delete (block as { index?: number }).index;
-    // partialJson is only a streaming scratch buffer; never persist it.
-    delete (block as { partialJson?: string }).partialJson;
+    if (block.type === "toolCall") {
+      delete block.partialJson;
+    }
   }
 }
 
@@ -280,8 +281,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           ? processStreamOptions.resolveServiceTier(responseTier, tier)
           : (responseTier ?? tier);
       },
-      onServiceTier: (responseTier) =>
-        responsesServiceTierObserver.observe(options, requestedTier, responseTier),
+      onServiceTier: (responseTier, response) =>
+        responsesServiceTierObserver.observe(options, requestedTier, responseTier, response),
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
