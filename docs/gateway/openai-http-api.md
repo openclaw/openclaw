@@ -110,7 +110,7 @@ A generic `model` with no header, no session key, and no default agent is reject
 
 The model list and detail endpoints require `operator.read` or a scope that includes it because they expose the global agent target inventory.
 
-`/v1/embeddings` uses the same agent-target `model` ids. Send `x-openclaw-model` (from a shared-secret caller, or an identity-bearing caller with `operator.admin`) to pick a specific embedding model; otherwise the request uses the selected agent's normal embedding setup.
+`/v1/embeddings` uses the same agent-target `model` ids. Send `x-openclaw-model` (from a shared-secret caller, or an identity-bearing caller with `operator.admin`) to pick a specific embedding model; otherwise the request uses the selected agent's normal embedding setup. The selected agent is checked against the caller's operator role agent allowlist before provider I/O, the same ceiling as Chat Completions and Responses. A role that does not list that agent receives HTTP `403` with `type: "forbidden"`.
 
 Embedding model overrides stay within the agent's configured embedding provider. A recognized provider prefix must match that provider; other slash-containing values, such as `library/bge-m3` or `hf:org/model`, remain complete model IDs. This also applies to explicitly configured embedding model names.
 
