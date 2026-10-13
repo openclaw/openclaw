@@ -563,7 +563,12 @@ suite.define(() => {
 `;
         await rawEditor.fill(rawDraft);
         const rawSave = page.getByRole("button", { name: "Save", exact: true });
-        await expect.poll(() => rawSave.isEnabled()).toBe(true);
+        await expect
+          .poll(async () => ({
+            raw: await rawEditor.inputValue(),
+            saveEnabled: await rawSave.isEnabled(),
+          }))
+          .toEqual({ raw: rawDraft, saveEnabled: true });
         await capture(page, "02-raw-draft.png", rawEditor);
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;

@@ -135,6 +135,31 @@ function doctorOperation(args: string[]) {
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {
+  it("records the failed post-core child even without supplied failure facts", async () => {
+    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
+      resumed: false,
+      exitCode: 1,
+      error: "x",
+      failureFacts: [],
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins(
+      convergenceParams({
+        result: { mode: "npm", before: { version: VERSION }, after: { version: "2026.9.4" } },
+        downgradeRisk: true,
+      }),
+    );
+    expect(resultWithPostUpdate).toMatchObject({
+      status: "error",
+      steps: [
+        {
+          name: "post-update verification",
+          exitCode: 1,
+          stderrTail: "x",
+          failureFacts: [{ check: "runtime", code: "post-core-update-failed" }],
+        },
+      ],
+    });
+  });
   it("cancels runtime classification with its enclosing command scope", async () => {
     const controller = new AbortController();
     const cancellation = new Error("Update command was cancelled");

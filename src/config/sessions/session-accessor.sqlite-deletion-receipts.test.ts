@@ -36,6 +36,7 @@ import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle
 import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
+import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
@@ -115,6 +116,23 @@ describe("SQLite session deletion receipts", () => {
     expect(before).toBeTypeOf("string");
     expect(unrelated).toBeTypeOf("string");
 
+    let closeRetained: (() => Promise<void>) | undefined;
+    const withWorker = reclamationWorker.withSqliteReclamationWorker;
+    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+      (options, source, run, assertRequestCurrent, signal, requestedPath) =>
+        withWorker(
+          options,
+          source,
+          async (worker) => {
+            closeRetained = () => worker.close();
+            return run(worker);
+          },
+          assertRequestCurrent,
+          signal,
+          requestedPath,
+        ),
+    );
+
     await deleteSessionEntryLifecycle({
       agentId: "main",
       storePath,
@@ -122,6 +140,11 @@ describe("SQLite session deletion receipts", () => {
       archiveTranscript: false,
       deleteTranscriptWithoutArchive: true,
     });
+    const closeWorker = closeRetained;
+    if (!closeWorker) {
+      throw new Error("Expected the deletion's real reclamation Worker");
+    }
+    await closeWorker();
 
     expect(scopeCount()).toBe(retainedBefore! - 2);
     installSqliteDatabaseAdmissions(stale);
