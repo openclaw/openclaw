@@ -209,7 +209,7 @@ describe("consented event Web Push content", () => {
     const scope = {
       sessionKeys: [sessionKey],
       agentId: "research",
-      answerPreview: { payload: finalEvent, canPreview: () => true },
+      answerPreview: { payload: finalEvent, text: "The draft is ready.", canPreview: () => true },
     };
     function previewSubscription(deviceId: string) {
       const subscription = boundSubscription(deviceId);
@@ -331,6 +331,7 @@ describe("consented event Web Push content", () => {
                 ? undefined
                 : {
                     payload: source === "different-event" ? { ...finalEvent } : finalEvent,
+                    text: "The draft is ready.",
                     canPreview: () => source !== "retired",
                   },
           },

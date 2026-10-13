@@ -58,6 +58,13 @@ describe("Web Push content projection", () => {
         {},
       ),
     ).toMatchObject({ text: "Visible answer" });
+    expect(
+      resolveWebPushAnswerPreview(
+        answerEvent({ ...assistant("hidden source"), openclawDisplayContent: [] }),
+        [sessionKey],
+        {},
+      ),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -91,6 +98,7 @@ describe("Web Push content projection", () => {
       {
         logging: { redactPatterns: ["private-start[\\s\\S]*private-end"] },
       },
+      `${secret} Safe summary.`,
     );
     expect(preview?.kind).toBe("answer");
     expect(JSON.stringify(preview)).not.toContain("synthetic-private");
@@ -105,9 +113,12 @@ describe("Web Push content projection", () => {
     );
     expect(projected).toMatchObject({ __openclaw: { truncated: true } });
     expect(
-      resolveWebPushAnswerPreview(answerEvent(projected), [sessionKey], {
-        logging: { redactPatterns: ["private-start[\\s\\S]*private-end"] },
-      }),
+      resolveWebPushAnswerPreview(
+        answerEvent(projected),
+        [sessionKey],
+        { logging: { redactPatterns: ["private-start[\\s\\S]*private-end"] } },
+        "Prepared answer cannot bypass truncation",
+      ),
     ).toBeUndefined();
   });
 
@@ -117,6 +128,7 @@ describe("Web Push content projection", () => {
         answerEvent(assistant("x".repeat(64 * 1024 + 1))),
         [sessionKey],
         {},
+        "x".repeat(64 * 1024 + 1),
       ),
     ).toBeUndefined();
   });
@@ -124,7 +136,7 @@ describe("Web Push content projection", () => {
   it("redacts before clipping and keeps whole Unicode graphemes inside 240 UTF-16 units", () => {
     const text = `${"a".repeat(237)}e\u0301🦞end`;
     expect(
-      resolveWebPushAnswerPreview(answerEvent(assistant(text)), [sessionKey], {}),
+      resolveWebPushAnswerPreview(answerEvent(assistant(text)), [sessionKey], {}, text),
     ).toMatchObject({
       text: `${"a".repeat(237)}e\u0301…`,
     });

@@ -257,7 +257,12 @@ export function createEventWebPushDelivery(params: {
                 answerSource.canPreview(authority.sessions.get(sessionKey)?.target ?? null)
               ) {
                 if (!answerPreviewResolved) {
-                  answerPreview = resolveWebPushAnswerPreview(payload, sessionKeys, cfg);
+                  answerPreview = resolveWebPushAnswerPreview(
+                    payload,
+                    sessionKeys,
+                    cfg,
+                    answerSource.text,
+                  );
                   answerPreviewResolved = true;
                 }
                 preview = answerPreview;

@@ -134,13 +134,18 @@ it.each(["unchanged", "label", "reset", "generation", "missing projection"] as c
           state: "final",
           runId: "original-run",
           ...scope,
-          message: { role: "assistant", content: [{ type: "text", text: "Original answer" }] },
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Original answer" }],
+            openclawDisplayContent: [],
+          },
         };
         const sql = observeHostDataSql();
         try {
           connection.broadcast("chat", payload, {
             agentId: scope.agentId,
             sessionKeys: [scope.sessionKey],
+            answerPreviewText: "Original answer",
           });
           expect(sql.queries).toEqual([]);
         } finally {

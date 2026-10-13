@@ -5,8 +5,10 @@ import { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "../agents/stream-message-shared.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
@@ -16,13 +18,19 @@ import {
   registerWebPushSubscription,
   setWebPushSubscriptionPreferences,
 } from "../infra/push-web.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { setCanonicalUserPreferences } from "../state/user-preferences.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { QuestionManager } from "./question-manager.js";
-import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createDirectChatContext,
+  emitAgentEvent,
+  registerChatRun,
+} from "./server-chat.agent-events.test-helpers.js";
+import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createQuestionHandlers } from "./server-methods/question.js";
 import { createSecretStoreWriteService } from "./server-methods/secrets.js";
@@ -239,6 +247,54 @@ async function createFixture(state: Parameters<Parameters<typeof withOpenClawTes
       },
       { agentId: "main", sessionKeys: [sessionKey] },
     );
+  const persistedAnswer = async () => {
+    const broadcast = vi.fn(connection.broadcast);
+    const handler = createAgentEventHandler({
+      ...connection,
+      broadcast,
+      nodeSendToSession: vi.fn(),
+      nodeHasSessionSubscribers: () => false,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+    });
+    const unsubscribe = onInternalSessionTranscriptUpdate(handler.retireTranscript);
+    const runId = "answer-run";
+    const text = "The draft is ready.";
+    const itemId = "persisted-answer";
+    registerChatRun(connection.chatRunState, runId, sessionKey, runId);
+    try {
+      await emitAgentEvent(handler, runId, "assistant", { itemId, text });
+      expect(
+        await appendExactAssistantMessageToSessionTranscript({
+          agentId: "main",
+          sessionKey,
+          expectedSessionId: entry.sessionId,
+          expectedLifecycleRevision: entry.lifecycleRevision,
+          runId,
+          idempotencyKey: itemId,
+          config: cfg,
+          message: buildAssistantMessage({
+            model: { api: "responses", provider: "synthetic", id: "synthetic" },
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+          }),
+        }),
+      ).toMatchObject({ ok: true });
+      expect(connection.chatRunState.resolveBuffer(runId).text).toBe("");
+      await emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq: 2 });
+      expect(broadcast.mock.calls.findLast(([event]) => event === "chat")?.[1]).toMatchObject({
+        state: "final",
+        message: {
+          content: [{ type: "text", text }],
+          openclawDisplayContent: [],
+        },
+      });
+    } finally {
+      unsubscribe();
+      await handler.dispose();
+    }
+  };
   const question = async () => {
     const params = {
       id: "question:42",
@@ -274,13 +330,24 @@ async function createFixture(state: Parameters<Parameters<typeof withOpenClawTes
     expect(responses).toMatchObject([[true, { id: "question:42" }, undefined]]);
     return expectDefined(manager.get("question:42"), "canonical pending question");
   };
-  return { capture, connection, projection, detach, manager, answer, question, bind, stranger };
+  return {
+    capture,
+    connection,
+    projection,
+    detach,
+    manager,
+    answer,
+    persistedAnswer,
+    question,
+    bind,
+    stranger,
+  };
 }
 
-it("delivers a consented answer through real authority and encrypted Web Push", async () => {
-  await withDeliveryFixture(async ({ answer, capture }) => {
+it("delivers a persisted final answer after its live display tail retires", async () => {
+  await withDeliveryFixture(async ({ persistedAnswer, capture }) => {
     const delivery = observeDelivery();
-    answer();
+    await persistedAnswer();
     await (
       await delivery
     ).settled;

@@ -48,6 +48,7 @@ import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
+  LivePayloadOptions,
 } from "./server-broadcast-types.js";
 import { createAgentEventAdmission } from "./server-chat-event-admission.js";
 import {
@@ -218,13 +219,6 @@ type AgentEventHandler = ((event: AgentEventPayload) => void | Promise<void>) & 
 
 type ChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
 type AgentTextThrottleStream = keyof NonNullable<ChatRunRecord["agentText"]>;
-type LivePayloadOptions = {
-  agentId?: string;
-  controlUiVisible?: boolean;
-  dropIfSlow?: boolean;
-  liveText?: GatewayBroadcastOpts["liveText"];
-};
-
 type ChatDelivery = {
   sessionKey: string;
   agentId?: string;
@@ -762,6 +756,7 @@ export function createAgentEventHandler({
           ? GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT
           : undefined,
       sessionKeys: deliverySessionKeys,
+      answerPreviewText: opts?.answerPreviewText,
       liveText:
         liveText &&
         event === "chat" &&
@@ -891,7 +886,11 @@ export function createAgentEventHandler({
       if (payload.message) {
         emitFirstAssistantChatSendTiming(delivery.firstAssistantTimingEntry);
       }
-      sendLivePayload("chat", sessionKey, payload, delivery);
+      sendLivePayload("chat", sessionKey, payload, {
+        ...delivery,
+        answerPreviewText:
+          jobState === "done" && !opts?.yielded && !shouldSuppressSilent && text ? text : undefined,
+      });
       chatRunState.clearRun(clientRunId);
       return;
     }

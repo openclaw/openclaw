@@ -63,6 +63,7 @@ export function captureWebPushAnswerPreviewAuthority(params: {
     };
     return {
       payload,
+      text: opts.answerPreviewText,
       canPreview(current) {
         try {
           const resident = projection.sharingTarget(query);

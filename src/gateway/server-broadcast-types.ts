@@ -67,9 +67,12 @@ export type GatewayBroadcastOpts = {
     record: QuestionRecord;
     canPreview: (client: GatewayClient, target: SessionSharingTarget | null) => boolean;
   };
+  /** Full projected terminal answer before persisted bytes retire from the live display tail. */
+  answerPreviewText?: string;
   /** Original completion publication; current push authority still admits each recipient. */
   answerPreview?: {
     payload: unknown;
+    text?: string;
     canPreview: (target: SessionSharingTarget | null) => boolean;
   };
   stateVersion?: GatewayBroadcastStateVersion;
@@ -94,6 +97,13 @@ export type GatewayBroadcastOpts = {
       text?: LiveTextProjectionText;
     };
   };
+};
+
+export type LivePayloadOptions = Pick<
+  GatewayBroadcastOpts,
+  "agentId" | "dropIfSlow" | "answerPreviewText" | "liveText"
+> & {
+  controlUiVisible?: boolean;
 };
 
 export type GatewayBroadcastFn = (

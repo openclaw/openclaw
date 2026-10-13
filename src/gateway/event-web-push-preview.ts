@@ -35,6 +35,7 @@ export function resolveWebPushAnswerPreview(
   payload: unknown,
   sessionKeys: readonly string[],
   cfg: OpenClawConfig,
+  answerPreviewText?: string,
 ): WebPushContentPreview | undefined {
   if (
     !isRecord(payload) ||
@@ -65,8 +66,14 @@ export function resolveWebPushAnswerPreview(
   }
   // Keep the complete selected text for redaction; the history cap can cut off
   // a credential delimiter before a configured pattern has a chance to match.
-  const projected = projectChatDisplayMessage(message, { maxChars: Number.MAX_SAFE_INTEGER });
-  const answer = stripSuppressedControlReplyToken(resolveRawAssistantAnswerText(projected));
+  // The live terminal producer retains its full projected answer when transcript
+  // persistence empties the display tail. Other producers retain their display overrides.
+  const answer = stripSuppressedControlReplyToken(
+    answerPreviewText ??
+      resolveRawAssistantAnswerText(
+        projectChatDisplayMessage(message, { maxChars: Number.MAX_SAFE_INTEGER }),
+      ),
+  );
   if (!answer || answer.length > PREVIEW_INPUT_LIMIT) {
     return undefined;
   }
