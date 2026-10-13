@@ -80,9 +80,13 @@ async function withQuestionOwner(
           id: record.id,
           manager,
           replaceHandler: (method, decorate) => {
+            const original = handlers[method];
+            if (!original) {
+              throw new Error(`Native ${method} handler must exist`);
+            }
             registry = createRequestGatewayMethodRegistry({
               ...handlers,
-              [method]: decorate(handlers[method]),
+              [method]: decorate(original),
             });
           },
         }),
@@ -198,7 +202,7 @@ it.each(operations)(
             operationalRunInstance: authority.operationalRunInstance,
             receiptAuthority: () => current,
           },
-          () => {
+          async () => {
             const params = { cfg: {}, questionId: id, authorize: () => () => current };
             return action === "answer"
               ? resolveQuestionAnswersOverGateway({ ...params, answers })
@@ -264,6 +268,21 @@ it.each(operations)("rejects a legacy boolean authorizer for native %s", async (
     );
     expect(manager.get(id)?.status).toBe("pending");
   });
+});
+
+it.each(operations)("denies a non-boolean current predicate for native %s", async (action) => {
+  for (const isCurrent of [() => Promise.resolve(true), () => 1]) {
+    await withQuestionOwner(async ({ id, manager }) => {
+      const params = { cfg: {}, questionId: id, answers, authorize: () => isCurrent };
+      // An untyped plugin's Promise or other truthy value cannot grant authority.
+      const operation =
+        action === "answer" ? resolveQuestionAnswersOverGateway : cancelQuestionOverGateway;
+      await expect(Reflect.apply(operation, undefined, [params])).resolves.toEqual({
+        status: "denied",
+      });
+      expect(manager.get(id)?.status).toBe("pending");
+    });
+  }
 });
 
 it("retains native answer validation and refuses secret question answers", async () => {

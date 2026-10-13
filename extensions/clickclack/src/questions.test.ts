@@ -625,7 +625,7 @@ describe("forwardClickClackQuestionAnswer", () => {
     hoisted.cancelQuestion.mockImplementationOnce(
       async (params: { authorize: () => (() => boolean) | null }) => {
         accountStart.abort();
-        const isCurrent = await params.authorize();
+        const isCurrent = params.authorize();
         return isCurrent?.() ? { status: "cancelled" } : { status: "denied" };
       },
     );

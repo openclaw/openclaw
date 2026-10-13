@@ -48,8 +48,11 @@ async function prepareQuestionResolutionCommitGuard(
     throw new Error("Question resolution requires a prepared synchronous authority assertion");
   }
   return () => {
-    if (isCurrent() !== true) {
-      throw new QuestionResolutionDeniedError();
+    switch (isCurrent()) {
+      case true:
+        return;
+      default:
+        throw new QuestionResolutionDeniedError();
     }
   };
 }

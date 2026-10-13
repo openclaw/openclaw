@@ -62,7 +62,7 @@ it.each([false, true])(
     hoisted.client.message.mockResolvedValue(submittedCard(account.botUserId!));
     hoisted.resolveAnswers.mockImplementationOnce(
       async ({ authorize }: { authorize: () => (() => boolean) | null }) => {
-        const isCurrent = await authorize();
+        const isCurrent = authorize();
         if (!isCurrent?.()) {
           return { status: "denied" };
         }
@@ -105,7 +105,7 @@ it.each(["answer", "skip"] as const)(
           allowFrom: ["usr_someone_else"],
           config: { ...account.config, allowFrom: ["usr_someone_else"] },
         });
-        const isCurrent = await authorize();
+        const isCurrent = authorize();
         if (!isCurrent?.()) {
           return { status: "denied" };
         }
