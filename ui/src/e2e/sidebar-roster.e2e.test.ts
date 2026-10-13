@@ -190,6 +190,17 @@ suite.define(() => {
 
         const headers = sidebar.locator(".sidebar-agent-roster__row");
         await expect.poll(() => headers.count()).toBe(4);
+        expect(await sidebar.locator(".sidebar-agent-roster__menu wa-dropdown-item").count()).toBe(
+          0,
+        );
+        expect(await sidebar.locator(".sidebar-new-session-menu wa-dropdown-item").count()).toBe(0);
+        const rosterMenu = sidebar.locator('[data-agent-group="main"] .sidebar-agent-roster__menu');
+        await rosterMenu.getByRole("button", { name: "Options for Harbor", exact: true }).focus();
+        await page.keyboard.press("Enter");
+        await rosterMenu.locator('wa-dropdown-item[value="main"]').waitFor({ state: "visible" });
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
+        await page.keyboard.press("Escape");
+        expect(await rosterMenu.locator("wa-dropdown-item").count()).toBe(3);
         await expect
           .poll(() =>
             headers.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-id"))),
@@ -324,6 +335,9 @@ suite.define(() => {
         await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
         const newMenu = sidebar.locator(".sidebar-new-session-menu");
         await expect.poll(() => newMenu.locator("wa-dropdown-item").first().isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        expect(await newMenu.locator("wa-dropdown-item").count()).toBe(4);
+        await sidebar.locator(".sidebar-session-toolbar .sidebar-new-session").click();
         expect(
           await newMenu
             .locator("wa-dropdown-item a")

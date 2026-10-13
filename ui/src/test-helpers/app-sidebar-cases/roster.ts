@@ -321,6 +321,9 @@ describe("AppSidebar agent roster", () => {
     const menus = sidebar.querySelectorAll(".sidebar-new-session-menu");
     expect(menus).toHaveLength(1);
     for (const menu of menus) {
+      expect(menu.querySelectorAll("wa-dropdown-item")).toHaveLength(0);
+      menu.dispatchEvent(new Event("wa-show"));
+      await sidebar.querySelector("openclaw-sidebar-new-session-menu")?.updateComplete;
       const options = [...menu.querySelectorAll("wa-dropdown-item")];
       expect(options.map((item) => item.getAttribute("value"))).toEqual(agentIds(sidebar));
       expect(options.map((item) => item.querySelector("a")?.getAttribute("href"))).toEqual(
