@@ -30,7 +30,11 @@ import {
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
 import type { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
-import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  prepareSqliteScope,
+  resolveSqliteWriteAdmissionScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionActorMemoryCollaborationCommand } from "./session-actor-memory-collaboration-contract.js";
 import {
   captureSessionActorStorageOwner,
@@ -129,275 +133,283 @@ export async function runSessionCollaborationWrite<
   }
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = await prepareSqliteScope({ ...scope, env });
-  const resolvedOptions = toDatabaseOptions(resolved);
-  const options = {
-    ...resolvedOptions,
-    env,
-    path: resolveOpenClawAgentSqlitePath({ ...resolvedOptions, env }),
-  };
-  const location = {
-    agentId: resolved.agentId,
-    storePath: options.path,
-    sessionKey: resolved.sessionKey,
-  };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  const assertQueuedCurrent = () => {
-    execution.assertCurrent();
-    assertCurrent();
-  };
-  const commandScope = {
-    agentId: resolved.agentId,
-    sessionKey: resolved.sessionKey,
-    storePath: options.path,
-    env: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
-  };
-  const capturedCommand: { type: Key; input: SessionSharingWorkerOperations[Key]["input"] } = {
-    type: command.type,
-    input: structuredClone({ ...command.input, scope: commandScope }),
-  };
-  try {
-    // Register drainable resources only after earlier writers release their FIFO slot.
-    return await runOpenClawAgentWriteAdmission(
-      options,
-      async () => {
-        assertQueuedCurrent();
-        if (!execution.fileIdentity) {
-          await prepareSessionEntryReplacementDatabase(options, assertQueuedCurrent, execution);
-        }
-        const identity = execution.fileIdentity?.physicalIdentity;
-        if (!identity) {
-          throw new Error("Session collaboration worker requires a file-backed owner");
-        }
-        const publication = retainSessionEntryWorkerPublication({
-          ...location,
-          databaseIdentity: identity,
-        });
-        const sharingAuthorityChanged =
-          capturedCommand.type === "add" ||
-          capturedCommand.type === "remove" ||
-          capturedCommand.type === "owner.assign";
-        let publicationKeys = [location.sessionKey];
-        let mutationDispatched = false;
-        let resultReceived = false;
-        let receiptFailed = false;
-        const publicationState: { result?: { value: T } } = {};
-        let activeAdmission: RetainedWorkerTransactionAdmission | undefined;
-        let mutationAdmission: typeof activeAdmission;
-        let candidate: SessionSharingCommitReceipt | undefined;
-        const worker = await openOpenClawAgentSqliteWorkerStore<SessionSharingWorkerOperations>(
-          options,
-          { execution },
-          {
-            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionSharingStore),
-            input: undefined,
-            assertAdmission(request) {
-              if (mutationDispatched && request.stage === "commit") {
-                if (!isRecord(request.facts)) {
-                  throw new SqliteWorkerError(
-                    "Session collaboration commit omitted its candidate",
-                    "outcome-unknown",
-                  );
-                }
-                candidate = structuredClone(
-                  readSessionCollaborationCandidate(
-                    request.facts.publication,
-                    // SAFETY: Serialization and typed preparation preserve the command's input/discriminant pairing.
-                    capturedCommand as SqliteWorkerCommand<SessionSharingWorkerOperations>,
-                    publicationKeys,
-                    identity,
-                  ),
-                );
-              }
-              return request;
-            },
-            onAdmitted(request) {
-              if (mutationDispatched && request.stage === "commit") {
-                mutationAdmission = activeAdmission;
-                if (!capturedCommand.type.startsWith("suggestion.")) {
-                  const memberships = new Map<string, string>();
-                  const participantProjections = new Map<
-                    string,
-                    | SessionSharingWorkerOperations["participant"]["output"]["participants"]
-                    | undefined
-                  >();
-                  for (const [key, fact] of candidate?.publication.facts ?? []) {
-                    if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
-                      memberships.set(key, fact.value[0].sessionId);
-                    }
-                    if (
-                      capturedCommand.type === "participant" &&
-                      fact.kind === "postimage" &&
-                      fact.value[0]?.kind === "participants" &&
-                      fact.value[0].projection
-                    ) {
-                      participantProjections.set(key, fact.value[0].projection);
-                    } else if (
-                      capturedCommand.type === "participant" &&
-                      fact.kind === "unchanged"
-                    ) {
-                      participantProjections.set(key, undefined);
-                    }
-                  }
-                  publication.beginChanges(
-                    publicationKeys,
-                    memberships,
-                    publicationKeys,
-                    participantProjections,
-                    undefined,
-                    sharingAuthorityChanged,
-                  );
-                }
-              }
-            },
-            observeAdmission(admission, retained) {
-              activeAdmission = retained;
-              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
-                if (!mutationDispatched || publicationState.result) {
-                  return;
-                }
-                try {
-                  if (!candidate || !isDeepStrictEqual(facts, candidate)) {
+  const capturedScope = { ...scope, env };
+  const reservationScope = resolveSqliteWriteAdmissionScope(capturedScope);
+  const run = async () => {
+    const resolved = await prepareSqliteScope(capturedScope);
+    const resolvedOptions = toDatabaseOptions(resolved);
+    const options = {
+      ...resolvedOptions,
+      env,
+      path: resolveOpenClawAgentSqlitePath({ ...resolvedOptions, env }),
+    };
+    const location = {
+      agentId: resolved.agentId,
+      storePath: options.path,
+      sessionKey: resolved.sessionKey,
+    };
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    const assertQueuedCurrent = () => {
+      execution.assertCurrent();
+      assertCurrent();
+    };
+    const commandScope = {
+      agentId: resolved.agentId,
+      sessionKey: resolved.sessionKey,
+      storePath: options.path,
+      env: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
+    };
+    const capturedCommand: { type: Key; input: SessionSharingWorkerOperations[Key]["input"] } = {
+      type: command.type,
+      input: structuredClone({ ...command.input, scope: commandScope }),
+    };
+    try {
+      // Register drainable resources only after earlier writers release their FIFO slot.
+      return await runOpenClawAgentWriteAdmission(
+        options,
+        async () => {
+          assertQueuedCurrent();
+          if (!execution.fileIdentity) {
+            await prepareSessionEntryReplacementDatabase(options, assertQueuedCurrent, execution);
+          }
+          const identity = execution.fileIdentity?.physicalIdentity;
+          if (!identity) {
+            throw new Error("Session collaboration worker requires a file-backed owner");
+          }
+          const publication = retainSessionEntryWorkerPublication({
+            ...location,
+            databaseIdentity: identity,
+          });
+          const sharingAuthorityChanged =
+            capturedCommand.type === "add" ||
+            capturedCommand.type === "remove" ||
+            capturedCommand.type === "owner.assign";
+          let publicationKeys = [location.sessionKey];
+          let mutationDispatched = false;
+          let resultReceived = false;
+          let receiptFailed = false;
+          const publicationState: { result?: { value: T } } = {};
+          let activeAdmission: RetainedWorkerTransactionAdmission | undefined;
+          let mutationAdmission: typeof activeAdmission;
+          let candidate: SessionSharingCommitReceipt | undefined;
+          const worker = await openOpenClawAgentSqliteWorkerStore<SessionSharingWorkerOperations>(
+            options,
+            { execution },
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionSharingStore),
+              input: undefined,
+              assertAdmission(request) {
+                if (mutationDispatched && request.stage === "commit") {
+                  if (!isRecord(request.facts)) {
                     throw new SqliteWorkerError(
-                      "Session collaboration receipt differs from its admitted candidate",
+                      "Session collaboration commit omitted its candidate",
                       "outcome-unknown",
                     );
                   }
-                  const receipt = candidate;
-                  const changes = [...receipt.publication.facts].flatMap<SessionRowChange>(
-                    ([sessionKey, fact]) =>
-                      fact.kind === "postimage"
-                        ? fact.value.map((changeFacts) => ({
-                            ...location,
-                            sessionKey,
-                            scope: "session-entry" as const,
-                            facts: changeFacts,
-                          }))
-                        : [{ ...location, sessionKey, facts: { kind: "unchanged" as const } }],
-                  );
-                  const result =
-                    // SAFETY: Candidate validation binds the result to this command; native receipt equality preserves that pairing.
-                    receipt.result as SessionSharingWorkerOperations[Key]["output"];
-                  publicationState.result = {
-                    value: publication.settleChanges(
-                      changes,
-                      (currentKeys, invalidations, release) => {
-                        for (const [sessionKey, fact] of receipt.publication.facts) {
-                          if (!currentKeys.has(sessionKey) || fact.kind !== "postimage") {
-                            continue;
-                          }
-                          for (const change of fact.value) {
-                            if (
-                              change.kind === "member" ||
-                              change.kind === "owner" ||
-                              change.kind === "category"
-                            ) {
-                              commitSessionSharingFieldChange(identity, sessionKey, change);
-                            } else {
-                              recordCommittedSessionMetadataPublication(
-                                identity,
-                                sessionKey,
-                                change,
-                              );
-                            }
-                            if (
-                              change.kind === "owner" ||
-                              change.kind === "category" ||
-                              change.kind === "unchanged"
-                            ) {
-                              invalidateSessionEntryCaches(identity);
-                            }
-                          }
-                        }
-                        release();
-                        const selected = publish(result, location, identity, currentKeys);
-                        sessionChanges.emitBatch(invalidations);
-                        return selected;
-                      },
+                  candidate = structuredClone(
+                    readSessionCollaborationCandidate(
+                      request.facts.publication,
+                      // SAFETY: Serialization and typed preparation preserve the command's input/discriminant pairing.
+                      capturedCommand as SqliteWorkerCommand<SessionSharingWorkerOperations>,
+                      publicationKeys,
+                      identity,
                     ),
-                  };
-                } catch (error) {
-                  receiptFailed = true;
-                  throw error;
+                  );
                 }
-              });
-            },
-          },
-        );
-        try {
-          if (prepare) {
-            await worker.run(async (operation) => {
-              const prepared = await prepare(
-                {
-                  async execute(prepareCommand, executeOptions) {
-                    const result = await operation.execute(prepareCommand, executeOptions);
-                    if (
-                      prepareCommand.type === "category.prepare" &&
-                      Array.isArray(result) &&
-                      result.every((key) => typeof key === "string")
-                    ) {
-                      publicationKeys = result;
+                return request;
+              },
+              onAdmitted(request) {
+                if (mutationDispatched && request.stage === "commit") {
+                  mutationAdmission = activeAdmission;
+                  if (!capturedCommand.type.startsWith("suggestion.")) {
+                    const memberships = new Map<string, string>();
+                    const participantProjections = new Map<
+                      string,
+                      | SessionSharingWorkerOperations["participant"]["output"]["participants"]
+                      | undefined
+                    >();
+                    for (const [key, fact] of candidate?.publication.facts ?? []) {
+                      if (fact.kind === "postimage" && fact.value[0]?.kind === "member") {
+                        memberships.set(key, fact.value[0].sessionId);
+                      }
+                      if (
+                        capturedCommand.type === "participant" &&
+                        fact.kind === "postimage" &&
+                        fact.value[0]?.kind === "participants" &&
+                        fact.value[0].projection
+                      ) {
+                        participantProjections.set(key, fact.value[0].projection);
+                      } else if (
+                        capturedCommand.type === "participant" &&
+                        fact.kind === "unchanged"
+                      ) {
+                        participantProjections.set(key, undefined);
+                      }
                     }
-                    return result;
+                    publication.beginChanges(
+                      publicationKeys,
+                      memberships,
+                      publicationKeys,
+                      participantProjections,
+                      undefined,
+                      sharingAuthorityChanged,
+                    );
+                  }
+                }
+              },
+              observeAdmission(admission, retained) {
+                activeAdmission = retained;
+                observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+                  if (!mutationDispatched || publicationState.result) {
+                    return;
+                  }
+                  try {
+                    if (!candidate || !isDeepStrictEqual(facts, candidate)) {
+                      throw new SqliteWorkerError(
+                        "Session collaboration receipt differs from its admitted candidate",
+                        "outcome-unknown",
+                      );
+                    }
+                    const receipt = candidate;
+                    const changes = [...receipt.publication.facts].flatMap<SessionRowChange>(
+                      ([sessionKey, fact]) =>
+                        fact.kind === "postimage"
+                          ? fact.value.map((changeFacts) => ({
+                              ...location,
+                              sessionKey,
+                              scope: "session-entry" as const,
+                              facts: changeFacts,
+                            }))
+                          : [{ ...location, sessionKey, facts: { kind: "unchanged" as const } }],
+                    );
+                    const result =
+                      // SAFETY: Candidate validation binds the result to this command; native receipt equality preserves that pairing.
+                      receipt.result as SessionSharingWorkerOperations[Key]["output"];
+                    publicationState.result = {
+                      value: publication.settleChanges(
+                        changes,
+                        (currentKeys, invalidations, release) => {
+                          for (const [sessionKey, fact] of receipt.publication.facts) {
+                            if (!currentKeys.has(sessionKey) || fact.kind !== "postimage") {
+                              continue;
+                            }
+                            for (const change of fact.value) {
+                              if (
+                                change.kind === "member" ||
+                                change.kind === "owner" ||
+                                change.kind === "category"
+                              ) {
+                                commitSessionSharingFieldChange(identity, sessionKey, change);
+                              } else {
+                                recordCommittedSessionMetadataPublication(
+                                  identity,
+                                  sessionKey,
+                                  change,
+                                );
+                              }
+                              if (
+                                change.kind === "owner" ||
+                                change.kind === "category" ||
+                                change.kind === "unchanged"
+                              ) {
+                                invalidateSessionEntryCaches(identity);
+                              }
+                            }
+                          }
+                          release();
+                          const selected = publish(result, location, identity, currentKeys);
+                          sessionChanges.emitBatch(invalidations);
+                          return selected;
+                        },
+                      ),
+                    };
+                  } catch (error) {
+                    receiptFailed = true;
+                    throw error;
+                  }
+                });
+              },
+            },
+          );
+          try {
+            if (prepare) {
+              await worker.run(async (operation) => {
+                const prepared = await prepare(
+                  {
+                    async execute(prepareCommand, executeOptions) {
+                      const result = await operation.execute(prepareCommand, executeOptions);
+                      if (
+                        prepareCommand.type === "category.prepare" &&
+                        Array.isArray(result) &&
+                        result.every((key) => typeof key === "string")
+                      ) {
+                        publicationKeys = result;
+                      }
+                      return result;
+                    },
                   },
-                },
-                commandScope,
-              );
-              if (prepared) {
-                capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
-              }
+                  commandScope,
+                );
+                if (prepared) {
+                  capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
+                }
+                assertQueuedCurrent();
+                mutationDispatched = capturedCommand.type !== "category.prepare";
+                await operation.execute(capturedCommand);
+                resultReceived = true;
+              }, assertQueuedCurrent);
+            } else {
               assertQueuedCurrent();
               mutationDispatched = capturedCommand.type !== "category.prepare";
-              await operation.execute(capturedCommand);
+              await worker.execute(capturedCommand, assertQueuedCurrent);
               resultReceived = true;
-            }, assertQueuedCurrent);
-          } else {
-            assertQueuedCurrent();
-            mutationDispatched = capturedCommand.type !== "category.prepare";
-            await worker.execute(capturedCommand, assertQueuedCurrent);
-            resultReceived = true;
-          }
-          if (!publicationState.result) {
-            throw new SqliteWorkerError(
-              "Session collaboration omitted its native commit receipt",
-              "outcome-unknown",
-            );
-          }
-          return publicationState.result.value;
-        } catch (error) {
-          await mutationAdmission?.settled;
-          if (publicationState.result) {
+            }
+            if (!publicationState.result) {
+              throw new SqliteWorkerError(
+                "Session collaboration omitted its native commit receipt",
+                "outcome-unknown",
+              );
+            }
             return publicationState.result.value;
+          } catch (error) {
+            await mutationAdmission?.settled;
+            if (publicationState.result) {
+              return publicationState.result.value;
+            }
+            const unknown =
+              mutationDispatched &&
+              (receiptFailed ||
+                resultReceived ||
+                collectNestedErrorCandidates(error).some(
+                  (errorCandidate) => extractErrorCode(errorCandidate) === "outcome-unknown",
+                ));
+            if (unknown && !capturedCommand.type.startsWith("suggestion.")) {
+              publication.beginChanges(
+                publicationKeys,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                sharingAuthorityChanged,
+              );
+            }
+            publication.settle(undefined, unknown);
+            throw error;
+          } finally {
+            publication.settle(undefined, false);
+            await worker.close();
           }
-          const unknown =
-            mutationDispatched &&
-            (receiptFailed ||
-              resultReceived ||
-              collectNestedErrorCandidates(error).some(
-                (errorCandidate) => extractErrorCode(errorCandidate) === "outcome-unknown",
-              ));
-          if (unknown && !capturedCommand.type.startsWith("suggestion.")) {
-            publication.beginChanges(
-              publicationKeys,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              sharingAuthorityChanged,
-            );
-          }
-          publication.settle(undefined, unknown);
-          throw error;
-        } finally {
-          publication.settle(undefined, false);
-          await worker.close();
-        }
-      },
-      true,
-    );
-  } finally {
-    await execution.release();
-  }
+        },
+        true,
+      );
+    } finally {
+      await execution.release();
+    }
+  };
+  // Join the exact-path FIFO before preparation yields so shutdown drains this write.
+  return reservationScope
+    ? runOpenClawAgentWriteAdmission(toDatabaseOptions(reservationScope), run, true)
+    : run();
 }
 
 /** The receipt owner installs retained facts before releasing pending publication. */
