@@ -32,7 +32,6 @@ import { livePresentation, type PresentationValue } from "../../lit/presentation
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { chatFailureRunId } from "./chat-pane-state.ts";
 import {
   buildPendingInputQueueItems,
   getChatPendingInputs,
@@ -82,6 +81,7 @@ import {
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
+import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";

@@ -68,5 +68,5 @@
   max-height: 240px;
   overflow: auto;
   margin: 8px 0;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
 }

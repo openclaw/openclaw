@@ -48,7 +48,6 @@ import {
   chatSubmitState,
   createChatPaneSendActions,
   createChatPaneRunRecoveryActions,
-  chatFailureRunId,
   dismissChatError,
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
@@ -68,7 +67,7 @@ import type { ChatProps } from "./chat-view.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
-import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
+import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";

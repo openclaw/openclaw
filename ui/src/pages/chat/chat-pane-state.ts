@@ -11,18 +11,6 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.ts";
-import type { ChatRunError } from "./run-lifecycle.ts";
-
-/** Only the latest terminal failure owns the visible recovery actions. */
-export function chatFailureRunId(
-  error: ChatRunError | null | undefined,
-  session: GatewaySessionRow | undefined,
-) {
-  return (
-    error?.runId ??
-    (session?.status === "failed" || session?.status === "timeout" ? session.lastRunId : undefined)
-  );
-}
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<

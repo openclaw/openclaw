@@ -11,7 +11,7 @@ import { formatSessionArchiveReason } from "../../../lib/sessions/session-archiv
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import "./chat-skill-learned-notice.tsx";
 import "./chat-permission-card.tsx";
-import { renderChatRunFailureNotice } from "./chat-run-failure-notice.ts";
+import "./chat-run-failure-notice.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export function renderChatPermissionCard(
@@ -140,7 +140,11 @@ export function renderChatNotice(
       data-ts=${String(item.timestamp)}
       data-run-failure=${item.runError.runId}
     >
-      ${renderChatRunFailureNotice(item.runError.summary, failureActions)}
+      <openclaw-chat-run-failure-notice
+        .summary=${item.runError.summary}
+        .onRetry=${failureActions?.onRetry}
+        .onChangeModel=${failureActions?.onChangeModel}
+      ></openclaw-chat-run-failure-notice>
     </div>`;
   }
   if (item.permissionMissing) {
