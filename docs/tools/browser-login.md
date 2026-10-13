@@ -22,22 +22,15 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 ## Passkeys in headless browsers
 
-A headless browser cannot show Chrome's passkey dialog, and an unseen dialog
-blocks every click and key press on the page. When OpenClaw controls a headless
-Chromium browser, it answers a site's passkey request the way a dismissed
-passkey dialog does. The page stays usable, and the site can offer its other
-sign-in methods, such as a password, a one-time code, or a prompt on your
-phone. Passkey autofill suggestions are left to the browser.
+Chrome's invisible passkey dialog can block clicks and key presses in headless
+mode. OpenClaw dismisses modal passkey requests in headless Chromium so the site
+can offer another sign-in method, such as a password or one-time code. Passkey
+autofill requests and headed browsers keep Chrome's normal behavior.
 
-- OpenClaw recognizes a headless browser it did not launch, such as an attached
-  or remote CDP browser, by reading its launch flags. When it cannot read them,
-  the Gateway log says so, and passkey requests keep Chrome's behavior.
-- A page that asked for a passkey before OpenClaw connected to the browser keeps
-  the dialog until the page reloads. Navigate to the same URL to reload it.
-- `existing-session` (Chrome MCP) profiles are not covered.
-- Passkeys, security keys, and DevTools virtual authenticators cannot complete
-  these requests in a headless browser. To sign in with one of them, use a
-  headed profile.
+Use a headed profile to sign in with a passkey or security key. If a page already
+requested a passkey before OpenClaw connected, navigate to the same URL to reload
+it. Attached and remote browsers must report their headless launch flags; a
+failed detection is logged. `existing-session` profiles are unchanged.
 
 ## Which Chrome profile is used?
 

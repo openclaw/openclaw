@@ -511,6 +511,8 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    /** Launch-owner fact for managed headless Chromium. */
+    headless?: true;
     timeoutMs?: number;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
@@ -565,8 +567,7 @@ export async function createPageViaPlaywright(
   try {
     assertCurrent();
     ensureContextState(context);
-    if (headless) {
-      // An isolated context is new, and its first document may already ask.
+    if (headless || opts.headless) {
       await guardHeadlessContexts([context]);
       assertCurrent();
     }

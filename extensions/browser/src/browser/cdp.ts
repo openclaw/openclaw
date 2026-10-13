@@ -89,11 +89,6 @@ export async function createTargetViaCdp(opts: {
   signal?: AbortSignal;
   /** Wait for the created document to finish navigation and return its authoritative URL. */
   waitForNavigationResult?: boolean;
-  /**
-   * Script the target's first document runs before its own scripts. The target
-   * then opens blank and navigates only after this session registered the script.
-   */
-  firstDocumentScript?: string;
 }): Promise<{ targetId: string; finalUrl?: string }> {
   opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
@@ -141,11 +136,7 @@ export async function createTargetViaCdp(opts: {
         candidateWsUrl,
         async (send) => {
           opts.signal?.throwIfAborted();
-          const firstDocument =
-            opts.firstDocumentScript === undefined
-              ? undefined
-              : { url: opts.url, script: opts.firstDocumentScript };
-          const params = { url: firstDocument ? "about:blank" : opts.url, background: true }; // Target-id selection must not activate browser UI.
+          const params = { url: opts.url, background: true }; // Target-id selection must not activate browser UI.
           const created = (await send("Target.createTarget", params)) as { targetId?: string };
           const targetId = created?.targetId?.trim() ?? "";
           if (!targetId) {
@@ -158,7 +149,6 @@ export async function createTargetViaCdp(opts: {
               targetId,
               opts.waitForNavigationResult ? opts.url : undefined,
               opts.signal,
-              firstDocument,
             );
             opts.signal?.throwIfAborted();
             return finalUrl ? { targetId, finalUrl } : { targetId };

@@ -151,18 +151,12 @@ export async function prepareCdpPageSession(
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
-/**
- * Prepare a created target and optionally observe its committed document URL.
- * With `firstDocument`, the target was created blank: this session registers
- * the script, navigates, and stays attached until the document commits, so the
- * document runs the script before its own.
- */
+/** Prepare a created target and optionally observe its committed document URL. */
 export async function prepareCdpTargetSession(
   send: CdpSendFn,
   targetId: string,
   navigationUrl?: string,
   signal?: AbortSignal,
-  firstDocument?: { url: string; script: string },
 ): Promise<string | undefined> {
   const attached = (await send("Target.attachToTarget", {
     targetId,
@@ -170,25 +164,13 @@ export async function prepareCdpTargetSession(
   }).catch(() => null)) as { sessionId?: unknown } | null;
   const sessionId = typeof attached?.sessionId === "string" ? attached.sessionId : undefined;
   if (!sessionId) {
-    if (firstDocument) {
-      throw new Error("CDP could not attach to the new blank target to open its URL.");
-    }
     return undefined;
   }
   try {
     await prepareCdpPageSession(send, sessionId);
-    if (firstDocument) {
-      await send(
-        "Page.addScriptToEvaluateOnNewDocument",
-        { source: firstDocument.script },
-        sessionId,
-      );
-      await send("Page.navigate", { url: firstDocument.url }, sessionId);
-    }
-    const resultUrl = navigationUrl ?? firstDocument?.url;
-    return resultUrl === undefined
+    return navigationUrl === undefined
       ? undefined
-      : await waitForCdpNavigationResult(send, sessionId, resultUrl, signal);
+      : await waitForCdpNavigationResult(send, sessionId, navigationUrl, signal);
   } finally {
     await send("Target.detachFromTarget", { sessionId }).catch(() => {});
   }

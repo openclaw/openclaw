@@ -259,64 +259,19 @@ describe("headless passkey guard on Playwright connections", () => {
     );
   });
 
-  it("guards a browser that OpenClaw launched headless even when the read failed", async () => {
+  it("uses the launch owner's headless mode before creating a page when detection fails", async () => {
     const chromium = makeChromium({ probeError: new Error("SystemInfo.getInfo is not allowed") });
     connectOverCdpSpy.mockResolvedValue(chromium.browser);
 
-    await pwAi.prepareHeadlessPasskeyGuard({ cdpUrl });
-    await getPageForTargetId({ cdpUrl, targetId: "EXISTING" });
+    await createPageViaPlaywright({ cdpUrl, url: "https://93.184.216.34/sign-in", headless: true });
 
-    expect(passkeyGuardEvents(chromium.events)).toEqual([
+    expect(chromium.events).toEqual([
       "default:addInitScript",
       "EXISTING/main:evaluate",
       "EXISTING/iframe:evaluate",
+      "default:newPage",
+      "NEW_1:goto",
     ]);
-  });
-
-  it("opens the tab after the guard budget when the connect is slow, and guards the browser once it connects", async () => {
-    vi.useFakeTimers();
-    const chromium = makeChromium({ commandLine: headlessCommandLine });
-    const connect = createDeferred<Browser>();
-    connectOverCdpSpy.mockImplementation(() => connect.promise);
-    try {
-      let ready = false;
-      const preparing = pwAi.prepareHeadlessPasskeyGuard({ cdpUrl }).then((guard) => {
-        ready = true;
-        return guard;
-      });
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(ready).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(preparing).resolves.toEqual({ firstDocumentScript: expect.any(String) });
-      expect(passkeyWarn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("Passkey guard not ready after 5000 ms"),
-      );
-      expect(passkeyGuardEvents(chromium.events)).toEqual([]);
-    } finally {
-      connect.resolve(chromium.browser);
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    expect(passkeyGuardEvents(chromium.events)).toEqual([
-      "default:addInitScript",
-      "EXISTING/main:evaluate",
-      "EXISTING/iframe:evaluate",
-    ]);
-  });
-
-  it("stops waiting for the guard when the open is cancelled", async () => {
-    const connect = createDeferred<Browser>();
-    connectOverCdpSpy.mockImplementation(() => connect.promise);
-    const controller = new AbortController();
-    const cancelled = new Error("open cancelled");
-
-    try {
-      const preparing = pwAi.prepareHeadlessPasskeyGuard({ cdpUrl, signal: controller.signal });
-      controller.abort(cancelled);
-      await expect(preparing).rejects.toBe(cancelled);
-    } finally {
-      connect.resolve(makeChromium({ commandLine: headlessCommandLine }).browser);
-      await settle();
-    }
   });
 
   it("waits for a slow guard registration only once", async () => {
@@ -332,7 +287,7 @@ describe("headless passkey guard on Playwright connections", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await expect(listing).resolves.toHaveLength(1);
     let ready = false;
-    void pwAi.prepareHeadlessPasskeyGuard({ cdpUrl }).then(() => {
+    void createPageViaPlaywright({ cdpUrl, url: "about:blank", headless: true }).then(() => {
       ready = true;
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -347,6 +302,8 @@ describe("headless passkey guard on Playwright connections", () => {
       "default:addInitScript",
       "EXISTING/main:evaluate",
       "EXISTING/iframe:evaluate",
+      "NEW_1/main:evaluate",
+      "NEW_1/iframe:evaluate",
     ]);
   });
 
@@ -438,23 +395,6 @@ describe("headless passkey page script", () => {
     });
     await expect(credentials.get({ password: true })).resolves.toMatchObject({ method: "get" });
     await expect(credentials.create(conditional)).resolves.toMatchObject({ method: "create" });
-  });
-
-  it("hands raw tab creation the same page script as source", async () => {
-    const chromium = makeChromium({ commandLine: headlessCommandLine });
-    connectOverCdpSpy.mockResolvedValue(chromium.browser);
-    const { firstDocumentScript } = await pwAi.prepareHeadlessPasskeyGuard({ cdpUrl });
-    const Container = class extends FakeCredentialsContainer {};
-    vm.runInNewContext(firstDocumentScript, { CredentialsContainer: Container, DOMException });
-    const credentials = new Container();
-    const publicKey = { challenge: new Uint8Array(32) };
-
-    await expect(credentials.get({ publicKey })).rejects.toMatchObject({
-      name: "NotAllowedError",
-    });
-    await expect(credentials.get({ mediation: "conditional", publicKey })).resolves.toMatchObject({
-      method: "get",
-    });
   });
 
   it("patches the prototype like the native methods", async () => {

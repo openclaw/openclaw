@@ -1,4 +1,3 @@
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -52,15 +51,11 @@ import {
 } from "./pw-session-state.js";
 import {
   guardHeadlessContexts,
-  HEADLESS_PASSKEY_GUARD_SOURCE,
   isHeadlessChromium,
   refuseHeadlessPasskeyDialogs,
-  waitForPasskeyGuard,
 } from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
-
-const log = createSubsystemLogger("browser").child("webauthn");
 
 export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
@@ -585,47 +580,6 @@ async function getPageForTargetIdOnce(opts: {
     return found.page;
   }
   throw new BrowserTabNotFoundError();
-}
-
-/**
- * Guard a browser that OpenClaw launched headless before raw CDP opens a tab in
- * it, and return the page script for that tab's first document.
- *
- * Playwright's context script covers the tab's later documents. It cannot be
- * relied on for the first one: right after a fresh connection, Chrome sometimes
- * commits a tab another client opened with a URL before Playwright registers
- * its scripts. The raw CDP caller therefore opens the tab blank and runs the
- * returned script on its own session first.
- *
- * The caller's recorded launch mode decides here; the connection's own
- * command-line read is left as it is. Waits at most the guard budget: a slower
- * connect keeps running, is cached for later actions, and then covers the tab.
- */
-export async function prepareHeadlessPasskeyGuard(opts: {
-  cdpUrl: string;
-  cdpPolicy?: SsrFPolicy;
-  engine?: BrowserEngineId;
-  signal?: AbortSignal;
-}): Promise<{ firstDocumentScript: string }> {
-  const ready = connectBrowser(opts.cdpUrl, opts.cdpPolicy, undefined, opts.engine).then(
-    ({ browser }) => guardHeadlessContexts(browser.contexts()),
-    (err: unknown) => {
-      // Raw CDP can still open the tab; later Playwright actions report the failure.
-      log.warn(
-        `Passkey guard skipped for a new tab: ${redactCdpErrorText(formatErrorMessage(err))}`,
-      );
-    },
-  );
-  await waitForPasskeyGuard(
-    ready,
-    (budgetMs) => {
-      log.warn(
-        `Passkey guard not ready after ${budgetMs} ms; the new tab gets it for its first page now and for later pages once the browser connection is ready.`,
-      );
-    },
-    opts.signal,
-  );
-  return { firstDocumentScript: HEADLESS_PASSKEY_GUARD_SOURCE };
 }
 
 /** Resolve a Playwright page by target id, reconnecting once on stale state. */
