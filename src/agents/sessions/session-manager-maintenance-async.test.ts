@@ -54,6 +54,7 @@ async function appendUser(manager: SessionManager, text: string): Promise<string
 
 it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", async (opaque) => {
   const shared = { text: "original" };
+  const buffer = new ArrayBuffer(3);
   const manager = SessionManager.fromEntries([
     { type: "session", version: 4, id: "snapshot", cwd: "/synthetic" },
     { type: "custom", id: "data", parentId: null, customType: "fixture", data: shared },
@@ -61,7 +62,7 @@ it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", asy
       type: "opaque",
       id: "opaque",
       shared,
-      ...(opaque ? { error: new Error("fixture", { cause: shared }) } : {}),
+      ...(opaque ? { buffer, bytes: new Uint8Array(buffer) } : {}),
     },
   ]);
   const rewrite = await manager.prepareTranscriptRewriteAsync();
@@ -77,10 +78,11 @@ it.each([false, true])("isolates rewrite payloads with opaque SDK data: %s", asy
   }
   expect(record.shared).toBe(entry.data);
   if (opaque) {
-    if (!(record.error instanceof Error)) {
-      throw new Error("Missing opaque error");
+    if (!(record.bytes instanceof Uint8Array)) {
+      throw new Error("Missing opaque bytes");
     }
-    expect(record.error.cause).toBe(entry.data);
+    expect(record.bytes.buffer).toBe(record.buffer);
+    expect(record.buffer).not.toBe(buffer);
   }
   entry.data.text = "prepared";
   expect(manager.getEntry("data")).toMatchObject({ data: { text: "original" } });

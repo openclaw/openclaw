@@ -21,8 +21,15 @@ await withOpenClawTestState({ label: "session-rewrite" }, async (state) => {
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   const manager = await SessionManager.openAsync(scope);
-  const append = (target: SessionManager) =>
-    target.appendMessageAsync({ role: "user", content: "synthetic rewrite", timestamp: 1 });
+  const append = async (target: SessionManager) => {
+    const id = await target.appendMessageAsync({
+      role: "user",
+      content: "synthetic rewrite",
+      timestamp: 1,
+    });
+    assert.ok(id, "Synthetic message must be appended");
+    return id;
+  };
   let source = await append(manager);
   const rewrite = async () => {
     const started = performance.now();
