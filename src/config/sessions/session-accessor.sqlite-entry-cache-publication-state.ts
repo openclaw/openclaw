@@ -261,13 +261,22 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
+  const sharingChanged = (publication: PendingSessionEntryPublication) => {
+    if (publication.sharingUnchanged.has(params.sessionKey)) {
+      return false;
+    }
+    const previous = read.facts?.entry;
+    const current = publication.entryPostimages?.get(params.sessionKey);
+    // Selected facts may agree on both sides of a pending write; membership still fences below.
+    return !(previous && current && params.matchesPendingEntry?.(previous, current));
+  };
   const pending = (membership: boolean, staged = read.pending) =>
     staged.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
         ((!publication.superseded.has(params.sessionKey) &&
-          (!membership || !publication.sharingUnchanged.has(params.sessionKey))) ||
+          (!membership || sharingChanged(publication))) ||
           (membership && publication.membershipInvalidated.has(params.sessionKey))),
     );
   // Generation readers compare only sessionId and lifecycleRevision, so a publication
