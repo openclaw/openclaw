@@ -28,11 +28,15 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
-Auth-file observers capture the Gateway's read-only scope and spawn broker when
-admitting a directory. Detached filesystem notifications reuse that scope's
+Gateway startup binds existing auth-file observers to its read-only scope and
+spawn broker, including observations retained across an in-process restart.
+New observers capture those resources when admitting a directory. File scans
+publish through the current binding, including scans spanning a restart.
+Detached filesystem notifications reuse that scope's
 serialized child; they do not launch a native process for each WAL change.
 Every refresh still re-admits the current database source and checks its authority.
-Gateway retirement stops the captured callbacks and joins the retained reader.
+Reader retirement stops change publications and joins the retained reader;
+the next Gateway generation rebinds retained observers before startup admission.
 
 Synchronous boot admission, migrations, Doctor/CLI one-shots, and lock primitives
 are the limited exceptions. Runtime access still using them is migration debt.

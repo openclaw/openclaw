@@ -6,10 +6,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  bindAuthProfileFileObservationReaders,
   readAuthProfileDatabaseIdentity,
   refreshAuthProfileFileState,
   registerAuthProfileFileChangeListener,
 } from "../agents/auth-profiles/file-state.js";
+import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -45,7 +47,7 @@ afterEach(() => {
 const skipBroker = process.platform === "win32";
 
 it.skipIf(skipBroker)(
-  "reuses the Gateway reader through detached WAL observation and auth source republication",
+  "reuses the Gateway reader through detached observations and retained-state restart",
   async () => {
     vi.spyOn(fs, "watch").mockImplementation(() => {
       throw new Error("synthetic unavailable watcher");
@@ -55,6 +57,9 @@ it.skipIf(skipBroker)(
     admitSqliteSchema(writer);
     const broker = createSpawnBrokerHost();
     const scope = createSqliteReadOnlyWorkerScope();
+    const restartedScope = createSqliteReadOnlyWorkerScope();
+    let publication: ReturnType<typeof watchAuthProfileNativeCommits> | undefined;
+    let pendingRefresh: Promise<void> | undefined;
     const observed: unknown[] = [];
     let refresh = () => read(source, "canonical");
     const unsubscribe = registerAuthProfileFileChangeListener(async ({ directory }) => {
@@ -87,15 +92,31 @@ it.skipIf(skipBroker)(
       ]);
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
+      publication = watchAuthProfileNativeCommits(source);
+      pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBe(0);
+      expect(observed).toHaveLength(3);
+      runWithSpawnBroker(broker, () => restartedScope.run(bindAuthProfileFileObservationReaders));
+      writer.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(store));
+      publication.dispose();
+      await pendingRefresh;
+      expect(observed).toHaveLength(4);
+      expect(observed[3]).toEqual({ status: "readable", raw: store });
+      expect(brokerSpawn).toHaveBeenCalledTimes(2);
+      expect(spawn).not.toHaveBeenCalled();
+      await restartedScope.close();
+      expect(brokerSpawn.mock.results[1]?.value.exitCode).toBe(0);
       clearAuthState(source);
       await runInDetachedAsyncContext(refreshAuthProfileFileState);
-      expect(observed).toHaveLength(3);
+      expect(observed).toHaveLength(4);
     } finally {
+      publication?.dispose();
+      await Promise.allSettled(pendingRefresh ? [pendingRefresh] : []);
       unsubscribe();
       await closeOpenClawStateDatabaseAsync();
       await scope.close();
+      await restartedScope.close();
       await broker.close();
       writer.close();
     }

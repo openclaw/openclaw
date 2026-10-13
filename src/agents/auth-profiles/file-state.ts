@@ -36,7 +36,7 @@ type DirectoryState = {
   presence: Map<string, boolean>;
   sourceVersions: Map<string, string | undefined>;
   observation: { close(): void };
-  refreshSources: () => Promise<void>;
+  publishChange: (change: FileChange) => Promise<void>;
   refresh?: Promise<void>;
   dirty: boolean;
 };
@@ -177,19 +177,13 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
           }
         }
         if (state.identities.size || sourcesChanged) {
-          await Promise.all(
-            Array.from(listeners, (listener) =>
-              Promise.resolve(
-                listener({
-                  directory,
-                  identityChanged,
-                  sourcesChanged,
-                  contentsChanged,
-                  createdPaths,
-                }),
-              ),
-            ),
-          );
+          await state.publishChange({
+            directory,
+            identityChanged,
+            sourcesChanged,
+            contentsChanged,
+            createdPaths,
+          });
         }
       }
     } finally {
@@ -199,30 +193,43 @@ function refreshDirectory(directory: string, state: DirectoryState): Promise<voi
   return state.refresh;
 }
 
+function captureFileChangePublisher(): DirectoryState["publishChange"] {
+  const broker = getSpawnBroker();
+  const runWithReaders = captureSqliteReadOnlyWorkerScope();
+  const signal = readOnlyWorkerScope.getStore()?.controller.signal;
+  // Restore only host readers at publication, after physical file facts settle.
+  // A scan spanning a restart uses the current publisher, never old request authority.
+  return async (change) => {
+    if (signal?.aborted) {
+      return;
+    }
+    await runWithSpawnBroker(broker, () =>
+      runWithReaders(() =>
+        Promise.all(Array.from(listeners, (listener) => Promise.resolve(listener(change)))),
+      ),
+    );
+  };
+}
+
+/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+export function bindAuthProfileFileObservationReaders(): void {
+  for (const state of directories.values()) {
+    state.publishChange = captureFileChangePublisher();
+  }
+}
+
 function directoryState(directory: string): DirectoryState {
   const existing = directories.get(directory);
   if (existing) {
     return existing;
   }
   const identities: DirectoryState["identities"] = new Map();
-  const broker = getSpawnBroker();
-  const runWithReaders = captureSqliteReadOnlyWorkerScope();
-  const signal = readOnlyWorkerScope.getStore()?.controller.signal;
   const state: DirectoryState = {
     identities,
     presence: new Map(),
     sourceVersions: new Map(),
     dirty: false,
-    // Shared watchers are detached. Carry only the host readers through observation
-    // and any credential refresh it publishes, never the registering request's authority.
-    async refreshSources() {
-      if (signal?.aborted || directories.get(directory) !== state) {
-        return;
-      }
-      await runWithSpawnBroker(broker, () =>
-        runWithReaders(() => refreshDirectory(directory, state)),
-      );
-    },
+    publishChange: captureFileChangePublisher(),
     observation: observeOwnedDirectory(directory, (filename) => {
       if (
         filename === undefined ||
@@ -233,7 +240,7 @@ function directoryState(directory: string): DirectoryState {
             filename === `${path.basename(databasePath)}-wal`,
         )
       ) {
-        void state.refreshSources();
+        void refreshDirectory(directory, state);
       }
     }),
   };
@@ -322,7 +329,9 @@ export function registerAuthProfileFileChangeListener(listener: FileChangeListen
 
 /** Explicit refresh joins observation without retiring unchanged file authority. */
 export async function refreshAuthProfileFileState(): Promise<void> {
-  await Promise.all([...directories.values()].map((state) => state.refreshSources()));
+  await Promise.all(
+    [...directories].map(([directory, state]) => refreshDirectory(directory, state)),
+  );
 }
 
 function closeAuthProfileFileState(): void {
