@@ -6,7 +6,7 @@ function grantRevision(value: object) {
   const bytes = JSON.stringify(value, (_key, entry) =>
     entry && typeof entry === "object" && !Array.isArray(entry)
       ? Object.fromEntries(
-          Object.entries(entry).sort(([left], [right]) => left.localeCompare(right)),
+          Object.entries(entry).toSorted(([left], [right]) => left.localeCompare(right)),
         )
       : entry,
   );
@@ -46,7 +46,12 @@ function fixture() {
       grant_definition_revision: grantRevision(grant),
     };
   };
-  const before = [
+  const before: [
+    ReturnType<typeof row>,
+    ReturnType<typeof row>,
+    ReturnType<typeof row>,
+    ReturnType<typeof row>,
+  ] = [
     row(heartbeat, 0, 1000),
     row(dreaming, 10, 9_000_000_000_000),
     { ...row({ ...heartbeat, id: "authored" }, 34, 1000), runtime_updated_at_ms: 1010 },
