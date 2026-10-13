@@ -27,6 +27,8 @@ export function ChatPullRequestChecks(props: {
   };
   const overlay = createOverlay(`chat-pr-checks-${createUniqueId()}`, undefined, {
     interactionElements: () => [details],
+    // Keyboard session switching preserves the retained disclosure's open intent.
+    dismissOutsideFocus: false,
     acquireOcclusion: acquireNativeOverlaySurface,
   });
   onCleanup(() => overlay.dispose());
