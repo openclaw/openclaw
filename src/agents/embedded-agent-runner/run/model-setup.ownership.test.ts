@@ -31,6 +31,8 @@ import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { modelCatalogRowToEntry } from "../../model-catalog-entry.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "../../prepared-model-runtime.capture.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.types.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../session-runtime-compat.js";
 import { resolveExtraParams } from "../extra-params.js";
@@ -158,6 +160,7 @@ async function createFixture(
       runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>,
       admission: ReturnType<typeof prepareSystemAgentRunAdmission>,
     ) => void | Promise<void>,
+    preparedModelRuntime: PreparedModelRuntimeSnapshot = generation.preparedModelRuntime,
   ) => {
     const actualParams = { ...runParams, ...overrides };
     const admission = prepareSystemAgentRunAdmission(
@@ -182,7 +185,7 @@ async function createFixture(
         markStartupStage: () => {},
         notifyExecutionPhase: () => {},
         fallbackConfigured: false,
-        preparedModelRuntime: generation.preparedModelRuntime,
+        preparedModelRuntime,
       });
       await use(runtime, admission);
     } finally {
@@ -394,6 +397,77 @@ describe("model chat and native model ownership", () => {
       });
     },
   );
+
+  it("retains admitted account routes when projecting native model capabilities", async () => {
+    const fixture = await createFixture();
+    const model = {
+      provider: "openai",
+      id: fixture.generation.modelId,
+      name: "Account-only model",
+    };
+    const source: PreparedModelRuntimeSnapshot = {
+      ...fixture.generation.preparedModelRuntime,
+      readFullModelCatalog: () => ({
+        entries: [{ ...model, nativeRuntime: "codex" }],
+        routeVariants: [
+          {
+            ...model,
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          },
+        ],
+      }),
+    };
+    const admitted = capturePreparedModelRuntimeCatalog(source, source);
+    // The orchestrator adds project facts without retaining the capture's object identity.
+    const projected = Object.freeze({ ...admitted, projectKey: null });
+    expect(projected.modelCatalog.entries).toEqual([{ ...model, nativeRuntime: "codex" }]);
+    expect(projected.modelCatalog.routeVariants).toEqual([]);
+    await fixture.state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:account-only": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-account-access",
+          refresh: "synthetic-account-refresh",
+          expires: Date.now() + 86_400_000,
+          accountId: "synthetic-account",
+        },
+      },
+    });
+    await withPreparedModelRuntimePluginGenerationScope(
+      {
+        remoteCatalog: null,
+        pluginMetadataSnapshot: fixture.generation.metadataSnapshot,
+        pluginRegistry: fixture.generation.pluginRegistry,
+        inlineProviderModels: [],
+        configuredCatalogEntries: [],
+      },
+      () =>
+        fixture.withRuntime(
+          { authProfileId: "openai:account-only", authProfileIdSource: "user" },
+          (runtime) => {
+            const snapshot = runtime.snapshot();
+            expect(runtime.nativeModelOwned).toBe(true);
+            expect(snapshot.agentHarness.id).toBe("codex");
+            expect(snapshot.activePreparedAuthPlan).toMatchObject({
+              forwardedAuthProfileId: "openai:account-only",
+              selectedAuthMode: "oauth",
+              modelRoute: {
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                authRequirement: "subscription",
+                runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+              },
+            });
+            expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+          },
+          projected,
+        ),
+      () => admitted,
+    );
+  });
 
   it("keeps model and plugin ownership across usage writes and subsequent turns", async () => {
     const fixture = await createFixture();

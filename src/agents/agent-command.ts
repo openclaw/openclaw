@@ -1,15 +1,13 @@
 import { addAbortListener } from "node:events";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import {
-  createSessionWorkStartChangedError,
-  resolveSessionWorkStartError,
-} from "../config/sessions/lifecycle.js";
+import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import {
   captureIncognitoSessionSource,
   withIncognitoSessionEntry,
 } from "../config/sessions/session-incognito-binding.js";
+import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -253,12 +251,9 @@ async function agentCommandInternal(
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
           throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
-        const archivedSessionError = resolveSessionWorkStartError(
-          sessionKey ?? sessionId,
-          currentEntry,
-        );
-        if (archivedSessionError) {
-          throw new Error(archivedSessionError);
+        const workStartError = resolveSessionWorkStartBlock(sessionKey ?? sessionId, currentEntry);
+        if (workStartError) {
+          throw workStartError;
         }
         operatorSession?.assertAuthorized(currentEntry);
         sessionEntry = currentEntry;

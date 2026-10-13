@@ -520,6 +520,11 @@ setup, preparation, dependency waits, and the final gate in workflow projections
 
 Oversized CLI and Blacksmith agent-support families use the existing file
 splitter, preserving complete inventories and their serial resource policy.
+Precisely selected, source-only CLI jobs use the 16-class when every serial group
+has at most two explicit files and retains its two-worker fallback. Apply this
+capacity choice after packing; keep the complete CLI family, mixed jobs, builds,
+memory floors, and explicit large-runner anchors at their planned capacity.
+RunsOn inherits the same hybrid choice for its retained Blacksmith CLI jobs.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan

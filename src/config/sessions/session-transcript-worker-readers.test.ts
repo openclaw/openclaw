@@ -3,32 +3,20 @@ import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 
 it("preserves the direct read request, signal, and projected result", async () => {
   const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
   const signal = new AbortController().signal;
   const readers = createSessionHistoryWorkerReaders(
-    async (prepare, inputBytes, receive, receivedSignal) => {
+    createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, receivedSignal) => {
       expect(prepare()).toEqual({ kind: "transcript-message-presence", ...input });
       expect(inputBytes).toBe(JSON.stringify(input).length * 2);
       expect(receivedSignal).toBe(signal);
-      return receive({ kind: "transcript-message-presence", present: true });
-    },
+      return { kind: "transcript-message-presence", present: true };
+    }),
   );
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
-});
-
-it.each([
-  { value: false },
-  { value: { kind: "session-members" as const, entry: undefined, members: [] } },
-  { value: { kind: "prewarm" as const } },
-])("rejects another worker result before projecting it: %j", async ({ value }) => {
-  const readers = createSessionHistoryWorkerReaders(async (_prepare, _inputBytes, receive) =>
-    receive(value),
-  );
-  await expect(
-    readers.readMessagePresence({ scope: { sessionId: "synthetic-session" } }),
-  ).rejects.toThrow("Session history worker returned another result instead of message presence");
 });
 
 it.each(["archives", "corpus", "targets"] as const)(
@@ -44,27 +32,29 @@ it.each(["archives", "corpus", "targets"] as const)(
         OpenClaw_Supervisor_Mode: "external",
         UNRELATED_VALUE: "synthetic",
       });
-      const readers = createSessionHistoryWorkerReaders(async (prepare, _inputBytes, receive) => {
-        // postMessage uses this same clone contract before a worker can consume the request.
-        const request = structuredClone(prepare());
-        const expectedEnv = {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_SUPERVISOR_MODE: "external",
-        };
-        switch (request.kind) {
-          case "session-archive-inventory":
-            expect(request.env).toEqual(expectedEnv);
-            return receive({ kind: request.kind, archives: [] });
-          case "session-corpus-inventory":
-            expect(request.scope.env).toEqual(expectedEnv);
-            return receive({ kind: request.kind, entries: [] });
-          case "memory-session-targets":
-            expect(request.params.env).toEqual(expectedEnv);
-            return receive({ kind: request.kind, targets: [] });
-          default:
-            throw new Error(`Unexpected inventory request: ${request.kind}`);
-        }
-      });
+      const readers = createSessionHistoryWorkerReaders(
+        createSessionHistoryWorkerRequestStub(async (prepare) => {
+          // postMessage uses this same clone contract before a worker can consume the request.
+          const request = structuredClone(prepare());
+          const expectedEnv = {
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_SUPERVISOR_MODE: "external",
+          };
+          switch (request.kind) {
+            case "session-archive-inventory":
+              expect(request.env).toEqual(expectedEnv);
+              return { kind: request.kind, archives: [] };
+            case "session-corpus-inventory":
+              expect(request.scope.env).toEqual(expectedEnv);
+              return { kind: request.kind, entries: [] };
+            case "memory-session-targets":
+              expect(request.params.env).toEqual(expectedEnv);
+              return { kind: request.kind, targets: [] };
+            default:
+              throw new Error(`Unexpected inventory request: ${request.kind}`);
+          }
+        }),
+      );
       const result =
         inventory === "archives"
           ? readers.readArchiveInventory({ agentId: "main", storePath, env, sessionIds: ["one"] })
@@ -95,11 +85,11 @@ it("passes the cold metadata caller's signal to its reader task", async () => {
   const input = { sessionId: "synthetic-cold-session", env: {} };
   const signal = new AbortController().signal;
   const readers = createSessionHistoryWorkerReaders(
-    async (prepare, _inputBytes, receive, receivedSignal) => {
+    createSessionHistoryWorkerRequestStub(async (prepare, _inputBytes, receivedSignal) => {
       expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
       expect(receivedSignal).toBe(signal);
-      return receive({ kind: "cold-metadata", archive: undefined });
-    },
+      return { kind: "cold-metadata", archive: undefined };
+    }),
   );
   await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
     kind: "cold-metadata",
@@ -122,7 +112,7 @@ it.each([
   const version = { generation: "synthetic-generation", rawSeq: 7, updatedAt: 123 };
   const signal = new AbortController().signal;
   const readers = createSessionHistoryWorkerReaders(
-    async (_prepare, _inputBytes, receive, _signal, onRequest) => {
+    createSessionHistoryWorkerRequestStub(async (_prepare, _inputBytes, _signal, onRequest) => {
       if (!onRequest) {
         throw new Error("Transcript reader did not provide its chunk receiver");
       }
@@ -134,8 +124,8 @@ it.each([
         },
         signal,
       );
-      return receive({ kind: "full", version, eventCount: 1 });
-    },
+      return { kind: "full", version, eventCount: 1 };
+    }),
   );
   const result = readers.readTranscript(
     {

@@ -151,6 +151,12 @@ export function registerNodeCli(program: Command) {
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
+    .addOption(
+      new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
+    )
+    .addOption(
+      new Option("--restore-service-cli <json>", "Restore a retained service CLI").hideHelp(),
+    )
     .option(
       "--auth-from-env",
       "Persist environment Gateway credentials instead of the paired device token",

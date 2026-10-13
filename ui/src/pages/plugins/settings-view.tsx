@@ -19,7 +19,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { renderArtTile } from "./consent-dialog.tsx";
+import { PluginArtTile } from "./consent-dialog.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
@@ -27,9 +27,8 @@ import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginDeclaredCapabilities,
+  renderPluginContentCapabilities,
   renderPluginMetadata,
-  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
@@ -189,11 +188,13 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     }
                   }}
                 >
-                  {renderArtTile(plugin().id, plugin().name, {
-                    iconUrl: props.iconUrls[plugin().id],
-                    onIconError: () => props.onIconError(plugin().id),
-                    loading: props.iconLoading?.(plugin().id),
-                  })}
+                  <PluginArtTile
+                    slug={plugin().id}
+                    name={plugin().name}
+                    iconUrl={props.iconUrls[plugin().id]}
+                    onIconError={() => props.onIconError(plugin().id)}
+                    loading={props.iconLoading?.(plugin().id)}
+                  />
                   <a
                     class="settings-row__text plugins-settings-row__link oc-settings-row-content"
                     href={props.pluginHref(plugin().id)}
@@ -520,16 +521,21 @@ function PluginOverview(props: DetailProps): JSX.Element {
         backHref={props.backHref}
         backLabel={props.backLabel}
         onBack={props.onBack}
-        icon={renderArtTile(plugin().id, plugin().name, {
-          iconUrl: props.iconUrls[plugin().id] ?? catalogIcon().src,
-          onIconError: () => props.onIconError(plugin().id),
-          authorIconUrl: authorIcon().src,
-          loading:
-            props.iconLoading?.(plugin().id) ||
-            props.catalogLoading ||
-            catalogIcon().loading ||
-            authorIcon().loading,
-        })}
+        icon={
+          <PluginArtTile
+            slug={plugin().id}
+            name={plugin().name}
+            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+            onIconError={() => props.onIconError(plugin().id)}
+            authorIconUrl={authorIcon().src}
+            loading={
+              props.iconLoading?.(plugin().id) ||
+              props.catalogLoading ||
+              catalogIcon().loading ||
+              authorIcon().loading
+            }
+          />
+        }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
         titleAction={
           <Show
@@ -610,17 +616,12 @@ function PluginOverview(props: DetailProps): JSX.Element {
                 <Icon name="key" />
               ),
             )}
-            {renderPluginDeclaredCapabilities(
-              props.inspection?.overview?.capabilities?.contracts,
-              props.inspection?.overview?.capabilities?.ui,
-            )}
-            {props.skillsSection ??
-              renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills(), () => (
-                <Icon name="bookOpenText" />
-              ))}
-            {renderPluginCapabilitySection(
-              t("pluginsPage.detailTools"),
-              tools().map(({ name, description, parameters }) => ({
+            {renderPluginContentCapabilities({
+              contracts: props.inspection?.overview?.capabilities?.contracts,
+              uiCapabilities: props.inspection?.overview?.capabilities?.ui,
+              skillsSection: props.skillsSection,
+              skills: skills(),
+              tools: tools().map(({ name, description, parameters }) => ({
                 name,
                 description,
                 onOpen:
@@ -628,14 +629,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
                     ? () => props.onOpenTool?.(name)
                     : undefined,
               })),
-              () => (
-                <Icon name="wrench" />
-              ),
-            )}
-            {renderPluginMcpServers(
-              components()?.mcpServers ?? catalog()?.detail.mcpServers ?? [],
-              catalog()?.detail.mcpServerDetails,
-            )}
+              mcpServers: components()?.mcpServers ?? catalog()?.detail.mcpServers ?? [],
+              mcpServerDetails: catalog()?.detail.mcpServerDetails,
+            })}
           </>
         }
         readme={

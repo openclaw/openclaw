@@ -375,7 +375,7 @@ describe("Tool Search dispatcher argument preparation", () => {
       );
     }
 
-    it("dispatches a double-wrapped tool_call through argument preparation", async () => {
+    it("dispatches a double-wrapped dispatch_action through argument preparation", async () => {
       const target = fakeTool("inspect_resource");
       const { catalogRef, config } = createRuntime([target]);
       const callTool = createToolSearchTools({ catalogRef, config }).find(
@@ -647,7 +647,7 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects invalid structured tool_call arguments without executing the target", async () => {
+  it("rejects invalid structured dispatch_action arguments without executing the target", async () => {
     const target = fakeTool(
       "strict_instruction",
       Type.Object({ instruction: Type.String() }, { additionalProperties: false }),

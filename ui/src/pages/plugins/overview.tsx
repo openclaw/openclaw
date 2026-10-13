@@ -227,7 +227,7 @@ export function renderPluginCapabilitySection(
   );
 }
 
-export function renderPluginMcpServers(
+function renderPluginMcpServers(
   names: readonly string[],
   details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
 ): JSX.Element {
@@ -293,7 +293,7 @@ const overviewContractFamilies = [
   "migrationProviders",
 ] as const;
 
-export function renderPluginDeclaredCapabilities(
+function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
   uiCapabilities?: readonly PluginUiCapability[],
 ): JSX.Element {
@@ -311,6 +311,30 @@ export function renderPluginDeclaredCapabilities(
       description: t(`pluginsPage.${key}.description`),
     })),
     () => <Icon name="layers" />,
+  );
+}
+
+export function renderPluginContentCapabilities(params: {
+  contracts: Readonly<Record<string, readonly string[]>> | undefined;
+  uiCapabilities?: readonly PluginUiCapability[];
+  skillsSection?: JSX.Element;
+  skills: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
+  mcpServers: readonly string[];
+  mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
+}): JSX.Element {
+  return (
+    <>
+      {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
+      {params.skillsSection ??
+        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
+          <Icon name="bookOpenText" />
+        ))}
+      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
+        <Icon name="wrench" />
+      ))}
+      {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails)}
+    </>
   );
 }
 

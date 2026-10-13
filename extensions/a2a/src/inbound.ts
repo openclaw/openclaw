@@ -118,9 +118,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
           if (info.kind !== "final" || !isReplyPayloadTerminalContent(payload)) {
             return;
           }
-          // Conversation queues, rather than callback ownership, preserve FIFO
-          // correlation across concurrent sends and canceled-task tombstones.
-          params.store.completeNext(params.contextId, payload.text, params.peerName);
+          params.store.complete(params.taskId, payload.text);
         },
         onError: (error) => {
           params.store.fail(params.taskId, error);
@@ -138,6 +136,8 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       );
     } else if (!dispatch.dispatched) {
       params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
+    } else if (!dispatch.dispatchResult.deferredToActiveRun) {
+      params.store.complete(params.taskId, undefined);
     }
   } catch (error) {
     params.store.fail(params.taskId, error);

@@ -22,7 +22,7 @@ import { captureSessionEntryMetadataRead } from "../config/sessions/session-entr
 import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { prepareGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -36,6 +36,7 @@ import {
   rejectGitHubPublicationSelection,
   type GitHubPublicationPreparation,
 } from "./github-publication-failure.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
@@ -525,7 +526,7 @@ export function sameGitHubPublicationWorkspace(
         current.worktree.branch === first.worktree.branch;
 }
 
-function localGitHubPublicationSessionIdentity(row: {
+async function localGitHubPublicationSessionIdentity(row: {
   request_id: string;
   identity_source: string;
   session_id: string;
@@ -535,10 +536,27 @@ function localGitHubPublicationSessionIdentity(row: {
   repository_fingerprint: string;
   branch: string;
 }) {
-  const lifecycle = readGitHubPublicationSessionLifecycle({
+  const authority = await prepareGitHubPublicationSessionLifecycle({
     publicationKind: row.identity_source === "personal" ? "personal" : "shared",
     requestId: row.request_id,
+  }).catch((cause: unknown) => {
+    throw new GitHubPublicationRecoveryPendingError(
+      "GitHub publication lifecycle authority is unavailable; retry recovery.",
+      { cause },
+    );
   });
+  const readLifecycle = () => {
+    try {
+      return authority.readCurrent();
+    } catch (cause) {
+      // Pending writes deny effects without proving that the accepted request failed.
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication lifecycle authority is unavailable; retry recovery.",
+        { cause },
+      );
+    }
+  };
+  const lifecycle = readLifecycle();
   if (!lifecycle) {
     throw new GitHubPublicationSessionChangedError();
   }
@@ -547,6 +565,7 @@ function localGitHubPublicationSessionIdentity(row: {
     sessionKey: row.session_key,
     agentId: row.agent_id,
     lifecycleRevision: lifecycle.lifecycle_revision,
+    assertLifecycleCurrent: readLifecycle,
     expected: {
       worktreeId: row.worktree_id,
       repositoryFingerprint: row.repository_fingerprint,
@@ -558,16 +577,12 @@ function localGitHubPublicationSessionIdentity(row: {
 export async function readLocalGitHubPublicationWorktreeOwner(
   row: Parameters<typeof localGitHubPublicationSessionIdentity>[0],
 ) {
-  const identity = localGitHubPublicationSessionIdentity(row);
+  const identity = await localGitHubPublicationSessionIdentity(row);
   const owner = await readGitHubPublicationWorktreeOwner(identity);
   return {
     ...owner,
     assertCurrent: () => {
-      if (
-        localGitHubPublicationSessionIdentity(row).lifecycleRevision !== identity.lifecycleRevision
-      ) {
-        throw new GitHubPublicationSessionChangedError();
-      }
+      identity.assertLifecycleCurrent();
       return owner.assertCurrent();
     },
   };

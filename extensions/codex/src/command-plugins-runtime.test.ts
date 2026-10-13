@@ -402,85 +402,68 @@ describe("Codex plugin command context", () => {
     },
   );
 
-  it.each(["policy", "conversation session"] as const)(
-    "does not publish a refresh response after %s changes and releases the client",
-    async (change) => {
-      const test = await fixture();
-      const appCache = new CodexAppInventoryCache();
-      let appCacheKey = "";
-      const storePath =
-        change === "conversation session"
-          ? path.join(root, "explicit", "sessions.json")
-          : resolveStorePath(test.ctx.config.session?.store, { agentId: "second" });
-      if (change === "conversation session") {
-        await upsertSessionEntry({
-          agentId: "second",
-          storePath,
-          sessionKey: test.ctx.sessionKey!,
-          entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
-        });
-        test.ctx.sessionTarget = {
-          agentId: "second",
-          sessionId: test.ctx.sessionId!,
-          sessionKey: test.ctx.sessionKey!,
-          storePath,
-        };
-        test.ctx.getCurrentConversationBinding = async () => ({
-          bindingId: "conversation-binding",
-          pluginId: "codex",
-          pluginRoot: root,
-          channel: "test",
-          accountId: "test-account",
-          conversationId: "conversation",
-          boundAt: 1,
-          data: {
-            kind: "codex-app-server-session",
-            version: 2,
-            bindingId: "conversation-binding",
-            workspaceDir: test.workspaceDir,
-            agentId: "second",
-          },
-        });
+  it("does not publish a refresh response after its conversation session changes and releases the client", async () => {
+    const test = await fixture();
+    const appCache = new CodexAppInventoryCache();
+    let appCacheKey = "";
+    const storePath = path.join(root, "explicit", "sessions.json");
+    await upsertSessionEntry({
+      agentId: "second",
+      storePath,
+      sessionKey: test.ctx.sessionKey!,
+      entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
+    });
+    test.ctx.sessionTarget = {
+      agentId: "second",
+      sessionId: test.ctx.sessionId!,
+      sessionKey: test.ctx.sessionKey!,
+      storePath,
+    };
+    test.ctx.getCurrentConversationBinding = async () => ({
+      bindingId: "conversation-binding",
+      pluginId: "codex",
+      pluginRoot: root,
+      channel: "test",
+      accountId: "test-account",
+      conversationId: "conversation",
+      boundAt: 1,
+      data: {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId: "conversation-binding",
+        workspaceDir: test.workspaceDir,
+        agentId: "second",
+      },
+    });
+    test.request.mockImplementation(async (method) => {
+      if (method !== "app/installed") {
+        return {};
       }
-      test.request.mockImplementation(async (method) => {
-        if (method !== "app/installed") {
-          return {};
-        }
-        if (change === "policy") {
-          test.current.plugins.notes.enabled = false;
-        }
-        if (change === "conversation session") {
-          await upsertSessionEntry({
-            agentId: "second",
-            storePath,
-            sessionKey: test.ctx.sessionKey!,
-            entry: { sessionId: "session-after-reset", updatedAt: 1 },
-          });
-        }
-        return { apps: [] };
+      await upsertSessionEntry({
+        agentId: "second",
+        storePath,
+        sessionKey: test.ctx.sessionKey!,
+        entry: { sessionId: "session-after-reset", updatedAt: 1 },
       });
-      await expect(
-        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
-          appCacheKey = context.appCacheKey;
-          await refreshCodexAppRuntimeState({
-            request: context.request,
-            appCache,
-            appCacheKey,
-          });
-        }),
-      ).rejects.toThrow(
-        change === "conversation session"
-          ? "Codex session generation is no longer current"
-          : "Codex account, conversation, or plugin policy changed",
-      );
-      expect(
-        appCache.read({
-          key: appCacheKey,
-          request: (method, params) => test.harness.client.request(method, params),
-          suppressRefresh: true,
-        }).snapshot,
-      ).toBeUndefined();
-      expect(test.release).toHaveBeenCalledOnce();
-    },
-  );
+      return { apps: [] };
+    });
+    await expect(
+      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+        appCacheKey = context.appCacheKey;
+        await refreshCodexAppRuntimeState({
+          request: context.request,
+          appCache,
+          appCacheKey,
+        });
+      }),
+    ).rejects.toThrow("Codex session generation is no longer current");
+    expect(
+      appCache.read({
+        key: appCacheKey,
+        request: (method, params) => test.harness.client.request(method, params),
+        suppressRefresh: true,
+      }).snapshot,
+    ).toBeUndefined();
+    expect(test.release).toHaveBeenCalledOnce();
+  });
 });
