@@ -1,10 +1,31 @@
+import { MessagePort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   readProfileAuthority,
   type ProfileAuthorityDescriptor,
 } from "../state/user-profile-authority.js";
-import type { SqliteProfileAdmissionResult } from "./sqlite-writer-admission-contract.js";
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
+import type {
+  SqliteBrokerAdmissionRequest,
+  SqliteWriterAdmissionResult,
+} from "./sqlite-writer-admission-contract.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
+
+function isSharedCell(value: unknown): value is Int32Array<SharedArrayBuffer> {
+  return (
+    value instanceof Int32Array && value.buffer instanceof SharedArrayBuffer && value.length === 1
+  );
+}
+
+function isBrokerRequest(value: unknown): value is SqliteBrokerAdmissionRequest {
+  return (
+    isRecord(value) &&
+    isSharedCell(value.decision) &&
+    isRecord(value.custody) &&
+    isSharedCell(value.custody.slot) &&
+    isSharedCell(value.custody.request)
+  );
+}
 
 function isProfileAuthority(value: unknown): value is ProfileAuthorityDescriptor {
   return (
@@ -26,7 +47,25 @@ function isProfileAuthority(value: unknown): value is ProfileAuthorityDescriptor
   );
 }
 
-serveWorkerTasks<SqliteProfileAdmissionResult>((input) => {
+serveWorkerTasks<SqliteWriterAdmissionResult>((input) => {
+  if (isRecord(input) && input.kind === "connect" && input.port instanceof MessagePort) {
+    if (!isRecord(workerData) || !isSharedCell(workerData.admissionLifetime)) {
+      throw new Error("SQLite admission service requires its owner lifetime");
+    }
+    const lifetime = workerData.admissionLifetime;
+    const port = input.port;
+    port.on("message", (request: unknown) => {
+      if (!isBrokerRequest(request)) {
+        port.close();
+        return;
+      }
+      const current =
+        Atomics.load(lifetime, 0) === 1 && readSqliteWorkerRequestCustody(request.custody);
+      Atomics.compareExchange(request.decision, 0, 0, current ? 1 : 2);
+      Atomics.notify(request.decision, 0);
+    });
+    return { kind: "connected", lifetime };
+  }
   if (
     !isRecord(input) ||
     (input.kind !== "assert-bound-revision" && input.kind !== "read-current-settled-facts") ||

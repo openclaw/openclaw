@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -20,10 +19,7 @@ import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
-import {
-  loadGatewaySessionEntryReadOnlyInWorker,
-  resolveSessionStoreKey,
-} from "../session-utils.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
@@ -157,23 +153,13 @@ export async function handleChatAbortRequestWithLifecycle(
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
 
-  const prepareAbortSession = async (): Promise<
-    Result<Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>, unknown>
-  > => {
-    try {
-      return {
-        ok: true,
-        value: await loadGatewaySessionEntryReadOnlyInWorker({
-          excludeInternalEffects: true,
-          cfg: abortCfg,
-          key: canonicalAbortSessionKey,
-          agentId: abortAgentId,
-        }),
-      };
-    } catch (error) {
-      return { ok: false, error };
-    }
-  };
+  const prepareAbortSession = () =>
+    prepareChatAbortSessionSnapshot({
+      excludeInternalEffects: true,
+      cfg: abortCfg,
+      key: canonicalAbortSessionKey,
+      agentId: abortAgentId,
+    });
   if (!runId) {
     const res = await abortChatRunsForSessionKeyWithPartials(
       {
@@ -662,6 +648,10 @@ export async function handleChatAbortRequestWithLifecycle(
                 stopReason: "rpc",
               }).aborted;
               return aborted;
+            }
+            // Completion can retire the captured run while metadata is being prepared.
+            if (!context.chatAbortControllers.has(runId)) {
+              return false;
             }
             throw new Error("Run changed before cancellation; retry Stop.");
           }

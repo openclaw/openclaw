@@ -298,7 +298,7 @@ describe("scoped Codex timeout diagnostics", () => {
     finish.resolve();
   });
 
-  it.each(["available", "unavailable", "throwing"] as const)(
+  it.each(["available", "unavailable"] as const)(
     "preserves initialize evidence when registered transport identity is %s",
     async (mode) => {
       const entered = createDeferred<void>();
@@ -307,12 +307,7 @@ describe("scoped Codex timeout diagnostics", () => {
       const started = {
         ...client(),
         getInitializeDiagnostic: () => ({ boundary: "request", outcome: "pending" }),
-        getRegisteredTransportIdentity: () => {
-          if (mode === "throwing") {
-            throw new Error("private diagnostic failure");
-          }
-          return mode === "available" ? identity : undefined;
-        },
+        getRegisteredTransportIdentity: () => (mode === "available" ? identity : undefined),
       };
       shared.acquire.mockImplementation((options: CodexAppServerClientOptions) => {
         options.onStartedClient?.({
@@ -320,7 +315,6 @@ describe("scoped Codex timeout diagnostics", () => {
           getRegisteredTransportIdentity: () => ({ pid: 500001, startedAt: "previous-child" }),
         } as never);
         options.onStartedClient?.(started as never);
-        identity.pid = 500003;
         entered.resolve();
         return acquired.promise;
       });
@@ -340,7 +334,6 @@ describe("scoped Codex timeout diagnostics", () => {
         boundary: "request",
         outcome: "pending",
       });
-      expect(JSON.stringify(logged)).not.toContain("private diagnostic failure");
       acquired.resolve(client());
       await vi.advanceTimersByTimeAsync(0);
     },

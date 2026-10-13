@@ -142,7 +142,7 @@ export function hasBinary(bin: string): boolean {
   return false;
 }
 
-/** Binary facts belong to one preparation; missing tools are probed again on the next build. */
+/** Binary facts belong to one preparation; probe installations and removals again next time. */
 export async function prepareBinaryAvailability(
   bins: Iterable<string>,
   assertCurrent?: () => void,
@@ -157,10 +157,6 @@ export async function prepareBinaryAvailability(
     (search.isWindows ? process.env.PATHEXT : undefined) === search.pathExt &&
     process.cwd() === cwd;
   const probe = async (bin: string) => {
-    if (search.cache.hits.has(bin)) {
-      available.add(bin);
-      return;
-    }
     for (const candidate of binaryCandidates(search, bin)) {
       if (failure || !isCurrent()) {
         return;
@@ -181,10 +177,6 @@ export async function prepareBinaryAvailability(
       assertCurrent?.();
       if (isCurrent()) {
         available.add(bin);
-        // A concurrent lookup may have replaced the shared PATH cache while this awaited.
-        if (binaryCache === search.cache) {
-          search.cache.hits.add(bin);
-        }
       }
       return;
     }

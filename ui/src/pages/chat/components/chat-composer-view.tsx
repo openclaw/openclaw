@@ -8,7 +8,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
@@ -18,8 +17,7 @@ import {
   renderAttachmentReadStatus,
 } from "./chat-attachments.ts";
 import { ContextNotice } from "./chat-composer-context.tsx";
-import { hasComposerContent } from "./chat-composer-controls.ts";
-import type { ChatRunControlsProps } from "./chat-composer-controls.tsx";
+import { hasComposerContent, solidTemplate } from "./chat-composer-controls.ts";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
@@ -27,13 +25,12 @@ import {
 } from "./chat-composer-controls.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
-import { GoalComposerMode, type GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { createChatComposerContext } from "./chat-composer-frame.ts";
+import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
 import { LitContent } from "./chat-composer-interop.tsx";
-import { HumanMentionMenuView, type HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
-import type { resolveComposerMenus } from "./chat-composer-menus.ts";
+import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import { renderChatQueue } from "./chat-composer-queue.tsx";
 import {
   ComposerQueue,
   ComposerInputScope,
@@ -41,11 +38,11 @@ import {
   ComposerGoal,
 } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
-import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import { resetSkillMenuState, SkillMenu } from "./chat-composer-skill-menu.tsx";
+import { SlashMenu, resetSlashMenuState } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPermissionPicker } from "./chat-permission-picker.ts";
 import {
@@ -53,54 +50,12 @@ import {
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
-import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 
-type ChatComposerViewContext = {
-  props: ChatComposerProps;
-  state: ChatComposerState;
-  attachmentReadRevision: number | undefined;
-  canCompose: boolean;
-  showAbortableUi: boolean;
-  visibleDraft: string;
-  runStatusAnnouncement: string;
-  requestUpdate: () => void;
-  sendShortcut: "enter" | "modifier-enter";
-  questionPanelProps: ReturnType<typeof createGatewayQuestionPanelProps> | null;
-  showComposer: boolean;
-  handleKeyDown: (event: KeyboardEvent) => void;
-  handleBeforeInput: (event: InputEvent) => void;
-  handleInput: (event: InputEvent) => void;
-  handleSelect: (event: Event) => void;
-  draftKey: string;
-  handleCompositionEnd: (event: CompositionEvent) => void;
-  handleBlur: (event: FocusEvent) => void;
-  dictation: ComposerDictationController | undefined;
-  runControlsProps: ChatRunControlsProps;
-  menus: ReturnType<typeof resolveComposerMenus>;
-  mentionMenuHost: HumanMentionMenuHost;
-  mentionError: string | null;
-  skillMenuHost: SkillMenuHost;
-  slashMenuHost: SlashMenuHost;
-  goalComposer: GoalComposerController;
-};
+type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
 export function renderChatComposerQueue(props: ChatComposerProps, showAbortableUi: boolean) {
-  const canAct = props.connected && props.canSend && !props.submitDisabledReason;
-  return renderChatQueue({
-    queue: props.queue,
-    displayQueue: props.displayQueue,
-    offline: props.offline,
-    canAbort: showAbortableUi,
-    canRemoveServerQueued: canAct,
-    onQueueRetry: canAct ? props.onQueueRetry : undefined,
-    onQueueSteer: canAct ? props.onQueueSteer : undefined,
-    // Reordering is local bookkeeping, so it stays available while offline —
-    // exactly when a queue is long enough to need it.
-    onQueueMove: props.onQueueMove,
-    queuedEdit: props.queuedEdit,
-    onQueueRemove: props.onQueueRemove,
-  });
+  return solidTemplate(ComposerQueue, { composer: props, showAbortableUi });
 }
 
 export function renderChatComposerView(context: ChatComposerViewContext) {
@@ -147,26 +102,22 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             role="status"
           >
             {banner().icon ? (
-              <>
-                <span
-                  class={`agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${banner().icon}`}
-                  aria-hidden="true"
-                >
-                  {banner().icon === "archive" ? (
-                    <Icon name="archive" />
-                  ) : banner().icon === "eye" ? (
-                    <Icon name="eye" />
-                  ) : (
-                    <Icon name="alertTriangle" />
-                  )}
-                </span>
-              </>
+              <span
+                class={`agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${banner().icon}`}
+                aria-hidden="true"
+              >
+                <Icon
+                  name={
+                    ({ archive: "archive", eye: "eye", warning: "alertTriangle" } as const)[
+                      banner().icon!
+                    ]
+                  }
+                />
+              </span>
             ) : undefined}
             <div class="callout__content">
               {banner().title ? (
-                <>
-                  <div class="agent-chat__disabled-banner-title">{banner().title}</div>
-                </>
+                <div class="agent-chat__disabled-banner-title">{banner().title}</div>
               ) : undefined}
               <div class="agent-chat__disabled-banner-detail">{banner().text}</div>
             </div>

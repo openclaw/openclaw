@@ -85,7 +85,7 @@ function authorityStore(admission: OpenClawStateDatabaseReadAdmission): ProfileA
     store = undefined;
   }
   if (!store) {
-    const lifetime = admission.captureIntegrity?.();
+    const lifetime = admission.captureIntegrity?.()?.lifetime;
     if (!lifetime) {
       throw new Error("Profile authority requires canonical admission lifetime");
     }
