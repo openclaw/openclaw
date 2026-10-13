@@ -25,7 +25,6 @@ export function maybeApplyTtsToPayload(params: Parameters<typeof maybeApplyTtsTo
 
 export {
   getLastTtsAttempt,
-  getResolvedSpeechProviderConfig,
   getTtsMaxLength,
   getTtsPersona,
   getTtsProvider,

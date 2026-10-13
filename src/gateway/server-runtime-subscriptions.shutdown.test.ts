@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -14,6 +13,12 @@ import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.j
 import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as sessionObserverModel from "./session-observer-model.js";
 
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+// mock-isolation: Subscription and transcript readers share the fixture config without live file I/O.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfigState.value,
+  getRuntimeConfigSnapshot: () => runtimeConfigState.value,
+}));
 vi.mock("../audit/audit-recorder.js", () => ({
   createAuditEventRecorder: () => ({
     record: vi.fn(),
@@ -63,7 +68,7 @@ it.for(["before startup", "before inherited connection drain"] as const)(
     );
     let draining: Promise<void> | undefined;
     try {
-      setRuntimeConfigSnapshot({ agents: { defaults: { utilityModel: "test/utility" } } });
+      runtimeConfigState.value = { agents: { defaults: { utilityModel: "test/utility" } } };
       const entry = await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
         updatedAt: 1,
