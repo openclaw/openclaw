@@ -124,7 +124,7 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     });
     releaseFirst.resolve();
     await withinTest(settled.promise, signal);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(state.execute).toHaveBeenCalledTimes(2);

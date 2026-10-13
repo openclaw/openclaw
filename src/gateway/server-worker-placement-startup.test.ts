@@ -47,6 +47,12 @@ function placementStoreDefaults(
     workspaceResultInstanceId: () => "gateway-test",
     getAsync: async (sessionId: string) =>
       readPlacements().find((placement) => placement.sessionId === sessionId),
+    getManyAsync: async (sessionIds: readonly string[]) =>
+      new Map(
+        readPlacements()
+          .filter((placement) => sessionIds.includes(placement.sessionId))
+          .map((placement) => [placement.sessionId, placement]),
+      ),
     listAsync: async () => readPlacements(),
     retireSessionPlacementAsync: vi.fn(async () => {}),
     pruneOrphanedWorkspaceReconciliations: async () => [],

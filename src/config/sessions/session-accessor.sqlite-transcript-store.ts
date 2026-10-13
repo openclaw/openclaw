@@ -541,7 +541,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     expectedEventJson: string;
     seq: number;
   }[],
-  options: { legacyTextStorage?: boolean } = {},
+  options: { legacyTextStorage?: boolean; projectionCurrent?: boolean } = {},
 ): string | undefined {
   if (rows.length === 0) {
     return undefined;
@@ -557,7 +557,8 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     };
   });
   const projectionUnchanged =
-    !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId) &&
+    (options.projectionCurrent ||
+      !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId)) &&
     rewrites.every((row) =>
       transcriptRewritePreservesProjection(row.expectedEventJson, row.eventJson),
     );

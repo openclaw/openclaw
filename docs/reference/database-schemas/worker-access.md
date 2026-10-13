@@ -131,6 +131,13 @@ identity, and open admission still rejects replacements that collide with a live
 owner. Creation and schema-maintenance requests keep their target checks at the
 actual effect.
 
+Direct session readers retain an already-selected canonical target for the read.
+A creator borrower stops checking its original alias after
+the worker publishes the admitted file identity. Retargeting an alias does not
+redirect or invalidate those retained operations; a fresh lookup resolves the
+new target. Worker opens still check physical identity. Target-discovery checks
+shared with cross-store effects and source checks used for authorization remain.
+
 Retained task workers request admission facts through their existing relay when
 needed. Task messages must not copy the global admission snapshot. Committed
 session deletion retires its exact receipt scopes, including windows removed by
@@ -440,6 +447,18 @@ updates those records in its existing transaction and publishes them on commit;
 rollback retains the previous facts. Cold, evicted, or invalidated actors use the
 canonical participant read. Participant updates remain independent of metadata CAS.
 This changes no schema, retention, stored format, or update behavior.
+
+Collaboration writes reuse the captured agent executor without opening a Gateway
+SQLite handle. Their commit receipts install membership, owner, category, and
+participant facts through the same retained-fact owner as native writers, then
+release pending publication before notifying row and lifecycle observers. Live
+sharing authority is still checked by the worker's transaction and commit admission.
+
+Entry-only current-source checks prepare their selected fields in the read worker
+and retain them with the existing entry-publication owner. Native and worker writes
+invalidate changed predicates before the next effect check, so those checks need no
+SQLite read on the Gateway. Conversation-bound checks still read the authoritative
+binding until every binding writer publishes its complete derived postimage.
 
 Reply-initialization cohorts reuse those entry facts only when the selected entry
 and its parent are both covered. Cold-archive absence requires a complete actor
@@ -1711,6 +1730,13 @@ preserves the stored preimage; conservative receipt invalidation can require a
 reload. Missing residency, replacement lifecycles, and unknown writes still
 require hydration. Oversized optional actor postimages are
 shed with full-entry enrichment under the existing publication limit.
+Message rewrite preparation and commit also consume the current resident actor's
+hot, reconciled anchor and generation facts. Commit acquires those facts inside
+its writer transaction; prepare-time facts never authorize a later rewrite.
+Both stages still read the exact stored payload bytes, and the conditional update
+rejects concurrent edits. Missing residency uses the existing worker readers.
+Admission- and projection-preserving rewrites publish through the same actor owner;
+resets, cold archives, and incompatible writes invalidate its retained facts.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not
@@ -3275,8 +3301,9 @@ authority without rereading the same database. The existing native receipt publi
 entry facts before releasing FIFO custody, and close joins accepted persistence.
 Receipt insertion checks capacity in the same SQL statement; rejection rolls back
 the Goal and turn without evicting a still-valid retry receipt.
-Incognito Goals use the memory actor. Maintenance and opaque or cross-store
-SDK guards retain native atomicity for durable storage.
+Incognito Goals use the memory actor. All durable management calls use the writer;
+opaque SDK lifetime guards run through its existing host grants rather than a native
+fallback. Prepared storage predicates must belong to the selected agent store.
 Receipt validity, retry behavior, schemas, retention, and update behavior are unchanged.
 
 Durable Board writes prepare exact session existence in the session reader and carry

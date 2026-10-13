@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isMainThread } from "node:worker_threads";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
@@ -10,21 +9,9 @@ import {
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { SESSION_GOAL_OPERATIONS_TABLE } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
-import {
-  ensureSessionGoalOperationsSchema,
-  SESSION_GOAL_OPERATIONS_TABLE,
-} from "../../state/openclaw-agent-goal-operations-schema.js";
-import {
-  applySessionGoalOperation,
   assertSessionGoalOperationTime,
   createSessionGoalOperationResult,
   MAX_SESSION_RECEIPTS,
@@ -34,14 +21,13 @@ import {
 import { SessionGoalOperationError } from "./goals-operations.types.js";
 import type {
   SessionGoalManagementInput,
-  SessionGoalManagementCommit,
   SessionGoalOperation,
   SessionGoalOperationLookup,
   SessionGoalOperationResult,
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   captureLifecycleDatabaseScope,
   getSessionKysely,
@@ -58,7 +44,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "./session-source-authority.js";
-import { mergeSessionEntry, type SessionEntry, type SessionGoal } from "./types.js";
+import type { SessionEntry, SessionGoal } from "./types.js";
 
 export type { SessionGoalOperation, SessionGoalOperationResult } from "./goals-operations.types.js";
 
@@ -280,25 +266,7 @@ export async function mutateSessionGoal(
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
-      const native = async (assertCaptured?: () => void) => {
-        ensureSessionGoalOperationsSchema(openOpenClawAgentDatabase(databaseOptions).db);
-        const { previous: _previous, ...result } = runOpenClawAgentWriteTransaction(
-          (database) => {
-            assertCaptured?.();
-            options.assertCurrent?.();
-            return mutateSessionGoalInDatabase(database, input);
-          },
-          databaseOptions,
-          { operationLabel: "session.goal.mutate" },
-        );
-        return result;
-      };
-      // The outer FIFO captures the physical store before waiting and retains preparation order.
-      // Worker-local calls and offline maintenance retain their owning transaction.
-      // Plain Gateway authority callbacks run at the worker's existing host grant.
-      if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
-        return native();
-      }
+      // The existing writer owns durable Goal changes and publishes them before FIFO release.
       const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
       const client = await import("./goals-management.js").catch(async (error: unknown) => {
         await execution.release();
@@ -313,49 +281,8 @@ export async function mutateSessionGoal(
           assertSources();
           assertSessionGoalOperationTime(input.operation, Date.now());
         }),
-        native,
       );
     },
     "session.goal.mutate",
   );
-}
-
-/** Receipt replay and the reducer share the current row and the caller's synchronous transaction. */
-export function mutateSessionGoalInDatabase(
-  database: OpenClawAgentDatabase,
-  input: SessionGoalManagementInput,
-): SessionGoalManagementCommit {
-  const fresh = readSessionEntryRow(database, input.sessionKey);
-  const replay = readSessionGoalOperationReceipt(
-    database.db,
-    input.sessionKey,
-    input.expectedSessionId,
-    input.operation,
-  );
-  if (replay && fresh?.entry.sessionId === input.expectedSessionId) {
-    return { result: replay, replayed: true };
-  }
-  if (!fresh || fresh.entry.sessionId !== input.expectedSessionId) {
-    throw new SessionGoalOperationError(
-      "session-rebound",
-      "Session changed; refresh before changing its Goal.",
-    );
-  }
-  const goal = applySessionGoalOperation(fresh.entry, input.operation, Date.now());
-  const sessionEntry = writeSessionEntry(
-    database,
-    input.sessionKey,
-    mergeSessionEntry(fresh.entry, { goal }),
-    {
-      canonicalPreviousEntry: fresh.entry,
-    },
-  );
-  const result = writeSessionGoalOperationReceipt(
-    database.db,
-    input.sessionKey,
-    input.expectedSessionId,
-    input.operation,
-    goal,
-  );
-  return { result, replayed: false, sessionEntry, previous: fresh.entry };
 }
