@@ -101,7 +101,10 @@ suite.define(() => {
         await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
         const externalGroup = page.locator(".chat-group.user", { hasText: followup });
         await captureUiProof(suite, page, "external-pending-input", "02-after.png");
-        await externalGroup.getByText("via CLI (Release helper)", { exact: true }).waitFor();
+        await externalGroup
+          .locator(".chat-group-footer")
+          .getByText("via CLI (Release helper)", { exact: true })
+          .waitFor();
         expect(
           await externalGroup
             .locator(".chat-sender-name, .chat-avatar, .chat-author-avatar")
