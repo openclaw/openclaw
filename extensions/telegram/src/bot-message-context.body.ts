@@ -197,9 +197,7 @@ export async function resolveTelegramInboundBody(params: {
     messageTextParts.entities,
   ).trim();
   const richText = resolveTelegramRichMessageText(msg);
-  // Dice stays out of this flag on purpose: its only consumer is the audio preflight
-  // below, and a Bot API message carries either `dice` or `voice`/`audio`, never both,
-  // so adding it here could not change any decision.
+  // Only text and locations participate in the audio transcription preflight.
   const hasUserText = Boolean(rawText || nonTextBody?.kind === "location");
   let rawBody = [rawText, nonTextBody?.text].filter(Boolean).join("\n").trim();
   if (!rawBody) {

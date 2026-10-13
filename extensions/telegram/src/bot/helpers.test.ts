@@ -30,8 +30,6 @@ describe("describeReplyTarget", () => {
   });
 
   it("describes a replied-to dice roll when the cache did not supply a body", () => {
-    // A dice roll has neither text nor media, so before it was normalized here the whole
-    // target resolved to null and a reply to the roll reached the agent without it.
     const result = describeReplyTarget(
       asMalformedTelegramMessage({
         message_id: 2,

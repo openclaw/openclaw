@@ -383,23 +383,21 @@ describe("Telegram admitted model input", () => {
     },
   );
 
-  it("delivers a dice-only update instead of dropping it as an empty body", async () => {
-    // A dice roll carries no text and no downloadable file. Before the fix it normalized to an
-    // empty body, so the DM was discarded exactly like the empty-DM case that stays silent below.
+  it.each([
+    { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
+    { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
+  ])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
     await receive(await createBot(false, true, config()), {
       ...textMessage("", false),
       text: undefined,
-      dice: { emoji: "\u{1F3B2}", value: 4 },
+      dice: { emoji, value },
     });
 
     expect(harness.replySpy).toHaveBeenCalledOnce();
-    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe("[Dice \u{1F3B2} = 4]");
+    expect(harness.replySpy.mock.calls[0]?.[0]?.BodyForAgent).toBe(body);
   });
 
   it("keeps a mention-skipped dice roll in ambient group history", async () => {
-    // Ambient ingest projects the skipped turn through its own history body, which is resolved
-    // separately from the agent body; dropping dice there leaves the room history with a blank
-    // entry nobody can read back.
     const received = vi.fn();
     registerInternalHook("message:received", received);
     const cfg = config({ requireMention: true, ingest: true });

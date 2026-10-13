@@ -177,9 +177,6 @@ describe("telegram message cache", () => {
   });
 
   it("keeps a cached dice roll readable as a reply target", async () => {
-    // The cache derives its own body rather than reusing the inbound one. Before dice was handled
-    // here, replying to a roll produced a cached node with an empty body, so the roll never
-    // reached the agent as reply context.
     const cache = createTelegramMessageCache();
     const roll = message(9100, "Ada", {
       from: sender(2, "Ada"),
