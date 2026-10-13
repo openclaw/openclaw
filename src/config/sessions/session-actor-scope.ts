@@ -37,7 +37,14 @@ export async function runSessionActorCommand<Value>(
   // Keep the read/command/rebase on one FIFO turn; a queued writer must not
   // invalidate the refused postimage before its single retry can enter.
   return actor.target.database.kind === "file"
-    ? runOpenClawAgentPathWriteAdmission(actor.target.database.nativeLocation, run, true)
+    ? runOpenClawAgentPathWriteAdmission(
+        actor.target.database.nativeLocation,
+        run,
+        true,
+        undefined,
+        undefined,
+        "session-actor.command",
+      )
     : run();
 }
 

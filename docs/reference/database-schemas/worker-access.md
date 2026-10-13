@@ -15,6 +15,15 @@ batch related work so ordinary requests do not repeat database calls.
 
 ## Choose the execution owner
 
+Actor-backed session managers serialize append preparation and committed view
+adoption on their manager queue. Only each actor storage command reserves the
+agent database writer, so unrelated sessions can write between commands. Native
+maintenance and unbound SDK managers retain their existing storage admission.
+Slow direct-reservation warnings label session-manager, actor-command, and selected
+history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
+publishes holder timing without paths, session identities, or message content.
+Schemas, stored data, live commit authority, and update behavior are unchanged.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
