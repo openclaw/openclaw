@@ -150,6 +150,10 @@ describe("model-switch follow-up terminal evidence", () => {
       primaryOutboundText: "hello from the primary model",
       alternateReplyText: "the **model switch** handoff completed",
       alternateOutboundText: "the model switch handoff completed",
+      primaryResponseModel: "primary-model-concrete",
+      primaryRerouted: false,
+      alternateResponseModel: "alternate-model-concrete",
+      alternateRerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -158,8 +162,8 @@ describe("model-switch follow-up terminal evidence", () => {
       model: "alternate-model",
     });
     expect(result.modelSwitchEvidence).toMatchObject({
-      primary: { runId: "run-1", effective: { responseModel: "primary-model" } },
-      alternate: { runId: "run-2", effective: { responseModel: "alternate-model" } },
+      primary: { runId: "run-1", effective: { responseModel: "primary-model-concrete" } },
+      alternate: { runId: "run-2", effective: { responseModel: "alternate-model-concrete" } },
       terminalReply: {
         disposition: "visible",
         text: "the **model switch** handoff completed",
@@ -169,26 +173,6 @@ describe("model-switch follow-up terminal evidence", () => {
     expect(result.steps[0]?.details).toBe("hello **from the primary model**");
     expect(result.steps[1]?.details).toBe("the **model switch** handoff completed");
   });
-
-  // Receipt-contract coverage: a receipt cannot classify a differing response id on its own,
-  // so the producer's rerouted:false stands. Provider equivalence is proven at the producer.
-  it.each([
-    {
-      run: "default",
-      params: { primaryResponseModel: "primary-model-concrete", primaryRerouted: false },
-    },
-    {
-      run: "alternate",
-      params: { alternateResponseModel: "alternate-model-concrete", alternateRerouted: false },
-    },
-  ])(
-    "accepts an unmarked $run receipt whose response model differs from the request",
-    async ({ params }) => {
-      const { result } = await runFollowUp(params);
-
-      expect(result.status).toBe("pass");
-    },
-  );
 
   const receiptErrors = {
     default: "default-model run did not return an exact owned terminal receipt",
