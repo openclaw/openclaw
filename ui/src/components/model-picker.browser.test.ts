@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";

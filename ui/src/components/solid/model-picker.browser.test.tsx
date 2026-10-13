@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";

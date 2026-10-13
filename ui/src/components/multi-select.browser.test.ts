@@ -1,23 +1,12 @@
-/* @vitest-environment jsdom */
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input.js";
 import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
-import { MultiSelect, type MultiSelectOption } from "./multi-select.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import "./multi-select-registration.ts";
+import type { MultiSelect, MultiSelectOption } from "./multi-select.ts";
 
-const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}`;
-
-type MultiSelectElement = HTMLElement & {
-  options: readonly MultiSelectOption[];
-  value: readonly string[];
-  isExcluded: (value: string) => boolean;
-  getValueKey: (value: string) => string;
-  placeholder: string;
-  allowCustom: boolean;
-  disabled: boolean;
-  onChange: (value: string[]) => void;
-  onOpen: () => void;
-  updateComplete: Promise<boolean>;
-};
+type MultiSelectElement = MultiSelect;
 
 const primary = "openai/gpt-5.4";
 const sonnet = "anthropic/claude-sonnet-4-6";
@@ -30,23 +19,6 @@ const options: MultiSelectOption[] = [
   { value: gemini, label: "Gemini 3 Pro", provider: "google" },
 ];
 
-beforeAll(() => {
-  // Web Awesome's popup observes its anchor; jsdom has no ResizeObserver.
-  if (!("ResizeObserver" in globalThis)) {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-  }
-  customElements.define(MULTI_SELECT_TEST_TAG, class extends MultiSelect {});
-});
-
-afterAll(() => vi.unstubAllGlobals());
-
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -55,7 +27,7 @@ afterEach(() => {
 async function createMultiSelect(
   overrides: Partial<Omit<MultiSelectElement, keyof HTMLElement>> = {},
 ): Promise<MultiSelectElement> {
-  const element = document.createElement(MULTI_SELECT_TEST_TAG) as MultiSelectElement;
+  const element = document.createElement("openclaw-multi-select");
   element.options = options;
   element.value = [sonnet];
   element.isExcluded = (value) => value === primary;
@@ -66,6 +38,8 @@ async function createMultiSelect(
   Object.assign(element, overrides);
   document.body.append(element);
   await element.updateComplete;
+  flush();
+  await waitForSolid(() => expect(element.querySelector("input")).not.toBeNull());
   return element;
 }
 
@@ -94,17 +68,14 @@ function isOpen(element: MultiSelectElement): boolean {
 }
 
 async function typeText(element: MultiSelectElement, text: string) {
-  const field = input(element);
-  field.value = text;
-  field.dispatchEvent(new Event("input", { bubbles: true }));
-  await element.updateComplete;
+  await userEvent.fill(input(element), text);
+  flush();
 }
 
 async function pressKey(element: MultiSelectElement, key: string) {
-  input(element).dispatchEvent(
-    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
-  );
-  await element.updateComplete;
+  input(element).focus();
+  await userEvent.keyboard(key.length === 1 ? key : `{${key}}`);
+  flush();
 }
 
 async function clickField(element: MultiSelectElement) {
@@ -112,6 +83,7 @@ async function clickField(element: MultiSelectElement) {
     .querySelector(".multi-select")
     ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   await element.updateComplete;
+  flush();
 }
 
 it("does not commit a disabled choice but keeps available choices usable", async () => {
@@ -132,6 +104,28 @@ it("does not commit a disabled choice but keeps available choices usable", async
   await pressKey(element, "Enter");
   expect(element.onChange).toHaveBeenCalledWith(["fixture/ready"]);
 });
+
+it.each(["content", "trigger"])(
+  "keeps the highlighted %s value distinct from listbox structure",
+  async (value) => {
+    const element = await createMultiSelect({
+      value: [],
+      isExcluded: () => false,
+      options: [{ value, label: value }],
+    });
+    await clickField(element);
+    await waitForSolid(() => {
+      expect(input(element).getAttribute("aria-activedescendant")).toBeTruthy();
+    });
+    const activeId = input(element).getAttribute("aria-activedescendant");
+    const active = activeId ? document.getElementById(activeId) : null;
+    expect(active?.getAttribute("role")).toBe("option");
+    expect(active?.getAttribute("data-value")).toBe(value);
+
+    await pressKey(element, "Enter");
+    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([value]);
+  },
+);
 
 it("keeps disabled choices out of typed additions without discarding saved chips", async () => {
   const element = await createMultiSelect({
@@ -163,6 +157,7 @@ it("skips disabled choices in both keyboard directions", async () => {
   });
   await clickField(element);
   await pressKey(element, "ArrowDown");
+  expect(document.activeElement).toBe(input(element));
   expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
     "fixture/last",
   );
@@ -210,6 +205,21 @@ it("moves the highlight with arrow keys and closes on Escape", async () => {
   expect(element.onChange).not.toHaveBeenCalled();
 });
 
+it("keeps native Tab exit from the highlighted listbox", async () => {
+  const element = await createMultiSelect();
+  const outside = document.createElement("input");
+  document.body.append(outside);
+  await clickField(element);
+  await pressKey(element, "ArrowDown");
+
+  await userEvent.keyboard("{Tab}");
+  flush();
+
+  expect(document.activeElement).toBe(outside);
+  expect(isOpen(element)).toBe(false);
+  expect(element.onChange).not.toHaveBeenCalled();
+});
+
 it("discards unconfirmed search text on blur", async () => {
   const outside = document.createElement("button");
   document.body.append(outside);
@@ -220,6 +230,7 @@ it("discards unconfirmed search text on blur", async () => {
 
     outside.focus();
     await element.updateComplete;
+    flush();
 
     expect(element.onChange).not.toHaveBeenCalled();
     expect(chipValues(element)).toEqual([sonnet]);
@@ -281,8 +292,11 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
   await pressKey(element, "ArrowDown");
   element.options = options.filter((option) => option.value !== gemini);
   await element.updateComplete;
-  const highlighted = element.querySelector('.multi-select__option[aria-selected="true"]');
-  expect(highlighted?.getAttribute("data-value")).toBe(opus);
+  flush();
+  await waitForSolid(() => {
+    const highlighted = element.querySelector('.multi-select__option[aria-selected="true"]');
+    expect(highlighted?.getAttribute("data-value")).toBe(opus);
+  });
   await pressKey(element, "Enter");
 
   expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, opus]);
@@ -301,6 +315,7 @@ it("leaves composing input untouched until the operator confirms the completed v
     }),
   );
   await element.updateComplete;
+  flush();
 
   expect(element.onChange).not.toHaveBeenCalled();
   expect(input(element).value).toBe("local/模型");

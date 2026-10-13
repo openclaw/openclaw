@@ -1,4 +1,3 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +6,7 @@ import {
   type PickerOption,
   type SelectPicker,
 } from "./select-picker.ts";
+import overlayStyles from "./solid/overlay.css?inline";
 
 const options: PickerOption[] = [
   { value: "fixture/anchor", label: "Anchor", description: "Fixture provider" },
@@ -67,6 +67,69 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("renderPicker", () => {
+  it("keeps grouped choices clickable near the viewport edge when overlay styles load later", async () => {
+    const { page } = await import("vitest/browser");
+    const initialViewport = { width: innerWidth, height: innerHeight };
+    try {
+      await page.viewport(1280, 1000);
+      const lateOverlayStyles = document.createElement("style");
+      lateOverlayStyles.textContent = overlayStyles;
+      document.body.append(lateOverlayStyles);
+      const p = await mount({
+        value: "inherited",
+        options: [
+          { value: "inherited", label: "Use global default" },
+          { value: "", label: "Disabled" },
+          { value: "fixture/one", label: "One" },
+          { value: "fixture/two", label: "Two" },
+        ],
+        groupBy: (option) =>
+          option.value.startsWith("fixture/") ? { id: "fixture", label: "Fixture" } : undefined,
+        searchable: "always",
+      });
+      p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      await page.elementLocator(p.trigger).click();
+      const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
+      const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      const bounds = menu.getBoundingClientRect();
+      const optionBounds = row.getBoundingClientRect();
+      expect(optionBounds.top).toBeGreaterThanOrEqual(bounds.top);
+      expect(optionBounds.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
+      await page.elementLocator(row).click();
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("");
+    } finally {
+      await page.viewport(initialViewport.width, initialViewport.height);
+    }
+  });
+
+  it("keeps reserved option values distinct from the popup and trigger IDs", async () => {
+    const p = await mount({
+      value: "content",
+      options: [
+        { value: "content", label: "Content" },
+        { value: "trigger", label: "Trigger" },
+      ],
+      searchable: "always",
+    });
+    await p.open();
+    const search = p.picker.querySelector<HTMLInputElement>("input")!;
+    for (const value of ["content", "trigger"]) {
+      const row = p.rows().find((option) => option.dataset.value === value)!;
+      await expect.element(search).toHaveAttribute("aria-activedescendant", row.id);
+      const active = document.getElementById(search.getAttribute("aria-activedescendant")!);
+      expect(active?.getAttribute("role")).toBe("option");
+      expect(active?.dataset.value).toBe(value);
+      const ids = [...p.picker.querySelectorAll<HTMLElement>("[id]")].map((element) => element.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      if (value === "content") {
+        await p.key("ArrowDown");
+      }
+    }
+    await p.key("Enter");
+    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("trigger");
+  });
+
   it.each([false, true])(
     "does not rewrite retained choices when search removes preceding rows (grouped=%s)",
     async (grouped) => {
@@ -114,10 +177,12 @@ describe("renderPicker", () => {
     },
   );
 
-  it("anchors its popup to the mounted trigger before the first open", async () => {
+  it("anchors its native popup to the mounted trigger before the first open", async () => {
     const p = await mount();
-    const popup = p.picker.querySelector<WaPopup>("wa-popup");
-    expect(popup?.anchor).toBe(p.trigger);
+    const popup = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    expect(popup.style.getPropertyValue("position-anchor")).toBe(
+      p.trigger.style.getPropertyValue("anchor-name"),
+    );
   });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
@@ -159,6 +224,33 @@ describe("renderPicker", () => {
     await p.key("Enter");
     expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta");
   });
+
+  it.each([
+    { value: "beta", disabled: false, expected: "beta" },
+    { value: "", disabled: false, expected: "" },
+    { value: "beta", disabled: true, expected: "gamma" },
+    { value: null, disabled: false, expected: "gamma" },
+  ])(
+    "opens with ArrowUp at the enabled selection or last fallback (value=$value, disabled=$disabled)",
+    async ({ value, disabled, expected }) => {
+      const { userEvent } = await import("vitest/browser");
+      const p = await mount({
+        value,
+        options: [
+          { value: "", label: "Automatic" },
+          { value: "alpha", label: "Alpha" },
+          { value: "beta", label: "Beta", disabled },
+          { value: "gamma", label: "Gamma" },
+        ],
+      });
+      p.trigger.focus();
+      await userEvent.keyboard("{ArrowUp}");
+      await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+      expect(p.params.onChange).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Enter}");
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(expected);
+    },
+  );
 
   it("opens a compact menu with a printable key without committing it", async () => {
     const p = await mount({
@@ -288,6 +380,7 @@ describe("renderPicker", () => {
     await p.open();
     await p.search("aurora");
     document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.body.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
     await p.picker.updateComplete;
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
     await p.open();
