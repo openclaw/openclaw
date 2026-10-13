@@ -11,6 +11,7 @@ import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import {
   adoptProcessPluginCache,
   createPluginCache,
+  getPluginCacheRetirementSignal,
   getProcessPluginCache,
   withPluginCache,
 } from "../../plugins/plugin-cache.js";
@@ -136,6 +137,7 @@ describe("ensureConfigReady", () => {
     runStartupConfigPreflightMock.mockResolvedValue({
       snapshot,
       baseConfig: {},
+      pluginCache: preflightCache,
       pluginMetadataSnapshot: preflightMetadata,
     });
     return snapshot;
@@ -177,12 +179,14 @@ describe("ensureConfigReady", () => {
     runStartupConfigPreflightMock.mockImplementation(async () => ({
       snapshot: makeSnapshot(),
       baseConfig: {},
+      pluginCache: preflightCache,
       pluginMetadataSnapshot: preflightMetadata,
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     adoptProcessPluginCache(processCache);
+    await preflightCache[Symbol.asyncDispose]();
     envSnapshot?.restore();
     envSnapshot = undefined;
     for (const root of tempRoots.splice(0)) {
@@ -263,7 +267,29 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it.each([true, false])("retires non-Gateway preflight resources with valid=%s", async (valid) => {
+    if (!valid) {
+      setInvalidSnapshot();
+    }
+    const retired = getPluginCacheRetirementSignal(preflightCache);
+    const runtime = makeRuntime();
+    runtime.exit.mockImplementation((code: number): never => {
+      throw new ExitError(code);
+    });
+
+    const ready = ensureConfigReady({ runtime, commandPath: ["message"] });
+    if (valid) {
+      await ready;
+    } else {
+      await expect(ready).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    }
+
+    expect(retired.aborted).toBe(true);
+    expect(getProcessPluginCache()).toBe(processCache);
+  });
+
   it("retains accepted startup facts with stdout suppressed", async () => {
+    const retired = getPluginCacheRetirementSignal(preflightCache);
     await runEnsureConfigReady(["gateway", "run"], true);
 
     expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
@@ -271,6 +297,7 @@ describe("ensureConfigReady", () => {
       validateStartupConfig: expect.any(Function),
     });
     expect(getProcessPluginCache() === preflightCache).toBe(true);
+    expect(retired.aborted).toBe(false);
     // Cache reuse must not freeze the Gateway inventory before its final config read.
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
   });
