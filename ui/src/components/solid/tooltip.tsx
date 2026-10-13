@@ -62,12 +62,8 @@ export function mountTooltipView(
   overlay.bindSurface(surface);
   overlay.setParent(findOverlayParent(policy.trigger ?? host));
   const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
-  const events = [
-    "overlay-show",
-    "overlay-hide",
-    "overlay-after-show",
-    "overlay-after-hide",
-  ] as const;
+  // Requests cross the shadow boundary; only completion events need forwarding.
+  const events = ["overlay-after-show", "overlay-after-hide"] as const;
   const listeners = events.map((type) => {
     const listener = (event: Event) => {
       if (event.target !== surface) {

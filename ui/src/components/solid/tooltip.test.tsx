@@ -38,6 +38,21 @@ function fixture(rich = false) {
 }
 
 describe("Solid tooltip policy", () => {
+  it("publishes each opening and closing event once to ancestor capture listeners", async () => {
+    const { view, host, trigger } = fixture();
+    const events: Event[] = [];
+    for (const type of ["overlay-show", "overlay-hide"]) {
+      view.container.addEventListener(type, (event) => events.push(event), { capture: true });
+    }
+    pointer(trigger, "pointerenter");
+    vi.advanceTimersByTime(150);
+    await host.updateComplete;
+    flush();
+    pointer(trigger, "pointerdown");
+    expect(events.map((event) => event.type)).toEqual(["overlay-show", "overlay-hide"]);
+    expect(events.every((event) => event.target === host && event.composed)).toBe(true);
+  });
+
   it("mounts the plain host before policy setup and keeps descriptions outside lazy content", async () => {
     const { host, trigger, surface } = fixture();
     expect(host).toBeInstanceOf(Tooltip.Element);
