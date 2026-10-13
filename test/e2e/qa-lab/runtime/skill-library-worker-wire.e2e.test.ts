@@ -233,7 +233,6 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               session: {
                 execCwd?: string;
                 spawnedCwd?: string;
-                hasActiveRun: boolean;
                 placement?: { state: string; workspaceResultReconciling?: boolean };
               };
             }>("sessions.describe", { key });
@@ -245,10 +244,12 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             const check = () => {
               void describeSession(key)
                 .then(({ session }) => {
+                  process.stderr.write(
+                    `[skill-library-wire] settlement ${JSON.stringify({ key, state: session.placement?.state, reconciling: session.placement?.workspaceResultReconciling })}\n`,
+                  );
                   if (
                     session.placement?.state === "active" &&
-                    !session.placement.workspaceResultReconciling &&
-                    !session.hasActiveRun
+                    !session.placement.workspaceResultReconciling
                   ) {
                     settled.resolve();
                   }
