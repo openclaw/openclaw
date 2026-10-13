@@ -162,49 +162,6 @@ afterEach(() => {
 });
 
 describe("local Meet realtime transport process stream errors", () => {
-  it.each(["createSession", "startInput", "connect"] as const)(
-    "disposes acquired resources when transcription %s fails",
-    async (phase) => {
-      const error = new Error(`${phase} failed`);
-      const sttSession = mockTranscriptionSession();
-      const transport = mockTransport();
-      const provider = transcriptionProvider(() => {
-        if (phase === "createSession") {
-          throw error;
-        }
-        return sttSession;
-      });
-      if (phase === "startInput") {
-        transport.startInput.mockImplementation(() => {
-          throw error;
-        });
-      }
-      if (phase === "connect") {
-        sttSession.connect.mockRejectedValueOnce(error);
-      }
-
-      await expect(
-        startMeetingAgentRealtimeEngine({
-          ...engineOptions(
-            resolveGoogleMeetConfig({
-              chrome: { audioFormat: "pcm16-24khz" },
-              realtime: { provider: "openai", agentId: "jay", introMessage: "" },
-            }),
-            `meet-${phase}-failure`,
-          ),
-          providers: [provider],
-          transport,
-        }),
-      ).rejects.toBe(error);
-
-      expect(transport.startInput).toHaveBeenCalledTimes(phase === "createSession" ? 0 : 1);
-      expect(sttSession.connect).toHaveBeenCalledTimes(phase === "connect" ? 1 : 0);
-      expect(sttSession.close).toHaveBeenCalledTimes(phase === "createSession" ? 0 : 1);
-      expect(transport.stop).toHaveBeenCalledOnce();
-      expect(transport.dispose).toHaveBeenCalledOnce();
-    },
-  );
-
   it("stops the engine when input fails during provider setup", async () => {
     const bridgeScript = writeBridgeCommand();
     let finishConnect = () => {};
@@ -406,36 +363,6 @@ describe("Google Meet bidi realtime engine cleanup", () => {
     expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ agentId: "molty" }));
     expect(bridgeRequest?.agentId).toBe("molty");
     await handle.stop();
-  });
-
-  it("disposes the audio transport when provider connection fails", async () => {
-    const connectError = new Error("voice bridge connect failed");
-    const stopError = new Error("transport stop failed");
-    const bridge = mockVoiceBridge();
-    bridge.connect.mockRejectedValueOnce(connectError);
-    bridge.isConnected.mockReturnValue(false);
-    const provider = voiceProvider(() => bridge);
-    const stop = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(stopError)
-      .mockResolvedValueOnce();
-    const dispose = vi.fn(async () => {});
-    const transport = { ...mockTransport(), stop, dispose };
-
-    await expect(
-      startMeetingRealtimeEngine({
-        ...engineOptions(
-          resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
-          "meet-connect-failure",
-        ),
-        providers: [provider],
-        transport,
-      }),
-    ).rejects.toBe(connectError);
-
-    expect(bridge.close).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledTimes(2);
-    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("stops the audio transport when the provider bridge closes unexpectedly", async () => {

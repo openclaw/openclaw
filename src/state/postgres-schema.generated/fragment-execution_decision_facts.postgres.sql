@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."execution_decision_facts" (
+CREATE TABLE "execution_decision_facts" (
   "receipt_id" text COLLATE "C" NOT NULL,
   "context_id" text COLLATE "C" NOT NULL,
   "execution_id" text COLLATE "C" NOT NULL,
@@ -37,8 +33,6 @@ CREATE TABLE "openclaw_state"."execution_decision_facts" (
   UNIQUE ("occurred_at", "receipt_id")
 );
 
-CREATE INDEX "execution_decision_facts_context_occurred_idx" ON "openclaw_state"."execution_decision_facts" (("context_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
+CREATE INDEX "execution_decision_facts_context_occurred_idx" ON "execution_decision_facts" (("context_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
 
-CREATE INDEX "execution_decision_facts_run_occurred_idx" ON "openclaw_state"."execution_decision_facts" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);
-
-COMMIT;
+CREATE INDEX "execution_decision_facts_run_occurred_idx" ON "execution_decision_facts" (("run_id") ASC NULLS FIRST, ("occurred_at") ASC NULLS FIRST, ("receipt_id") ASC NULLS FIRST);

@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { NODE_PERMISSION_STATES } from "../node-permissions.js";
 import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -162,6 +163,14 @@ export const NodeInvokeParamsSchema = closedObject({
   turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
 });
 
+/** Native permission failure; capability IDs use the node's published vocabulary. */
+export const NodePermissionDetailsSchema = closedObject({
+  capabilities: Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true }),
+  state: Type.Enum(NODE_PERMISSION_STATES),
+});
+
+export type NodePermissionDetails = Static<typeof NodePermissionDetailsSchema>;
+
 export const NodeInvokeResultParamsSchema = closedObject({
   id: NonEmptyString,
   nodeId: NonEmptyString,
@@ -172,6 +181,7 @@ export const NodeInvokeResultParamsSchema = closedObject({
     closedObject({
       code: Type.Optional(NonEmptyString),
       message: Type.Optional(NonEmptyString),
+      details: Type.Optional(NodePermissionDetailsSchema),
     }),
   ),
 });

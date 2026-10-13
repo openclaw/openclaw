@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   createEffect,
@@ -10,6 +11,7 @@ import {
   type Accessor,
   untrack,
 } from "solid-js";
+import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -22,6 +24,7 @@ import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
+import { renderChatPermissionCard } from "./chat-divider.ts";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -125,14 +128,10 @@ export function GroupedMessage(props: GroupedMessageProps) {
                 <InlineToolCards cards={state().toolCards} options={state().toolRenderOptions} />
               </Match>
               <Match when={state().isStandaloneToolMessage}>
-                <ToolMessage
-                  state={state}
-                  messageKey={props.messageKey}
-                  options={props.options}
-                  onOpenSidebar={props.onOpenSidebar}
-                />
+                <ToolMessage {...props} state={state} />
               </Match>
               <Match when={true}>
+                {/* Keep preparation out of this boundary so refreshes retain embedded media. */}
                 <BubbleContents
                   state={state}
                   messageKey={props.messageKey}
@@ -394,13 +393,7 @@ function BubbleContents(props: ContentProps) {
   const previewCount = createMemo(() => props.state().videoPreviews.length);
   const previews = createMemo(() =>
     Array.from({ length: previewCount() }, (_, index) => (
-      <VideoPreview
-        state={props.state}
-        messageKey={props.messageKey}
-        options={props.options}
-        onOpenSidebar={props.onOpenSidebar}
-        item={() => props.state().videoPreviews[index]}
-      />
+      <VideoPreview {...props} item={() => props.state().videoPreviews[index]} />
     )),
   );
   const hasText = () =>
@@ -550,30 +543,30 @@ function ToolMessageFallback(props: ContentProps) {
 }
 
 function ToolMessage(props: ContentProps) {
-  const fallback = solidContent(ToolMessageFallback, {
-    get state() {
-      return props.state;
-    },
-    get messageKey() {
-      return props.messageKey;
-    },
-    get options() {
-      return props.options;
-    },
-    get onOpenSidebar() {
-      return props.onOpenSidebar;
-    },
-  });
+  const permission = () =>
+    readNodePermissionRequest(
+      asNullableRecord(props.state().singleToolCard?.details)?.permissionMissing,
+    );
+  const fallback = solidContent(ToolMessageFallback, props);
   return (
-    <LitContent
-      value={renderPluginToolResult(
-        props.state().singleToolCard,
-        {
-          ...props.state().toolRenderOptions,
-          expanded: props.state().toolMessageExpanded,
-        },
-        fallback,
+    <Show
+      when={permission()}
+      fallback={
+        <LitContent
+          value={renderPluginToolResult(
+            props.state().singleToolCard,
+            {
+              ...props.state().toolRenderOptions,
+              expanded: props.state().toolMessageExpanded,
+            },
+            fallback,
+          )}
+        />
+      }
+    >
+      {(request) => (
+        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
       )}
-    />
+    </Show>
   );
 }

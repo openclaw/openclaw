@@ -56,23 +56,21 @@ describe("searxng client", () => {
     testing.SEARXNG_SEARCH_CACHE.clear();
   });
 
-  it.each([
-    [
-      "http://127.0.0.1:8888/search/",
-      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-      true,
-    ],
-  ] as const)("builds the public request URL from %s", async (baseUrl, expectedUrl, fromConfig) => {
+  it("builds the request URL from plugin config", async () => {
     endpointMockState.responses.push(Response.json({ results: [] }));
-    const webSearch = { baseUrl, categories: "general,news", language: "en" };
+    const webSearch = {
+      baseUrl: "http://127.0.0.1:8888/search/",
+      categories: "general,news",
+      language: "en",
+    };
     await runSearxngSearch({
       query: "openclaw",
-      ...(fromConfig
-        ? { config: { plugins: { entries: { searxng: { config: { webSearch } } } } } }
-        : webSearch),
+      config: { plugins: { entries: { searxng: { config: { webSearch } } } } },
     });
 
-    expect(endpointMockState.calls[0]?.url).toBe(expectedUrl);
+    expect(endpointMockState.calls[0]?.url).toBe(
+      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
+    );
   });
 
   it("normalizes, filters, and caps provider result rows", async () => {

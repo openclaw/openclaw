@@ -65,6 +65,8 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
       hasActiveRun: parentActive,
       activeRunIds: parentActive ? ["parent-run"] : [],
       hasActiveSubagentRun: true,
+      startedAt: 1_000,
+      endedAt: parentActive ? undefined : 2_000,
       childSessions: [childKey],
     } satisfies GatewaySessionRow;
     const child = {
@@ -124,6 +126,7 @@ describe("composer run status", () => {
         hasActiveRun: false,
         hasActiveSubagentRun: true,
         startedAt: 1_000,
+        endedAt: 2_500,
       };
       const child: GatewaySessionRow = {
         key: "agent:main:subagent:backend",

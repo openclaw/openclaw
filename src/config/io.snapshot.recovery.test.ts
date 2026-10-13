@@ -101,7 +101,7 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 
 describe("prepared config recovery", () => {
   it.each(["sync", "async"] as const)(
-    "preserves unavailable dependencies when preparing a backup candidate (%s)",
+    "prepares a canonical backup when migration metadata is unavailable (%s)",
     async (mode) => {
       const root = tempDirs.make("openclaw-backup-preparation-io-");
       const context = createConfigIoContext({
@@ -116,28 +116,30 @@ describe("prepared config recovery", () => {
         raw: '{"gateway":{"mode":"local"}}',
         parsed: { gateway: { mode: "local" } },
       };
-      if (mode === "sync") {
-        const read = vi
-          .spyOn(deferredMigrations, "readDeferredPluginMigrations")
-          .mockImplementation(() => {
-            throw unavailable;
-          });
-        try {
-          expect(() => context.prepareRecoveryBackupCandidate(candidate)).toThrow(unavailable);
-        } finally {
-          read.mockRestore();
-        }
-      } else {
-        const read = vi
-          .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
-          .mockRejectedValue(unavailable);
-        try {
-          await expect(context.prepareRecoveryBackupCandidateAsync(candidate)).rejects.toBe(
-            unavailable,
-          );
-        } finally {
-          read.mockRestore();
-        }
+      const readSync = vi
+        .spyOn(deferredMigrations, "readDeferredPluginMigrations")
+        .mockImplementation(() => {
+          throw unavailable;
+        });
+      const readAsync = vi
+        .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
+        .mockRejectedValue(unavailable);
+      try {
+        const prepared =
+          mode === "sync"
+            ? context.prepareRecoveryBackupCandidate(candidate)
+            : await context.prepareRecoveryBackupCandidateAsync(candidate);
+        expect(prepared).toMatchObject({
+          ok: true,
+          candidate: {
+            raw: '{"gateway":{"mode":"local"}}',
+            parsed: { gateway: { mode: "local" } },
+            config: { gateway: { mode: "local" } },
+          },
+        });
+      } finally {
+        readSync.mockRestore();
+        readAsync.mockRestore();
       }
     },
   );

@@ -600,3 +600,9 @@ Revalidate each caller before delivering any result.
 `allowStale: false` waits for freshness; `refresh: true` replaces an older load.
 `clear()` retires pending cache publications. Cache keys must include the owning
 identity or revision; the cache never provides authorization.
+
+`createStaleWhileRevalidateCache` from `openclaw/plugin-sdk/collection-runtime`
+passes the previous successful value (or `undefined`) to its load callback,
+including explicit refreshes. Keep HTTP validators with that value so eviction,
+clear, and failed refreshes retire the representation and its validators together.
+The loader must treat the previous value as immutable.

@@ -114,8 +114,11 @@ export function createHumanMentionPolicy(params: {
     let profile = displays.get(profileId);
     if (!profile) {
       profile = resolveCurrentUserProfileDisplay(profileId);
-      pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
-      displays.set(profileId, profile);
+      // Catalog hydration does not advance the profile revision; retry unresolved reads.
+      if (profile.kind === "resolved") {
+        pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
+        displays.set(profileId, profile);
+      }
     }
     return profile.kind === "resolved" ? profile : undefined;
   }

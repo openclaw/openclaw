@@ -362,6 +362,37 @@ export function resolveStreamingReply(params: {
       };
     }
   }
+  if (
+    text === undefined &&
+    params.evtType !== "text_end" &&
+    params.parsedStreamDirectives &&
+    !params.parsedStreamDirectives.isSilent &&
+    params.parsedStreamDirectives.text === params.visibleDelta &&
+    params.appendDelta !== null &&
+    params.previousCleaned &&
+    params.previousText.length > params.previousCleaned.length &&
+    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
+  ) {
+    const marker = params.previousText.lastIndexOf("[[");
+    const tailStart = params.previousText.indexOf("]]", marker + 2) + 2;
+    const tail = params.previousText.slice(tailStart);
+    const source = params.rawDirectiveSource ?? params.next;
+    // Settled directives before any code opener cannot enter code on append.
+    // New markers and reference definitions still require the complete Markdown context.
+    if (
+      marker >= 0 &&
+      tailStart > marker + 2 &&
+      tail.trim() &&
+      params.previousCleaned.endsWith(tail.trimStart()) &&
+      !/[`~\t]| {4}/u.test(params.previousText.slice(0, marker)) &&
+      !source.includes("[[", params.previousText.length - 1) &&
+      !source.includes("]:")
+    ) {
+      text = params.previousCleaned + params.appendDelta;
+      delta = params.appendDelta;
+      isAppend = true;
+    }
+  }
 
   if (text === undefined) {
     directiveCodePrefix = undefined;

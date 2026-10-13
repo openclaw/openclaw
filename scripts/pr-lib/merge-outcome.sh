@@ -183,8 +183,12 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
-        (if has("cancellation") then .route == "auto" and
-          (.cancellation | keys == ["actor","outcome","state"] and (.outcome | oid) and
+        (if has("cancellation") then . as $record | .route == "auto" and
+          (.cancellation |
+            (if has("observedHead") then keys == ["actor","observedHead","outcome","state"] and
+              $record.accepted == true and .state == "confirmed" and
+              (.observedHead | oid) and .observedHead != $record.head
+             else keys == ["actor","outcome","state"] end) and (.outcome | oid) and
             (.actor | type == "string" and length > 0) and (.state | IN("requested","confirmed")))
          else true end) and
         (if has("headDrift") then . as $record | .route == "auto" and .accepted == true and
@@ -227,7 +231,7 @@ merge_outcome_load_local() {
       merge_outcome_stop "invalid retained repository identity"; return 1;
     }
     parents=$(GIT_NO_LAZY_FETCH=1 pr_git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
-    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead] | .[] | select(. != null)'); do
+    for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
@@ -317,7 +321,8 @@ merge_outcome_load_local() {
           .accepted == $next.accepted and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
           .base == $next.base and .head == $next.head and .main == $next.main and
-          .method == $next.method and .attempt == $next.attempt
+          .method == $next.method and .attempt == $next.attempt and
+          (if $next.cancellation.observedHead != null then .recovery == $next.recovery else true end)
         ' >/dev/null; then
         merge_outcome_stop "invalid or unretained auto cancellation provenance"; return 1
       fi
@@ -350,7 +355,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -419,7 +424,11 @@ merge_outcome_write() {
                  (.phase == "intent" and .accepted == $prior.accepted and
                   .route == "auto" and .route == $prior.route and .method == $prior.method and
                   .cancellation.outcome == $outcome and
-                  .cancellation.state == "requested"))))) or
+                  (.cancellation.state == "requested" or
+                   (.cancellation.state == "confirmed" and .accepted == true and
+                    ($prior | has("cancellation") | not) and
+                    (.cancellation.observedHead | type == "string" and test("^[0-9a-f]{40}$")) and
+                    .cancellation.observedHead != .head))))))) or
           (.recovery == null and $prior.recovery == null and $prior.phase == "intent" and
             .phase == "intent" and .route == "auto" and
             .cancellation.outcome == $outcome and .attempt == $prior.attempt)
@@ -891,11 +900,16 @@ merge_outcome_stable() {
   done
   # Cancelling auto does not admit a merge. Keep its identity, request and policy
   # facts pinned while GitHub recalculates these read-only merge projections.
-  if [ "${3:-}" = cancel-auto ] && printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
+  if { [ "${3:-}" = cancel-auto ] || [ "${3:-}" = cancel-auto-observed ]; } &&
+    printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
     del(.pr.mergeable,.pr.mergeStateStatus) == ($observed | del(.pr.mergeable,.pr.mergeStateStatus))
   ' >/dev/null; then
     MERGE_OBSERVATION="$reread"
     return 0
+  fi
+  if [ "${3:-}" = cancel-auto-observed ]; then
+    merge_outcome_stop "observed-head retirement requires stable transport, policy, and PR/main facts"
+    return 1
   fi
   [ "$reread" = "$MERGE_OBSERVATION" ] && return 0
   # Both APIs bind the same PR/main facts. Compare REST policy evidence whenever
@@ -1099,19 +1113,35 @@ merge_outcome_accept_head_drift() {
 }
 
 merge_outcome_cancel_auto() {
-  local pr="$1" expected_oid="$2" actor root capture
+  local pr="$1" expected_oid="$2" observed_head="${3:-}" actor root capture
+  local observation_mode=cancel-auto
   if [ "$expected_oid" != "$MERGE_OUTCOME_OID" ] ||
     ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '
       .phase == "intent" and .route == "auto"
     ' >/dev/null; then
     merge_outcome_stop "auto cancellation requires the exact retained auto intent"; return 1
   fi
+  if [ -n "$observed_head" ]; then
+    observation_mode=cancel-auto-observed
+    if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg head "$observed_head" '
+      .accepted == true and (has("cancellation") | not) and .head != $head
+    ' >/dev/null || ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$observed_head^{commit}" 2>/dev/null; then
+      merge_outcome_stop "observed-head retirement requires an accepted uncancelled auto intent and a different locally available commit"; return 1
+    fi
+  fi
   merge_outcome_observe "$pr" || return 1
-  if [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
+  if [ -n "$observed_head" ]; then
+    if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --arg head "$observed_head" --argjson record "$MERGE_OUTCOME_RECORD" '
+      .pr.id == $record.prId and .pr.headRefOid == $head and .pr.baseRefName == $record.base and
+      .pr.state == "OPEN" and .pr.autoMergeRequest == null and
+      .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false
+    ' >/dev/null; then
+      merge_outcome_stop "observed-head retirement requires the selected open PR/head/base and an absent non-queue auto request"; return 1
+    fi
+  elif [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.state)" = MERGED ]; then
     merge_outcome_resume "$pr"
     return
-  fi
-  if ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
+  elif ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson record "$MERGE_OUTCOME_RECORD" '
     .pr.id == $record.prId and .pr.headRefOid == $record.head and .pr.baseRefName == $record.base and
     .pr.state == "OPEN" and .pr.isInMergeQueue == false and .pr.isMergeQueueEnabled == false and
     (.pr.autoMergeRequest == null or
@@ -1129,7 +1159,17 @@ merge_outcome_cancel_auto() {
       [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
       captures+=("$capture")
     done
-    merge_outcome_stable "$pr" false cancel-auto || return 1
+    merge_outcome_stable "$pr" false "$observation_mode" || return 1
+    if [ -n "$observed_head" ]; then
+      # A requested receipt would prevent reconciliation if the changed head merged
+      # during observation. Publish only the final retirement, without dispatch.
+      merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c \
+        --arg actor "$actor" --arg outcome "$expected_oid" --arg head "$observed_head" \
+        '.cancellation={actor:$actor,outcome:$outcome,state:"confirmed",observedHead:$head}')" ${captures[@]+"${captures[@]}"} || return 1
+      echo "Auto request retirement confirmed at observed head $observed_head for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
+      echo "Repair, review, and prepare the intended head before explicit merge-recover with this outcome OID."
+      return 0
+    fi
     # Retain retirement intent without rewriting the original acknowledgment.
     # A lost cancellation reply remains observation-only on retry.
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg actor "$actor" --arg outcome "$expected_oid" \

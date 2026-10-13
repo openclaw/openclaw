@@ -964,6 +964,68 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  it("finalizes worker tool outcomes after an empty model response", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+      isError: false,
+    });
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.inferenceRequests[2]?.context.tools ?? []).toEqual([]);
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+    expect(
+      gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+    ).toMatchObject({ event: { payload: { text: "worker reply" } } });
+  });
+
+  it("finalizes worker tool outcomes with a failure after one empty continuation", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "empty-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+  });
+
+  it("finalizes worker tool outcomes with an accurate running-process status", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["background-tool", "text"],
+      backgroundCommand: `${JSON.stringify(process.execPath)} -e 'require("node:net").createServer().listen(0, "127.0.0.1")'`,
+    });
+    const scopeKey = `worker:${SESSION_ID}`;
+    const environment = await createWorkerRuntimeEnvironment(SESSION_ID);
+    try {
+      await expect(
+        runWorkerDescriptor(launch, { environmentStateDir: environment.stateDir }),
+      ).resolves.toMatchObject({ status: "completed" });
+      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
+      expect(running).toHaveLength(1);
+      const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+      expect(messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("still running") }],
+      });
+      expect(JSON.stringify(messages.at(-1))).toContain(running[0]!.id);
+      expect(gateway.inferenceRequests).toHaveLength(2);
+      expect(
+        gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+      ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
+    } finally {
+      getProcessSupervisor().cancelScope(scopeKey, "manual-cancel");
+      await waitForExecScope(scopeKey);
+      await environment.close();
+    }
+  });
+
   registerWorkerBackgroundExecLifecycleTests({
     setup,
     waitForFast,

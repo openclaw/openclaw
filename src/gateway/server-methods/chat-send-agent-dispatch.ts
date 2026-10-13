@@ -408,9 +408,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                   ? { taskSuggestionDeliveryMode: "gateway" as const }
                   : {}),
                 expectedActiveReplyOperation: admission.expectedActiveReplyOperation,
-                ...userTurn.getSessionInitializationOptions(),
-                bindSessionCreation: params.bindSessionCreation,
-                onSessionCreated: params.onSessionCreated,
+                ...params.getSessionInitializationOptions(),
                 onSessionPrepared: (binding) => {
                   phase?.mark("preparation");
                   admission.onSessionPrepared(binding);

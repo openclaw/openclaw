@@ -394,12 +394,6 @@ export async function authorizeGatewayConnectDevice(
         clientAccessMetadata,
         reason,
       });
-      // Re-resolve: another connection may have superseded/approved the request since we created it
-      const { pending } = await listDevicePairing();
-      const recoveryRequestId = (
-        pending.find((entry) => entry.requestId === pairing.request.requestId) ??
-        pending.find((entry) => entry.deviceId === device.id && entry.publicKey === devicePublicKey)
-      )?.requestId;
       // Approval may come from another connection or be revoked during the
       // awaits above. Only the current device record can authorize continuation.
       const livePaired = await getPairedDevice(device.id);
@@ -422,6 +416,13 @@ export async function authorizeGatewayConnectDevice(
             })
           : pairingStateAllowsRequestedAccess(livePaired));
       if (!pairingResolved) {
+        const { pending } = await listDevicePairing();
+        const recoveryRequestId = (
+          pending.find((entry) => entry.requestId === pairing.request.requestId) ??
+          pending.find(
+            (entry) => entry.deviceId === device.id && entry.publicKey === devicePublicKey,
+          )
+        )?.requestId;
         if (inlineApprovalAttempted && recoveryRequestId === pairing.request.requestId) {
           requestContext.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
         }

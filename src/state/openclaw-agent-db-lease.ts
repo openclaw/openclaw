@@ -188,7 +188,7 @@ export function claimOpenClawAgentDatabaseLease(
         params.env,
         onVerification,
       ),
-    { env: params.env },
+    { env: params.env, initializationAgentPaths: [params.path] },
   );
   return leaseId;
 }

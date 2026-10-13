@@ -400,8 +400,9 @@ export async function maybeRestartService(params: {
           env: activation.serviceEnv,
         });
         assertReadinessCurrent();
-        if (recovery.launchAgentRecovery?.attempted) {
-          activationAccepted = recovery.launchAgentRecovery.recovered;
+        const nativeRecovery = recovery.launchAgentRecovery;
+        if (nativeRecovery?.status === "recovered" || nativeRecovery?.status === "failed") {
+          activationAccepted = nativeRecovery.status === "recovered";
         }
         return recovery;
       },

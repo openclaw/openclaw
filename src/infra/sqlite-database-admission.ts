@@ -270,21 +270,51 @@ function admission(database: DatabaseSync, create = true): Admission | undefined
   if (record && record.identity !== expected) {
     throw new Error("SQLite database changed identity before admission");
   }
-  if (record && !isRetired(record)) {
-    retainConnection(database, record);
-  }
-  return record && !isRetired(record) ? record : undefined;
+  return record && !isRetired(record) ? retainConnection(database, record) : undefined;
 }
 
-function retainConnection(database: DatabaseSync, record: Admission): void {
-  state.connections.set(database, record);
-  if (!state.registry.changeReferences(record, 1)) {
-    return;
-  }
+function retainConnection(database: DatabaseSync, record: Admission): Admission {
+  const expected = record.identity;
+  let current = record;
   try {
-    exchange(record);
+    for (;;) {
+      if (current.identity !== expected) {
+        throw new Error("SQLite database changed identity during native open");
+      }
+      const publish = state.registry.changeReferences(current, 1);
+      let retained = false;
+      try {
+        if (publish) {
+          exchange(current);
+        }
+        const retirement = readSqliteDatabaseGeneration(current, "retired");
+        if (retirement === 0) {
+          state.connections.set(database, current);
+          retained = true;
+          return current;
+        }
+        if (retirement !== 2) {
+          throw new Error("SQLite database admission retired during native open");
+        }
+      } finally {
+        if (!retained) {
+          state.registry.changeReferences(current, -1);
+        }
+      }
+      // The last known reader can close before the host receives this worker's
+      // first reference. Bind only after the host acknowledges its live generation.
+      const location = database.location();
+      const replacement = database.isTransaction
+        ? state.registry.records.get(expected)
+        : location
+          ? pathAdmission(location)
+          : undefined;
+      if (!replacement || isRetired(replacement)) {
+        throw new Error("SQLite database admission unavailable during native open");
+      }
+      current = replacement;
+    }
   } catch (error) {
-    state.registry.changeReferences(record, -1);
     state.openedIdentities.delete(database);
     throw error;
   }

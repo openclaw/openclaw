@@ -67,6 +67,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @state() private refreshFailed = false;
   @state() private checkingTarget = false;
   @state() private targetCheckFailed = false;
+  @state() private expanded = false;
   private refreshAttempt = 0;
   private readonly countdownPolling = new PollController(
     this,
@@ -139,6 +140,15 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     }
     this.confirmUpdate(this.updateRun);
   };
+
+  /** Compact rows refresh the Gateway target each time they expand. */
+  private expansionChecksTarget() {
+    return (
+      Boolean(this.onCheckStatus) &&
+      !hasNativeUpdateBridge() &&
+      !isUpdateRunAttentionVisible(this.updateRun, this.updateRunAcknowledged)
+    );
+  }
 
   private readonly checkTarget = async () => {
     if (!this.onCheckStatus) {
@@ -318,11 +328,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       ...summary,
       detail: this.checkingTarget ? t("updates.sidebar.checking") : summary.detail,
       onToggle: (open) => {
-        if (
-          open &&
-          !hasNativeUpdateBridge() &&
-          !isUpdateRunAttentionVisible(this.updateRun, this.updateRunAcknowledged)
-        ) {
+        this.expanded = open;
+        if (open && this.expansionChecksTarget()) {
           void this.checkTarget();
         }
       },
@@ -449,6 +456,10 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     if (!statusBanner && !actionable) {
       return nothing;
     }
+    // A collapsed row checks its target on expansion; stay busy until that check
+    // starts so the first expanded frame never offers the unchecked target.
+    const checking =
+      this.checkingTarget || (this.compact && !this.expanded && this.expansionChecksTarget());
     const canUpdate = this.nativeUpdateAvailable ? this.canNativeUpdate : this.canUpdate;
     const title = this.nativeUpdateAvailable
       ? t("chat.sidebar.updateMacAndGateway")
@@ -470,21 +481,21 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
     const updateAction = html`<button
-      class="sidebar-update-card__action ${busy || this.checkingTarget ? "sidebar-update-card__action--busy" : ""}"
+      class="sidebar-update-card__action ${busy || checking ? "sidebar-update-card__action--busy" : ""}"
       type="button"
       aria-disabled=${canUpdate ? nothing : "true"}
-      ?disabled=${busy || this.checkingTarget}
-      aria-busy=${this.checkingTarget ? "true" : "false"}
+      ?disabled=${busy || checking}
+      aria-busy=${checking ? "true" : "false"}
       @click=${this.startUpdate}
     >
       <span class="sidebar-update-card__icon" aria-hidden="true"
-        >${busy || this.checkingTarget ? icons.refresh : icons.download}</span
+        >${busy || checking ? icons.refresh : icons.download}</span
       >
       <span
         class="sidebar-update-card__text"
         role=${countdownActive ? "timer" : nothing}
         aria-live=${countdownActive ? "off" : nothing}
-        >${this.checkingTarget ? t("updates.sidebar.checking") : text}</span
+        >${checking ? t("updates.sidebar.checking") : text}</span
       >
     </button>`;
     return html`
@@ -494,7 +505,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         aria-live=${campaign ? nothing : "polite"}
       >
         ${this.renderStatus()}
-        ${!actionable && statusBanner?.source === "read" ? html`<button type="button" class="sidebar-update-card__review" ?disabled=${this.checkingTarget || !this.connected} @click=${this.checkTarget}>${this.checkingTarget ? t("updates.sidebar.checking") : t("connection.retryNow")}</button>` : nothing}
+        ${!actionable && statusBanner?.source === "read" ? html`<button type="button" class="sidebar-update-card__review" ?disabled=${checking || !this.connected} @click=${this.checkTarget}>${checking ? t("updates.sidebar.checking") : t("connection.retryNow")}</button>` : nothing}
         ${
           actionable
             ? html`<div class="sidebar-update-card__actions">
@@ -520,7 +531,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               </button>`
             : nothing
         }
-        ${actionable && !busy && !this.checkingTarget && !this.targetCheckFailed ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
+        ${actionable && !busy && !checking && !this.targetCheckFailed ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
       </div>
     `;
   }

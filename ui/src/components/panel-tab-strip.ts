@@ -8,7 +8,7 @@ import type {
   PanelTabStripTab as BasePanelTabStripTab,
 } from "./panel-tab-strip-types.ts";
 
-export type PanelTabStripTab = BasePanelTabStripTab<TemplateResult | typeof nothing>;
+export type PanelTabStripTab = BasePanelTabStripTab<TemplateResult | Node | typeof nothing>;
 export type PanelTabStripParams<T extends PanelTabStripTab = PanelTabStripTab> =
   BasePanelTabStripParams<T, TemplateResult | Node | typeof nothing>;
 

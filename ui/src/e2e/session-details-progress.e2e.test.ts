@@ -192,6 +192,12 @@ suite.define(() => {
           .poll(() => progress.textContent())
           .toContain("The card changed while Details stayed closed.");
         const menu = progress.locator(".chat-details-progress__menu");
+        expect(await menu.locator("wa-dropdown-item").count()).toBe(0);
+        await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
+        await menu.locator('wa-dropdown-item[value="hide"]').waitFor({ state: "visible" });
+        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
+        await page.keyboard.press("Escape");
+        expect(await menu.locator("wa-dropdown-item").count()).toBe(4);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('wa-dropdown-item[value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);

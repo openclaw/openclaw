@@ -18,6 +18,7 @@ import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
+  type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -95,6 +96,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
   protected abstract readonly createProvider: MemoryManagerProviderFactory;
   protected fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected providerInitialized = false;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected abstract beginSyncProviderGeneration(options?: { forceFtsOnly?: boolean }): void;
@@ -117,6 +119,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract retireCurrentProvider(): Promise<void>;
+
+  protected applyProviderResult(result: EmbeddingProviderResult): void {
+    this.provider = result.provider;
+    this.fallbackFrom = result.fallbackFrom;
+    this.fallbackReason = result.fallbackReason;
+    this.providerUnavailableReason = result.providerUnavailableReason;
+    this.providerLifecycle = resolveMemoryProviderLifecycle(result);
+    this.providerRuntime = result.runtime;
+    this.providerInitialized = true;
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+  }
 
   protected createConfiguredEmbeddingProvider(
     request = resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
@@ -526,20 +540,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return false;
     }
 
-    this.providerLifecycle = resolveMemoryProviderLifecycle({
-      provider: fallbackResult.provider,
-      runtime: fallbackResult.runtime,
+    this.applyProviderResult({
+      ...fallbackResult,
       requestedProvider: currentProviderId,
       fallbackFrom: currentProviderId,
       fallbackReason: reason,
+      providerUnavailableReason: undefined,
     });
-    this.fallbackFrom = currentProviderId;
-    this.fallbackReason = reason;
-    this.provider = fallbackResult.provider;
-    this.providerRuntime = fallbackResult.runtime;
-    this.providerUnavailableReason = undefined;
-    this.providerKey = this.computeProviderKey();
-    this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
       reason,
     });

@@ -40,7 +40,10 @@ import {
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { subscribeActivitySummaryEntryReceipts } from "./session-activity-summary-entry-receipts.js";
+import {
+  projectActivitySummaryEntry,
+  subscribeActivitySummaryEntryReceipts,
+} from "./session-activity-summary-entry-receipts.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
@@ -79,7 +82,7 @@ const SYSTEM_PROMPT = [
 
 type Tracked = ActivitySummaryTarget & {
   sessionId: string;
-  entry: SessionEntry;
+  entry: ReturnType<typeof projectActivitySummaryEntry>;
   lifecycleRevision?: string;
   storePath: string;
   readyAt: number;
@@ -206,7 +209,7 @@ export function createSessionActivitySummaries(deps: {
       state = undefined;
     }
     if (state) {
-      state.entry = entry;
+      state.entry = projectActivitySummaryEntry(entry);
       return state;
     }
     if (states.size >= MAX_TRACKED) {
@@ -220,7 +223,7 @@ export function createSessionActivitySummaries(deps: {
     }
     state = {
       ...target,
-      entry,
+      entry: projectActivitySummaryEntry(entry),
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
       storePath,
