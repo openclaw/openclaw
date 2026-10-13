@@ -174,6 +174,7 @@ beforeEach(() => {
   hoisted.access.mockResolvedValue({
     preparedRoute: { revoked: false },
     channelIngress: { senderAccess: { allowed: true } },
+    isSenderCurrent: () => true,
   });
   hoisted.client.resolveQuestion.mockResolvedValue(cardMessage({}));
   ({ abort: accountStart, lifetime } = startAccount());
@@ -213,6 +214,28 @@ describe("buildClickClackQuestionSpec", () => {
     ["secret questions", { questions: [{ ...pendingRecord().questions[0], isSecret: true }] }],
     ["records about to expire", { expiresAtMs: now + 5_000 }],
     ["finished records", { status: "answered" }],
+    [
+      "form labels requiring exact whitespace",
+      {
+        questions: [
+          { ...pendingRecord().questions[0], presentation: "form", options: [{ label: " Yes " }] },
+        ],
+      },
+    ],
+    [
+      "labels that identify another option's canonical value",
+      {
+        questions: [
+          {
+            ...pendingRecord().questions[0],
+            options: [
+              { label: "a", value: "b" },
+              { label: "b", value: "c" },
+            ],
+          },
+        ],
+      },
+    ],
     [
       "ids the card cannot carry",
       { questions: [{ ...pendingRecord().questions[0], questionId: "Ship-Date" }] },
@@ -545,6 +568,7 @@ describe("forwardClickClackQuestionAnswer", () => {
     hoisted.access.mockResolvedValueOnce({
       preparedRoute: { revoked: false },
       channelIngress: { senderAccess: { allowed: false } },
+      isSenderCurrent: () => true,
     });
 
     await forward();
@@ -580,6 +604,7 @@ describe("forwardClickClackQuestionAnswer", () => {
     access.resolve({
       preparedRoute: { revoked: false },
       channelIngress: { senderAccess: { allowed: true } },
+      isSenderCurrent: () => true,
     });
     await run;
     expect(hoisted.resolveAnswers).not.toHaveBeenCalled();

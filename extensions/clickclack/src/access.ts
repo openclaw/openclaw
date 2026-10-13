@@ -256,6 +256,7 @@ export async function resolveClickClackInboundAccess(params: {
     return {
       shouldDispatch: false,
       isCurrent,
+      isSenderCurrent: () => false,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -282,6 +283,7 @@ export async function resolveClickClackInboundAccess(params: {
     return {
       shouldDispatch: false,
       isCurrent,
+      isSenderCurrent: () => false,
       commandAuthorized: false,
       requireMention: threadMentionPolicy.requireMention,
       mentionFacts,
@@ -354,7 +356,7 @@ export async function resolveClickClackInboundAccess(params: {
       : false,
   });
 
-  const isAdmissionCurrent = () => {
+  const isAdmissionCurrent = (checkMention = true) => {
     if (!isCurrent()) {
       return false;
     }
@@ -423,6 +425,11 @@ export async function resolveClickClackInboundAccess(params: {
     ) {
       return false;
     }
+    // A submitted card is an explicit response; it does not need the mention
+    // that activates an ordinary inbound message. Sender policy still applies.
+    if (!checkMention) {
+      return true;
+    }
     const currentThreadPolicy = resolveBotThreadMentionPolicy({
       isBotOwnedThread,
       requireMentionInBotThreads: currentGroupPolicy.requireMentionInBotThreads,
@@ -453,6 +460,7 @@ export async function resolveClickClackInboundAccess(params: {
     shouldDispatch:
       isAdmissionCurrent() && !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
     isCurrent: isAdmissionCurrent,
+    isSenderCurrent: () => isAdmissionCurrent(false),
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,

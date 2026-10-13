@@ -36,7 +36,7 @@ const account = {
   requireMention: false,
   mentionPatterns: [],
   groups: {},
-  config: { allowFrom: ["*"] },
+  config: { workspace: "wsp_1", allowFrom: ["*"] },
 } satisfies ResolvedClickClackAccount;
 
 const message: ClickClackMessage = {
@@ -69,6 +69,7 @@ it("sends ask_user prompts as question cards and other replies as text", async (
     runInAccountContext: <T>(run: () => T) => run(),
   };
   await handleClickClackInbound({ account, config: {} as CoreConfig, questionLifetime, message });
+  expect(runtime.channel.inbound.dispatch).toHaveBeenCalledOnce();
   const delivery = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0].delivery;
   const prompt = {
     text: "Pick a date",

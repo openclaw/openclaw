@@ -808,6 +808,27 @@ describe("ClickClack HTTP client", () => {
     });
   });
 
+  it("includes the native question in a direct message", async () => {
+    const question = {
+      external_id: "ask_0123456789abcdef0123456789abcdef",
+      expires_at: "2026-10-13T12:00:00Z",
+      allow_skip: true,
+      items: [{ id: "date", header: "Date", prompt: "Which date?" }],
+    };
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ message: { id: "msg_dm_card", question } }),
+    );
+    const client = createTestClient(fetchMock as unknown as typeof fetch);
+
+    await client.createDirectMessage("dcn_1", "Which date?", { question });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://clickclack.example/api/dms/dcn_1/messages");
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      body: "Which date?",
+      question,
+    });
+  });
+
   it("rejects activity rows without a channel or conversation target", async () => {
     const fetchMock = vi.fn();
     const client = createTestClient(fetchMock as unknown as typeof fetch);

@@ -97,7 +97,12 @@ function buildCardItem(
     if (
       !hasLength(label, 1, MAX_LABEL_LENGTH) ||
       (description && characterCount(description) > MAX_DESCRIPTION_LENGTH) ||
-      seenLabels.has(labelKey)
+      seenLabels.has(labelKey) ||
+      // Forms preserve label bytes; the card's trimmed label would be different.
+      (question.presentation === "form" && label !== option.label) ||
+      // Gateway canonicalization prefers an exact value over a matching label.
+      // Keep a label belonging to another option's value on the text path.
+      question.options.some((candidate) => candidate !== option && candidate.value === label)
     ) {
       return null;
     }
@@ -410,7 +415,11 @@ async function responderMayAnswer(params: {
       question: undefined,
     },
   });
-  return !access.preparedRoute.revoked && access.channelIngress?.senderAccess.allowed === true;
+  return (
+    !access.preparedRoute.revoked &&
+    access.channelIngress?.senderAccess.allowed === true &&
+    access.isSenderCurrent()
+  );
 }
 
 const REOPEN_FOR_ALLOWED_RESPONDER: CardOutcome = {

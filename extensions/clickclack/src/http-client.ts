@@ -561,6 +561,7 @@ export function createClickClackClient(options: ClientOptions) {
       createMessage(`/api/dms/${encodeURIComponent(conversationId)}/messages`, body, {
         quotedMessageId: opts?.quotedMessageId,
         nonce: opts?.nonce,
+        question: opts?.question,
       }),
     resolveQuestion: async (
       messageId: string,
