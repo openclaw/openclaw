@@ -64,28 +64,6 @@ import {
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
-const mutationAuthorizationDiagnostic = vi.hoisted(() => ({ active: false }));
-vi.mock("./session-mutation-authorization-error.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-mutation-authorization-error.js")>();
-  return {
-    ...actual,
-    SessionMutationAuthorizationChangedError: new Proxy(
-      actual.SessionMutationAuthorizationChangedError,
-      {
-        construct(target, args, newTarget) {
-          if (mutationAuthorizationDiagnostic.active) {
-            console.error(
-              "configured agent mutation authorization diagnostic",
-              new Error("Mutation authorization construction").stack,
-            );
-          }
-          return Reflect.construct(target, args, newTarget);
-        },
-      },
-    ),
-  };
-});
-
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
@@ -631,7 +609,6 @@ describe("gateway server chat", () => {
 
   test("sessions.send creates a configured agent main session before sending", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
-    mutationAuthorizationDiagnostic.active = true;
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
       entries: { main: {}, orion: {} },
@@ -645,7 +622,7 @@ describe("gateway server chat", () => {
         message: "hello orion",
         idempotencyKey: "idem-sessions-send-orion",
       });
-      expect(res.ok, JSON.stringify(res)).toBe(true);
+      expect(res.ok).toBe(true);
       expect(res.payload?.runId).toBe("idem-sessions-send-orion");
 
       expect(
@@ -656,7 +633,6 @@ describe("gateway server chat", () => {
       ).toBeTypeOf("string");
       await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
-      mutationAuthorizationDiagnostic.active = false;
       await settleGatewayFixture();
       testState.agentsConfig = undefined;
       await removeTempDir(dir);
