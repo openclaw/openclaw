@@ -3,6 +3,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveStateDir } from "../paths.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { withActor } from "./session-actor-worker.test-support.js";
 import type { SessionLifecycleProjectionCommit } from "./session-lifecycle-projection.types.js";
@@ -55,11 +56,13 @@ it("reuses lifecycle actor facts and falls back after another writer or actor re
   await withActor(async (f) => {
     const sessionKey = f.target.sessionKey;
     const original = f.read().entry!;
-    const backend = runWithSqliteWorkerStateContext({ environment: { ...process.env } }, () =>
-      bindSqliteWorkerBackend(
-        { agentId: "main" },
-        { database: f.database.db, databasePath: f.database.path },
-      ),
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() } },
+      () =>
+        bindSqliteWorkerBackend(
+          { agentId: "main" },
+          { database: f.database.db, databasePath: f.database.path },
+        ),
     );
     const input = {
       removals: [],
