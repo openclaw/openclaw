@@ -430,7 +430,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
       prepareWorkerGitHubEnvironment({
         binding,
         stateDir: path.join(root, "state"),
-        runId: "turn",
+        turnId: "turn",
         cwd,
         signal: controller.signal,
       });
