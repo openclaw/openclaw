@@ -255,7 +255,10 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
         );
       const external = new DatabaseSync(target.database.path);
       try {
-        if (admission !== "cold") {
+        if (admission === "cold") {
+          // The host fixture writer can already have published canonical admission.
+          markCanonicalSessionValidationPending(database);
+        } else {
           expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
             "requested-message",
           ]);
