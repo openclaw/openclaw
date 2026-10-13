@@ -1004,8 +1004,9 @@ Bookkeeping operations check coordinator lifetime before dispatch and apply thei
 execution predicates in the worker transaction, without transaction or commit
 handshakes back to the host. An accepted write may finish after caller revocation;
 its receipt grants no authority for another GitHub action. FIFO writes and shutdown
-still join native settlement. An unknown outcome remains an error for that write,
-but does not disable later operations that reread the current durable state.
+still join native settlement. An unknown outcome remains an error for that write;
+bookkeeping may reread durable state, but retained lifecycle authority stays denied
+until its physical owner closes and restarts.
 Reporting and claim deferral each use one worker transaction across the relevant
 publication kinds, including when one kind has no stored requests.
 
@@ -1058,6 +1059,17 @@ coordinators only await operations and apply committed facts. See the
 [SDK migration guide](/plugins/sdk-migration/how-to-migrate#await-github-publication-operations)
 for method pairs. Personal OAuth `cancelAuthorization` and `disconnect` keep their
 separate compatibility contract.
+
+The receipt owner retains immutable shared/personal lifecycle bindings separately
+from mutable request status. Cold preparation uses `githubPublication.lifecycle`;
+final availability and executor guards read only memory. Pending publication
+writes deny those guards before dispatch, including personal-session cleanup.
+Committed postimages and tombstones install before denial is released. Confirmed
+rollback releases only its own pending operation; uncertainty stays denied, and
+delete/reinsert never revives a retained binding. Pending writes also revoke
+unadmitted source capabilities; already-admitted writes retain their existing
+native source reservations through destination settlement. The database-worker
+custody guard enumerates every request/lifecycle writer and its owner entry.
 
 Publication execution is owned by the coordinator's per-request promise and
 workspace exclusion. Its worker transaction retains execution predicates, while

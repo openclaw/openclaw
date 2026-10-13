@@ -13,7 +13,7 @@ import * as repository from "../gateway/github-repository-publication-store.work
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import {
   assertGitHubPublicationConnectionSource,
