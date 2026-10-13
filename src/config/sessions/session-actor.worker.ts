@@ -307,7 +307,9 @@ export function createSessionActorWorker(
         ) {
           return undefined;
         }
-        const anchor = current.transcript.anchors.find((anchor) => anchor.entryId === entryId);
+        const anchor = current.transcript.anchors.find(
+          (candidate) => candidate.entryId === entryId,
+        );
         return {
           entry: {
             sessionId: current.entry.sessionId,
