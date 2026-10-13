@@ -79,10 +79,14 @@ describe("update completion ownership", () => {
       expect(reportedResult("repair")).toMatchObject({
         status: pendingAgain ? "warning" : "ok",
       });
-      expect(reportedResult("repair")).toHaveProperty(
-        "postUpdate.doctor",
-        pendingAgain ? { status: "warning", warnings: [finalPassWarning] } : { status: "ok" },
-      );
+      // Post-plugin convergence reports the still-pending migration once, as a
+      // plugin warning; Doctor's earlier copies are retired.
+      expect(reportedResult("repair")).toHaveProperty("postUpdate.doctor", { status: "ok" });
+      if (pendingAgain) {
+        expect(reportedResult("repair")).toHaveProperty("postUpdate.plugins.warnings", [
+          expect.objectContaining({ pluginId: pending.pluginId, message: finalPassWarning }),
+        ]);
+      }
       // The earlier warning steps were persisted as reported; the run history and
       // its rendered report must match the ledger after the final pass.
       const [run] = listUpdateRuns();

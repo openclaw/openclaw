@@ -435,7 +435,17 @@ async function updateFinalizeCommandInternal(
           pluginUpdate: initialPluginUpdate,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
         });
-        const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(doctorWarnings);
+        // Post-plugin convergence rereads the ledger and reports each still-pending
+        // migration as a plugin warning; that final report supersedes Doctor's.
+        const finallyReportedPluginIds = new Set(
+          (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
+            warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+          ),
+        );
+        const retiredWarnings = await readRetiredDeferredPluginMigrationWarnings(
+          doctorWarnings,
+          finallyReportedPluginIds,
+        );
         phase.assertCurrent();
         if (retiredWarnings.size > 0) {
           // Earlier Doctor warnings were persisted when reported; retire the ones a
