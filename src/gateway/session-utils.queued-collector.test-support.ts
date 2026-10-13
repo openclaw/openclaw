@@ -11,7 +11,7 @@ import { spawnSubagentDirect } from "../agents/subagents/spawn/subagent-spawn.js
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler, reserveSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionResetPolicy } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -88,6 +88,7 @@ export function useQueuedCollectorFixture() {
         entries: { main: { workspace: state.workspaceDir } },
       },
     });
+    await captureRuntimeConfigAsyncReader()();
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
@@ -522,88 +523,80 @@ suite.define(() => {
       await retainedReply.waitFor({ state: "visible" });
       expect(await retainedReply.locator(".chat-reply-attribution").count()).toBe(0);
       await progressCard.waitFor({ state: "visible" });
-      await page.evaluate((sessionKey) => {
-        const titleHistory: string[] = [];
-        const paneTitleHistory: string[] = [];
-        const documentTitleHistory: string[] = [];
-        const sessionStateHistory: Array<{
-          gatewaySessionKey?: string;
-          loading?: boolean;
-          selectedTitle?: string;
-        }> = [];
-        const recordTitle = () => {
-          const row = [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")].find(
-            (candidate) => candidate.dataset.sessionKey === sessionKey,
-          );
-          const title = row
-            ?.querySelector(".sidebar-recent-session__name")
-            ?.textContent?.replace(/\s+/g, " ")
-            .trim();
-          if (title && titleHistory.at(-1) !== title) {
-            titleHistory.push(title);
-          }
-          const paneTitle = document
-            .querySelector(
-              "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__session-title",
-            )
-            ?.textContent?.replace(/\s+/g, " ")
-            .trim();
-          if (paneTitle && paneTitleHistory.at(-1) !== paneTitle) {
-            paneTitleHistory.push(paneTitle);
-          }
-          if (document.title && documentTitleHistory.at(-1) !== document.title) {
-            documentTitleHistory.push(document.title);
-          }
-        };
-        new MutationObserver(recordTitle).observe(document.documentElement, {
-          childList: true,
-          characterData: true,
-          subtree: true,
-        });
-        recordTitle();
-        (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory = titleHistory;
-        (
-          window as Window & {
-            archivePaneTitleHistory?: string[];
-            archiveDocumentTitleHistory?: string[];
-          }
-        ).archivePaneTitleHistory = paneTitleHistory;
-        (
-          window as Window & {
-            archivePaneTitleHistory?: string[];
-            archiveDocumentTitleHistory?: string[];
-            archiveSessionStateHistory?: typeof sessionStateHistory;
-          }
-        ).archiveDocumentTitleHistory = documentTitleHistory;
-        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
-          runtime?: {
-            context?: {
-              gateway?: { snapshot?: { sessionKey?: string } };
-              sessions?: {
-                subscribe: (
-                  listener: (state: {
-                    loading?: boolean;
-                    result?: { sessions?: Array<{ key: string; derivedTitle?: string }> } | null;
-                  }) => void,
-                ) => () => void;
-              };
-            };
+      await evaluateControlUiContext(
+        page,
+        (application, sessionKey) => {
+          const titleHistory: string[] = [];
+          const paneTitleHistory: string[] = [];
+          const documentTitleHistory: string[] = [];
+          const sessionStateHistory: Array<{
+            gatewaySessionKey?: string;
+            loading?: boolean;
+            selectedTitle?: string;
+          }> = [];
+          const recordTitle = () => {
+            const row = [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")].find(
+              (candidate) => candidate.dataset.sessionKey === sessionKey,
+            );
+            const title = row
+              ?.querySelector(".sidebar-recent-session__name")
+              ?.textContent?.replace(/\s+/g, " ")
+              .trim();
+            if (title && titleHistory.at(-1) !== title) {
+              titleHistory.push(title);
+            }
+            const paneTitle = document
+              .querySelector(
+                "openclaw-chat-pane.chat-pane-cache__pane--active .chat-pane__session-title",
+              )
+              ?.textContent?.replace(/\s+/g, " ")
+              .trim();
+            if (paneTitle && paneTitleHistory.at(-1) !== paneTitle) {
+              paneTitleHistory.push(paneTitle);
+            }
+            if (document.title && documentTitleHistory.at(-1) !== document.title) {
+              documentTitleHistory.push(document.title);
+            }
           };
-        };
-        shell.runtime?.context?.sessions?.subscribe((state) => {
-          const selectedRow = state.result?.sessions?.find((session) => session.key === sessionKey);
-          sessionStateHistory.push({
-            gatewaySessionKey: shell.runtime?.context?.gateway?.snapshot?.sessionKey,
-            loading: state.loading,
-            selectedTitle: selectedRow?.derivedTitle,
+          new MutationObserver(recordTitle).observe(document.documentElement, {
+            childList: true,
+            characterData: true,
+            subtree: true,
           });
-        });
-        (
-          window as Window & {
-            archiveSessionStateHistory?: typeof sessionStateHistory;
-          }
-        ).archiveSessionStateHistory = sessionStateHistory;
-      }, selected.key);
+          recordTitle();
+          (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory =
+            titleHistory;
+          (
+            window as Window & {
+              archivePaneTitleHistory?: string[];
+              archiveDocumentTitleHistory?: string[];
+            }
+          ).archivePaneTitleHistory = paneTitleHistory;
+          (
+            window as Window & {
+              archivePaneTitleHistory?: string[];
+              archiveDocumentTitleHistory?: string[];
+              archiveSessionStateHistory?: typeof sessionStateHistory;
+            }
+          ).archiveDocumentTitleHistory = documentTitleHistory;
+          application.sessions.subscribe((state) => {
+            const selectedRow = state.result?.sessions?.find(
+              (session) => session.key === sessionKey,
+            );
+            sessionStateHistory.push({
+              gatewaySessionKey: application.gateway.snapshot.sessionKey,
+              loading: state.loading,
+              selectedTitle: selectedRow?.derivedTitle,
+            });
+          });
+          (
+            window as Window & {
+              archiveSessionStateHistory?: typeof sessionStateHistory;
+            }
+          ).archiveSessionStateHistory = sessionStateHistory;
+        },
+        selected.key,
+      );
 
       for (const row of batchRows) {
         await rowFor(row.key).click({ modifiers: ["Alt"] });
@@ -869,14 +862,28 @@ suite.define(() => {
         ]),
       },
       sessionKey: mainKey,
+      sessionTranscripts: {
+        [deletedKey]: {
+          messages: [{ role: "assistant", content: "Synthetic conversation before deletion." }],
+        },
+        [mainKey]: {
+          messages: [{ role: "assistant", content: "Synthetic main conversation after deletion." }],
+        },
+      },
     });
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, deletedKey));
-      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const activePane = page.locator(
+        'openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]',
+      );
       await activePane
         .locator(".agent-chat__input textarea")
         .waitFor({ state: "visible", timeout: 10_000 });
+
+      await activePane
+        .getByText("Synthetic conversation before deletion.", { exact: true })
+        .waitFor();
 
       const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
         .length;
@@ -891,6 +898,17 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname, { timeout: 15_000 })
         .toBe(controlUiSessionPath(mainKey));
+      await activePane
+        .getByText("Synthetic main conversation after deletion.", { exact: true })
+        .waitFor();
+      expect(
+        await activePane
+          .getByText("Synthetic conversation before deletion.", { exact: true })
+          .count(),
+      ).toBe(0);
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey))
+        .toBe(mainKey);
       await expect
         .poll(() =>
           activePane.evaluate(

@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -262,16 +264,19 @@ describe("chat header session menu", () => {
       const container = document.createElement("div");
       document.body.append(container);
       containers.push(container);
-      render(
-        pane.renderPaneHeader(
-          createPaneHeaderWorkspaceFixture(state),
-          session,
-          false,
-          undefined,
-          false,
-          null,
-        ),
-        container,
+      mountSolid(
+        () =>
+          createComponent(LitContent, {
+            value: pane.renderPaneHeader(
+              createPaneHeaderWorkspaceFixture(state),
+              session,
+              false,
+              undefined,
+              false,
+              null,
+            ),
+          }),
+        { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
       await menu?.updateComplete;
@@ -316,16 +321,19 @@ describe("chat header session menu", () => {
     const container = document.createElement("div");
     document.body.append(container);
     containers.push(container);
-    render(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
+    mountSolid(
+      () =>
+        createComponent(LitContent, {
+          value: pane.renderPaneHeader(
+            createPaneHeaderWorkspaceFixture(state),
+            session,
+            false,
+            undefined,
+            false,
+            null,
+          ),
+        }),
+      { container },
     );
     const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
     if (!menu) {

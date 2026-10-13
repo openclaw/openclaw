@@ -79,6 +79,7 @@ public enum DeviceSettingsPanel: String, CaseIterable, Sendable {
     case quickChatShortcut = "quick-chat-shortcut"
     case microphoneTest = "microphone-test"
     case browserImport = "browser-import"
+    case aiSetup = "ai-setup"
     case connection, gateways, debug, diagnostics, licenses, about, watch
 }
 
@@ -335,6 +336,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let keepAwakeEnabled: Bool?
         public let healthSummaryAvailable: Bool?
         public let healthSummaryEnabled: Bool?
+        public let aiSetupAvailable: Bool?
 
         public init(
             canvasEnabled: Bool? = nil,
@@ -348,7 +350,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             unattendedDesktopEnabled: Bool? = nil,
             keepAwakeEnabled: Bool? = nil,
             healthSummaryAvailable: Bool? = nil,
-            healthSummaryEnabled: Bool? = nil)
+            healthSummaryEnabled: Bool? = nil,
+            aiSetupAvailable: Bool? = nil)
         {
             self.canvasEnabled = canvasEnabled
             self.cameraEnabled = cameraEnabled
@@ -362,6 +365,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.keepAwakeEnabled = keepAwakeEnabled
             self.healthSummaryAvailable = healthSummaryAvailable
             self.healthSummaryEnabled = healthSummaryEnabled
+            self.aiSetupAvailable = aiSetupAvailable
         }
     }
 

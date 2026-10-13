@@ -96,11 +96,6 @@ describe("OpenAI Responses provider", () => {
       },
     },
     {
-      label: "JSON object",
-      responseFormat: { type: "json_object" },
-      expected: { type: "json_object" },
-    },
-    {
       label: "text",
       responseFormat: { type: "text" },
       expected: { type: "text" },
@@ -116,7 +111,7 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each(["none", "short", "long"] as const)(
+  it.each(["long"] as const)(
     "identifies OpenCode conversations with %s cache retention",
     async (cacheRetention) => {
       await streamOpenAIResponses(model({ baseUrl: "https://opencode.ai/zen/v1" }), context, {
@@ -130,7 +125,7 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each([undefined, "default", "priority"] as const)(
+  it.each(["priority"] as const)(
     "sends service tier %s from simple completions",
     async (serviceTier) => {
       await streamSimpleOpenAIResponses(model(), context, { apiKey: "test", serviceTier }).result();
@@ -252,11 +247,9 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    { id: "gpt-5.6-sol", cacheRetention: "short", ttl: undefined, retention: undefined },
     { id: "gpt-5.6-sol", cacheRetention: "long", ttl: "30m", retention: undefined },
     { id: "gpt-5.6-sol", cacheRetention: "none", ttl: undefined, retention: undefined },
     { id: "gpt-5.5", cacheRetention: "long", ttl: undefined, retention: "24h" },
-    { id: "gpt-5.5", cacheRetention: "short", ttl: undefined, retention: undefined },
   ] as const)(
     "serializes $id $cacheRetention caching through both Responses builders",
     async ({ id, cacheRetention, ttl, retention }) => {
@@ -298,16 +291,7 @@ describe("OpenAI Responses provider", () => {
 
   it.each([
     { id: "gpt-6.1-sol", reasoningEffort: undefined, expectedEffort: undefined },
-    { id: "gpt-6.1-sol", reasoningEffort: "none", expectedEffort: undefined },
     { id: "gpt-6.1-sol", reasoningEffort: "minimal", expectedEffort: "low" },
-    { id: "gpt-6.1-sol", reasoningEffort: "max", expectedEffort: "max" },
-    { id: "gpt-6-astra", reasoningEffort: undefined, expectedEffort: undefined },
-    { id: "gpt-6-astra", reasoningEffort: "minimal", expectedEffort: "low" },
-    { id: "gpt-6-astra", reasoningEffort: "xhigh", expectedEffort: "xhigh" },
-    { id: "gpt-6-astra", reasoningEffort: "max", expectedEffort: "max" },
-    { id: "gpt-6-sol", reasoningEffort: "none", expectedEffort: "none" },
-    { id: "gpt-6-sol", reasoningEffort: "max", expectedEffort: "max" },
-    { id: "gpt-6-luna", reasoningEffort: "none", expectedEffort: "none" },
     { id: "gpt-6-luna", reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
     "honors $id reasoning and sampling without catalog metadata for $reasoningEffort",

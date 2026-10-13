@@ -246,7 +246,12 @@ async function resolveAssistantMediaAvailability(
       mimeType && (mediaKind === "audio" || mediaKind === "video")
         ? await resolvePlaybackMetadataForSource({
             sourcePath: opened.realPath,
-            sourceStat: opened.stat,
+            sourceStat: {
+              size: opened.stat.size,
+              mtimeMs: opened.stat.mtimeMs,
+              ctimeMs: opened.stat.ctimeMs,
+              exactIdentity: opened.exactIdentity,
+            },
             mimeType,
             kind: mediaKind,
             signal,
@@ -439,7 +444,12 @@ export async function handleControlUiAssistantMediaRequest(
     ) {
       const playback = await resolvePlaybackTranscode({
         sourcePath: opened.realPath,
-        sourceStat: opened.stat,
+        sourceStat: {
+          size: opened.stat.size,
+          mtimeMs: opened.stat.mtimeMs,
+          ctimeMs: opened.stat.ctimeMs,
+          exactIdentity: opened.exactIdentity,
+        },
         mimeType: contentType,
         kind: mediaKind,
         signal: byteStream.signal,

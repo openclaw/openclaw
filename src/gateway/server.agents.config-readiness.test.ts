@@ -4,6 +4,7 @@ import "./server-start.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { localStateOwnerFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
@@ -279,21 +280,30 @@ it("publishes agent mutations before acknowledging immediate session and roster 
                         operator.request("agents.delete", deletion),
                         otherOperator.request("agents.delete", deletion),
                       ]);
-                      expect(results).toEqual(
-                        expect.arrayContaining([
-                          {
-                            status: "fulfilled",
-                            value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
-                          },
-                          {
-                            status: "rejected",
-                            reason: expect.objectContaining({
-                              code: "INVALID_REQUEST",
-                              message: `agent "${overlapAgentId}" not found`,
-                            }),
-                          },
-                        ]),
-                      );
+                      expect(results.filter((result) => result.status === "fulfilled")).toEqual([
+                        {
+                          status: "fulfilled",
+                          value: expect.objectContaining({ ok: true, agentId: overlapAgentId }),
+                        },
+                      ]);
+                      const failure: unknown = results.find(
+                        (result) => result.status === "rejected",
+                      )?.reason;
+                      if (
+                        failure instanceof GatewayClientRequestError &&
+                        failure.code === "UNAVAILABLE"
+                      ) {
+                        // Cleanup can outlast the concurrent loser's five-second lease wait.
+                        expect(failure.message).toContain(
+                          `agent deletion core:agent-deletion/${overlapAgentId} is held by `,
+                        );
+                        expect(failure.message).toContain("code=OPENCLAW_STATE_LEASE_HELD");
+                      } else {
+                        expect(failure).toMatchObject({
+                          code: "INVALID_REQUEST",
+                          message: `agent "${overlapAgentId}" not found`,
+                        });
+                      }
                     } else {
                       await expect(
                         operator.request("agents.delete", deletion),
@@ -302,6 +312,7 @@ it("publishes agent mutations before acknowledging immediate session and roster 
                         agentId: overlapAgentId,
                       });
                     }
+                    expect(getRuntimeConfig().agents?.entries?.[overlapAgentId]).toBeUndefined();
                   }
                 }),
               ),

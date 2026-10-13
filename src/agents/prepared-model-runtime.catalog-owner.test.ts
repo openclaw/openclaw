@@ -39,6 +39,50 @@ const fixture = usePreparedModelRuntimeHarness();
 const { mocks } = fixture;
 
 describe("prepared catalog owner lifecycle", () => {
+  it.each([
+    ["qwen3:8bb", "qwen3:8b"],
+    ["qwen3:8b", "qwen3:8bb"],
+  ])("updates retained catalog advisories on hot reload from %s to %s", async (before, after) => {
+    const worker = mocks.runPreparedModelCatalogWorker;
+    mocks.authStorage.getAll.mockReturnValue({ ollama: { type: "api_key", key: "ollama-local" } });
+    mocks.configuredAgentIds = ["pro"];
+    const listed = { provider: "ollama", id: "qwen3:8b", name: "Qwen" };
+    worker.mockResolvedValue({
+      entries: [listed],
+      routeVariants: [listed],
+      providerOutcomes: [
+        {
+          provider: "ollama",
+          status: "ready",
+          modelIdCatalog: { baseUrl: "http://localhost:11434", modelIds: ["qwen3:8b"] },
+          ...(before === "qwen3:8bb" ? { unlistedConfiguredModelIds: [before] } : {}),
+        },
+      ],
+    });
+    const config: OpenClawConfig = {
+      agents: { entries: { pro: {} }, defaults: { model: `ollama/${before}` } },
+    };
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    await refreshPreparedModelRuntimeSnapshots(config, options);
+    const original = await prepareModelRuntimeSnapshot(fixture.agentInput("pro", config));
+    const initial = await original.loadFullModelCatalog!({ refresh: true, wait: true });
+    const missing = (catalog: ModelCatalogSnapshot) =>
+      catalog.providerOutcomes?.flatMap((outcome) => outcome.unlistedConfiguredModelIds ?? []);
+    expect(missing(initial)).toEqual(before === "qwen3:8bb" ? [before] : []);
+    worker.mockClear();
+
+    const changed: OpenClawConfig = {
+      ...config,
+      agents: { ...config.agents, defaults: { model: `ollama/${after}` } },
+    };
+    await refreshPreparedModelRuntimeSnapshots(changed, options);
+    const rebuilt = await prepareModelRuntimeSnapshot(fixture.agentInput("pro", changed));
+    const current = rebuilt.readFullModelCatalog!();
+    expect(current).toBeDefined();
+    expect(missing(current!)).toEqual(after === "qwen3:8bb" ? [after] : []);
+    expect(worker).not.toHaveBeenCalled();
+  });
+
   it("retains the current preparation across adopted auth", async () => {
     mocks.configuredAgentIds = ["alpha"];
     const agentDir = fixture.state.agentDir("alpha");

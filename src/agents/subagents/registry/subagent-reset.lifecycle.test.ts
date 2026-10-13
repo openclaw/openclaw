@@ -5,7 +5,7 @@ import {
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
 /** Explicit reset retires child work without erasing its durable conversations. */
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
@@ -13,7 +13,7 @@ import { clearFollowupDrainCallback } from "../../../auto-reply/reply/queue/drai
 import { clearFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -36,6 +36,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
 const childKey = (id: string) => "agent:main:subagent:" + id;

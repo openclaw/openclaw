@@ -62,11 +62,6 @@ export {
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
   OperatorApprovalHistoryCursorError,
 } from "./operator-approval-store.rows.js";
-export {
-  // Gateway boot admission closes orphaned rows and prunes before serving requests.
-  closeOrphanedOperatorApprovals,
-  pruneTerminalOperatorApprovals,
-} from "./operator-approval-store.boot.js";
 
 /** Storage admission failure is not evidence that a pending row is corrupt. */
 export function isOperatorApprovalStoreRefusal(error: unknown): boolean {
@@ -219,6 +214,11 @@ function execute<Key extends Operation>(
   );
 }
 
+export function recoverOperatorApprovalsOnStartup(
+  params: Input<"operatorApprovals.recoverStartup">,
+) {
+  return execute("operatorApprovals.recoverStartup", params);
+}
 export function insertOperatorApproval(params: Input<"operatorApprovals.insert">) {
   return execute("operatorApprovals.insert", params);
 }

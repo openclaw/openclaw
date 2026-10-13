@@ -644,14 +644,14 @@ describe("codex command", () => {
             codexControlRequest,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (bindingIdentity) => {
+              readAsync: async (bindingIdentity) => {
                 if (resumeAccepted) {
                   if (failure === "read") {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   elapsedClock.mockReturnValue(1_001);
                 }
-                return testCodexAppServerBindingStore.read(bindingIdentity);
+                return await testCodexAppServerBindingStore.readAsync(bindingIdentity);
               },
             },
           },

@@ -14,8 +14,14 @@ const mocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(),
 }));
 
+// mock-isolation: Trajectory export fixtures select synthetic stores without reading operator config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {

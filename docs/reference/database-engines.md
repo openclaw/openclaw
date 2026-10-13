@@ -32,8 +32,11 @@ and tables. Put its connection DSN in a secret, then configure a SecretRef:
 
 Provide `OPENCLAW_DATABASE_DSN` in the Gateway's environment through your secret
 manager. It is the secret referenced by this example, not an engine-selection
-environment variable. [File, exec, and secret-store references](/gateway/secrets/secretref-contract)
-are also supported. The host resolves the secret and passes the connection to
+environment variable. [File and exec references](/gateway/secrets/secretref-contract)
+are also supported. Store-backed references are rejected because resolving them
+requires the shared database that this connection must open. Use an env, file or
+exec SecretRef instead; `openclaw doctor` reports invalid connection refs.
+The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
 
@@ -44,7 +47,7 @@ that stores without a PostgreSQL schema remain on SQLite.
 | Field                            | Default      | Meaning                                                                                                                                                          |
 | -------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `database.engine`                | `"sqlite"`   | `"sqlite"` or `"postgres"`. PostgreSQL applies to every registered store that supplies a PostgreSQL schema.                                                      |
-| `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or SecretRef; prefer a SecretRef.                                                                                          |
+| `database.postgres.connection`   | None         | Required for PostgreSQL. A DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema. |
 
 Workboard is currently the only PostgreSQL-supported store. Shared state,
@@ -81,6 +84,21 @@ version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
 
+PostgreSQL catalog admission captures columns, keys, checks, and indexes from the
+server in one consistent read. These facts are separate from the anchor's SQLite
+catalog. Ordinary data commits retain schema admission; schema owners publish
+replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
+page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
+repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction.
+
+Runtime PostgreSQL queries run in workers. Physical open and boot migration code
+may use the synchronous `withEngineStoreAdmission` scope from
+`openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
+that scope ends does not authorize main-thread queries. Close remains available
+to settle resources. The store owner supplies `openEngineStore` with its existing
+SQLite-data decision, so partially initialized stores are also protected from an
+accidental engine switch.
+
 Back up both the local anchor and its PostgreSQL schema as a matched set. Stop
 the Gateway while taking or restoring that pair, and include the SQLite stores
 that still hold the rest of the installation. A local anchor backup alone does
@@ -94,6 +112,12 @@ version. PostgreSQL forward migrations are not available until schema lockstep
 tooling lands. A version mismatch refuses admission; restore a matching backup
 with its matching OpenClaw version, or keep the existing version until a supported
 migration exists. Never edit the schema version to bypass admission.
+
+The generated shared-state `state.postgres.sql` and `fragment-*.postgres.sql`
+files contain runtime DDL only. Their caller supplies the transaction and
+`search_path`; no second wrapped copy is generated. For manual readiness checks,
+see [applying the generated state DDL](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation).
+The agent readiness artifact remains wrapped until the agent-store cutover.
 
 PostgreSQL text cannot contain NUL characters. Values containing NUL fail with an
 engine error. Search/vector capabilities remain store-specific; selecting an

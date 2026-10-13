@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
@@ -71,7 +72,13 @@ export type {
 } from "./update-managed-service-handoff-lease-types.js";
 
 export function resolveManagedUpdateLeaseDatabasePath(): string {
-  return path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
+  const uid = process.getuid?.();
+  // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
+  const preferredDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+  return path.join(
+    resolvePreferredOpenClawTmpDir({ preferredDir }),
+    "managed-update-handoffs.sqlite",
+  );
 }
 
 /** One lease implementation, preloaded normally and sealed before package replacement. */

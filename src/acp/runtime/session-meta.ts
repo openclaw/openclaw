@@ -3,6 +3,7 @@ import { captureIncognitoSessionBinding } from "../../config/sessions/session-in
 /** SQLite-backed ACP session metadata storage keyed through session-store entries. */
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import {
@@ -64,6 +65,11 @@ export function readAcpSessionEntry(params: {
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): AcpSessionStoreEntry | null {
+  warnPluginSdkDeprecation({
+    family: "acp-session",
+    method: "readAcpSessionEntry",
+    replacement: "readAcpSessionEntryAsync",
+  });
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;

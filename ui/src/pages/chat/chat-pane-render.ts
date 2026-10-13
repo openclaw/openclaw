@@ -341,8 +341,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         placementComposer.busyMessage ??
         (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
           ? placementComposer.failedUnavailableMessage
-          : null) ??
-        (state.connected && (placementStartup || initialHistoryUnavailable) ? null : pendingReason),
+          : null),
       disabledReasonTone:
         !composerAccess ||
         disabledReason ||
@@ -461,7 +460,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
-      queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,

@@ -276,8 +276,8 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
         });
         const current = readRegularFileSync({ filePath: targetPath });
         if (
-          current.stat.dev !== target.stat.dev ||
-          current.stat.ino !== target.stat.ino ||
+          current.exactIdentity.dev !== target.exactIdentity.dev ||
+          current.exactIdentity.ino !== target.exactIdentity.ino ||
           !current.buffer.equals(target.buffer)
         ) {
           throw new Error(

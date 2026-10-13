@@ -38,21 +38,12 @@ export function registerSqliteWalWorkerMaintenance(
   execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  const previous = Number(
-    // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-    database.prepare("PRAGMA wal_autocheckpoint;").get()?.wal_autocheckpoint ?? 0,
-  );
   database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-  admissions.set(database, {
-    execute,
-    cancel: () => {
-      // Without its worker the writer falls back to the bounded inline threshold.
-      if (previous > 0 && database.isOpen && !database.isTransaction) {
-        database.exec(`PRAGMA wal_autocheckpoint = ${previous};`); // sqlite-allow-raw -- Restore the connection-local threshold.
-      }
-      return cancel?.();
-    },
-  });
+  admissions.set(database, { execute, cancel });
+}
+
+export function isSqliteWalWorkerMaintained(database: DatabaseSync): boolean {
+  return admissions.get(database)?.execute !== undefined;
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {

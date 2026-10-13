@@ -26,6 +26,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import {
   discardSqliteTransactionState,
+  prepareSqliteTransactionCommit,
   withSqlitePostCommitPublications,
 } from "./sqlite-post-commit.js";
 import {
@@ -375,7 +376,7 @@ function abortImmediateTransaction(
   // the commit owner runs, no transaction may instead mean a durable COMMIT
   // followed by a guard failure or rejected Promise: retain conservative fencing.
   if (!commitStarted && db.isOpen && !db.isTransaction) {
-    discardSqliteTransactionState(db, error);
+    discardSqliteTransactionState(db, error, "rolled-back");
     return;
   }
   try {
@@ -437,7 +438,7 @@ export function runSqliteReservedTransactionSync<T>(
   options: SqliteTransactionOptions,
 ): T {
   if (isPostgresSqlConnection(db)) {
-    return db.runTransaction(operation, options, false, true, false);
+    return db.runTransaction(operation, options, false, true);
   }
   assertTransactionUsable(db);
   if (isMainThread || !db.isTransaction) {
@@ -462,6 +463,7 @@ function settleSqliteTransactionSync<T>(
   const commit = () => {
     const startedAt = Date.now();
     try {
+      prepareSqliteTransactionCommit(db);
       execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
     } finally {
       commitMs += Date.now() - startedAt;
@@ -612,19 +614,13 @@ export function runSqliteWorkerTransactionSync<T>(
 ): T {
   if (isPostgresSqlConnection(context.database)) {
     context.admit("transaction");
-    return context.database.runTransaction(
-      operation,
-      {
-        ...options,
-        withCommit(commit) {
-          context.admit("commit");
-          return options?.withCommit ? options.withCommit(commit) : commit();
-        },
+    return context.database.runTransaction(operation, {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
       },
-      false,
-      false,
-      false,
-    );
+    });
   }
   assertTransactionUsable(context.database);
   context.admit("transaction");

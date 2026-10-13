@@ -7,7 +7,7 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_COMMUNICATION_MODES } from "../../packages/gateway-protocol/src/session-communication.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../acp/runtime/session-meta-readonly.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   resolveAgentDir,
@@ -53,6 +53,7 @@ import {
 import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-overrides.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -131,10 +132,30 @@ type SessionPatchPreparation =
     };
 
 /** Stop at the first actual catalog use without committing or acquiring runtime effects. */
-export function prepareSessionsPatchEntry(
+export async function prepareSessionsPatchEntry(
   params: SessionPatchProjectionParams,
-): SessionPatchPreparation {
-  const projection = projectSessionPatchSteps(params);
+): Promise<SessionPatchPreparation> {
+  const invalidPatch = validateSessionPatchAdmission(params);
+  if (invalidPatch) {
+    return { kind: "complete", result: invalidPatch };
+  }
+  const needsRuntimeMetadata =
+    "thinkingLevel" in params.patch ||
+    "model" in params.patch ||
+    "agentRuntime" in params.patch ||
+    "contextWindow" in params.patch;
+  const acpMeta = needsRuntimeMetadata
+    ? await readAcpSessionMetaForEntryAsync({
+        sessionKey: params.storeKey,
+        agentId: normalizeAgentId(
+          params.agentId ??
+            parseAgentSessionKey(params.storeKey)?.agentId ??
+            resolveDefaultAgentId(params.cfg),
+        ),
+        entry: params.existingEntry,
+      })
+    : undefined;
+  const projection = projectSessionPatchSteps(params, acpMeta);
   const first = projection.next();
   if (first.done) {
     return { kind: "complete", result: first.value };
@@ -156,7 +177,7 @@ export async function projectSessionsPatchEntry(
     loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
   },
 ): Promise<SessionPatchProjectionResult> {
-  const preparation = prepareSessionsPatchEntry(params);
+  const preparation = await prepareSessionsPatchEntry(params);
   if (preparation.kind === "complete") {
     return preparation.result;
   }
@@ -169,12 +190,9 @@ export async function projectSessionsPatchEntry(
 
 function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
+  acpMeta: SessionAcpMeta | undefined,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
-  const invalidPatch = validateSessionPatchAdmission(params);
-  if (invalidPatch) {
-    return invalidPatch;
-  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -191,11 +209,6 @@ function* projectSessionPatchSteps(
   ): string => {
     // ACP metadata can own canonical agent keys (for example agent:main:main),
     // so key shape alone cannot identify the runtime that validates thinking.
-    const acpMeta = readAcpSessionMetaForEntry({
-      sessionKey: storeKey,
-      agentId: sessionAgentId,
-      entry,
-    });
     return (
       params.preparedAgentRuntime ??
       acpMeta?.backend ??
@@ -472,10 +485,7 @@ function* projectSessionPatchSteps(
   if (executionError) {
     return invalid(executionError);
   }
-  if (
-    "agentRuntime" in patch &&
-    readAcpSessionMetaForEntry({ sessionKey: storeKey, agentId: sessionAgentId, entry: existing })
-  ) {
+  if ("agentRuntime" in patch && acpMeta) {
     return invalid("Runtime selection is owned by this ACP session.");
   }
   if (patch.agentRuntime === null) {
@@ -603,11 +613,7 @@ function* projectSessionPatchSteps(
         agentId: sessionAgentId,
       };
       if (
-        !readAcpSessionMetaForEntry({
-          sessionKey: storeKey,
-          agentId: sessionAgentId,
-          entry: next,
-        }) &&
+        !acpMeta &&
         requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
         resolveAgentHarnessOwnerPluginIds({
           ...harnessSelection,

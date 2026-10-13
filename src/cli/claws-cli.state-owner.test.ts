@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { persistClawInstallRecord } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import {
   runClawsAddCommand,
@@ -127,10 +128,9 @@ describe("Claw CLI state ownership", () => {
   it("migrates and removes adopted ownership offline while retaining the existing agent", async () => {
     await fs.mkdir(workspace);
     await fs.writeFile(path.join(workspace, "SOUL.md"), "Existing agent\n");
-    await fs.writeFile(
-      process.env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify({ agents: { entries: { demo: { workspace } } } }),
-    );
+    const cfg = { agents: { entries: { demo: { workspace } } } };
+    await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
+    setRuntimeConfigSnapshot(cfg);
     await runClawsMigrateCommand("demo", { dryRun: true, json: true }, runtime);
     const migration = output.at(-1) as { planIntegrity: string };
     await runClawsMigrateCommand(

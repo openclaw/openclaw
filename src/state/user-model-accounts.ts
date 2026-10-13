@@ -23,6 +23,7 @@ import {
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import {
   invalidUserModelAccounts as invalidAccounts,
@@ -181,14 +182,29 @@ export function registerUserModelAuthProfileSecrets(credential: AuthProfileCrede
   }
 }
 
+function encodeUserModelAuthProfile(profile: UserModelAuthProfile): string {
+  return JSON.stringify(profileSchema.parse({ version: 1, ...profile }));
+}
+
+export function normalizeUserModelAuthProfile(profile: UserModelAuthProfile): UserModelAuthProfile {
+  const { credential, usageStats } = parseRecord(
+    encodeUserModelAuthProfile(profile),
+    profileSchema,
+  );
+  return { credential, usageStats };
+}
+
 function writeProfile(
   db: DatabaseSync,
   owner: string,
   authProfileId: string,
   profile: UserModelAuthProfile,
+  replacement = false,
 ): void {
-  const record = profileSchema.parse({ version: 1, ...profile });
-  writeRecord(db, owner, `model-account:${authProfileId}`, JSON.stringify(record));
+  writeRecord(db, owner, `model-account:${authProfileId}`, encodeUserModelAuthProfile(profile));
+  personalCredentialPublication.stagePostimages(db, [
+    { id: authProfileId, credential: profile.credential, replacement },
+  ]);
 }
 
 function accountLinks(record: UserModelLinks): UserProfileAuthLink[] {
@@ -412,7 +428,7 @@ export function connectUserModelAccount(
       const authProfileId = canReplace ? replacement.id : `personal:${owner}:${randomUUID()}`;
       record.links[credential.provider] = { authProfileId, updatedAt: Date.now() };
       params.assertCurrent("transaction");
-      writeProfile(db, owner, authProfileId, { credential });
+      writeProfile(db, owner, authProfileId, { credential }, true);
       writeLinks(db, owner, record);
       params.assertCurrent("commit");
       return { authProfileId, links: accountLinks(record) };
@@ -473,9 +489,6 @@ export async function listUserProfileAuthLinksAsync(
     { context, current: true, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
-    throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
-  }
   return reply?.links ?? [];
 }
 

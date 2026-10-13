@@ -80,6 +80,7 @@ async function createHistoricalSharedStore() {
   const turn = await persistSessionTranscriptTurn(
     { ...store.scope, sessionId: "doctor-session" },
     {
+      config: store.cfg,
       expectedSessionId: "doctor-session",
       messages: [{ message: { role: "user", content: goalOperation.objective } }],
       sessionTurnMutation: { kind: "goal", operation: goalOperation, runId: "goal-start" },

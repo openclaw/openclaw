@@ -18,6 +18,7 @@ import {
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
+import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
 import type {
   CronRuntimeMutationContracts,
   CronRuntimeWorkerOperations,
@@ -156,5 +157,40 @@ export function recordCronFailureAlertOutcomeInWorker(
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.failure-alert-outcome" },
+  );
+}
+
+export function recordCronFailureRepairSettlementInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["input"],
+): CronRuntimeWorkerOperations["cron.recordFailureRepairSettlement"]["output"] {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const committed = mutateCronRuntimeRowsInDatabase<
+        CronRuntimeMutationContracts["cron.recordFailureRepairSettlement"]["outcome"]
+      >({
+        database: db,
+        storeKey: input.storeKey,
+        jobIds: new Set([input.jobId]),
+        mutate({ jobs }) {
+          const job = jobs.get(input.jobId);
+          const repair = job?.state.failureAlertIncident?.repair;
+          if (
+            !job ||
+            !repair ||
+            repair.alerted ||
+            repair.atMs !== input.repairAtMs ||
+            job.state.lastFailureNotificationId !== input.repairId
+          ) {
+            return { value: {} };
+          }
+          repair.settledAtMs = input.settledAtMs;
+          return { upsertJobIds: [job.id], value: { job } };
+        },
+      });
+      return { outcome: committed.value };
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.failure-repair-settlement" },
   );
 }

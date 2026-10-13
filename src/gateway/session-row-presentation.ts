@@ -2,6 +2,8 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+  shareSessionRowFacts,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -82,6 +84,20 @@ const publications = new WeakMap<
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
+const sharedLists = new WeakMap<
+  GatewaySessionRow[],
+  ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
+>();
+
+export function shareSidebarSessionRows(rows: GatewaySessionRow[]) {
+  let shared = sharedLists.get(rows);
+  if (!shared) {
+    shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
+    registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
+    sharedLists.set(rows, shared);
+  }
+  return shared;
+}
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
 export function serializeSessionRow(row: GatewaySessionRow): string {
@@ -408,13 +424,15 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "dashboard") {
+    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
+      const fields =
+        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
       for (const field of Object.keys(row)) {
-        if (!SESSION_DASHBOARD_ROW_FIELDS.has(field)) {
+        if (!fields.has(field)) {
           Reflect.deleteProperty(row, field);
         }
       }
-      row.rowMode = "dashboard";
+      row.rowMode = options.rowMode;
     } else if (options.rowMode === "compact") {
       for (const field of SESSION_ROW_DETAIL_FIELDS) {
         delete row[field];

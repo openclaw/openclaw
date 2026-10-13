@@ -23,8 +23,12 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
-import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -126,6 +130,88 @@ describe("chat delivery watermark preparation", () => {
       }
     });
   });
+
+  it.each(["rewrite", "replacement"] as const)(
+    "reads released actor reply facts and rejects the old answer after %s",
+    async (change) => {
+      await withOpenClawTestState({ label: "chat-delivery-actor-receipt" }, async () => {
+        const { dispatch, rewriteSync, scope, runId } = await createReplyTranscriptFixture();
+        const acquired = await acquireSessionInputActor(
+          {
+            ...scope,
+            storePath: resolveSessionTranscriptDatabasePath(scope),
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        );
+        if (!acquired) {
+          throw new Error("Expected a durable transcript actor");
+        }
+        const { actor } = acquired;
+        const authority = { assertCurrent() {}, authorize() {} };
+        try {
+          const before = await actor.read(authority);
+          expect(
+            dispatch.captureAgentTranscriptStart(runId, {
+              ...scope,
+              ...before.transcript.watermark,
+            }),
+          ).toBe(true);
+          const appended = await actor.appendToolResult(
+            {
+              commandId: "assistant-answer",
+              phaseId: "turn",
+              turn: {
+                agentId: scope.agentId,
+                sessionKey: scope.sessionKey,
+                options: {
+                  expectedSessionId: scope.sessionId,
+                  sessionFile: "synthetic.jsonl",
+                  messages: [
+                    {
+                      eventId: "answer",
+                      message: attachSessionTranscriptRunId(
+                        { role: "assistant", content: "Committed answer." },
+                        runId,
+                      ),
+                      now: 2,
+                    },
+                  ],
+                },
+              },
+            },
+            authority,
+          );
+          expect(appended.kind).toBe("committed");
+        } finally {
+          await actor.release();
+        }
+        const anchorReads = vi.fn();
+        const readerSpy = interceptDeliverySnapshot(anchorReads);
+        try {
+          await runWithoutOwnedSessionTranscriptWrites(async () => {
+            expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
+            expect(anchorReads).not.toHaveBeenCalled();
+            if (change === "rewrite") {
+              rewriteSync("answer", "NO_REPLY");
+            } else {
+              await replaceSessionEntry(scope, {
+                sessionId: "replacement-session",
+                lifecycleRevision: "replacement",
+                updatedAt: 3,
+              });
+            }
+            expect(await dispatch.resolveReplyDelivery()).toBe("missing");
+            if (change === "rewrite") {
+              expect(anchorReads).toHaveBeenCalledTimes(1);
+            }
+          });
+        } finally {
+          readerSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("consumes the committed manager boundary without caller transcript SQL", async () => {
     await withOpenClawTestState({ label: "chat-prepared-start" }, async () => {

@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
@@ -52,6 +53,15 @@ function enforceSqliteVariableLimit(
 
 describe("SQLite transcript history events", () => {
   const scope = useHistoryEventScope();
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
   it("reads fresh generations and rows across empty and populated sessions", async () => {
     const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };

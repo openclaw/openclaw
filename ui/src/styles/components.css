@@ -5308,7 +5308,7 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--muted);
+  color: var(--session-row-muted, var(--muted));
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

@@ -284,16 +284,17 @@ readers and current-owner checks. The service exposes `listBySessionAsync`,
 synchronous fallback. External adapters remain responsible for their own
 storage, currentness, and committed publication.
 
-For channel route ownership, replace `resolveConversationRouteOwner` and
-`prepareConversationRouteOwners` with `prepareConversationRouteOwnersAsync`.
+For channel route ownership, replace `resolveConversationRouteOwner` with
+`prepareConversationRouteOwnersAsync`. The unreleased synchronous
+`prepareConversationRouteOwners` hook has been removed.
 Await its `inspectBindings(refs)` callback during preparation, then return one
 synchronous resolver per input. The callback returns a reader for the prepared
 binding facts; invoke that reader inside the resolver so committed binding
 changes invalidate ownership before an external effect. Do not retain the
 preparation callback after returning. The Gateway releases the facts after
 selection or delivery. Discord, Matrix, Slack, and Telegram use this contract for all bundled
-route ownership reads; deprecated synchronous hooks remain for external plugins
-until the next Plugin SDK major and warn when called.
+route ownership reads; the released synchronous resolver remains deprecated for
+external plugins while they migrate and warns when called.
 
 The original synchronous keyed stores, opaque `update`/`deleteIf` callbacks,
 binding managers, and adapter registrations remain compatibility APIs. They
@@ -329,6 +330,39 @@ callbacks are awaited by the host. The original APIs preserve their synchronous
 contracts through the next Plugin SDK major compatibility window. Use the narrow
 subpaths above for new imports; broad compatibility barrels retain existing APIs
 without duplicating the replacements.
+
+## Await session-backed approval routing
+
+Use the async approval-routing replacements when selecting an account, resolving
+a session target, or constructing native approval routes. They read delivery
+facts through the session worker instead of querying SQLite on the Gateway
+thread. Each synchronous API below is deprecated; append `Async` to its name
+to select the replacement:
+
+| SDK subpath                 | Deprecated APIs                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approval-native-runtime`   | `createNativeApprovalChannelRouteGates`, `createChannelNativeOriginTargetResolver`, `resolveExecApprovalSessionTarget`, `resolveApprovalRequestSessionTarget`, `resolveApprovalRequestOriginTarget`, `resolveApprovalRequestAccountId`, `resolveApprovalRequestChannelAccountId`, `doesApprovalRequestMatchChannelAccount`, `doesApprovalRequestSelectChannelAccount` |
+| `approval-client-runtime`   | `createChannelExecApprovalProfile`                                                                                                                                                                                                                                                                                                                                    |
+| `approval-delivery-runtime` | `createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes`                                                                                                                                                                                                                                                                                                |
+
+The factories still return their adapters synchronously. Await the resulting
+session-dependent routing and eligibility methods. The direct account and target
+resolvers return promises. The existing `approval-runtime` facade also exposes
+the replacements for its retained APIs.
+
+For a routing operation that needs several decisions, call
+`resolveApprovalRequestSessionDeliveryAsync` once and pass its `sessionDelivery`
+result to the async helpers. `null` records that the session has no delivery
+facts. The `ApprovalRequestSessionDelivery` type describes this prepared value.
+Use `createChannelApproverDmTargetResolverAsync` and
+`createNativeApprovalForwardingFallbackSuppressorAsync` when their callbacks
+need asynchronous routing.
+
+Prepared delivery facts select a route; they do not authorize an approval.
+Keep the host's current-authority check at the actual approval effect. The
+deprecated synchronous APIs emit a migration warning and remain available during
+their deprecation period. They will be removed in a later release after stable
+deprecation. This changes no stored format, permissions, or update behavior.
 
 ## Await Gateway approval publication
 
@@ -577,6 +611,19 @@ The synchronous fingerprint, projection, binding, and injection methods are depr
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
 
+## Prepare harness tool surfaces
+
+Use `await createAgentHarnessToolSurfaceRuntimeAsync(params)` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` before compacting a harness tool
+catalog. The returned runtime keeps the same synchronous `compactTools` and
+`cleanup` methods. When local-model lean filtering is enabled, construction
+prepares its session policy through the session worker; compaction reuses those
+facts. Other surfaces do not load session metadata for lean filtering.
+
+The synchronous `createAgentHarnessToolSurfaceRuntime` remains supported during
+its deprecation period, warns once per plugin, and will be removed in a later
+release after stable deprecation. Bundled harnesses use the asynchronous factory.
+
 ## Prepare session catalog identities
 
 Await `readSessionTranscriptCatalogTitleAsync({ agentId, sessionKey, storePath, entry })`
@@ -614,7 +661,7 @@ invoke the supplied assertion after preparation and before the final sharing rea
 replacement at the same path, even when session IDs were reused.
 
 The released synchronous `createSessionCatalogSourceActorProjector` and
-`createSessionCatalogGitHubLinker` signatures remain available for existing plugins;
+`createSessionCatalogGitHubLinker` signatures are deprecated and remain available for existing plugins;
 bundled Session Share uses the awaited helpers. Schemas, stored data, retention,
 permissions, and update behavior are unchanged.
 
@@ -669,10 +716,11 @@ initializer's ownership.
 
 The synchronous upsert, delete, and initializer `link` contracts shipped in
 `v2026.9.8` retain their arguments, immediate results, and completion timing until
-the next Plugin SDK major and explicit breaking-release approval. Their
-deprecation is recorded in TypeScript and the compatibility registry without
-runtime warnings. This migration changes no schema, stored data, retention, or
-update behavior.
+removal in a later stable release after deprecation ships. Calling any of
+these methods emits one `DEP_SESSION_PERSISTENCE` warning per plugin and process
+for the upstream-link capability family; unscoped consumers share one SDK-level
+warning. This migration changes no schema, stored data, retention, or update
+behavior.
 
 ## Await session metadata listings
 
@@ -1508,6 +1556,26 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
   </Step>
 </Steps>
 
+## Read prepared runtime config
+
+Use `readRuntimeConfig()` from `openclaw/plugin-sdk/runtime-config-snapshot`
+inside runtime handlers that need the current published config. It reads the
+prepared snapshot without opening storage and reports a missing-preparation
+error if the runtime has not loaded config yet. Prefer config already supplied
+by the handler or tool context when available.
+
+At a cold preparation boundary, use the same subpath's
+`await captureRuntimeConfigAsyncReader()()` and consume its returned config.
+That existing owner loads and publishes the snapshot asynchronously; later
+calls to `readRuntimeConfig()` read it directly.
+
+The SDK's `getRuntimeConfig(options?)` on `runtime-config-snapshot` and
+`memory-core-host-runtime-core` remains available with its synchronous cold-load
+behavior for released plugins. It is deprecated and warns once per plugin and
+runtime-config family per process. Migrate hot reads to
+`readRuntimeConfig` and cold preparation to `captureRuntimeConfigAsyncReader`.
+Removal will follow in a later stable release after deprecation ships; no stored-config migration is needed.
+
 ## Await strict transcript message preparation
 
 For `appendSessionTranscriptMessageByIdentityStrict` and
@@ -1530,30 +1598,49 @@ availability, or starting work that depends on a stored credential. Their
 database reads and writes run through the existing auth owner and workers.
 Keep the same arguments and await the replacement's result:
 
-| SDK subpath                              | Synchronous API                               | Awaited replacement                                |
-| ---------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
-| `provider-auth`                          | `ensureAuthProfileStore`                      | `ensureAuthProfileStoreAsync`                      |
-| `provider-auth`                          | `ensureAuthProfileStoreForLocalUpdate`        | `ensureAuthProfileStoreForLocalUpdateAsync`        |
-| `provider-auth`                          | `upsertAuthProfile`                           | `upsertAuthProfileAsync`                           |
-| `provider-auth`, `provider-auth-api-key` | `upsertApiKeyProfile`                         | `upsertApiKeyProfileAsync`                         |
-| `provider-auth`                          | `isProviderApiKeyConfigured`                  | `isProviderApiKeyConfiguredAsync`                  |
-| `provider-auth`                          | `isProviderAuthProfileConfigured`             | `isProviderAuthProfileConfiguredAsync`             |
-| `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`            |
-| `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`          |
-| `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync` |
-| `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`          |
-| `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`    |
-| `agent-harness-runtime`                  | `resolveModelAuthMode`                        | `resolveModelAuthModeAsync`                        |
-| `models-provider-runtime`                | `formatModelsAvailableHeader`                 | `formatModelsAvailableHeaderAsync`                 |
-| `image-generation-core`                  | `resolveCapabilityModelCandidates`            | `resolveCapabilityModelCandidatesAsync`            |
-| `provider-selection-runtime`             | `resolveConfiguredCapabilityProvider`         | `resolveConfiguredCapabilityProviderAsync`         |
-| `realtime-voice`                         | `resolveConfiguredRealtimeVoiceProvider`      | `resolveConfiguredRealtimeVoiceProviderAsync`      |
-| `tts-runtime`, `agent-runtime`           | `getTtsProvider`                              | `getTtsProviderAsync`                              |
-| `tts-runtime`                            | `isTtsProviderConfigured`                     | `isTtsProviderConfiguredAsync`                     |
-| `tts-runtime`                            | `resolveExplicitTtsOverrides`                 | `resolveExplicitTtsOverridesAsync`                 |
+| SDK subpath                              | Synchronous API                               | Awaited replacement                                  |
+| ---------------------------------------- | --------------------------------------------- | ---------------------------------------------------- |
+| `provider-auth`                          | `ensureAuthProfileStore`                      | `ensureAuthProfileStoreAsync`                        |
+| `provider-auth`                          | `ensureAuthProfileStoreForLocalUpdate`        | `ensureAuthProfileStoreForLocalUpdateAsync`          |
+| `provider-auth`                          | `upsertAuthProfile`                           | `upsertAuthProfileAsync`                             |
+| `provider-auth`, `provider-auth-api-key` | `upsertApiKeyProfile`                         | `upsertApiKeyProfileAsync`                           |
+| `provider-auth`                          | `isProviderApiKeyConfigured`                  | `isProviderApiKeyConfiguredAsync`                    |
+| `provider-auth`                          | `isProviderAuthProfileConfigured`             | `isProviderAuthProfileConfiguredAsync`               |
+| `provider-auth`                          | `listUsableProviderAuthProfileIds`            | `listUsableProviderAuthProfileIdsAsync`              |
+| `provider-auth-runtime`                  | `resolveProviderAuthProfileMetadata`          | `resolveProviderAuthProfileMetadataAsync`            |
+| `agent-runtime`                          | `loadAuthProfileStoreWithoutExternalProfiles` | `loadAuthProfileStoreWithoutExternalProfilesAsync`   |
+| `agent-runtime`                          | `loadAuthProfileStoreForSecretsRuntime`       | `loadAuthProfileStoreForRuntimeAsync`                |
+| `agent-runtime`                          | `findPersistedAuthProfileCredential`          | `findPersistedAuthProfileCredentialAsync`            |
+| `agent-runtime`                          | `resolvePersistedAuthProfileOwnerAgentDir`    | `resolvePersistedAuthProfileOwnerAgentDirAsync`      |
+| `agent-harness-runtime`                  | `resolveModelAuthMode`                        | `resolveModelAuthModeAsync`                          |
+| `models-provider-runtime`                | `formatModelsAvailableHeader`                 | `formatModelsAvailableHeaderAsync`                   |
+| `image-generation-core`                  | `resolveCapabilityModelCandidates`            | `resolveCapabilityModelCandidatesAsync`              |
+| `provider-selection-runtime`             | `resolveConfiguredCapabilityProvider`         | `resolveConfiguredCapabilityProviderAsync`           |
+| `realtime-voice`                         | `resolveConfiguredRealtimeVoiceProvider`      | `resolveConfiguredRealtimeVoiceProviderAsync`        |
+| `tts-runtime`, `agent-runtime`           | `getTtsProvider`                              | `getTtsProviderAsync`                                |
+| `tts-runtime`                            | `isTtsProviderConfigured`                     | `isTtsProviderConfiguredAsync`                       |
+| `tts-runtime`                            | `resolveExplicitTtsOverrides`                 | `resolveExplicitTtsOverridesAsync`                   |
+| `agent-sessions`                         | `AuthStorage.forAgent`, `AuthStorage.create`  | `AuthStorage.forAgentAsync`                          |
+| `agent-sessions`                         | `AuthStorage.reload`                          | `AuthStorage.reloadAsync`                            |
+| `agent-sessions`                         | `AuthStorage.set`                             | `AuthStorage.setAsync`                               |
+| `agent-sessions`                         | `AuthStorage.remove`, `AuthStorage.logout`    | `AuthStorage.removeAsync`, `AuthStorage.logoutAsync` |
+| `agent-sessions`                         | `ModelRegistry.create`                        | `ModelRegistry.createAsync`                          |
+| `agent-sessions`                         | `ModelRegistry.refresh`                       | `ModelRegistry.refreshAsync`                         |
+| `agent-sessions`                         | `ModelRegistry.unregisterProvider`            | `ModelRegistry.unregisterProviderAsync`              |
 
 The deprecated broad `agent-runtime` subpath also exposes
 `ensureAuthProfileStoreAsync`; use the focused `provider-auth` subpath for new imports.
+
+For secret-resolution reads, use `loadAuthProfileStoreForRuntimeAsync` from
+`agent-runtime` with `readOnly: true` and `allowKeychainPrompt: false`, preserving
+any other existing read options. The core helper
+`loadAuthProfileStoreForSecretsRuntimeAsync` is not a public SDK export.
+
+`resolveAuthStorePathForDisplay` remains a deprecated SDK compatibility export
+until removal in a later stable release after deprecation ships. Its async replacement,
+`resolveAuthStorePathForDisplayAsync`, is core-internal. New plugins should
+present credential or provider metadata through public APIs such as
+`resolveProviderAuthProfileMetadataAsync` from `provider-auth-runtime`.
 
 Use `loadAuthProfileStoreWithoutExternalProfilesAsync` when an existing
 `agent-runtime` integration needs persisted credential or usage facts without
@@ -1594,6 +1681,32 @@ profile; it preserves neighboring profiles. `upsertApiKeyProfileAsync` resolves
 to the profile ID after the write completes. A store returned for local update
 is a snapshot, not permission to replace newer owner state; use the owner-backed
 mutation API for the write.
+
+Replace `agent-runtime`'s `saveAuthProfileStore` with
+`updateAuthProfileStoreWithLock` from `provider-auth`. Its updater receives the
+owner's current store under the write transaction; change only the intended
+profiles and return whether the store changed. Await the result before using
+the updated credentials. This avoids replacing neighboring writes from an old
+whole-store snapshot.
+
+`AuthStorage.forAgentAsync(agentDir, config)` loads the canonical store through
+the worker. Use the awaited mutation and reload methods on that instance;
+`get`, `list`, and `has` read its prepared local view. `getApiKey` refreshes that
+view through the owner before resolving a credential. `login` and `getApiKey`
+keep their existing async signatures. Synchronous mutation methods remain
+available on instances created through the deprecated synchronous factory;
+an async instance rejects them with the required async method name. Migrate
+`AuthStorage.create(path)` by passing the path's agent directory to
+`AuthStorage.forAgentAsync`.
+
+Await `ModelRegistry.createAsync(authStorage, modelsJsonPath, options)` and
+`refreshAsync()` for disk-backed catalogs. If the owner already captured plugin
+catalogs, use `ModelRegistry.fromCapturedSources` with `options.pluginCatalogs`
+to build the registry synchronously without opening their store. Await
+`unregisterProviderAsync(name)` when removing a provider from a disk-backed
+registry. Captured session forks keep their immediate in-memory behavior.
+The synchronous disk-backed methods remain deprecated and warn on native reads
+until removal in a later stable release after deprecation ships.
 
 Image, music, video, speech, realtime voice, and realtime transcription provider
 plugins should implement

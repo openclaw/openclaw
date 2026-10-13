@@ -22,10 +22,10 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
     "openclaw/plugin-sdk/acp-runtime",
   );
-  acpHost.read.mockImplementation(actual.readAcpSessionEntry);
+  acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
   return {
     ...actual,
-    readAcpSessionEntry: acpHost.read,
+    readAcpSessionEntryAsync: acpHost.read,
   };
 });
 
@@ -75,7 +75,7 @@ export function useTelegramThreadBindingsFixture() {
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
     );
-    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntry);
+    acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
     await stopManagers();
     state = await createOpenClawTestState({
       layout: "state-only",

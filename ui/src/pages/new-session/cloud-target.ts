@@ -97,7 +97,7 @@ function detailRow(icon: TemplateResult, text: string) {
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
   const unavailableReason = params.disabled ? params.title || params.description : undefined;
   const description = params.compact ? undefined : params.description;
-  const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
+  const accessibleBlocker = params.compact && params.disabled;
   const touchDetails = params.compact && !params.disabled && !params.hideDetails;
   const accessibilityHints = [
     params.suggested ? t("newSession.machineDefault") : undefined,
@@ -107,12 +107,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   ]
     .filter(Boolean)
     .join(", ");
-  const accessibleDescription = [
-    accessibilityHints,
-    params.accessibleProvider ? unavailableReason : undefined,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const accessibleDescription = [accessibilityHints, unavailableReason].filter(Boolean).join(", ");
   const row = html`
     <button
       type="button"
@@ -157,6 +152,14 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         }
       </span>
       ${
+        accessibleBlocker
+          ? html`<span class="new-session-page__unavailable-status"
+              ><span aria-hidden="true">${icons.alertTriangle}</span
+              >${t("newSession.environmentUnavailable")}</span
+            >`
+          : nothing
+      }
+      ${
         !params.compact && params.facts?.length
           ? html`<span class="new-session-page__menu-meta">
               <span class="new-session-page__menu-facts">
@@ -185,7 +188,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
       }
     </button>
   `;
-  return params.compact && !params.hideDetails
+  return params.compact && (!params.hideDetails || accessibleBlocker)
     ? html`<openclaw-tooltip
         class="new-session-page__environment-details"
         placement="right-start"

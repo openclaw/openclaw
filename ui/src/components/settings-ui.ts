@@ -6,8 +6,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { live } from "lit/directives/live.js";
 import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
-import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import {
   nextSettingsRadioName,
@@ -21,9 +19,6 @@ import {
   type SettingsSegmentedProps,
   type SettingsToggleControl,
 } from "./settings-controls.ts";
-import "./tooltip.ts";
-
-type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
 type SettingsRowControl = TemplateResult | typeof nothing;
 
@@ -37,7 +32,7 @@ type SettingsRowProps = {
   stackedOnNarrow?: boolean;
 };
 
-export type SettingsSectionProps = {
+type SettingsSectionProps = {
   title?: unknown;
   description?: unknown;
   /** Right-aligned inline actions next to the heading (e.g. an Add button). */
@@ -48,15 +43,7 @@ export type SettingsSectionProps = {
   danger?: boolean;
 };
 
-type SettingsHelpTriggerProps = {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-};
-
-export type SettingsPageHeaderProps = {
+type SettingsPageHeaderProps = {
   title: unknown;
   subtitle?: unknown;
   actions?: TemplateResult | typeof nothing;
@@ -73,34 +60,6 @@ export function renderSettingsPage(
   >
     ${children}
   </div>`;
-}
-
-export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): TemplateResult {
-  const helpIcon = props.icon === "info" ? icons.info : icons.circleQuestionMark;
-  return html`
-    <openclaw-tooltip .content=${props.tooltip}>
-      <button
-        id=${props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label=${props.label}
-        aria-controls=${props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">${helpIcon}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-export function renderLearnMoreLink(url: string): TemplateResult {
-  return html`<a
-    class="learn-more-link"
-    href=${url}
-    target=${EXTERNAL_LINK_TARGET}
-    rel=${buildExternalLinkRel()}
-    >${t("common.learnMore")}</a
-  >`;
 }
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
@@ -168,7 +127,7 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
 }
 
 /** A bare group surface without a section heading (rare; prefer sections). */
-export function renderSettingsGroup(rows: unknown, options: { danger?: boolean } = {}) {
+function renderSettingsGroup(rows: unknown, options: { danger?: boolean } = {}) {
   const groupClass = options.danger ? "settings-group settings-group--danger" : "settings-group";
   return html`<div class=${groupClass}>${rows}</div>`;
 }
@@ -266,11 +225,6 @@ export function renderSettingsToggleRow(
   `;
 }
 
-// Controls already show inherited values; reserve default references for overrides.
-export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
-}
-
 class SettingsRadioGroupDirective extends Directive {
   // Renaming a checked radio can uncheck a sibling before Lit updates its value.
   private readonly name = nextSettingsRadioName();
@@ -356,20 +310,6 @@ export function renderSettingsSegmented<T extends string>(
     </div>`;
   }
   return html`${settingsRadioGroup((name) => renderSettingsRadioGroup(props, name))}`;
-}
-
-export function renderSettingsStatus(props: {
-  kind: SettingsStatusKind;
-  label: unknown;
-  dot?: boolean;
-}): TemplateResult {
-  const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
-  return html`
-    <span class="settings-status${modifier}">
-      ${props.dot === false ? nothing : html`<span class="settings-status__dot"></span>`}
-      <span>${props.label}</span>
-    </span>
-  `;
 }
 
 export function renderSettingsValue(value: unknown, options: { mono?: boolean } = {}) {

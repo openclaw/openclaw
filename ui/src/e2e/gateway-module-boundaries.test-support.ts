@@ -28,7 +28,16 @@ export function defineGatewayModuleBoundaryTests(
               // The sidebar module is deliberately unavailable, so no roster can render.
               awaitInitialRoster: false,
             });
-            await page.goto(`${suite.server.baseUrl}new`);
+            // Failed production imports trigger the one-shot document reload.
+            // Finish that replacement before testing a later Gateway disconnect.
+            await Promise.all([
+              page.waitForEvent("framenavigated", {
+                predicate: (frame) =>
+                  frame === page.mainFrame() &&
+                  new URL(frame.url()).searchParams.has("openclaw_mount_recovery"),
+              }),
+              page.goto(`${suite.server.baseUrl}new`),
+            ]);
             await waitForControlUiGatewayReady(page);
             await page.locator(".new-session-page__message").waitFor({ state: "visible" });
             await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);

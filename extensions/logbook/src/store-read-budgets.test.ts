@@ -1,7 +1,10 @@
 import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  openNodeSqliteDatabase,
+  type SqliteWorkerBackend,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
@@ -121,9 +124,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const day = "2026-07-03";
 
-it("reuses schema admission on reopen and validates a replacement physical database", async () => {
+it("reuses live schema admission on reopen and validates a replacement physical database", async () => {
   const dataDir = tempDirs.make("logbook-schema-admission-");
   const databasePath = path.join(dataDir, "logbook.sqlite");
+  // Keep the original physical store admitted through reopen and pathname replacement.
+  using owner = openNodeSqliteDatabase(databasePath);
+  expect(owner.isOpen).toBe(true);
   for (let opened = 0; opened < 3; opened += 1) {
     schemaStatements.length = 0;
     const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
