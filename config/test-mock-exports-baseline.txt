@@ -9073,7 +9073,6 @@
 ["src/secrets/configure.test.ts","../plugins/manifest-registry.js","8ece9e3dbe7d0125c1481e38ee8895ddc5f454e0bb4b4b8472fe2110be393bab",1]
 ["src/secrets/configure.test.ts","./apply.js","8312fa1133877554e0ba39a16f59d6a6edde43e95a218901071d1eb99f40d426",1]
 ["src/secrets/configure.test.ts","./config-io.js","2b64d2c02da6ce51513d2e5483f58b25bb81b0fe701fc2a0ee96292d74e86896",1]
-["src/secrets/model-egress.test.ts","./egress-proxy/proxy-server.js","604762b56ed5cbae137ce4ffed13897aee3adf41140bd7784de750cdc580e2cc",1]
 ["src/secrets/provider-env-vars.dynamic.test.ts","../plugins/manifest-registry-installed.js","a870b1b30985e07df19f46b3c4929eef8e3907e4658e7c07e9affabc073da515",1]
 ["src/secrets/provider-env-vars.dynamic.test.ts","../plugins/plugin-metadata-snapshot.js","0372ba17b08ee83a25d613f8bf34fbb8b050e30e5dba7b1a03fd61728665eee7",1]
 ["src/secrets/provider-env-vars.dynamic.test.ts","../plugins/plugin-registry.js","4127f8b960c4f2d6f202bfd30214f54ce6c3065fc1292fd00a32852c42fce8b4",1]

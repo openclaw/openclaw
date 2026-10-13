@@ -11,7 +11,8 @@ import { looksLikeSecretSentinel, resolveSecretSentinel } from "./sentinel.js";
 const startProxy = vi.hoisted(() =>
   vi.fn<typeof import("./egress-proxy/proxy-worker.js").startSecretEgressProxyWorker>(),
 );
-vi.mock("./egress-proxy/proxy-worker.js", () => ({
+vi.mock("./egress-proxy/proxy-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./egress-proxy/proxy-worker.js")>()),
   startSecretEgressProxyWorker: startProxy,
 }));
 

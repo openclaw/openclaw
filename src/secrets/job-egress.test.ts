@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { withSetupSecretEgress } from "../plugin-sdk/secret-egress-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -15,7 +15,10 @@ import { writeSecretStoreEntries } from "./store/secret-store.js";
 const startProxy = vi.hoisted(() =>
   vi.fn<typeof import("./egress-proxy/proxy-worker.js").startSecretEgressProxyWorker>(),
 );
-vi.mock("./egress-proxy/proxy-worker.js", () => ({ startSecretEgressProxyWorker: startProxy }));
+vi.mock("./egress-proxy/proxy-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./egress-proxy/proxy-worker.js")>()),
+  startSecretEgressProxyWorker: startProxy,
+}));
 const revoke = vi.fn();
 const stop = vi.fn(async () => {});
 let state: OpenClawTestState;
@@ -69,6 +72,7 @@ beforeEach(() => {
         failedCertificates: 0,
       }),
       registerProcess: async (bindings) => {
+        assert.isDefined(bindings);
         registered = bindings;
         return { env: { HTTPS_PROXY: hostProxy, NODE_EXTRA_CA_CERTS: caPath }, revoke };
       },
