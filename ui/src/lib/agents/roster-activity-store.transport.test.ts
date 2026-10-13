@@ -172,21 +172,32 @@ it.each(["pending", "settled"] as const)(
   },
 );
 
-it.each(["before", "after"] as const)(
-  "reconciles metadata issued %s the roster read without losing membership changes",
-  async (issued) => {
+it.each([
+  { issued: "before", settled: false },
+  { issued: "before", settled: true },
+  { issued: "after", settled: false },
+  { issued: "after", settled: true },
+] as const)(
+  "reconciles metadata issued $issued the roster read (settled: $settled) without losing membership changes",
+  async ({ issued, settled }) => {
     const f = fixture();
     let reconcile = issued === "before" ? f.sessions.captureReconcile() : undefined;
     f.subscribe();
     await vi.advanceTimersByTimeAsync(0);
     reconcile ??= f.sessions.captureReconcile();
+    if (settled) {
+      f.respond(0, "Listed membership");
+      await vi.advanceTimersByTimeAsync(0);
+    }
     reconcile({
       ...snapshot("Selected session metadata").sessions[0]!,
       sessionId: "main-session",
       updatedAt: 1,
     });
-    f.respond(0, "Listed membership");
-    await vi.advanceTimersByTimeAsync(5_000);
+    if (!settled) {
+      f.respond(0, "Listed membership");
+    }
+    await vi.advanceTimersByTimeAsync(15_000);
     if (issued === "after") {
       expect(f.requests).toHaveLength(2);
       f.respond(1, "Listed membership");

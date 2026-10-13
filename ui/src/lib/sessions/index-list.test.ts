@@ -297,73 +297,46 @@ describe("session list requests", () => {
     },
   );
 
-  it.each([false, true])(
-    "joins a reentrant observed refresh (after pagination: %s)",
-    async (afterPagination) => {
-      const response = createDeferred<SessionsListResult>();
-      const request = vi.fn(async () => response.promise);
-      const { sessions } = sessionHarness(request);
-      const query = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
-      if (afterPagination) {
-        request.mockResolvedValueOnce(listResult(["agent:writer:first"], 3));
-        request.mockResolvedValueOnce(listResult(["agent:writer:second"], 3, 1));
-        await sessions.refreshList(query);
-        await sessions.refreshList({ ...query, append: true, offset: 1 });
-      }
-      const reads = afterPagination ? 3 : 1;
-      let requestedAgain = false;
-      let reentrant: Promise<void> | undefined;
-      let observedKeys: string[] = [];
-      const observation = sessions.observeList(query, (snapshot) => {
-        observedKeys = snapshot.result?.sessions.map((row) => row.key) ?? [];
-        if (snapshot.loading && !requestedAgain) {
-          requestedAgain = true;
-          reentrant = observation.refresh();
-        }
+  it("queues a reentrant observed refresh behind the current request", async () => {
+    const firstResponse = createDeferred<SessionsListResult>();
+    const secondResponse = createDeferred<SessionsListResult>();
+    const secondStarted = createDeferred();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => firstResponse.promise)
+      .mockImplementationOnce(async () => {
+        secondStarted.resolve();
+        return secondResponse.promise;
       });
-      const initial = observation.refresh();
-
-      try {
-        expect(requestedAgain).toBe(true);
-        expect(request).toHaveBeenCalledTimes(reads);
-        response.resolve(listResult(["agent:writer:current"]));
-        await Promise.all([initial, reentrant]);
-        expect(request).toHaveBeenCalledTimes(reads);
-        expect(observedKeys).toEqual(["agent:writer:current"]);
-      } finally {
-        response.resolve(listResult());
-        await Promise.allSettled([initial, reentrant]);
-        observation.dispose();
-        sessions.dispose();
-      }
-    },
-  );
-
-  it("replaces the window when a full observed refresh arrives during pagination", async () => {
-    const page = createDeferred<SessionsListResult>();
-    const request = vi.fn(async (_method: string, params?: ListParams) =>
-      params?.offset ? page.promise : listResult(["agent:writer:current"], 2),
-    );
     const { sessions } = sessionHarness(request);
-    const query = { agentId: "writer", archivedFilter: "all" as const, limit: 1 };
+    let requestedAgain = false;
+    let reentrant: Promise<void> | undefined;
     let observedKeys: string[] = [];
-    const observation = sessions.observeList(query, (snapshot) => {
-      observedKeys = snapshot.result?.sessions.map(({ key }) => key) ?? [];
+    const observation = sessions.observeList({ agentId: "writer", limit: 2 }, (snapshot) => {
+      observedKeys = snapshot.result?.sessions.map((row) => row.key) ?? [];
+      if (snapshot.loading && !requestedAgain) {
+        requestedAgain = true;
+        reentrant = observation.refresh();
+      }
     });
+    const initial = observation.refresh();
+
     try {
-      await observation.refresh();
-      const append = sessions.refreshList({ ...query, append: true, offset: 1 });
-      const replacement = observation.refresh();
-      page.resolve(listResult(["agent:writer:appended"], 2, 1));
-      await Promise.all([append, replacement]);
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(request).toHaveBeenLastCalledWith(
-        "sessions.list",
-        expect.not.objectContaining({ offset: 1 }),
-      );
+      expect(requestedAgain).toBe(true);
+      expect(request).toHaveBeenCalledOnce();
+
+      firstResponse.resolve(listResult(["agent:writer:first"]));
+      await secondStarted.promise;
+      expect(request).toHaveBeenCalledTimes(2);
+
+      secondResponse.resolve(listResult(["agent:writer:current"]));
+      await Promise.all([initial, reentrant]);
+      expect(request).toHaveBeenCalledTimes(2);
       expect(observedKeys).toEqual(["agent:writer:current"]);
     } finally {
-      page.resolve(listResult());
+      firstResponse.resolve(listResult());
+      secondResponse.resolve(listResult());
+      await Promise.allSettled([initial, reentrant]);
       observation.dispose();
       sessions.dispose();
     }

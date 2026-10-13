@@ -126,10 +126,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     // that supplying query stale. Other membership projections still refresh.
     scheduleManagedLists(
       (entry) =>
-        // A pending list already covers metadata requested before it; real events
+        // A list already covers metadata requested before it; real events
         // and later observations still retire its pages and schedule a fresh read.
         !(
-          entry.pending &&
+          (entry.pending || entry.snapshot.readSucceeded === true) &&
           observedReadRevision !== undefined &&
           entry.readRevision >= observedReadRevision
         ) && matches(entry.query, entry.snapshot.result),
@@ -551,7 +551,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     observeList: (scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) => {
       const entry = managedList(scope);
       return primaryWindows.observe(entry, listener, pageActive, host.connection, () =>
-        refreshManagedList(entry, { append: false }),
+        refreshManagedList(entry, { append: false, invalidated: true }),
       );
     },
     refreshList(this: void, options: SessionRefreshOptions = {}): Promise<void> {
