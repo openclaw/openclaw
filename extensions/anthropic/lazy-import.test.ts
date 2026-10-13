@@ -79,12 +79,15 @@ describe("anthropic session catalog lazy imports", () => {
     vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
       throw new Error("auth execution loaded");
     });
+    // mock-isolation: importing the real transport would defeat the cold-registration guard.
     vi.doMock("openclaw/plugin-sdk/provider-stream-shared", () => {
       throw new Error("stream transport loaded");
     });
+    // mock-isolation: importing the real wrappers would defeat the cold-registration guard.
     vi.doMock("./stream-wrappers.js", () => {
       throw new Error("stream execution loaded");
     });
+    // mock-isolation: importing the real catalog would defeat the cold-registration guard.
     vi.doMock("./live-model-projection.js", () => {
       throw new Error("live catalog loaded");
     });

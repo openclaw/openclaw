@@ -19,6 +19,7 @@ describe("acpx Pi session catalog lazy imports", () => {
     vi.doMock("acpx/runtime", () => {
       throw new Error("native model inspection loaded during registration");
     });
+    // mock-isolation: importing the real runtime would defeat the cold-registration guard.
     vi.doMock("openclaw/plugin-sdk/agent-harness-session-runtime", () => {
       throw new Error("session mutation runtime loaded during registration");
     });
