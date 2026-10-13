@@ -18,7 +18,12 @@ import {
 } from "./external-server/setup.js";
 import { wrapLlamaServerStream } from "./external-server/stream.js";
 import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
-import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+import {
+  configureLlamaCppNonInteractive,
+  detectLlamaCppSetup,
+  prepareLlamaCppSetup,
+  runLlamaCppSetup,
+} from "./setup.js";
 
 function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const inner = wrapLlamaServerStream(ctx);
@@ -70,6 +75,7 @@ export function registerLlamaCppProvider(
           prepare: prepareLlamaCppSetup,
         },
         run: runLlamaCppSetup,
+        runNonInteractive: configureLlamaCppNonInteractive,
       },
       {
         id: "existing-server",

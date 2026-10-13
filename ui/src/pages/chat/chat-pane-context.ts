@@ -398,7 +398,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return;
     }
     // Upload controls read the live config capability; refresh every policy publication.
-    state.requestUpdate?.();
+    this.chatState.requestBackgroundUpdate();
     const previousTerminalAvailable = state.terminalAvailable;
     state.terminalAvailable =
       config.terminalEnabled &&
@@ -416,7 +416,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
-    state.requestUpdate?.();
   }
 
   protected applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -664,7 +663,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         if (agentsList) {
           applyChatAgentsList(state, agentsList, startupClient);
         }
-        state.requestUpdate?.();
+        this.chatState.requestBackgroundUpdate();
       };
       this.connectedClient = startupClient;
       const questionClient = canUseQuestionPrompts(snapshot) ? startupClient : null;
@@ -704,6 +703,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       void resumeStoredChatOutboxes(state);
     }
     this.reconcileWaitingApprovalSnapshot();
-    state.requestUpdate?.();
+    this.chatState.requestBackgroundUpdate();
   }
 }

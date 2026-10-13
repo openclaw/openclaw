@@ -226,6 +226,7 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     provider: params.provider,
     model: params.model,
     agentRuntime: thinkingRuntime,
+    configuredReasoning: logicalEntry?.configuredReasoning ?? logicalEntry?.reasoning,
     modelCatalog: runtimeCatalog,
     rowContext: params.rowContext,
     providerPolicySource: params.providerPolicySource,

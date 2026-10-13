@@ -429,6 +429,8 @@ describe("createPersistCronSessionEntry", () => {
     });
 
     await continuation.initialize();
+    await continuation.sync();
+    expect(persistSessionEntry).toHaveBeenCalledTimes(1);
     expect(persistSessionEntry).toHaveBeenCalledWith({
       fallbackEntry: expect.objectContaining({ sessionId: "run-session-id" }),
       sessionKey: runSessionKey,
@@ -472,9 +474,8 @@ describe("createPersistCronSessionEntry", () => {
       },
     });
 
-    cronSession.sessionEntry.cliSessionBindings = {
-      "claude-cli": { sessionId: "native-claude-session", forceReuse: true },
-    };
+    const cliBinding = { sessionId: "native-claude-session", forceReuse: true };
+    cronSession.sessionEntry.cliSessionBindings = { "claude-cli": cliBinding };
     const writesBeforeSelection = persistSessionEntry.mock.calls.length;
     await continuation.sync(undefined, { cliExecutionProvider: "claude-cli" });
     expect(persistSessionEntry.mock.calls.length).toBe(writesBeforeSelection + 1);
@@ -483,11 +484,21 @@ describe("createPersistCronSessionEntry", () => {
       sessionId: "native-claude-session",
       forceReuse: true,
     });
+    await continuation.sync(undefined, { cliExecutionProvider: "claude-cli" });
+    expect(persistSessionEntry.mock.calls.length).toBe(writesBeforeSelection + 1);
+
+    cliBinding.sessionId = "updated-native-session";
+    persistSessionEntry.mockRejectedValueOnce(new Error("write failed"));
+    await expect(continuation.sync()).rejects.toThrow("write failed");
+    await continuation.sync();
+    expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "updated-native-session",
+    );
 
     await continuation.sync(undefined, {});
     expect(store[runSessionKey]?.cronRunContinuation?.cliExecutionProvider).toBeUndefined();
     expect(store[runSessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
-      "native-claude-session",
+      "updated-native-session",
     );
 
     await continuation.seal({ basePersisted: true });
@@ -510,7 +521,9 @@ describe("createPersistCronSessionEntry", () => {
       },
     });
     await expect(continuation.sync()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
-    await expect(continuation.seal()).rejects.toBeInstanceOf(CronSessionLifecycleClaimError);
+    const writesAfterSeal = persistSessionEntry.mock.calls.length;
+    await continuation.seal();
+    expect(persistSessionEntry.mock.calls.length).toBe(writesAfterSeal);
     expect(store[runSessionKey]).toMatchObject({
       sessionId: "continued-session-id",
       modelProvider: "anthropic",

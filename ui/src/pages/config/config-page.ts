@@ -231,10 +231,7 @@ export class ConfigPageController {
     );
     document.addEventListener("visibilitychange", this.visibilityChanged);
     window.addEventListener("focus", this.visibilityChanged);
-    this.customThemeImportOwner.connect(
-      this.context.gateway.connection.gatewayUrl,
-      this.context.theme.serverSelection,
-    );
+    this.customThemeImportOwner.connect(this.context.gateway.connection.gatewayUrl);
     this.mediaDeviceWatch = observeRealtimeTalkDevices(() => {
       void this.refreshMediaDevices("microphone", false);
       void this.refreshMediaDevices("camera", false);
@@ -345,17 +342,10 @@ export class ConfigPageController {
       this.previousClient = snapshot.client;
       this.previousHello = snapshot.hello;
       this.previousPhase = snapshot.phase;
-      this.customThemeImportOwner.synchronizeScope(
-        gateway.connection.gatewayUrl,
-        this.context.theme.serverSelection,
-      );
+      this.customThemeImportOwner.synchronizeScope(gateway.connection.gatewayUrl);
     }
     this.synchronizeRuntimeConfig(this.context.runtimeConfig);
-    this.settings = this.customThemeImportOwner.adoptSettings(
-      this.settings,
-      loadSettings(),
-      this.context.theme.serverSelection,
-    );
+    this.settings = this.customThemeImportOwner.adoptSettings(this.settings, loadSettings());
     const client = this.systemInfoRequestClient();
     if (!client) {
       clearInterval(this.poll);
@@ -777,7 +767,6 @@ export class ConfigPageController {
   private setTheme(theme: ThemeName) {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
-    this.customThemeImportOwner.recordActivation(reset ? null : theme);
     if (reset) {
       this.resetSyncedPref("theme");
     } else {
@@ -821,6 +810,7 @@ export class ConfigPageController {
     await this.customThemeImportOwner.import({
       config: this.context.runtimeConfig.state,
       hasCustomTheme: Boolean(this.settings.customTheme),
+      readTheme: () => this.settings.theme,
       load: importCustomThemeFromUrl,
       apply: (customTheme, activate) =>
         this.applySettings({ customTheme }, activate ? "custom" : this.settings.theme),

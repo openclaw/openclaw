@@ -23,8 +23,9 @@ stall. Those diagnostic observations justify transferring authority ownership
 contracts; they do not predict production latency.
 
 The first slice transfers profile revision/status checks through shared cells and
-adds a read-only admission service factory with two typed profile checks. Bound
-and current-settled operations use the same canonical state as host assertions.
+adds a read-only admission service test factory in
+`src/infra/sqlite-writer-admission-service.test-support.ts`. Bound and
+current-settled operations use the same canonical state as host assertions.
 The factory is exercised through real worker tests; production dispatch stays
 with the host until remaining dependencies can transfer. A measured intermediate
 host-to-service preparation detour added latency and was removed.
@@ -45,6 +46,21 @@ worker-only close refuses reads before asynchronous drainage. Service reads do
 not certify the remaining physical custody still checked by the host. Later owners must supply those
 contracts and native-to-service transport before transaction admission can bypass
 the host.
+
+The broker slice makes slot and request custody canonical shared state. Dispatch,
+queued cancellation, completion, failure and native retirement publish to the same
+retained cells before replacing current work or notifying observers. Accepted
+cancellation preserves dispatch history and receipt settlement. Native stages check
+those exact cells before requesting host admission and after consuming its grant;
+a late descriptor cannot reacquire authority through a reused numeric request ID.
+
+The service test helper also exposes a direct native-port custody check with a bounded wait.
+Expiry atomically closes the pending decision, so a delayed service reply cannot
+grant it. Service shutdown revokes its epoch before awaiting cleanup; replacement
+uses a fresh cell. This transport remains a prerequisite exercised by worker tests:
+mixed production admission still uses the host and does not add a second service
+round trip until the remaining owners can transfer. It grants only broker custody,
+never policy authority, native COMMIT or receipt settlement.
 
 ## Current owners and required transfers
 

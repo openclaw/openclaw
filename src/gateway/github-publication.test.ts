@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import * as publicationLifecycles from "../state/github-publication-session-lifecycles.js";
+import { holdNextReply } from "../state/github-publication.worker.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -10,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   BASE_HEAD,
   BRANCH,
@@ -480,56 +484,134 @@ describe("Gateway GitHub publication", () => {
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
   });
 
-  it("singleflights concurrent coordinators before any Git or GitHub mutation", async ({
-    signal,
-  }) => {
-    const repositoryEntered = createDeferred();
-    const { promise: repositoryReady, resolve: releaseRepository } = createDeferred();
-    mocks.resolveRepository.mockImplementationOnce(async () => {
-      repositoryEntered.resolve();
-      await repositoryReady;
-      return {
-        checkoutRoot: "/repo/worktree",
-        repoRoot: "/repo",
-        originUrl: "git@github.com:openclaw/openclaw.git",
-        fingerprint: "fingerprint-1",
+  it.for(["settled", "pending"] as const)(
+    "singleflights concurrent coordinators with %s duplicate admission before any Git or GitHub mutation",
+    async (admission, { signal }) => {
+      const repositoryEntered = createDeferred();
+      const { promise: repositoryReady, resolve: releaseRepository } = createDeferred();
+      mocks.resolveRepository.mockImplementationOnce(async () => {
+        repositoryEntered.resolve();
+        await repositoryReady;
+        return {
+          checkoutRoot: "/repo/worktree",
+          repoRoot: "/repo",
+          originUrl: "git@github.com:openclaw/openclaw.git",
+          fingerprint: "fingerprint-1",
+        };
+      });
+      const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+      const placements = createWorkerSessionPlacementStore({ database });
+      const first = createGitHubPublicationCoordinator({ placements });
+      const second = createGitHubPublicationCoordinator({ placements });
+      const request = {
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey: "publication-concurrent",
+        title: "Publish once",
       };
-    });
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const first = createGitHubPublicationCoordinator({ placements });
-    const second = createGitHubPublicationCoordinator({ placements });
-    const request = {
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      idempotencyKey: "publication-concurrent",
-      title: "Publish once",
-    };
 
-    const requests = [first.requestForSessionV2(request), second.requestForSessionV2(request)];
-    try {
-      await withinTest(Promise.race([repositoryEntered.promise, ...requests]), signal);
-      expect(mocks.resolveRepository).toHaveBeenCalledOnce();
-    } finally {
-      releaseRepository();
-      await Promise.allSettled(requests);
-    }
+      const lifecycleDenied = createDeferred();
+      const prepareLifecycle = publicationLifecycles.prepareGitHubPublicationSessionLifecycle;
+      const observeLifecycle = vi
+        .spyOn(publicationLifecycles, "prepareGitHubPublicationSessionLifecycle")
+        .mockImplementation(async (input) => {
+          const authority = await prepareLifecycle(input);
+          return {
+            readCurrent() {
+              try {
+                return authority.readCurrent();
+              } catch (error) {
+                lifecycleDenied.resolve();
+                throw error;
+              }
+            },
+          };
+        });
+      const requests = [first.requestForSessionV2(request)];
+      let duplicateReply: ReturnType<typeof holdNextReply> | undefined;
+      let stopObserving: (() => void) | undefined;
+      try {
+        await withinTest(Promise.race([repositoryEntered.promise, ...requests]), signal);
+        const duplicateSettled = createDeferred();
+        let duplicateOperation: string | undefined;
+        stopObserving = githubPublicationReceipts.subscribeFacts((change) => {
+          if (change.kind === "pending") {
+            duplicateOperation = change.operationId;
+          } else if (change.kind === "settled" && change.operationId === duplicateOperation) {
+            duplicateSettled.resolve();
+          }
+        });
+        duplicateReply = holdNextReply("githubPublications.insert");
+        requests.push(second.requestForSessionV2(request));
+        await withinTest(Promise.race([duplicateReply.ready, ...requests]), signal);
+        expect(mocks.resolveRepository).toHaveBeenCalledOnce();
+        if (admission === "settled") {
+          duplicateReply.release();
+          await withinTest(duplicateSettled.promise, signal);
+        }
+        releaseRepository();
+        if (admission === "pending") {
+          await withinTest(Promise.race([lifecycleDenied.promise, ...requests]), signal);
+          expect(
+            commands.filter(
+              (argv) =>
+                argv.includes("commit-tree") || argv.includes("push") || argv.includes("POST"),
+            ),
+          ).toEqual([]);
+          const row = database.db
+            .prepare(
+              "SELECT request_id, status FROM github_publication_requests WHERE idempotency_key = ?",
+            )
+            .get(request.idempotencyKey);
+          expect(row).toMatchObject({ request_id: expect.any(String), status: "publishing" });
+          duplicateReply.release();
+          const outcomes = await Promise.allSettled(requests);
+          expect(outcomes[0]).toEqual({
+            status: "rejected",
+            reason: expect.any(GitHubPublicationRecoveryPendingError),
+          });
+          // The duplicate can join the interrupted attempt or resume after its lease settles.
+          for (const outcome of outcomes.slice(1)) {
+            if (outcome.status === "fulfilled") {
+              expect(outcome.value).toMatchObject({
+                status: "published",
+                requestId: row?.request_id,
+              });
+            } else {
+              expect(outcome.reason).toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+            }
+          }
+          await first.resumeSessionRequests();
+          expect(await first.requestForSessionV2(request)).toMatchObject({
+            status: "published",
+            requestId: row?.request_id,
+          });
+        } else {
+          await expect(Promise.all(requests)).resolves.toEqual([
+            expect.objectContaining({ status: "published" }),
+            expect.objectContaining({ status: "published" }),
+          ]);
+        }
+      } finally {
+        releaseRepository();
+        duplicateReply?.release();
+        await Promise.allSettled(requests);
+        stopObserving?.();
+        observeLifecycle.mockRestore();
+      }
 
-    await expect(Promise.all(requests)).resolves.toEqual([
-      expect.objectContaining({ status: "published" }),
-      expect.objectContaining({ status: "published" }),
-    ]);
-    expect(mocks.resolveRepository).toHaveBeenCalledOnce();
-    expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
-    const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
-    const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
-    const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
-    expect(fetchIndex).toBeGreaterThanOrEqual(0);
-    expect(commitIndex).toBeGreaterThan(fetchIndex);
-    expect(updateRefIndex).toBeGreaterThan(commitIndex);
-    expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
-    expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
-  });
+      expect(mocks.resolveRepository).toHaveBeenCalledTimes(admission === "pending" ? 2 : 1);
+      expect(commands.filter((argv) => argv.includes("commit-tree"))).toHaveLength(1);
+      const fetchIndex = commands.findIndex((argv) => argv.includes("fetch"));
+      const commitIndex = commands.findIndex((argv) => argv.includes("commit-tree"));
+      const updateRefIndex = commands.findIndex((argv) => argv.includes("update-ref"));
+      expect(fetchIndex).toBeGreaterThanOrEqual(0);
+      expect(commitIndex).toBeGreaterThan(fetchIndex);
+      expect(updateRefIndex).toBeGreaterThan(commitIndex);
+      expect(commands.filter((argv) => argv.includes("push"))).toHaveLength(1);
+      expect(commands.filter((argv) => argv[0] === "gh" && argv.includes("POST"))).toHaveLength(1);
+    },
+  );
 
   it("binds the accepted worker snapshot before acceptance and never recaptures it", async () => {
     await persistClaimPublicationWorkspace();

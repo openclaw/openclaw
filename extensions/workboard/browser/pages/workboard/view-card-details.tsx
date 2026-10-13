@@ -19,13 +19,7 @@ import {
 } from "../../lib/workboard/index.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import { automationDetailFields, BoardAutomation } from "./view-automation.tsx";
-import {
-  getCardActionState,
-  ArchiveCardAction,
-  DeleteCardAction,
-  EditCardAction,
-  StartExecutionButton,
-} from "./view-card-actions.tsx";
+import { getCardActionState, CardAction, StartExecutionButton } from "./view-card-actions.tsx";
 import {
   DependencyDetailList,
   DetailRow,
@@ -280,24 +274,27 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                       onClick={closeWorkboardPopoverOnAction}
                     >
                       {!action().archived ? (
-                        <EditCardAction
+                        <CardAction
+                          kind="edit"
                           workboard={props}
                           card={card()}
-                          options={{ requestAction: requestTransition }}
+                          requestAction={requestTransition}
                         />
                       ) : undefined}
-                      <ArchiveCardAction
+                      <CardAction
+                        kind="archive"
                         workboard={props}
                         card={card()}
                         busy={action().busy}
                         archived={action().archived}
-                        options={{ requestAction: requestTransition }}
+                        requestAction={requestTransition}
                       />
-                      <DeleteCardAction
+                      <CardAction
+                        kind="delete"
                         workboard={props}
                         card={card()}
                         busy={action().busy}
-                        options={{ requestAction: requestTransition }}
+                        requestAction={requestTransition}
                       />
                     </div>
                   </>
@@ -316,7 +313,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
               class="workboard-detail__tabs"
               role="tablist"
               aria-label={t("workboard.detailTitle")}
-              onKeyDown={(event: KeyboardEvent) => {
+              onKeyDown={(event) => {
                 const index = tabs().findIndex((tab) => tab.id === activeTab());
                 let next: number;
                 if (event.key === "ArrowRight") {
@@ -336,11 +333,9 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                 }
                 event.preventDefault();
                 selectTab(nextTab.id, event.currentTarget);
-                if (event.currentTarget instanceof HTMLElement) {
-                  const buttons =
-                    event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]");
-                  buttons[next]?.focus();
-                }
+                const buttons =
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]");
+                buttons[next]?.focus();
               }}
             >
               <For each={tabs()} keyed={(tab) => tab.id}>
@@ -571,10 +566,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                         placeholder={t("workboard.detailNotePlaceholder")}
                         ref={noteValue}
                         disabled={action().busy}
-                        onInput={(event: InputEvent) => {
-                          if (!(event.currentTarget instanceof HTMLTextAreaElement)) {
-                            return;
-                          }
+                        onInput={(event) => {
                           state().detailCommentBody = event.currentTarget.value;
                           state().detailCommentDrafts.set(card().id, state().detailCommentBody);
                           props.onRequestUpdate?.();

@@ -574,11 +574,14 @@ describe("normalizeAssistantReplayContent", () => {
     const toolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
     const messages = [
       userMessage("hi"),
-      bedrockAssistant([
-        { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
-        { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
-        toolCall,
-      ]),
+      bedrockAssistant(
+        [
+          { type: "text", text: COPIED_INBOUND_METADATA_ONLY_TEXT },
+          { type: "text", text: `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nVisible reply` },
+          toolCall,
+        ],
+        "toolUse",
+      ),
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };

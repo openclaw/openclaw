@@ -7,12 +7,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub-status.js";
+import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { closeSkillsWatchers } from "../runtime/refresh.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillReadiness, buildWorkspaceSkillStatus } from "./status.js";
+import {
+  buildWorkspaceSkillReadiness,
+  buildWorkspaceSkillStatus,
+  prepareWorkspaceSkillStatus,
+} from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeSkillsWatchers(true);
+    cleanup();
+  }),
+);
 
 describe("buildWorkspaceSkillStatus", () => {
   it("selects dependency recipes using the workspace host platform and binaries", () => {
@@ -83,6 +95,68 @@ describe("buildWorkspaceSkillStatus", () => {
     });
   });
 
+  it("refreshes local binary status after installation, PATH changes, and removal without rediscovery", async () => {
+    const workspaceDir = tempDirs.make("openclaw-async-skill-status-");
+    const binDir = path.join(workspaceDir, "bin");
+    await fs.mkdir(binDir);
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "dependency"),
+      name: "dependency",
+      description: "Requires local tools",
+      metadata: JSON.stringify({
+        openclaw: {
+          requires: { bins: ["fixture-tool"], anyBins: ["fixture-alt", "fixture-other"] },
+          install: [
+            { id: "brew", kind: "brew", formula: "fixture-tool" },
+            { id: "node", kind: "node", package: "fixture-tool" },
+          ],
+        },
+      }),
+    });
+    await withEnvAsync(
+      {
+        HOME: workspaceDir,
+        USERPROFILE: workspaceDir,
+        OPENCLAW_HOME: workspaceDir,
+        OPENCLAW_STATE_DIR: path.join(workspaceDir, "state"),
+        OPENCLAW_BUNDLED_SKILLS_DIR: path.join(workspaceDir, "bundled-skills"),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(workspaceDir, "bundled-plugins"),
+        PATH: binDir,
+        PATHEXT: ".CMD",
+      },
+      async () => {
+        const read = async () => {
+          const { report } = await prepareWorkspaceSkillStatus(workspaceDir, {
+            config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
+          });
+          return requireSkillStatus(skillStatusByName(report.skills), "dependency");
+        };
+        const unavailable = {
+          eligible: false,
+          missing: { bins: ["fixture-tool"], anyBins: ["fixture-alt", "fixture-other"] },
+          install: [{ id: "node" }],
+        };
+        expect(await read()).toMatchObject(unavailable);
+        const version = getSkillsSnapshotVersion(workspaceDir);
+        const binaries = ["fixture-tool", "fixture-alt", "brew"].map((name) =>
+          path.join(binDir, process.platform === "win32" ? `${name}.CMD` : name),
+        );
+        await Promise.all(binaries.map((file) => fs.writeFile(file, "", { mode: 0o755 })));
+        expect(await read()).toMatchObject({
+          eligible: true,
+          missing: { bins: [], anyBins: [] },
+          install: [{ id: "brew" }],
+        });
+        await withEnvAsync({ PATH: path.join(workspaceDir, "other-bin") }, async () => {
+          expect(await read()).toMatchObject(unavailable);
+        });
+        await Promise.all(binaries.map((file) => fs.unlink(file)));
+        expect(await read()).toMatchObject(unavailable);
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      },
+    );
+  });
+
   it("does not link ClawHub origin metadata from the wrong install directory", async () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
     const copiedSkillDir = path.join(workspaceDir, "skills", "copied-agentreceipt");
@@ -102,6 +176,32 @@ describe("buildWorkspaceSkillStatus", () => {
       slug: "agentreceipt",
       reason: expect.stringContaining("expected ClawHub install directory"),
     });
+  });
+
+  it("preserves file facts and requested Skill Card content for caller-supplied entries", async () => {
+    const workspaceDir = tempDirs.make("openclaw-supplied-skill-status-");
+    const skillDir = path.join(workspaceDir, "selected");
+    const cardPath = path.join(skillDir, "skill-card.md");
+    const content = "# Selected Skill Card\n";
+    await fs.mkdir(skillDir);
+    await fs.writeFile(cardPath, content);
+    const entry = createEntry("selected", { baseDir: skillDir, source: "openclaw-workspace" });
+    const result = await prepareWorkspaceSkillStatus(workspaceDir, {
+      entries: [entry],
+      skillCardKey: "selected",
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+    });
+    const skillCard = { present: true, path: cardPath, sizeBytes: Buffer.byteLength(content) };
+    expect(result.report.skills).toEqual([
+      expect.objectContaining({ name: "selected", skillCard }),
+    ]);
+    expect(result.files).toEqual([
+      expect.objectContaining({
+        name: "selected",
+        filePath: entry.skill.filePath,
+        skillCard: { ...skillCard, content },
+      }),
+    ]);
   });
 
   it("reads a local Skill Card through a hardlink without changing its reported path", async () => {
