@@ -127,6 +127,8 @@ function cancelChangedQueuedRuns(
         database: db,
         receiptSchema,
         handle: receipt,
+        pendingReceiptId:
+          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,

@@ -8,12 +8,17 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WORKBOARD_SCHEMA_SQL } from "../extensions/workboard/src/workboard-schema.ts";
+import {
+  assertPostgresCatalog,
+  expectedPostgresCatalog,
+  postgresCatalogQuery,
+  readPostgresCatalog,
+} from "../src/infra/database-engine/postgres-catalog.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
 import {
   catalog,
-  literal,
   quote,
   sqliteOnlyNulGuards,
   type Catalog,
@@ -105,7 +110,9 @@ export async function generatePostgresSchemas(
           db.exec(fragment.sql());
         }
       }
-      catalogs[name] = catalog(db, `${prefix}_${name}`);
+      const namespace = `${prefix}_${name}`;
+      // State DDL uses the owner's search_path; catalog checks target its chosen namespace.
+      catalogs[name] = { ...catalog(db, name === "state" ? "" : namespace), schema: namespace };
     } finally {
       db.close();
     }
@@ -127,33 +134,37 @@ export async function generatePostgresSchemas(
         }
       }
     }
-    if (name === "state" && root === ROOT) {
-      for (const pending of pendingPromotion) {
-        assert.ok(
-          data.objects.some(
-            (item) =>
-              item.kind === "index" &&
-              item.name === pending.name &&
-              item.category === "pendingPromotion",
-          ),
-          `Stale pendingPromotion entry: ${pending.name}`,
-        );
+    if (name === "state") {
+      if (root === ROOT) {
+        for (const pending of pendingPromotion) {
+          assert.ok(
+            data.objects.some(
+              (item) =>
+                item.kind === "index" &&
+                item.name === pending.name &&
+                item.category === "pendingPromotion",
+            ),
+            `Stale pendingPromotion entry: ${pending.name}`,
+          );
+        }
       }
       const ownership = new Map(
         fragments.flatMap((fragment) =>
           fragment.tables.map((table) => [table, fragment.id] as const),
         ),
       );
-      const eager = { ...data, objects: data.objects.filter((item) => !ownership.has(item.table)) };
+      const runtimeDdl = (objects: Catalog["objects"]) =>
+        `${["-- Generated runtime DDL; the owner supplies search_path and the transaction.", ...tableStatements({ ...data, objects })].join("\n\n")}\n`;
+      files["state.postgres.sql"] = runtimeDdl(
+        data.objects.filter((item) => !ownership.has(item.table)),
+      );
       for (const fragment of manifest) {
-        const objects = data.objects.filter((item) => ownership.get(item.table) === fragment.id);
-        files[fragment.file] =
-          `${["-- Generated lazy feature; create dependencies first.", "BEGIN;", "SET LOCAL standard_conforming_strings = on;", ...tableStatements({ ...data, objects }), "COMMIT;"].join("\n\n")}\n`;
+        files[fragment.file] = runtimeDdl(
+          data.objects.filter((item) => ownership.get(item.table) === fragment.id),
+        );
       }
       files["manifest.json"] =
         `${JSON.stringify({ minimumPostgresVersion: 16, fragments: manifest, pendingPromotion, sqliteOnlyAllowList }, null, 2)}\n`;
-      files[`${name}.postgres.sql`] =
-        `${["-- Generated eager shared state; lazy features are listed in manifest.json.", "BEGIN;", "SET LOCAL standard_conforming_strings = on;", `CREATE SCHEMA ${quote(data.schema)};`, ...tableStatements(eager), "COMMIT;"].join("\n\n")}\n`;
       continue;
     }
     const statements = [
@@ -248,89 +259,9 @@ async function verifyPostgres(
   catalogs: Record<string, Catalog>,
   querySql: (sql: string) => Promise<unknown>,
 ): Promise<void> {
-  const canonical = (value: unknown): string =>
-    JSON.stringify(value, (_key, item: unknown) => {
-      if (item !== null && typeof item === "object" && !Array.isArray(item)) {
-        return Object.fromEntries(
-          Object.entries(item).toSorted(([a], [b]) => a.localeCompare(b, "en")),
-        );
-      }
-      return item;
-    });
   for (const data of Object.values(catalogs)) {
-    const expected: unknown[] = [];
-    const add = (table: string, kind: string, value: unknown) =>
-      expected.push({ table, kind, value });
-    for (const table of data.tables) {
-      add(table.name, "table", null);
-      for (const [position, column] of table.columns.entries()) {
-        add(table.name, "column", { ...column, position: position + 1 });
-      }
-      if (table.pk.length) {
-        add(table.name, "primaryKey", table.pk);
-      }
-      for (const unique of table.unique) {
-        add(table.name, "unique", unique);
-      }
-      for (const fk of table.foreignKeys) {
-        add(table.name, "foreignKey", fk);
-      }
-      add(
-        table.name,
-        "indexes",
-        data.schema.endsWith("_state")
-          ? data.objects.filter(
-              (item) =>
-                item.table === table.name &&
-                item.kind === "index" &&
-                item.category !== "pendingPromotion",
-            ).length + (table.columns.some((column) => column.identity) ? 1 : 0)
-          : table.indexes,
-      );
-      add(
-        table.name,
-        "checks",
-        data.objects.filter(
-          (item) =>
-            item.table === table.name &&
-            item.kind === "check" &&
-            (data.schema.endsWith("_state") || item.sql),
-        ).length,
-      );
-    }
-    const columns = (relation: string, keys: string) =>
-      `(SELECT jsonb_agg(a.attname ORDER BY k.ordinality) FROM unnest(${keys}) WITH ORDINALITY k(num, ordinality) JOIN pg_attribute a ON a.attrelid = ${relation} AND a.attnum = k.num)`;
-    const action = (field: string) =>
-      `CASE ${field} WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END`;
-    const query = `WITH relations AS (
-      SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = ${literal(data.schema)} AND c.relkind IN ('r', 'p')
-    ), facts AS (
-      SELECT r.relname AS "table", 'table' AS kind, 'null'::jsonb AS value FROM relations r
-      UNION ALL SELECT r.relname, 'column', jsonb_build_object(
-        'name', a.attname, 'type', format_type(a.atttypid, a.atttypmod),
-        'nullable', NOT a.attnotnull, 'identity', a.attidentity = 'd', 'position', a.attnum,
-        'default', regexp_replace(pg_get_expr(d.adbin, d.adrelid), '::(text|bigint|double precision)$', ''))
-        FROM relations r JOIN pg_attribute a ON a.attrelid = r.oid LEFT JOIN pg_attrdef d ON d.adrelid = r.oid AND d.adnum = a.attnum WHERE a.attnum > 0 AND NOT a.attisdropped
-      UNION ALL SELECT r.relname, CASE c.contype WHEN 'p' THEN 'primaryKey' ELSE 'unique' END,
-        ${columns("r.oid", "c.conkey")} FROM relations r JOIN pg_constraint c ON c.conrelid = r.oid WHERE c.contype IN ('p', 'u')
-      UNION ALL SELECT r.relname, 'foreignKey', jsonb_build_object(
-        'columns', ${columns("r.oid", "c.conkey")}, 'target', target.relname,
-        'targetColumns', ${columns("c.confrelid", "c.confkey")},
-        'onUpdate', ${action("c.confupdtype")}, 'onDelete', ${action("c.confdeltype")},
-        'deferrable', c.condeferrable, 'deferred', c.condeferred)
-        FROM relations r JOIN pg_constraint c ON c.conrelid = r.oid
-        JOIN pg_class target ON target.oid = c.confrelid WHERE c.contype = 'f'
-      UNION ALL SELECT r.relname, 'indexes', to_jsonb((SELECT count(*) FROM pg_index i WHERE i.indrelid = r.oid)) FROM relations r
-      UNION ALL SELECT r.relname, 'checks', to_jsonb((SELECT count(*) FROM pg_constraint c WHERE c.conrelid = r.oid AND c.contype = 'c')) FROM relations r
-    ) SELECT coalesce(jsonb_agg(facts), '[]'::jsonb) FROM facts;`;
-    const actual = await querySql(query);
-    assert.ok(Array.isArray(actual), "psql must return a JSON catalog array");
-    assert.deepStrictEqual(
-      actual.map(canonical).toSorted(),
-      expected.map(canonical).toSorted(),
-      `${data.schema}: unexplained PostgreSQL catalog differences`,
-    );
+    const actual = readPostgresCatalog(await querySql(postgresCatalogQuery(data.schema)));
+    assertPostgresCatalog(actual, expectedPostgresCatalog(data));
     console.log(
       `${data.schema}: verified ${data.tables.length} tables, ${data.tables.reduce((sum, table) => sum + table.columns.length, 0)} columns, ${data.objects.filter((item) => item.kind === "check").length} CHECKs, ${data.tables.reduce((sum, table) => sum + table.indexes, 0)} indexes, ${data.tables.reduce((sum, table) => sum + table.foreignKeys.length, 0)} FKs; zero unexplained differences (types/nullability/defaults/identity, PK, UNIQUE, FK actions/deferrability)`,
     );
@@ -349,6 +280,9 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
       throw new Error("Shared-state schema requires PostgreSQL 16 or newer (IS JSON)");
     }
     const generated = await generatePostgresSchemas(ROOT, prefix);
+    await client.query("BEGIN");
+    await client.query(`CREATE SCHEMA ${quote(`${prefix}_state`)}`);
+    await client.query(`SET LOCAL search_path = ${quote(`${prefix}_state`)}`);
     await client.query(generated.files["state.postgres.sql"]!);
     const remaining = [...generated.report.fragments];
     const applied = new Set<string>();
@@ -363,9 +297,10 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
       await client.query(generated.files[fragment!.file]!);
       applied.add(fragment!.id);
     }
+    await client.query("COMMIT");
     await verifyPostgres(
       { state: generated.report.catalogs.state! },
-      async (sql) => (await client.query(sql)).rows[0].coalesce,
+      async (sql) => (await client.query(sql)).rows[0].catalog,
     );
     console.log(
       `Pending v22 promotions: ${pendingPromotion.map((entry) => entry.name).join(", ")}`,

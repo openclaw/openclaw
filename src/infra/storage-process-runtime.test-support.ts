@@ -1,5 +1,10 @@
 // Native storage probes share the invocation build before their child deadlines begin.
 export const storageProcessTestEntrypoints = {
+  auditRecovery: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "state-migrations.audit-recovery-protocol.test-support",
+    distWorkerPath: "infra/state-migrations.audit-recovery-protocol.test-support.js",
+  },
   acpMetadataWriter: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../acp/runtime/session-meta-process.test-support",

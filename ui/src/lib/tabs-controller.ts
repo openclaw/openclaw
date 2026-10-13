@@ -1,4 +1,4 @@
-export type TabsActivation = "auto" | "manual";
+type TabsActivation = "auto" | "manual";
 
 export type TabsOptions = {
   /** Omit for local selection; null deliberately leaves every tab unselected. */

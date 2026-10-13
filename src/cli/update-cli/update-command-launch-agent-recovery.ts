@@ -6,9 +6,9 @@ import {
 import { recoverInstalledLaunchAgent } from "../daemon-cli/launchd-recovery.js";
 
 export type PostUpdateLaunchAgentRecoveryResult =
-  | { attempted: false; recovered: false }
-  | { attempted: true; recovered: true; message: string }
-  | { attempted: true; recovered: false; detail: string };
+  | { status: "not-needed" }
+  | { status: "recovered"; message: string }
+  | { status: "failed" | "inspection-failed"; detail: string };
 
 export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
@@ -18,14 +18,26 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
 }): Promise<PostUpdateLaunchAgentRecoveryResult> {
   params.assertCurrent?.();
   if (process.platform !== "darwin") {
-    return { attempted: false, recovered: false };
+    return { status: "not-needed" };
   }
 
   const service = params.service ?? resolveGatewayService();
-  const state = await readGatewayServiceState(service, { env: params.env }).catch(() => null);
+  const state = await readGatewayServiceState(service, { env: params.env }).catch(
+    (error: unknown) => ({ error }),
+  );
   params.assertCurrent?.();
-  if (!state || state.loadState.status !== "not-loaded" || !state.installed) {
-    return { attempted: false, recovered: false };
+  const inspectionFailed = (error: unknown): PostUpdateLaunchAgentRecoveryResult => ({
+    status: "inspection-failed",
+    detail: `LaunchAgent state could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+  });
+  if ("error" in state) {
+    return inspectionFailed(state.error);
+  }
+  if (state.loadState.status === "unknown") {
+    return inspectionFailed(state.loadState.detail);
+  }
+  if (state.loadState.status !== "not-loaded" || !state.installed) {
+    return { status: "not-needed" };
   }
 
   let recovered: Awaited<ReturnType<typeof recoverInstalledLaunchAgent>>;
@@ -36,23 +48,20 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   } catch (error) {
     params.assertCurrent?.();
     return {
-      attempted: true,
-      recovered: false,
+      status: "failed",
       detail: error instanceof Error ? error.message : String(error),
     };
   }
   if (!recovered) {
     return {
-      attempted: true,
-      recovered: false,
+      status: "failed",
       detail:
         "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
     };
   }
 
   return {
-    attempted: true,
-    recovered: true,
+    status: "recovered",
     message: recovered.message,
   };
 }

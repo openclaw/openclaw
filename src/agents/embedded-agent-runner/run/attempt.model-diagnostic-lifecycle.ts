@@ -282,6 +282,14 @@ export function createModelLifecycle(params: {
     observer.state.terminalEventEmitted = true;
     const terminalAtMs = Date.now();
     const durationMs = terminalAtMs - startedAt;
+    const providerTimingFields: Record<string, number> =
+      observer.state.providerProcessingMs === undefined
+        ? {}
+        : {
+            providerProcessingMs: observer.state.providerProcessingMs,
+            // Includes queueing, loading, transport, and terminal settlement overhead.
+            providerWaitEstimateMs: Math.max(0, durationMs - observer.state.providerProcessingMs),
+          };
     const sizeTimingFields = observer.sizeTimingFields();
     const fields = failure ? modelCallErrorFields(failure.error) : undefined;
     const terminal = fields
@@ -318,6 +326,7 @@ export function createModelLifecycle(params: {
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
           terminalAtMs,
+          ...providerTimingFields,
           ...(observer.state.lastProviderActivityAtMs !== undefined
             ? { lastProviderActivityAtMs: observer.state.lastProviderActivityAtMs }
             : {}),
@@ -333,6 +342,7 @@ export function createModelLifecycle(params: {
         ...terminal,
         ...eventBase,
         durationMs,
+        ...providerTimingFields,
         ...sizeTimingFields,
         ...observer.usageField(),
       },

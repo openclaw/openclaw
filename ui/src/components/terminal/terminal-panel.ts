@@ -1,9 +1,8 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
-import { nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
+import { renderSolidSnapshot } from "../../lit/solid-snapshot.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
@@ -26,10 +25,13 @@ import type {
   TerminalPanelSessionTab,
   TerminalRouteTarget,
 } from "./terminal-panel-session-types.ts";
-import { terminalPanelHostedTabs } from "./terminal-panel-tabs.ts";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.ts";
 import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
-import { TerminalPanelHostedActions, type TerminalPanelViewState } from "./terminal-panel-view.tsx";
+import type { TerminalPanelViewState } from "./terminal-panel-view.tsx";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
+
+// Hosted-tab getters can run in ownerless effects. Render static artwork at module load.
+const hostedTabIcon = renderSolidSnapshot(terminalPanelTabIcon);
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
@@ -237,7 +239,9 @@ export class TerminalPanelController extends SolidPanelController {
   }
 
   get hostedTabs() {
-    return terminalPanelHostedTabs(this.terminalSessions.tabs);
+    return terminalPanelHostedTabs(this.terminalSessions.tabs).map((tab) =>
+      Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+    );
   }
 
   get activeHostedTabId(): string | null {
@@ -253,11 +257,10 @@ export class TerminalPanelController extends SolidPanelController {
     await this.updateComplete;
   }
 
-  get hostedActions() {
-    if (!this.embedded || !this.tabsInHeader) {
-      return nothing;
-    }
-    return solidContent(TerminalPanelHostedActions, { state: this.viewState });
+  hostedActionsContent: HTMLElement | undefined;
+
+  get hostedActions(): HTMLElement | undefined {
+    return this.embedded && this.tabsInHeader ? this.hostedActionsContent : undefined;
   }
 
   activateTerminalHost(): void {

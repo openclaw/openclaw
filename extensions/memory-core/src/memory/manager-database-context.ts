@@ -23,14 +23,11 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import {
-  runMemoryDatabaseFacts,
-  runMemorySourceState,
-  runMemoryVectorLoad,
-} from "./manager-cpu-worker-runtime.js";
+import { runMemoryIndexRead, runMemoryVectorLoad } from "./manager-cpu-worker-runtime.js";
 import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import { closeMemoryDatabase, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import type { MemoryIndexReadCommand, MemoryIndexReadOperations } from "./manager-index-read.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
@@ -131,7 +128,10 @@ export class MemoryIndexDatabase {
           memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
         if (database.hasIndex) {
           database.installFacts(
-            await runMemoryDatabaseFacts(params.writeOptions.path, params.agentId),
+            await runMemoryIndexRead(
+              { databasePath: params.writeOptions.path, agentId: params.agentId },
+              { type: "index.facts", input: undefined },
+            ),
           );
         }
       } else if (admitted) {
@@ -248,7 +248,7 @@ export class MemoryIndexDatabase {
       return;
     }
     this.installFacts(
-      await this.executePublication({ type: "index.facts", input: undefined }, () => {
+      await this.read({ type: "index.facts", input: undefined }, () => {
         if (this.closed || !this.db.isOpen) {
           throw new Error("Memory database owner closed before reading index facts");
         }
@@ -498,11 +498,26 @@ export class MemoryIndexDatabase {
     return result?.value;
   }
 
-  read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
-    command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
+  async read<Command extends MemoryIndexReadCommand>(
+    command: Command,
     assertCurrent: () => void,
-  ): Promise<MemoryPublicationOperations[Key]["output"]> {
-    return this.executePublication(command, assertCurrent);
+  ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
+    if (this.isShadow) {
+      return this.executePublication(command, assertCurrent);
+    }
+    const target = this.writeOptions;
+    if (!target?.agentId || !target.path) {
+      throw new Error("Memory index reads require their captured database target");
+    }
+    assertCurrent();
+    this.assertPublishedFileCurrent();
+    const result = await runMemoryIndexRead(
+      { agentId: target.agentId, databasePath: target.path },
+      command,
+    );
+    assertCurrent();
+    this.assertPublishedFileCurrent();
+    return result;
   }
 
   admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
@@ -538,21 +553,7 @@ export class MemoryIndexDatabase {
     if (!this.hasIndex) {
       return [];
     }
-    let rows;
-    if (this.readOnly) {
-      const target = this.writeOptions;
-      if (!target?.agentId || !target.path) {
-        throw new Error("Memory source inspection requires its captured database target");
-      }
-      rows = await runMemorySourceState(
-        { agentId: target.agentId, databasePath: target.path },
-        query,
-      );
-    } else {
-      rows = await this.executePublication({ type: "source.state", input: query }, assertCurrent);
-    }
-    assertCurrent();
-    return rows;
+    return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {

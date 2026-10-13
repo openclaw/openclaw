@@ -77,18 +77,21 @@ export function resolveWhereChip(params: {
   );
   const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
   const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
+  const common = {
+    devices,
+    cloudProfiles: params.cloudProfiles,
+    cloudMachines: [],
+    selectedMachineId: "",
+    operatingSystems: [],
+    selectedOsId: "",
+    autoDeviceDisabledReason,
+  };
   if (params.hostedEnvironment) {
     return {
+      ...common,
       kind: "hosted",
       label: params.hostedEnvironment.label,
       hostedRuntimeId: params.hostedEnvironment.id,
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      cloudMachines: [],
-      selectedMachineId: "",
-      operatingSystems: [],
-      selectedOsId: "",
-      autoDeviceDisabledReason,
     };
   }
   if (params.cloudProfileId) {
@@ -101,29 +104,21 @@ export function resolveWhereChip(params: {
       ? cloudMachines.find((machine) => machine.id === params.machineClass)
       : defaultMachine;
     return {
+      ...common,
       kind: "cloud",
       label: profile?.id ?? params.cloudProfileId,
       operatingSystems,
       selectedOsId,
       cloudMachines,
       selectedMachineId: selectedMachine?.id ?? "",
-      devices,
-      cloudProfiles: params.cloudProfiles,
-      autoDeviceDisabledReason,
     };
   }
   return {
+    ...common,
     kind: params.deviceId ? "device" : params.autoDevice ? "auto-device" : "local",
     label: params.deviceId
       ? (device?.label ?? params.deviceId)
       : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
-    cloudMachines: [],
-    selectedMachineId: "",
-    operatingSystems: [],
-    selectedOsId: "",
-    devices,
-    cloudProfiles: params.cloudProfiles,
-    autoDeviceDisabledReason,
   };
 }
 

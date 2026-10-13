@@ -26,12 +26,13 @@ export function sessionTranscriptSearchFtsQuery(
   query: string,
   match: SessionTranscriptSearchParams["match"],
 ): string {
+  // Implicit AND lets FTS5 discard empty phrases using its own tokenizer.
   return sessionTranscriptSearchTerms(query)
     .map(
       (token, index, tokens) =>
         `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
     )
-    .join(" AND ");
+    .join(" ");
 }
 
 export function sessionTranscriptSearchLimit(limit?: number): number {

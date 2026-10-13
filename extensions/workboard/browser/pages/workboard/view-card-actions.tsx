@@ -109,11 +109,8 @@ export function CardMoveControl(input: {
         aria-label={`${t("workboard.fieldStatus")}: ${input.card.title}`}
         value={input.card.status}
         disabled={input.busy || !input.workboard.connected || !input.workboard.client}
-        onChange={(event: Event) => {
+        onChange={(event) => {
           const target = event.currentTarget;
-          if (!(target instanceof HTMLSelectElement)) {
-            return;
-          }
           const status = statuses().find((candidate) => candidate === target.value);
           if (status) {
             void moveCardToStatus(input.workboard, input.card, status);
@@ -215,59 +212,74 @@ function CardActionButton(input: {
     </button>
   );
 }
-export function EditCardAction(input: {
-  workboard: WorkboardProps;
-  card: WorkboardCard;
-  options?: {
+export function CardAction(
+  input: {
+    workboard: WorkboardProps;
+    card: WorkboardCard;
     requestAction?: (action: () => void) => void;
-  };
-}) {
+  } & (
+    | { kind: "edit" }
+    | { kind: "archive"; busy: boolean; archived: boolean }
+    | { kind: "stop" | "delete"; busy: boolean }
+  ),
+) {
   const state = () => {
     void input.workboard.revision;
     return getWorkboardState(input.workboard.host);
   };
-  return (
-    <CardActionButton
-      params={{
-        label: t("workboard.editCard"),
-        icon: icons.edit,
-        requestAction: input.options?.requestAction,
-        ariaHaspopup: "dialog",
-        disabled: state().dispatching,
-        onClick: () => {
-          openEditModal(state(), input.card);
-          input.workboard.onRequestUpdate?.();
-        },
-      }}
-    />
-  );
-}
-export function ArchiveCardAction(input: {
-  workboard: WorkboardProps;
-  card: WorkboardCard;
-  busy: boolean;
-  archived: boolean;
-  options?: {
-    requestAction?: (action: () => void) => void;
+  const appearance = createMemo(() => {
+    switch (input.kind) {
+      case "edit":
+        return { label: "workboard.editCard", icon: icons.edit, disabled: state().dispatching };
+      case "archive":
+        return {
+          label: input.archived ? "workboard.unarchiveCard" : "workboard.archiveCard",
+          icon: input.archived ? icons.archiveRestore : icons.archive,
+          disabled: input.busy,
+        };
+      case "stop":
+        return {
+          label: "workboard.stopSession",
+          icon: icons.stop,
+          disabled: input.busy || !input.workboard.connected,
+        };
+      case "delete":
+        return { label: "workboard.deleteCard", icon: icons.trash, disabled: input.busy };
+    }
+    return input satisfies never;
+  });
+  const perform = () => {
+    const context = workboardMutationContext(input.workboard);
+    switch (input.kind) {
+      case "edit":
+        openEditModal(state(), input.card);
+        input.workboard.onRequestUpdate?.();
+        break;
+      case "archive":
+        void archiveWorkboardCard({ ...context, cardId: input.card.id, archived: !input.archived });
+        break;
+      case "stop":
+        void stopWorkboardCard({
+          ...context,
+          card: input.card,
+          session: getCardActionState(input.workboard, input.card).sessionTarget,
+        });
+        break;
+      case "delete":
+        void deleteWorkboardCard({ ...context, cardId: input.card.id });
+        break;
+    }
   };
-}) {
-  const label = createMemo(() =>
-    input.archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard"),
-  );
   return (
     <CardActionButton
       params={{
-        label: label(),
-        icon: input.archived ? icons.archiveRestore : icons.archive,
-        requestAction: input.options?.requestAction,
-        disabled: input.busy,
-        onClick: () => {
-          void archiveWorkboardCard({
-            ...workboardMutationContext(input.workboard),
-            cardId: input.card.id,
-            archived: !input.archived,
-          });
-        },
+        label: t(appearance().label),
+        icon: appearance().icon,
+        requestAction: input.requestAction,
+        ariaHaspopup: input.kind === "edit" ? "dialog" : undefined,
+        className: input.kind === "delete" ? "workboard-card__delete" : undefined,
+        disabled: appearance().disabled,
+        onClick: perform,
       }}
     />
   );
@@ -301,54 +313,6 @@ export function OpenSessionCardAction(input: {
         />
       )}
     </Show>
-  );
-}
-export function StopCardAction(input: {
-  workboard: WorkboardProps;
-  card: WorkboardCard;
-  busy: boolean;
-}) {
-  return (
-    <CardActionButton
-      params={{
-        label: t("workboard.stopSession"),
-        icon: icons.stop,
-        disabled: input.busy || !input.workboard.connected,
-        onClick: () => {
-          void stopWorkboardCard({
-            ...workboardMutationContext(input.workboard),
-            card: input.card,
-            session: getCardActionState(input.workboard, input.card).sessionTarget,
-          });
-        },
-      }}
-    />
-  );
-}
-export function DeleteCardAction(input: {
-  workboard: WorkboardProps;
-  card: WorkboardCard;
-  busy: boolean;
-  options?: {
-    requestAction?: (action: () => void) => void;
-  };
-}) {
-  return (
-    <CardActionButton
-      params={{
-        label: t("workboard.deleteCard"),
-        icon: icons.trash,
-        requestAction: input.options?.requestAction,
-        className: "workboard-card__delete",
-        disabled: input.busy,
-        onClick: () => {
-          void deleteWorkboardCard({
-            ...workboardMutationContext(input.workboard),
-            cardId: input.card.id,
-          });
-        },
-      }}
-    />
   );
 }
 export function StartExecutionButton(input: {

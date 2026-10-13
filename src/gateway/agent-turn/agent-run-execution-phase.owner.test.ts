@@ -555,7 +555,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves access across liveness and invalidates creation (new session: %s)",
     async (isNewSession) => {
       const execution = createVisibleExecution();

@@ -19,6 +19,11 @@ import {
 
 export type { TemplateResult as LegacyTemplateResult } from "lit";
 
+/** Render opaque plugin SDK templates with their event receiver. */
+export function renderLegacyTemplate(template: unknown, target: HTMLElement, host?: object): void {
+  renderLit(template, target, { host });
+}
+
 /** Retained content keeps its DOM while foreground directive work is disconnected. */
 export const SolidContentPresentation = createContext<Accessor<boolean>>(() => true);
 
@@ -205,8 +210,8 @@ class SolidContent extends AsyncDirective {
     if (!component || !element) {
       return;
     }
-    // The directive controls connection; its creator owns resources mounted by later effects.
-    this.dispose = runWithOwner(this.owner, () =>
+    // An initially unowned Lit render can later commit under its renderer's restored owner.
+    this.dispose = runWithOwner(this.owner ?? getOwner(), () =>
       renderSolid(() => {
         // A legacy host can publish props during its parent's Solid commit.
         const [props, setProps] = createSignal(this.props, { ownedWrite: true });

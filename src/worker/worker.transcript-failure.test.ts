@@ -3,10 +3,6 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -70,7 +66,6 @@ it.each(["storage", "malformed schema receipt"])(
     const controller = new AbortController();
     let run: ReturnType<typeof runWorkerDescriptor> | undefined;
     try {
-      setRuntimeConfigSnapshot(harness.cfg);
       await harness.start();
       const replayed = createDeferred();
       const failure =
@@ -119,7 +114,6 @@ it.each(["storage", "malformed schema receipt"])(
       controller.abort(new Error("fixture teardown"));
       await Promise.allSettled([run]);
       await harness.close();
-      clearRuntimeConfigSnapshot();
     }
   },
 );
@@ -129,7 +123,6 @@ it("replays transient transcript failures and completes the run without duplicat
   const controller = new AbortController();
   let run: ReturnType<typeof runWorkerDescriptor> | undefined;
   try {
-    setRuntimeConfigSnapshot(harness.cfg);
     await harness.start();
     const failures = [
       schemaPublicationFailure("stale"),
@@ -180,6 +173,5 @@ it("replays transient transcript failures and completes the run without duplicat
     controller.abort(new Error("fixture teardown"));
     await Promise.allSettled([run]);
     await harness.close();
-    clearRuntimeConfigSnapshot();
   }
 });

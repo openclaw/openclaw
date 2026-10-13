@@ -456,7 +456,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
-  // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
     sessionModelRevision: sessionModelRevision(entry),
@@ -464,8 +463,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
     incognito: entry?.incognito,
-    spawnedBy: undefined,
-    controlOwnerSessionKey: undefined,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
@@ -530,7 +527,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
-    agentStatus: undefined,
     observerDigest: observerDigest
       ? {
           ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
@@ -567,24 +563,12 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
-    totalTokens: undefined,
-    totalTokensFresh: undefined,
-    goal: undefined,
-    estimatedCostUsd: undefined,
-    status: undefined,
-    subagentRunState: undefined,
-    hasActiveSubagentRun: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    lastRunError: undefined,
     providerReview: projectSessionProviderReview(entry, key),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
     parentSessionKey: entry?.parentSessionKey,
     parentSessionId: entry?.parentSessionId,
-    childSessions: undefined,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(
       entry?.responseUsage,
@@ -599,8 +583,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     }).mode,
     modelProvider: input.rowModelIdentity.provider,
     model: input.rowModelIdentity.model,
-    activeModelProvider: undefined,
-    activeModel: undefined,
     modelOverrideSource:
       input.selectedModel.storedOverrideSource === "parent"
         ? "inherited"
@@ -622,6 +604,12 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
+  // JSON omits undefined fields; keep the resident projection equally sparse.
+  for (const field in row) {
+    if (Reflect.get(row, field) === undefined) {
+      Reflect.deleteProperty(row, field);
+    }
+  }
   return {
     row,
     source: {

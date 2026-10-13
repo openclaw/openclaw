@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -74,7 +78,6 @@ type ScenarioHarness = {
 
 type OuterRunOptions = {
   fallbacks?: string[];
-  onError?: (error: unknown) => void;
   runCandidate?: (
     provider: string,
     model: string,
@@ -126,6 +129,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await fs.rm(scenarioRoot, { recursive: true, force: true });
 });
 
@@ -242,7 +246,6 @@ async function runOuter(options: OuterRunOptions = {}) {
         sessionKey: "agent:main:cli-fault-e2e",
         skipAuthProfileRuntime: true,
         fallbacksOverride: options.fallbacks,
-        onError: ({ error }) => options.onError?.(error),
         run: async (provider, model) => {
           harness.outerCandidates.push({ provider, model });
           return options.runCandidate
@@ -280,6 +283,7 @@ function expectCounts(expected: ScenarioCounts): void {
 
 describe("CLI runner fault sequences", () => {
   it("dispatches bridge mode through one fresh CLI child and bypasses the native run budget", async () => {
+    setRuntimeConfigSnapshot(fallbackConfig());
     supervisorSpawnMock.mockResolvedValueOnce(managedRun(successExit("bridge ok")));
 
     const outcome = await runOuter({
@@ -496,7 +500,7 @@ describe("CLI runner fault sequences", () => {
     });
   });
 
-  it("fresh-retries reused-session context overflow once and never crosses models", async () => {
+  it("fresh-retries reused-session context overflow once before advancing the outer model", async () => {
     harness.contextFor = buildReusableProcessContext;
     supervisorSpawnMock
       .mockResolvedValueOnce(
@@ -504,25 +508,39 @@ describe("CLI runner fault sequences", () => {
       )
       .mockResolvedValueOnce(
         managedRun(makeExit({ exitCode: 1, stderr: "Prompt is too long for this context window" })),
-      );
+      )
+      .mockResolvedValueOnce(managedRun(successExit("fallback after context overflow")));
 
-    let error: unknown;
-    try {
-      await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
-    } catch (caught) {
-      error = caught;
-    }
+    const outcome = await runOuter({ fallbacks: [`claude-cli/${FALLBACK_MODEL}`] });
 
-    expect(error).toMatchObject({
-      reason: "context_overflow",
-      code: "cli_context_overflow",
-    });
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(outcome.model).toBe(FALLBACK_MODEL);
+    expect(outcome.result.payloads).toEqual([{ text: "fallback after context overflow" }]);
+    expect(outcome.attempts).toMatchObject([
+      {
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    ]);
+    expect(
+      supervisorSpawnMock.mock.calls.map(([params]) =>
+        params.mode === "child" ? params.argv : params.mode,
+      ),
+    ).toEqual([
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--resume", "source-cli-session"]),
+      expect.arrayContaining(["--model", PRIMARY_MODEL, "--session-id"]),
+      expect.arrayContaining(["--model", FALLBACK_MODEL]),
+    ]);
+    expect(harness.outerCandidates).toEqual([
+      { provider: "claude-cli", model: PRIMARY_MODEL },
+      { provider: "claude-cli", model: FALLBACK_MODEL },
+    ]);
     expectCounts({
-      childProcesses: 2,
+      childProcesses: 3,
       nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
+      outerCandidates: 2,
+      runCliAgentCalls: 2,
       wholeTurnRetries: 0,
     });
   });
