@@ -281,6 +281,11 @@ export function useSessionMenuDetails(
             <span class="session-menu__text">{t("common.reset")}</span>
           </SessionMenuItem>
         ) : undefined}
+        <div
+          slot={props.inline ? undefined : "submenu"}
+          class="session-menu__separator"
+          role="separator"
+        />
       </>
     );
   };
