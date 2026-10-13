@@ -2,23 +2,26 @@ import { randomUUID } from "node:crypto";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { bindSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import type { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
 import type {
-  addSessionSuggestion,
-  claimSessionSuggestionDispatch,
-  finalizeSessionSuggestionClaim,
-  releaseSessionSuggestionDispatch,
-} from "./session-suggestion-store.js";
+  SessionOwnerAssignParams,
+  SessionSuggestionAddParams,
+  SessionSuggestionClaimParams,
+  SessionSuggestionDispatchClaim,
+  SessionSuggestionFinalizeParams,
+  SessionSuggestionReleaseParams,
+  StoredSessionSuggestion,
+} from "./session-sharing-store.types.js";
 
 export function assignSessionOwnerInWorker(
   scope: SessionCollaborationScope,
-  params: Omit<Parameters<typeof assignSessionOwner>[1], "assertCurrent" | "expectedSessionId"> & {
+  params: Omit<SessionOwnerAssignParams, "expectedSessionId"> & {
     expectedSessionId: string;
   },
   assertCurrent?: () => void,
-): Promise<ReturnType<typeof assignSessionOwner>> {
+): Promise<SessionOwnerAssignment | null> {
   const capturedParams = structuredClone({
     ...params,
     assignedAt: params.assignedAt ?? Date.now(),
@@ -54,9 +57,9 @@ export function assignSessionOwnerInWorker(
 
 export function addSessionSuggestionInWorker(
   scope: SessionCollaborationScope,
-  params: Parameters<typeof addSessionSuggestion>[1],
+  params: SessionSuggestionAddParams,
   assertCurrent?: () => void,
-): Promise<ReturnType<typeof addSessionSuggestion>> {
+): Promise<StoredSessionSuggestion> {
   const capturedParams = structuredClone({
     ...params,
     id: params.id ?? randomUUID(),
@@ -72,9 +75,9 @@ export function addSessionSuggestionInWorker(
 
 export function claimSessionSuggestionDispatchInWorker(
   scope: SessionCollaborationScope,
-  params: Parameters<typeof claimSessionSuggestionDispatch>[1],
+  params: SessionSuggestionClaimParams,
   assertCurrent?: () => void,
-): Promise<ReturnType<typeof claimSessionSuggestionDispatch>> {
+): Promise<SessionSuggestionDispatchClaim | null> {
   const capturedParams = structuredClone(params);
   return runSessionCollaborationWrite(
     scope,
@@ -86,9 +89,9 @@ export function claimSessionSuggestionDispatchInWorker(
 
 export function releaseSessionSuggestionDispatchInWorker(
   scope: SessionCollaborationScope,
-  params: Parameters<typeof releaseSessionSuggestionDispatch>[1],
+  params: SessionSuggestionReleaseParams,
   assertCurrent?: () => void,
-): Promise<ReturnType<typeof releaseSessionSuggestionDispatch>> {
+): Promise<boolean> {
   const capturedParams = structuredClone(params);
   return runSessionCollaborationWrite(
     scope,
@@ -100,9 +103,9 @@ export function releaseSessionSuggestionDispatchInWorker(
 
 export function finalizeSessionSuggestionClaimInWorker(
   scope: SessionCollaborationScope,
-  params: Parameters<typeof finalizeSessionSuggestionClaim>[1],
+  params: SessionSuggestionFinalizeParams,
   assertCurrent?: () => void,
-): Promise<ReturnType<typeof finalizeSessionSuggestionClaim>> {
+): Promise<StoredSessionSuggestion | null> {
   const capturedParams = structuredClone(params);
   return runSessionCollaborationWrite(
     scope,
