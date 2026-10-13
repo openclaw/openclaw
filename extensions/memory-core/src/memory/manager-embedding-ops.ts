@@ -14,6 +14,7 @@ import {
   buildMultimodalChunkForIndexing,
   createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
+  runWithConcurrency,
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -555,7 +556,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           throw new Error("Memory source owner changed before replacement");
         }
       };
-      const replacements = items.map((item) => this.sourceReplacement(item, generation));
+      const activeItems = [...items];
+      const replacements = activeItems.map((item) => this.sourceReplacement(item, generation));
       if (database !== sourceDatabase) {
         // The published index owns forget authority, including for shadow rebuilds.
         for (const replacement of replacements) {
@@ -565,9 +567,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         }
       }
       const prepare = async (): Promise<boolean> => {
-        for (const {
-          prepared: { entry, source },
-        } of items) {
+        for (let index = activeItems.length - 1; index >= 0; index--) {
+          const {
+            prepared: { entry, source },
+          } = activeItems[index]!;
           if (source !== "memory") {
             continue;
           }
@@ -581,11 +584,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             log.debug("memory source changed while indexing; queued incremental retry", {
               path: entry.path,
             });
-            return false;
+            // A changed file must not veto unrelated sources in the same transaction.
+            activeItems.splice(index, 1);
+            replacements.splice(index, 1);
           }
         }
         assertCurrent();
-        return true;
+        return replacements.length > 0;
       };
       const published =
         replacements.length > 1 && memoryPublicationGroup(replacements)
@@ -601,7 +606,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       for (const {
         prepared: { chunks },
         vectorReady,
-      } of items) {
+      } of activeItems) {
         database.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
           vectorEnabled: this.vector.enabled,
           vectorReady,
@@ -794,35 +799,39 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           ),
         );
         let offset = 0;
-        for (const size of requestSizes) {
-          const end = offset + size;
-          const batchCandidates = candidates.slice(offset, end);
-          const known = batchCandidates.map(
-            (candidate) => resolved.get(candidate.chunk.hash) ?? [],
-          );
-          const missing = known.flatMap((embedding, index) =>
-            embedding.length > 0 ? [] : [index],
-          );
-          const batchEmbeddings = await this.embedChunksWithBatch(
-            batchCandidates,
-            batchCandidates[0]?.source ?? "unknown",
-            generation,
-            {},
-            {
-              embeddings: known,
-              missing,
-              missingCandidates: missing.map((index) => batchCandidates[index]!),
-            },
-          );
-          embeddings.push(...batchEmbeddings);
-          for (const [index, candidate] of batchCandidates.entries()) {
-            const embedding = batchEmbeddings[index];
-            if (embedding?.length) {
-              resolved.set(candidate.chunk.hash, embedding);
+        const requests = requestSizes.map((size) => {
+          const batchCandidates = candidates.slice(offset, offset + size);
+          offset += size;
+          return async () => {
+            const known = batchCandidates.map(
+              (candidate) => resolved.get(candidate.chunk.hash) ?? [],
+            );
+            const missing = known.flatMap((embedding, index) =>
+              embedding.length > 0 ? [] : [index],
+            );
+            const batchEmbeddings = await this.embedChunksWithBatch(
+              batchCandidates,
+              batchCandidates[0]?.source ?? "unknown",
+              generation,
+              {},
+              {
+                embeddings: known,
+                missing,
+                missingCandidates: missing.map((index) => batchCandidates[index]!),
+              },
+            );
+            for (const [index, candidate] of batchCandidates.entries()) {
+              const embedding = batchEmbeddings[index];
+              if (embedding?.length) {
+                resolved.set(candidate.chunk.hash, embedding);
+              }
             }
-          }
-          offset = end;
-        }
+            return batchEmbeddings;
+          };
+        });
+        embeddings = (
+          await runWithConcurrency(requests, sourceWide ? 1 : this.getIndexConcurrency())
+        ).flat();
       }
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);

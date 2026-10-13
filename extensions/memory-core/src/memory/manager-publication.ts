@@ -94,14 +94,14 @@ export async function publishMemorySource(params: {
 }) {
   const { replacement, state, execute, run, retry, prepare, assertPublished } = params;
   if (Array.isArray(replacement)) {
-    const sources = memoryPublicationGroup(replacement);
-    if (!sources) {
-      throw new Error("Memory publication group exceeds its bounded transfer");
-    }
-    return retry(
-      () => execute({ type: "source.replace.group", input: { sources, state: state() } }),
-      prepare,
-    );
+    return retry(() => {
+      // Preparation may exclude files edited while their embeddings were in flight.
+      const sources = memoryPublicationGroup(replacement);
+      if (!sources) {
+        throw new Error("Memory publication group exceeds its bounded transfer");
+      }
+      return execute({ type: "source.replace.group", input: { sources, state: state() } });
+    }, prepare);
   }
   const inline = memoryPublicationInline(replacement);
   if (inline) {

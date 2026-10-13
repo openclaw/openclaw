@@ -36,7 +36,9 @@ describe("memory session delta publication", () => {
 
   it("yields an interrupted pass and indexes every pending session after the next quiet period", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const manager = await getFreshManager(
       createConfig({ sources: ["sessions"], sessionMemory: true, cacheEnabled: true }),
     );
@@ -94,7 +96,9 @@ describe("memory session delta publication", () => {
 
   it("keeps the published index when a background rebuild is interrupted", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const session = { sessionId: "rebuild", sessionKey: "agent:main:chat:rebuild" };
     await seedSessionTranscript({
       ...session,
@@ -139,7 +143,9 @@ describe("memory session delta publication", () => {
 
   it("settles ten queued turns incrementally with the same search results as a full reindex", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const sessionId = "growing-session";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const sessionPath = `sessions/main/${sessionId}.jsonl`;
@@ -179,7 +185,7 @@ describe("memory session delta publication", () => {
     expect(readPublishedSessionIndex(database, sessionPath, "turnmarker1").search).toEqual(
       initial.search,
     );
-    expect(fixture.provider.embeddedBatchTexts.some((text) => text.includes("turnmarker1"))).toBe(
+    expect(fixture.provider.embeddedBatchTexts.some((text) => /\bturnmarker1\b/.test(text))).toBe(
       false,
     );
     expect(fixture.provider.embeddedBatchTexts.some((text) => text.includes("turnmarker14"))).toBe(

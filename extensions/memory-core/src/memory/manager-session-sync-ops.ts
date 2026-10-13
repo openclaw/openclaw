@@ -339,9 +339,23 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     this.scheduleSessionIndexPass();
   }
 
-  protected deferSessionIndexFiles(files: string[]): void {
+  protected deferSessionIndexFiles(
+    files: string[],
+    corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
+  ): void {
+    const entriesByFile = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
     for (const file of files) {
-      this.sessionPendingFiles.add(file);
+      const entry = entriesByFile.get(file);
+      if (entry?.transcriptSource === "sqlite") {
+        const target = {
+          agentId: entry.agentId,
+          sessionId: entry.sessionId,
+          ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+        };
+        this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
+      } else {
+        this.sessionPendingFiles.add(file);
+      }
     }
     this.sessionPendingSince ??= Date.now();
     this.sessionLastActivity = Date.now();

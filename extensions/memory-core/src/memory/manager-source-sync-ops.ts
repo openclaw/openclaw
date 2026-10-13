@@ -371,6 +371,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       this.deferSessionIndexFiles(
         items.filter((item) => item.source === "sessions").map((item) => item.entry.absPath),
+        corpusEntries,
       );
     };
 
@@ -400,7 +401,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       for (let start = 0; start < files.length; start += groupSize) {
         if (this.shouldYieldSessionIndexing()) {
           deferItems(pendingIndexItems);
-          this.deferSessionIndexFiles(files.slice(start));
+          this.deferSessionIndexFiles(files.slice(start), corpusEntries);
           return;
         }
         const fileBatch = files.slice(start, start + groupSize);
@@ -413,7 +414,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         );
         if (pendingIndexItems.length >= groupSize) {
           if (await flushPendingIndexItems()) {
-            this.deferSessionIndexFiles(files.slice(start + groupSize));
+            this.deferSessionIndexFiles(files.slice(start + groupSize), corpusEntries);
             return;
           }
         }
