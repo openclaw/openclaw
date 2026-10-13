@@ -294,67 +294,94 @@ export function createSessionActorWorker(
     };
   };
   const registerTranscriptRewriteOwner = (database: OpenClawAgentDatabase) =>
-    registerSessionActorTranscriptRewriteOwner(database, (opened, rewrite, run) => {
-      const before = residents.get(rewrite.sessionKey)?.state;
-      if (
-        closed ||
-        readSessionActorTransactionState(opened) ||
-        before?.hot.entry?.sessionId !== rewrite.sessionId ||
-        before.hot.writeToken !==
-          readSqliteDatabasePendingScopedWriteToken(
-            opened.db,
-            scopes(before.hot.target, before.hot.dependencySessionIds),
-          )
-      ) {
-        return run();
-      }
-      const working = forkSessionActorStoredState(before);
-      for (const { rawSeq, event, serializedBytes } of rewrite.rows) {
-        if (working.transcript.payloads.has(rawSeq)) {
-          working.transcript.payloads = writableSessionActorMap(working.transcript.payloads);
-          working.transcript.payloads.set(rawSeq, { event, serializedBytes });
+    registerSessionActorTranscriptRewriteOwner(database, {
+      read(opened, scope, entryId) {
+        // Active actor mutations consume their working facts through the transaction kernels.
+        if (readSessionActorTransactionState(opened)) {
+          return undefined;
         }
-      }
-      working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
-      return withSessionActorTransactionState(opened, working, run, (authority) => {
-        working.hot = projectSessionActorHotState(working);
-        const pendingToken = readSqliteDatabasePendingScopedWriteToken(
-          opened.db,
-          scopes(working.hot.target, working.hot.dependencySessionIds),
-        );
-        if (pendingToken === undefined) {
-          return authority;
-        }
-        working.hot.writeToken = pendingToken;
-        const mutationRevision = readSqliteNativeMutationRevision(opened.db);
+        const current = retainedState(opened, scope.sessionKey)?.hot;
         if (
-          !stageSqliteTransactionState(opened.db, {
-            stage() {},
-            rollback() {},
-            commit() {
-              // A later nested writer must not install this intermediate transcript.
-              if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
-                remember(working);
-              } else {
-                drop(rewrite.sessionKey);
-              }
-            },
-            invalidate: () => drop(rewrite.sessionKey),
-          })
+          current?.entry?.sessionId !== scope.sessionId ||
+          current.transcript.anchorsState !== "resident"
         ) {
-          return authority;
+          return undefined;
         }
+        const anchor = current.transcript.anchors.find(
+          (candidate) => candidate.entryId === entryId,
+        );
         return {
-          ...authority,
-          actorRewrite: freezeJsonSnapshot(
-            structuredClone({
-              before: before.hot.transcript.version,
-              postimage: working.hot,
-              rows: rewrite.rows,
-            }),
-          ),
+          entry: {
+            sessionId: current.entry.sessionId,
+            lifecycleRevision: current.entry.lifecycleRevision,
+            activeWriterRunId: current.entry.activeWriterRunId,
+          },
+          generation: current.transcript.version.generation ?? undefined,
+          anchor: anchor && { ...anchor },
         };
-      });
+      },
+      rewrite(opened, rewrite, run) {
+        const before = residents.get(rewrite.sessionKey)?.state;
+        if (
+          closed ||
+          readSessionActorTransactionState(opened) ||
+          before?.hot.entry?.sessionId !== rewrite.sessionId ||
+          before.hot.writeToken !==
+            readSqliteDatabasePendingScopedWriteToken(
+              opened.db,
+              scopes(before.hot.target, before.hot.dependencySessionIds),
+            )
+        ) {
+          return run();
+        }
+        const working = forkSessionActorStoredState(before);
+        for (const { rawSeq, event, serializedBytes } of rewrite.rows) {
+          if (working.transcript.payloads.has(rawSeq)) {
+            working.transcript.payloads = writableSessionActorMap(working.transcript.payloads);
+            working.transcript.payloads.set(rawSeq, { event, serializedBytes });
+          }
+        }
+        working.hot.version = { ...before.hot.version, sequence: before.hot.version.sequence + 1 };
+        return withSessionActorTransactionState(opened, working, run, (authority) => {
+          working.hot = projectSessionActorHotState(working);
+          const pendingToken = readSqliteDatabasePendingScopedWriteToken(
+            opened.db,
+            scopes(working.hot.target, working.hot.dependencySessionIds),
+          );
+          if (pendingToken === undefined) {
+            return authority;
+          }
+          working.hot.writeToken = pendingToken;
+          const mutationRevision = readSqliteNativeMutationRevision(opened.db);
+          if (
+            !stageSqliteTransactionState(opened.db, {
+              stage() {},
+              rollback() {},
+              commit() {
+                // A later nested writer must not install this intermediate transcript.
+                if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
+                  remember(working);
+                } else {
+                  drop(rewrite.sessionKey);
+                }
+              },
+              invalidate: () => drop(rewrite.sessionKey),
+            })
+          ) {
+            return authority;
+          }
+          return {
+            ...authority,
+            actorRewrite: freezeJsonSnapshot(
+              structuredClone({
+                before: before.hot.transcript.version,
+                postimage: working.hot,
+                rows: rewrite.rows,
+              }),
+            ),
+          };
+        });
+      },
     });
   const requireTarget = (target: SessionActorTarget) => {
     const current = physicalIdentity();

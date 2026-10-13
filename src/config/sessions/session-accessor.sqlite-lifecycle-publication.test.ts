@@ -209,6 +209,14 @@ it.each(["publication", "writer return", "rollback"] as const)(
       sessionKey: "agent:main:lifecycle-publication",
     };
     const entry = { sessionId: "committed-session", updatedAt: 1, label: "Committed row" };
+    const owner = { actor: { type: "human" as const, id: "lifecycle-creator" }, assignedAt: 1 };
+    const transcript = [
+      {
+        id: "created-event",
+        type: "message",
+        message: { role: "user", content: "Created with its lifecycle entry" },
+      },
+    ];
     const failure = new Error(`synthetic ${outcome} failure`);
     failures.publication = outcome === "publication" ? failure : undefined;
     const events: string[] = [];
@@ -227,6 +235,14 @@ it.each(["publication", "writer return", "rollback"] as const)(
         agentId: scope.agentId,
         storePath: scope.storePath,
         upserts: [{ sessionKey: scope.sessionKey, entry }],
+        creation: {
+          preparedTranscript: {
+            sessionKey: scope.sessionKey,
+            sessionId: entry.sessionId,
+            events: transcript,
+          },
+          ownerAssignment: { sessionKey: scope.sessionKey, owner },
+        },
         skipMaintenance: true,
         onLifecycleCommitted: committed,
         withCommit:
@@ -239,7 +255,7 @@ it.each(["publication", "writer return", "rollback"] as const)(
             : undefined,
         ...(outcome === "rollback"
           ? {
-              afterUpsertsInTransaction: () => {
+              beforeCommitInTransaction: () => {
                 throw failure;
               },
             }
@@ -257,8 +273,11 @@ it.each(["publication", "writer return", "rollback"] as const)(
       if (outcome === "rollback") {
         expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
       } else {
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+        expect(loadSessionEntryReadOnly(scope)).toMatchObject({ ...entry, owner });
       }
+      await expect(loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).resolves.toEqual(
+        outcome === "rollback" ? [] : transcript,
+      );
     } finally {
       unsubscribe();
     }
