@@ -140,7 +140,9 @@ class ArchiveSession {
     if (previous && previous !== this) {
       if (
         previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
-        !previous.connection?.retiring
+        !previous.connection?.retiring &&
+        !previous.connection?.failure &&
+        !previous.connection?.didExit
       ) {
         this.connection = previous.connection;
         previous.connection = undefined;
