@@ -16,8 +16,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observed = { revision: "observed", definition: "failed-node", stored: false };
 const workingDirectory = "/retained/node-workspace";
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: mocks.runtime }));
-vi.mock("../../daemon/node-service.js", () => ({ resolveNodeService: () => service }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: mocks.runtime,
+}));
+vi.mock("../../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/node-service.js")>()),
+  resolveNodeService: () => service,
+}));
 vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
   readDaemonRuntimePinForInstall: mocks.pin,
@@ -27,7 +33,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.probe,
 }));
-vi.mock("../../node-host/config.js", () => ({ loadNodeHostConfig: async () => null }));
+vi.mock("../../node-host/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../node-host/config.js")>()),
+  loadNodeHostConfig: async () => null,
+}));
 vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveSystemNodeInfo: async () => null,
