@@ -265,7 +265,7 @@ it.each(["publication", "writer return", "rollback"] as const)(
   },
 );
 
-it("publishes removal invalidations before identity and row observers without archive intent", async () => {
+it("publishes confirmed removals before identity and row observers without archive intent", async () => {
   const stateDir = tempDirs.make("session-lifecycle-removal-publication-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const storePath = path.join(stateDir, "sessions.json");
@@ -335,7 +335,7 @@ it("publishes removal invalidations before identity and row observers without ar
     readOnlyCache: readCommittedSessionEntryCache(reader.database.db),
   });
   const observedFacts: Array<
-    ReturnType<typeof readFacts> & { invalidated: boolean; ownerTagged: boolean }
+    ReturnType<typeof readFacts> & { invalidated: boolean; removed: boolean; ownerTagged: boolean }
   > = [];
   const stopFacts = sessionChanges.subscribeFacts((change) => {
     if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
@@ -344,6 +344,7 @@ it("publishes removal invalidations before identity and row observers without ar
     order.push("facts");
     observedFacts.push({
       invalidated: change.factsInvalidated === true,
+      removed: change.facts?.kind === "removed",
       ownerTagged: isPreparedSessionSharingChange(change),
       ...readFacts(),
     });
@@ -394,7 +395,9 @@ it("publishes removal invalidations before identity and row observers without ar
       readOnlyCache: undefined,
     };
     expect(lifecycleFacts).toEqual([retiredFacts]);
-    expect(observedFacts).toEqual([{ invalidated: true, ownerTagged: true, ...retiredFacts }]);
+    expect(observedFacts).toEqual([
+      { invalidated: false, removed: true, ownerTagged: true, ...retiredFacts },
+    ]);
     expect(() =>
       acquiring.initialize({ entry: sharingEntry, membership: new Set(["member"]) }),
     ).toThrow("Session sharing acquisition is no longer current");

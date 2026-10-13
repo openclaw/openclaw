@@ -89,8 +89,6 @@ import {
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-export { withTranscriptWriteTransaction } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-
 /** Replaces the active session identity and branch inside the maintenance worker transaction. */
 export function replaceSessionWithBranchedTranscriptInTransaction(
   database: OpenClawAgentDatabase,

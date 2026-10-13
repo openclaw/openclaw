@@ -108,17 +108,50 @@ export async function repairLaunchAgentBootstrap(args: {
   // env file before the plist becomes world-readable for launchd.
   const warn = args.warn ?? ((message: string) => console.warn(formatLine("Warning", message)));
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
-  await execLaunchctl(["enable", serviceTarget], args.deadline);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath], args.deadline);
-  if (boot.code === 0) {
-    return { ok: true, status: "repaired" };
-  }
-  const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    return { ok: false, status: "gui-session-unavailable", detail, domain };
-  }
-  if (!isLaunchctlAlreadyLoaded(boot)) {
-    return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+  try {
+    const bootstrap = await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway start",
+      deadline: args.deadline,
+    });
+    if (bootstrap === "bootstrapped") {
+      return { ok: true, status: "repaired" };
+    }
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    const boot = error instanceof Error ? error.cause : undefined;
+    if (
+      !boot ||
+      typeof boot !== "object" ||
+      !("stderr" in boot) ||
+      typeof boot.stderr !== "string" ||
+      !("stdout" in boot) ||
+      typeof boot.stdout !== "string" ||
+      !("code" in boot) ||
+      typeof boot.code !== "number" ||
+      !("termination" in boot)
+    ) {
+      throw error;
+    }
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      return { ok: false, status: "gui-session-unavailable", detail, domain };
+    }
+    if (
+      boot.termination !== "exit" ||
+      !isLaunchctlAlreadyLoaded({
+        code: boot.code,
+        termination: "exit",
+        stderr: boot.stderr,
+        stdout: boot.stdout,
+      })
+    ) {
+      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+    }
   }
 
   // Service is already bootstrapped. Only kickstart if it is not actively running —

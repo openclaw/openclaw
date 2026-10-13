@@ -589,58 +589,7 @@ suite.define(() => {
                   .isVisible();
                 proof.restoredDraftPreserved = (await composer.inputValue()) === "Next draft";
                 expect(await composer.inputValue()).toBe("Next draft");
-                stage = "complete";
               } finally {
-                if (stage !== "complete") {
-                  const sessionFacts = (session: SessionDescriptor | undefined) => ({
-                    matchesSession: session?.key === sessionKey,
-                    matchesRun: Boolean(runId && session?.lastRunId === runId),
-                    knownRun: session?.lastRunId ? knownRunIds.has(session.lastRunId) : false,
-                    active: session?.hasActiveRun,
-                    status: session?.status,
-                  });
-                  const relevantFrames = [
-                    ...delivered,
-                    ...received.filter((frame) => !delivered.includes(frame)),
-                  ].filter((frame) =>
-                    frame.type === "event"
-                      ? ["chat", "agent", "sessions.changed", "session.message"].includes(
-                          frame.event ?? "",
-                        )
-                      : [
-                          "chat.send",
-                          "chat.abort",
-                          "chat.startup",
-                          "chat.history",
-                          "sessions.describe",
-                          "sessions.list",
-                        ].includes(sent.find((entry) => entry.id === frame.id)?.method ?? ""),
-                  );
-                  const frames = relevantFrames.slice(-48).map((frame) => ({
-                    delivered: delivered.includes(frame),
-                    event: frame.event,
-                    method: sent.find((entry) => entry.id === frame.id)?.method,
-                    ok: frame.ok,
-                    matchesSession: frame.payload?.sessionKey === sessionKey,
-                    matchesRun: Boolean(runId && frame.payload?.runId === runId),
-                    matchesClientRun: Boolean(runId && frame.payload?.clientRunId === runId),
-                    knownRun: frame.payload?.runId ? knownRunIds.has(frame.payload.runId) : false,
-                    lastRunMatches: Boolean(runId && frame.payload?.lastRunId === runId),
-                    active: frame.payload?.hasActiveRun,
-                    state: frame.payload?.state,
-                    phase: frame.payload?.phase,
-                    lifecyclePhase: frame.payload?.data?.phase,
-                    session: sessionFacts(frame.payload?.session),
-                    history: sessionFacts(frame.payload?.sessionInfo),
-                    rows: frame.payload?.sessions
-                      ?.filter((row) => row.key === sessionKey)
-                      .map(sessionFacts),
-                  }));
-                  console.error(
-                    "[chat-stop-qualification]",
-                    JSON.stringify({ stage, frameCount: relevantFrames.length, frames }),
-                  );
-                }
                 const send = sent.find((frame) => frame.method === "chat.send");
                 const response = send && received.find((frame) => frame.id === send.id);
                 proof.sendAckObserved = response !== undefined;

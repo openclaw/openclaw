@@ -444,10 +444,14 @@ For versions that support checks before installation, health checks, config and 
 test Gateway boot on copied state finish before the service stops. The stopped interval
 contains the swap, required migrations, plugin downloads and convergence, and
 service start. Plugin work uses the installed target without requiring a serving
-Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;
-unchanged plugins do not run another full Doctor pass. The final report records
-downtime through convergence and final verification, plus verification
-results. See
+Gateway. Changed plugins, pending plugin migrations, or deferred model retirement
+run fresh Doctor repairs before restart; required repair failures still block startup.
+After the candidate takes ownership of finalization, optional diagnostics with
+complete lint coverage can run after verified readiness. Their warnings and retry
+commands remain in the update report while the Gateway serves. Missing diagnostic
+selectors cause the checks to run before startup instead.
+The final report records downtime through convergence and final verification,
+plus verification results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
 Source updates also admit build-artifact ownership and runtime staging access in
