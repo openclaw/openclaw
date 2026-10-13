@@ -19,6 +19,7 @@ import type {
 } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find as findPlacement } from "./placement-row-codec.js";
+import { workerPreparationSourceKey } from "./preparation-identity.schema.js";
 import { parseWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentNativePatch } from "./store-projection.js";
 import { executeWorkerEnvironmentWrite } from "./store-write.js";
@@ -101,16 +102,12 @@ function hasPlacementReference(db: DatabaseSync, environmentId: string): boolean
   );
 }
 
-function snapshotProjectKey(snapshot: unknown): string {
-  if (
-    !isRecord(snapshot) ||
-    !isRecord(snapshot.project) ||
-    typeof snapshot.project.key !== "string" ||
-    !/^[a-f0-9]{64}$/u.test(snapshot.project.key)
-  ) {
-    throw new Error("Prepared worker has an invalid project identity");
+function snapshotSourceKey(snapshot: unknown): string {
+  const key = isRecord(snapshot) ? workerPreparationSourceKey(snapshot) : undefined;
+  if (!key) {
+    throw new Error("Prepared worker has an invalid preparation source");
   }
-  return snapshot.project.key;
+  return key;
 }
 
 type PreparedReservationCandidate = Pick<
@@ -144,7 +141,7 @@ export function selectPreparedEnvironmentReservations(
       cleanupOrder: record.destroyRequestedAtMs !== null || record.state === "orphaned" ? 0 : 1,
       state: record.state,
       purpose: record.preparation!.purpose,
-      projectKey: snapshotProjectKey(record.profileSnapshot),
+      projectKey: snapshotSourceKey(record.profileSnapshot),
       createdAtMs: record.createdAtMs,
     }))
     .toSorted(
@@ -316,8 +313,8 @@ export function createPreparedEnvironmentStoreOps(options: {
       ) {
         return undefined;
       }
-      if (snapshotProjectKey(input.intent.profileSnapshot) !== input.projectKey) {
-        throw new Error("Prepared worker capacity does not match the admitted project");
+      if (snapshotSourceKey(input.intent.profileSnapshot) !== input.projectKey) {
+        throw new Error("Prepared worker capacity does not match the admitted source");
       }
       return options.createIntent(input.intent);
     },

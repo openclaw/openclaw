@@ -450,9 +450,10 @@ async function executeDoctorLint(
     ...extensionChecks,
   ];
   const runOpts: DoctorLintRunOptions = {
-    checks: opts.updateReadiness
-      ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
-      : checks,
+    checks:
+      opts.updateReadiness && opts.includeAllChecks !== true
+        ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
+        : checks,
     includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     skipIds: [...(opts.skipIds ?? []), ...(stateView.deferredCheckIds ?? [])],
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),

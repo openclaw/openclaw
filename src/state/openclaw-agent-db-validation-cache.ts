@@ -96,16 +96,20 @@ function observeValidationPath(pathname: string, admission: boolean): void {
       invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
     }
   };
-  const watched = observeOwnedDirectory(path.dirname(pathname), (filename) => {
-    if (
-      filename === undefined ||
-      (process.platform === "win32"
-        ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
-        : filename === path.basename(pathname))
-    ) {
-      revalidate();
-    }
-  });
+  const watched = observeOwnedDirectory(
+    path.dirname(pathname),
+    (filename) => {
+      if (
+        filename === undefined ||
+        (process.platform === "win32"
+          ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
+          : filename === path.basename(pathname))
+      ) {
+        revalidate();
+      }
+    },
+    { recoveryIntervalMs: 30_000 },
+  );
   // Retained proof outlives native handles; its cache owns observation cleanup.
   validationObservations.set(pathname, {
     revalidate,

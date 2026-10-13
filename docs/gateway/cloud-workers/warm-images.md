@@ -112,12 +112,19 @@ Pool details require current administrator access. API clients request them with
 `includePreparedDetails: true` on `environments.list` or `environments.status`;
 default responses retain the existing inventory shape for older clients.
 
-For an eligible local Git project or repository-only session, a successful session activation can prepare a
+For an eligible local Git project, repository-only session, or empty committed
+workspace, a successful session activation can prepare a
 dedicated worker for the next session in the background. The default target is
 one unassigned worker per project and profile, with a Gateway-wide cap of four.
 The next matching dispatch consumes a ready worker once, then schedules refill;
 if no eligible worker is ready, dispatch uses ordinary provisioning.
 Paired-device dispatch does not use this pool.
+Empty workspaces share a runtime-only reserve per provider and profile, independent
+of each session's repository path and commit. These reserves contain no session
+files, Git metadata, or owner credentials. The first empty session provisions
+normally; after activation, the next compatible empty session can claim its
+reserve and synchronize its own repository. Empty workspaces do not create
+presence-driven demand or share reserves with projects.
 When an authenticated Control UI browser authorized to create sessions is connected,
 the configured default repository and its worker profile keep the profile's
 `readyWorkers` target prepared. Read-only connections do not allocate workers.
@@ -146,7 +153,8 @@ provider idle-timeout window. Track its `preparation: { purpose, key }` in
 and waits for provider work to settle and cleanup to finish. The same command
 cancels an unused automatic reserve, including one whose expiry has passed.
 
-Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
+Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target
+(or the shared empty-workspace target) and
 `cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
 corresponding reserves and drains unused capacity without restarting the Gateway, preserving active
 sessions and image reuse. Preparing workers and workers awaiting confirmed
@@ -174,7 +182,13 @@ Deferred workers remain counted against capacity, and no new preparation runs
 until the observations succeed. Confirmed profile, source-owner, or runtime
 changes still retire incompatible workers. A failed refill does not discard an
 independently verified ready worker. Session dispatch always performs fresh
-admission before consuming a reserve.
+admission before consuming a reserve. When demand cannot refill, the Gateway logs
+one concise reason with the profile and source environment ID, including disabled
+capacity (with the effective `readyWorkers` and `maxTotal`), expiry, profile or runtime
+changes, and deferred provider observations. If no reserve appears after activation,
+check these limits first: an explicit zero overrides the defaults. Unchanged
+reasons stay quiet on subsequent passes; a changed reason or recurrence after
+recovery logs again.
 
 Prepared-project images record foreground demand only after successful session
 activation. Failed enrollment or dispatch does not renew image demand. A newly

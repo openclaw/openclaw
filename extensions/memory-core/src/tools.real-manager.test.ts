@@ -371,10 +371,21 @@ describe("memory_search real manager", () => {
 
   it("returns memory-file keyword matches at the deadline without cooling down healthy recall", async () => {
     const cfg = createConfig({ minScore: 0, vectorEnabled: false });
-    await indexedManager(cfg, undefined, "baseline");
+    const manager = await indexedManager(cfg, undefined, "baseline");
     const queryEntered = createDeferred<void>();
+    const partialStatusReady = createDeferred<void>();
     const releaseQuery = createDeferred<void>();
+    let embeddingStarted = false;
+    const statusAsync = manager.statusAsync.bind(manager);
+    vi.spyOn(manager, "statusAsync").mockImplementation(async () => {
+      const status = await statusAsync();
+      if (embeddingStarted) {
+        partialStatusReady.resolve();
+      }
+      return status;
+    });
     provider.beforeEmbedQuery = async () => {
+      embeddingStarted = true;
       queryEntered.resolve();
       await releaseQuery.promise;
     };
@@ -383,6 +394,7 @@ describe("memory_search real manager", () => {
     const execution = tool.execute("keyword-deadline", zebraQuery);
     try {
       await queryEntered.promise;
+      await partialStatusReady.promise;
       await vi.advanceTimersByTimeAsync(30_000);
       const result = await execution;
       expect(result.details).toMatchObject({

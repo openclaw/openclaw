@@ -53,7 +53,11 @@ export function withGitProcessOperation<T>(
 }
 
 /** Count admitted local and broker launches, without recording paths or arguments. */
-export function recordChildProcessSpawn(command: string, child: ChildProcess): void {
+export function recordChildProcessSpawn(
+  command: string,
+  child: ChildProcess,
+  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -62,7 +66,8 @@ export function recordChildProcessSpawn(command: string, child: ChildProcess): v
     .toLowerCase()
     .replace(/\.(exe|cmd)$/, "");
   const family = COMMAND_FAMILIES.test(name) ? name : "other";
-  const operation = family === "git" ? (gitOperation.getStore() ?? "unknown") : "none";
+  const operation =
+    family === "git" ? (gitOperation.getStore() ?? "unknown") : (sqliteOperation ?? "none");
   const key = `${family}:${operation}`;
   child.once("spawn", () => {
     if (areDiagnosticsEnabledForProcess()) {

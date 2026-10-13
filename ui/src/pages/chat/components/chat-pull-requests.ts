@@ -1,7 +1,5 @@
-import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, noChange, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type {
   ControlUiSessionBranch,
@@ -11,18 +9,19 @@ import type {
 import "./chat-ci-details.ts";
 import "./chat-ci-automation-control.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
-import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import { livePresentation, type PresentationValue } from "../../../lit/presentation-binding.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
   renderGitHubPublicationAction,
   renderGitHubPublicationDetails,
 } from "./chat-github-publication.ts";
+import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 
 registerGitHubEnglish();
 
@@ -127,80 +126,55 @@ function renderChecks(
 ) {
   const checks = pullRequest.checks;
   const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
-  let details: HTMLDetailsElement | undefined;
   const presented = props.presented ?? true;
-  const isPresented = () => (typeof presented === "boolean" ? presented : presented.isPresented());
-  const syncChecksOverlay = (element: EventTarget | null | undefined) => {
-    if (!(element instanceof HTMLDetailsElement)) {
-      return;
-    }
-    details = element;
-    syncAnchoredOverlay(element, "top", { alignment: "end" });
-    const popup = element.querySelector<WaPopup>(":scope > wa-popup[data-anchored-overlay]");
-    if (popup && !isPresented()) {
-      popup.active = false;
-    }
-  };
-  return html`
-    <details
-      class="chat-pr__checks"
-      data-checks=${checks?.state ?? "none"}
-      ${ref(syncChecksOverlay)}
-      @toggle=${(event: Event) => syncChecksOverlay(event.currentTarget)}
-    >
-      <summary class="chat-pr__checks-pill" aria-label=${label} title=${label}>
-        <span class="chat-pr__checks-dot" aria-hidden="true"></span>
-        ${t("chat.pullRequests.checks")}
-        <span class="chat-pr__checks-chevron" aria-hidden="true">${icons.chevronDown}</span>
-      </summary>
-      <wa-popup
-        data-anchored-overlay
-        .active=${typeof presented === "boolean" ? noChange : livePresentation({ owner: presented.owner, isPresented: () => isPresented() && Boolean(details?.open) })}
+  return solidContent(ChatPullRequestChecks, {
+    label,
+    checksState: checks?.state ?? "none",
+    presented,
+    content: html`
+      <div
+        class="chat-pr__checks-menu"
+        role="group"
+        aria-label=${t("chat.pullRequests.ciMonitoring")}
       >
-        <div
-          class="chat-pr__checks-menu"
-          role="group"
-          aria-label=${t("chat.pullRequests.ciMonitoring")}
-        >
-          <div class="chat-pr__checks-menu-header">
-            <span>${t("chat.pullRequests.ciMonitoring")}</span>
-            <a
-              href=${pullRequest.checksUrl ?? pullRequest.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label=${t("chat.pullRequests.openChecks")}
-            >
-              ${icons.externalLink}
-            </a>
-          </div>
-          <div class="chat-pr__checks-counts">
-            ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks?.failed ?? 0, "failed")}
-            ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks?.passed ?? 0, "passed")}
-            ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks?.running ?? 0, "running")}
-            ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks?.skipped ?? 0, "skipped")}
-            ${!checks ? t("chat.pullRequests.automationNoChecks") : nothing}
-          </div>
-          <openclaw-chat-ci-automation
-            .pullRequest=${pullRequest}
-            .gateway=${props.gateway}
-            .sessionKey=${props.sessionKey ?? ""}
-            .sessionId=${props.sessionId ?? ""}
-            .presented=${livePresentation(presented)}
-          ></openclaw-chat-ci-automation>
-          ${
-            checks
-              ? html`<openclaw-chat-ci-details
-                  .pullRequest=${pullRequest}
-                  .gateway=${props.gateway}
-                  .sessionKey=${props.sessionKey ?? ""}
-                  .presented=${livePresentation(presented)}
-                ></openclaw-chat-ci-details>`
-              : nothing
-          }
+        <div class="chat-pr__checks-menu-header">
+          <span>${t("chat.pullRequests.ciMonitoring")}</span>
+          <a
+            href=${pullRequest.checksUrl ?? pullRequest.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label=${t("chat.pullRequests.openChecks")}
+          >
+            ${icons.externalLink}
+          </a>
         </div>
-      </wa-popup>
-    </details>
-  `;
+        <div class="chat-pr__checks-counts">
+          ${renderChecksRow(t("chat.pullRequests.checksFailed"), checks?.failed ?? 0, "failed")}
+          ${renderChecksRow(t("chat.pullRequests.checksPassed"), checks?.passed ?? 0, "passed")}
+          ${renderChecksRow(t("chat.pullRequests.checksRunning"), checks?.running ?? 0, "running")}
+          ${renderChecksRow(t("chat.pullRequests.checksSkipped"), checks?.skipped ?? 0, "skipped")}
+          ${!checks ? t("chat.pullRequests.automationNoChecks") : nothing}
+        </div>
+        <openclaw-chat-ci-automation
+          .pullRequest=${pullRequest}
+          .gateway=${props.gateway}
+          .sessionKey=${props.sessionKey ?? ""}
+          .sessionId=${props.sessionId ?? ""}
+          .presented=${livePresentation(presented)}
+        ></openclaw-chat-ci-automation>
+        ${
+          checks
+            ? html`<openclaw-chat-ci-details
+                .pullRequest=${pullRequest}
+                .gateway=${props.gateway}
+                .sessionKey=${props.sessionKey ?? ""}
+                .presented=${livePresentation(presented)}
+              ></openclaw-chat-ci-details>`
+            : nothing
+        }
+      </div>
+    `,
+  });
 }
 
 function renderDiffStats(
@@ -272,6 +246,7 @@ function renderWorkRow(
   onOpenSessionDiff?: () => void,
   publication?: GitHubPublicationView,
   onDismissBranch?: (branch: ControlUiSessionBranch) => void,
+  presented: PresentationValue = true,
 ) {
   const published =
     !branch && publication?.result?.status === "published" ? publication.result : undefined;
@@ -296,7 +271,7 @@ function renderWorkRow(
         ${renderStatusWarning(status)}
         ${
           publication
-            ? renderGitHubPublicationAction(publication)
+            ? renderGitHubPublicationAction(publication, presented)
             : branch
               ? renderCreatePullRequestLink(branch)
               : nothing
@@ -361,6 +336,7 @@ export function renderChatPullRequests(props: {
         props.onOpenSessionDiff,
         publication,
         props.onDismissBranch,
+        props.presented,
       )}
     </div>`;
   }
@@ -448,18 +424,21 @@ export function renderChatPullRequests(props: {
           </article>
         `;
       })}
-      ${recovery ? renderPublicationRecovery(recovery) : nothing}
+      ${recovery ? renderPublicationRecovery(recovery, props.presented) : nothing}
     </div>
   `;
 }
 
-function renderPublicationRecovery(publication: GitHubPublicationView) {
+function renderPublicationRecovery(
+  publication: GitHubPublicationView,
+  presented: PresentationValue = true,
+) {
   const failed = publication.result?.status === "failed";
   const content = html`<div class="chat-pr__publication-recovery">
     ${renderGitHubPublicationDetails(publication, { inline: failed })}
     ${
       publication.result?.status !== "published"
-        ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
+        ? html`<div>${renderGitHubPublicationAction(publication, presented)}</div>`
         : nothing
     }
   </div>`;

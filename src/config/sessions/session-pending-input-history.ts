@@ -7,6 +7,7 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
@@ -140,6 +141,9 @@ async function readPendingInputRows(
     return { rows: [], total: 0 };
   }
   assertReadCurrent();
+  if (hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)) {
+    return { rows: [], total: 0 };
+  }
   return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
     const snapshot = await owner.readPendingInputHistory({
       query: { ...query, sessionKey: resolved.sessionKey },

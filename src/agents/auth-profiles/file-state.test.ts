@@ -32,7 +32,9 @@ afterEach(async () => {
 });
 
 it("keeps unchanged fallback observations off row workers and detects WAL-only writes", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   vi.spyOn(fs, "watch").mockImplementation(() => {
     throw new Error("synthetic unavailable watcher");
   });
@@ -198,7 +200,9 @@ it("rejects a swapped database before a privileged write even before observation
 });
 
 it("publishes a first owner write immediately and keeps same-file writes from revoking identity", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   const directory = temporary.make("auth-file-write-through-");
   const databasePath = path.join(directory, "openclaw-agent.sqlite");
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
@@ -264,7 +268,9 @@ it("keeps first-write authority when publication overtakes an observed file read
 });
 
 it("explicitly refreshes absent files without retiring unchanged authority", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   vi.spyOn(fs, "watch").mockImplementation(() => {
     throw new Error("synthetic unavailable watcher");
   });
@@ -286,7 +292,9 @@ it("explicitly refreshes absent files without retiring unchanged authority", asy
 });
 
 it("joins a fallback observation received while a prior refresh is pending", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   vi.spyOn(fs, "watch").mockImplementation(() => {
     throw new Error("synthetic unavailable watcher");
   });
@@ -341,7 +349,9 @@ it("joins a fallback observation received while a prior refresh is pending", asy
 });
 
 it("invalidates admitted auth facts after a separate process replaces their files", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   const directory = temporary.make("auth-file-owner-");
   const databasePath = path.join(directory, "openclaw-agent.sqlite");
   const legacyPath = path.join(directory, "auth-profiles.json");
@@ -377,7 +387,9 @@ it("invalidates admitted auth facts after a separate process replaces their file
 });
 
 it("periodically invalidates when directory events are unavailable", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   vi.spyOn(fs, "watch").mockImplementation(() => {
     throw new Error("synthetic unavailable watcher");
   });
@@ -399,7 +411,9 @@ it("periodically invalidates when directory events are unavailable", async () =>
 });
 
 it("keeps an absent database readable as missing after fallback revalidation", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   const directory = temporary.make("auth-file-still-missing-");
   const databasePath = path.join(directory, "openclaw-agent.sqlite");
   const captured = captureAuthProfileFileIdentity(databasePath);
