@@ -1,14 +1,10 @@
 import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
-/**
- * Projects OpenClaw context-engine assemblies into Codex prompt text while
- * preserving media boundaries and bounding historical tool payloads.
- */
 import {
   isOpenClawRuntimeContextCustomMessage,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
@@ -55,19 +51,12 @@ const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
 
-/**
- * This projection has no access to agent-core's private compaction helper, but
- * must keep the same attribution contract: a stable ID is identity; display
- * labels are optional metadata, never provenance on their own.
- */
+// Match compaction attribution: stable IDs establish identity; display labels do not.
 function formatCodexContextSenderSuffix(message: AgentMessage): string {
   if (message.role !== "user") {
     return "";
   }
-  const metadata = Reflect.get(message, "__openclaw");
-  if (!metadata || typeof metadata !== "object") {
-    return "";
-  }
+  const metadata = asOptionalObjectRecord(Reflect.get(message, "__openclaw"));
   const normalize = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
       return undefined;
@@ -77,14 +66,12 @@ function formatCodexContextSenderSuffix(message: AgentMessage): string {
       ? truncateUtf16Safe(normalized, CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS)
       : undefined;
   };
-  // SAFETY: object narrowing above guarantees a record; each sender field is validated below.
-  const record = metadata as Record<string, unknown>;
-  const id = normalize(record.senderId);
+  const id = normalize(metadata?.senderId);
   if (!id) {
     return "";
   }
-  const name = normalize(record.senderName);
-  const username = normalize(record.senderUsername);
+  const name = normalize(metadata?.senderName);
+  const username = normalize(metadata?.senderUsername);
   return ` sender=${JSON.stringify({ id, ...(name ? { name } : {}), ...(username ? { username } : {}) })}`;
 }
 
@@ -143,8 +130,9 @@ export async function projectContextEngineAssemblyForCodex(params: {
   const currentUserSenderSuffix = params.currentUserMessage
     ? formatCodexContextSenderSuffix(params.currentUserMessage)
     : "";
-  const currentUserSenderLabel = currentUserSenderSuffix ? `[user${currentUserSenderSuffix}]` : "";
-  const currentRequest = currentUserSenderLabel ? `${currentUserSenderLabel}\n${prompt}` : prompt;
+  const currentRequest = currentUserSenderSuffix
+    ? `${neutralizeCodexExplicitMentionSigils(`[user${currentUserSenderSuffix}]`)}\n${prompt}`
+    : prompt;
   const promptSuffix = boundedContext
     ? `\n${CONTEXT_CLOSE}\n\n${REQUEST_HEADER}\n${currentRequest}`
     : "";
