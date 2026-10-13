@@ -4,7 +4,8 @@ import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input
 import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./multi-select-registration.ts";
-import type { MultiSelect, MultiSelectOption } from "./multi-select.ts";
+import type { MultiSelectOption } from "./multi-select-types.ts";
+import type { MultiSelect } from "./multi-select.ts";
 
 type MultiSelectElement = MultiSelect;
 

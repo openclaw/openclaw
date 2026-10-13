@@ -210,14 +210,11 @@ async function selectCatalogDelete(
     .querySelector(`[data-session-key*="${threadId}"]`)!
     .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
-  const item = sidebar.querySelector('wa-dropdown-item[value="delete"]');
-  expect(item).not.toBeNull();
-  item!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      detail: { item: { value: "delete" } },
-    }),
+  const item = sidebar.querySelector<HTMLButtonElement>(
+    'openclaw-catalog-session-menu [data-value="delete"]',
   );
+  expect(item).not.toBeNull();
+  item!.click();
   return waitForConfirmDialogActions();
 }
 
