@@ -3,7 +3,7 @@ import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
+import "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import "../../components/ip-location.ts";
@@ -34,7 +34,6 @@ import {
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { ActivitySessionGit } from "./session-activity-git.tsx";
 import { ActivitySessionMedia } from "./session-activity-media.tsx";
@@ -199,7 +198,7 @@ function SessionLinkView(props: {
             ) : undefined}
             {showAgent() ? (
               <span class="activity-feed__session-scope">
-                <LitContent render={() => renderAgentRowChip(agentId())} />
+                <openclaw-agent-row-chip prop:agentId={agentId()} />
               </span>
             ) : undefined}
             {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}

@@ -87,12 +87,8 @@ type SharedChatHistoryRequest = {
   promise: Promise<SharedChatHistoryResponse>;
 };
 
-type SharedChatHistoryRegistry = {
-  ownerRequestCounts: WeakMap<object, Map<string, number>>;
-  requests: Map<string, SharedChatHistoryRequest>;
-};
-
 type SharedChatHistoryConsumer = {
+  owner: object;
   isCurrent: () => boolean;
   captureRun?: () => ChatHistoryRunObservation | undefined;
   onRetry?: () => void;
@@ -101,27 +97,8 @@ type SharedChatHistoryConsumer = {
 // The capability owns roster observations; a shared socket alone cannot transfer them.
 const sharedChatHistoryRequests = new WeakMap<
   GatewayBrowserClient,
-  WeakMap<object, SharedChatHistoryRegistry>
+  WeakMap<object, Map<string, SharedChatHistoryRequest>>
 >();
-
-function updateChatHistoryOwnerRequestCount(
-  registry: SharedChatHistoryRegistry,
-  owner: object,
-  requestKey: string,
-  delta: 1 | -1,
-) {
-  const counts = registry.ownerRequestCounts.get(owner) ?? new Map<string, number>();
-  const nextCount = (counts.get(requestKey) ?? 0) + delta;
-  if (nextCount <= 0) {
-    counts.delete(requestKey);
-    if (counts.size === 0) {
-      registry.ownerRequestCounts.delete(owner);
-    }
-    return;
-  }
-  registry.ownerRequestCounts.set(owner, counts);
-  counts.set(requestKey, nextCount);
-}
 
 type SharedChatHistoryArgs = [
   client: GatewayBrowserClient,
@@ -166,18 +143,12 @@ export function requestSharedHistory(
   }
   // Snapshot-only readers share transport work without acquiring roster observations.
   const owner = sessions ?? client;
-  let registry = owners.get(owner);
-  if (!registry) {
-    registry = {
-      ownerRequestCounts: new WeakMap(),
-      requests: new Map(),
-    };
-    owners.set(owner, registry);
-  }
-  const requests = registry.requests;
+  const requests = owners.get(owner) ?? new Map<string, SharedChatHistoryRequest>();
+  owners.set(owner, requests);
   let shared = requests.get(requestKey);
-  const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
-  const consumer: SharedChatHistoryConsumer = { ...consumerObservation };
+  const existingOwner =
+    shared && [...shared.consumers].some((entry) => entry.owner === consumerOwner);
+  const consumer: SharedChatHistoryConsumer = { owner: consumerOwner, ...consumerObservation };
   if (!shared || existingOwner) {
     const params = {
       sessionKey,
@@ -256,17 +227,16 @@ export function requestSharedHistory(
   } else {
     shared.consumers.add(consumer);
   }
-  updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, 1);
   // The client owns this bounded in-flight map, while every pane remains responsible
   // for applying the shared payload under its own session/version ownership checks.
-  // Owner counts outlive displaced map entries so overlapping refreshes never reuse stale work.
+  // A pane returning while an older request is displaced may join the latest read;
+  // its ordinary history owner still decides whether that payload can be applied.
   const pending = shared;
   return subscribeToSharedRequest(
     { controller: pending.controller, promise: pending.promise, subscribers: pending.consumers },
     consumer,
     pending.controller.signal,
     () => {
-      updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
       if (pending.consumers.size === 0 && requests.get(requestKey) === pending) {
         requests.delete(requestKey);
       }

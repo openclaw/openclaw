@@ -24,6 +24,7 @@ export function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
+  customInlineButtonHint?: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -66,7 +67,7 @@ export function buildMessagingSection(params: {
       "",
     ];
   }
-  const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
+  const showGenericInlineButtonHint = !params.customInlineButtonHint;
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");

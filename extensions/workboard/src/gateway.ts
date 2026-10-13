@@ -211,6 +211,19 @@ export function registerWorkboardGatewayMethods(params: {
     register(`workboard.cards.${method}`, WRITE_SCOPE, ({ params: input }) =>
       redactCardResult(mutate(readId(input), input)),
     );
+  const prepareWorkspaceInput = async (
+    request: GatewayMethodContext,
+    value: unknown,
+    kind: "create" | "patch" | "decompose",
+  ) => {
+    const input = withoutWorkboardWorkspaceAccess(value);
+    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
+    return kind === "decompose"
+      ? withWorkboardDecomposeWorkspaceAccess(input, access)
+      : kind === "create" || containsWorkboardWorkspaceMutation(input)
+        ? withWorkboardWorkspaceAccess(input, access)
+        : input;
+  };
   const dispatchCards = createWorkboardDispatchHandler({ api, store });
 
   register("workboard.cards.list", READ_SCOPE, async ({ params: input }) => {
@@ -225,9 +238,7 @@ export function registerWorkboardGatewayMethods(params: {
   });
   for (const method of ["create", "captureSession"] as const) {
     register(`workboard.cards.${method}`, WRITE_SCOPE, async (request) => {
-      const input = withoutWorkboardWorkspaceAccess(request.params);
-      const access = await resolveGatewayWorkspaceMutationAccess(request, input);
-      const prepared = withWorkboardWorkspaceAccess(input, access);
+      const prepared = await prepareWorkspaceInput(request, request.params, "create");
       return redactCardResult(
         method === "create"
           ? store.create(prepared, undefined, request.sessionMutationCommitGuard)
@@ -236,18 +247,9 @@ export function registerWorkboardGatewayMethods(params: {
     });
   }
   register("workboard.cards.update", WRITE_SCOPE, async (request) => {
-    const patch = withoutWorkboardWorkspaceAccess(readPatch(request.params));
-    const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
+    const patch = await prepareWorkspaceInput(request, readPatch(request.params), "patch");
     const expectedUpdatedAt = readExpectedUpdatedAt(request.params);
-    return redactCardResult(
-      store.update(
-        readId(request.params),
-        containsWorkboardWorkspaceMutation(patch)
-          ? withWorkboardWorkspaceAccess(patch, access)
-          : patch,
-        { expectedUpdatedAt },
-      ),
-    );
+    return redactCardResult(store.update(readId(request.params), patch, { expectedUpdatedAt }));
   });
   register("workboard.cards.start", WRITE_SCOPE, (request) =>
     dispatchCards(request, { supportsMaxStarts: false, directCard: true }),
@@ -288,13 +290,9 @@ export function registerWorkboardGatewayMethods(params: {
   cardMutation("unblock", (id) => store.unblock(id));
   register("workboard.cards.bulk", WRITE_SCOPE, async (request) => {
     const input = withoutWorkboardWorkspaceAccess(request.params);
-    const patch = withoutWorkboardWorkspaceAccess(readPatch(request.params));
-    const access = await resolveGatewayWorkspaceMutationAccess(request, patch);
     const result = await store.bulkUpdate({
       ...input,
-      patch: containsWorkboardWorkspaceMutation(patch)
-        ? withWorkboardWorkspaceAccess(patch, access)
-        : patch,
+      patch: await prepareWorkspaceInput(request, readPatch(request.params), "patch"),
     });
     return { cards: result.cards.map(redactClaimToken) };
   });
@@ -369,24 +367,18 @@ export function registerWorkboardGatewayMethods(params: {
     return { ...result, card: redactClaimToken(result.card) };
   });
   register("workboard.cards.specify", WRITE_SCOPE, async (request) => {
-    const input = withoutWorkboardWorkspaceAccess(request.params);
-    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
     return redactCardResult(
       store.specify(
         readId(request.params),
-        containsWorkboardWorkspaceMutation(input)
-          ? withWorkboardWorkspaceAccess(input, access)
-          : input,
+        await prepareWorkspaceInput(request, request.params, "patch"),
         null,
       ),
     );
   });
   register("workboard.cards.decompose", WRITE_SCOPE, async (request) => {
-    const input = withoutWorkboardWorkspaceAccess(request.params);
-    const access = await resolveGatewayWorkspaceMutationAccess(request, input);
     const result = await store.decompose(
       readId(request.params),
-      withWorkboardDecomposeWorkspaceAccess(input, access),
+      await prepareWorkspaceInput(request, request.params, "decompose"),
       null,
     );
     return {

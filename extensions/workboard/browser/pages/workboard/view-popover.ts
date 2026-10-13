@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 
 export function closeWorkboardPopoverOnAction(event: Event) {
   if (!(event.target instanceof Element) || !event.target.closest("button")) {
@@ -11,12 +11,11 @@ export function closeWorkboardPopoverOnAction(event: Event) {
 
 export function workboardPopoverRef(align: "start" | "end" = "start", hover = false) {
   let dispose = () => {};
+  let panel!: HTMLElement;
   onCleanup(() => dispose());
-  return (element: Element | undefined) => {
-    dispose();
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
+  onSettled(() => {
+    const element = panel;
+    // Conditional Solid fragments have no sibling anchor until their DOM is committed.
     const sibling = element.previousElementSibling;
     const trigger = sibling instanceof HTMLElement ? sibling : null;
     let hoverTimer: ReturnType<typeof setTimeout> | undefined;
@@ -35,10 +34,10 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
         "--workboard-popover-max-height",
         `${Math.max(64, opensBelow ? below : above)}px`,
       );
-      const panel = element.getBoundingClientRect();
-      const left = align === "end" ? anchor.right - panel.width : anchor.left;
-      element.style.left = `${Math.max(12, Math.min(left, innerWidth - panel.width - 12))}px`;
-      element.style.top = `${opensBelow ? anchor.bottom + 6 : Math.max(12, anchor.top - panel.height - 6)}px`;
+      const bounds = element.getBoundingClientRect();
+      const left = align === "end" ? anchor.right - bounds.width : anchor.left;
+      element.style.left = `${Math.max(12, Math.min(left, innerWidth - bounds.width - 12))}px`;
+      element.style.top = `${opensBelow ? anchor.bottom + 6 : Math.max(12, anchor.top - bounds.height - 6)}px`;
     };
     const toggle = () => {
       element.previousElementSibling?.setAttribute(
@@ -129,5 +128,8 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
     };
+  });
+  return (element: HTMLElement) => {
+    panel = element;
   };
 }

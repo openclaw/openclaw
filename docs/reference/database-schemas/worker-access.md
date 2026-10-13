@@ -104,7 +104,7 @@ the migration inventory records remaining synchronous compatibility paths.
 | Session list projection         | Worker hydration and bounded history reads           | The host retains list rows and display metadata. Entry, sharing, transcript, profile, and topology publications update or invalidate their owned fields; incognito rows stay outside the durable roster.                                                    |
 | User profiles                   | Shared-state readers and profile writer              | The resident catalog retains display rows, roles, merge aliases, and email bindings. Profile and binding writers install committed changes before notifications; physical replacement or unknown changes invalidate the catalog.                            |
 | Agent deletion journal          | Shared-state reader and lifecycle writer             | Admission retains `absent`, `pending`, or `complete` per physical database and agent. Journal begin, completion, and removal publish the new status after commit; offline repair invalidates it. Final deletion effects retain their live-authority guards. |
-| Plugin state                    | Plugin-state worker                                  | Bounded keyed postimages and absence facts serve warm reads. Native and worker mutation receipts replace or invalidate keys; pending or unknown settlement prevents reuse, and expiry is evaluated on read.                                                 |
+| Plugin state                    | Plugin-state worker                                  | Bounded keyed postimages and absence facts serve warm reads. Namespace lists wait for earlier writes to that namespace, then reuse committed receipts even during unrelated writes. Unknown settlement invalidates facts; expiry is evaluated on read.      |
 | Memory index                    | Index publication and retrieval workers              | Index-facts postimages supply source invalidation and vector-completeness facts. The publication owner updates them after index changes; retrieval owns read-only capability probing.                                                                       |
 | Outbound recovery and Web Push  | Existing shared-state workers                        | Queue insertion/replacement invalidates the empty-recovery fact. Subscription writes publish or invalidate subscription presence. These facts never authorize delivery.                                                                                     |
 
@@ -119,6 +119,13 @@ quarantine guard still runs before opening. Lease admission marks the integrity
 receipt dirty once. A healthy close without a completed checkpoint leaves that
 receipt dirty, while failed disposal revokes it and the final checkpointed closer
 can certify it. These changes do not alter database formats or update behavior.
+
+Optional session-preview backfill retains its completed transcript watermark
+across generic notifications. Canonical transcript writes advance or invalidate
+that watermark, so a notification alone does not repeat the bounded history read.
+Usage-cost refresh reads a stale rollup body and its monthly partitions in one
+worker snapshot; discovery still reads only metadata. Neither change alters
+stored formats, retention, or update behavior.
 
 Memory retrieval workers borrow the existing agent read-only owner across query
 awaits and release each borrow before replying. The owner retains the idle reader

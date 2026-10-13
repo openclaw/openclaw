@@ -1869,7 +1869,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat", "plugin"],
     [
       "ui/src/components/board/board-view.ts",
-      "ui/src/lib/board/widgets/session-progress.ts",
+      "ui/src/lib/board/widgets/session-progress.tsx",
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/sidebar-layout.ts",
     ],

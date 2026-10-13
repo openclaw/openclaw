@@ -1,24 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
-import type { ApplicationContext, ApplicationThemeServerSelection } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../../test-helpers/custom-theme.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  createApplicationGateway,
-  createSolidApplicationContextProvider,
-} from "../../test-helpers/solid-application-context.tsx";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { completeConfigContext } from "./config-page.test-support.ts";
 import { ConfigPageController } from "./config-page.ts";
-import { ConfigPage } from "./config-page.tsx";
 import type { CustomThemeImportOwner } from "./custom-theme-import-owner.ts";
 import * as customTheme from "./custom-theme-import.ts";
 
@@ -58,17 +48,13 @@ function createCustomThemePage(settings: Partial<UiSettings> = {}) {
     },
     theme: { recordServerSelection: vi.fn(), refresh: vi.fn(), serverSelection: null },
   } as unknown as ApplicationContext;
-  state.customThemeImportOwner.connect(gatewayUrl, null);
+  state.customThemeImportOwner.connect(gatewayUrl);
   state.adoptThemeSettings = () => {
-    state.settings = state.customThemeImportOwner.adoptSettings(
-      state.settings,
-      loadSettings(),
-      state.context.theme.serverSelection,
-    );
+    state.settings = state.customThemeImportOwner.adoptSettings(state.settings, loadSettings());
   };
   state.setCustomThemeImportUrl = (next) => state.customThemeImportOwner.setUrl(next);
   state.synchronizeCustomThemeGatewayScope = (scope) =>
-    state.customThemeImportOwner.synchronizeScope(scope, state.context.theme.serverSelection);
+    state.customThemeImportOwner.synchronizeScope(scope);
   state.retireCustomThemeImportForConfigMutation = () =>
     state.customThemeImportOwner.retireForConfigMutation("You have unsaved changes");
   state.settings = { ...loadSettings(), ...settings };
@@ -165,68 +151,6 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.settings.customTheme?.themeId).toBe("first");
   });
 
-  it("revokes activation when server intent changes but the local mirror is equal", async () => {
-    const pending = deferred<ImportedCustomTheme>();
-    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { gateway } = createApplicationGateway();
-    patchSettings({ gatewayUrl: gateway.connection.gatewayUrl, theme: "claw" });
-    const theme = createApplicationTheme(loadSettings(), gateway);
-    const context: ApplicationContext = {
-      ...completeConfigContext({
-        gateway,
-        runtimeConfig: {
-          state: {
-            connected: true,
-            configSnapshot: { config: {}, valid: true, issues: [] },
-          },
-        },
-      } as unknown as ApplicationContext),
-      theme,
-    };
-    const provider = createSolidApplicationContextProvider(context);
-    const view = mountSolid(
-      () => createComponent(ConfigPage, { pageId: "appearance", routeData: null }),
-      { wrapper: provider.wrapper },
-    );
-    try {
-      flush();
-      view.container.querySelector<HTMLButtonElement>(".settings-theme-card--custom")!.click();
-      flush();
-      const input = view.container.querySelector<HTMLInputElement>(
-        "[data-custom-theme-import-input]",
-      )!;
-      input.scrollIntoView = vi.fn();
-      input.value = "first";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      flush();
-      view.container
-        .querySelector<HTMLButtonElement>(".settings-theme-import__actions .primary")!
-        .click();
-      expect(importCustomThemeFromUrl).toHaveBeenCalledWith("first");
-
-      theme.recordServerSelection("claw", gateway.connection.gatewayUrl);
-      flush();
-      pending.resolve(customThemeFixture("First", "first"));
-      await waitForSolid(() =>
-        expect(
-          view.container.querySelector(".settings-theme-import__message--success"),
-        ).toBeTruthy(),
-      );
-
-      expect(loadSettings().customTheme?.themeId).toBe("first");
-      expect(loadSettings().theme).toBe("claw");
-      expect(
-        view.container.querySelector(".settings-theme-card--claw")?.getAttribute("aria-pressed"),
-      ).toBe("true");
-      expect(
-        view.container.querySelector(".settings-theme-card--custom")?.getAttribute("aria-pressed"),
-      ).toBe("false");
-    } finally {
-      view.unmount();
-      theme.dispose();
-    }
-  });
-
   it("retires an import when navigation leaves Appearance", async () => {
     const pending = deferred<ImportedCustomTheme>();
     importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
@@ -280,40 +204,6 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.customThemeImport.url).toBe("");
     expect(state.customThemeImport.message?.kind).toBe("success");
     expect(state.settings.theme).toBe("knot");
-    expect(state.settings.customTheme?.themeId).toBe("first");
-  });
-
-  it("honors a newer server Custom selection after an intervening built-in selection", async () => {
-    const pending = deferred<ImportedCustomTheme>();
-    importCustomThemeFromUrl.mockReturnValueOnce(pending.promise);
-    const { state } = createCustomThemePage();
-    let serverSelection: ApplicationThemeServerSelection | null = {
-      revision: 1,
-      scope: "ws://gateway.test",
-      theme: "claw",
-    };
-    state.context = {
-      ...state.context,
-      theme: {
-        ...state.context.theme,
-        get serverSelection() {
-          return serverSelection;
-        },
-      },
-    } as ApplicationContext;
-    state.customThemeImportOwner.connect("ws://gateway.test", serverSelection);
-    state.setCustomThemeImportUrl("first");
-    const pendingImport = state.importCustomTheme();
-
-    serverSelection = { revision: 2, scope: "ws://gateway.test", theme: "knot" };
-    patchSettings({ theme: "knot" });
-    state.adoptThemeSettings();
-    serverSelection = { revision: 3, scope: "ws://gateway.test", theme: "custom" };
-    state.adoptThemeSettings();
-    pending.resolve(customThemeFixture("First", "first"));
-    await pendingImport;
-
-    expect(state.settings.theme).toBe("custom");
     expect(state.settings.customTheme?.themeId).toBe("first");
   });
 

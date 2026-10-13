@@ -13,6 +13,7 @@ import {
   type ReefPeerIdentity,
   type ReefPeerTrust,
 } from "./friend-types.js";
+import { transitionReefPeer, type ReefPeerMutation } from "./trust-peer-transition.js";
 import { validateReefPeerIdentity } from "./trust-store-authority.js";
 import {
   MESSAGE_ID_PATTERN,
@@ -111,21 +112,13 @@ export class LegacyReefTrustStore {
   set(peer: string, trust: ReefPeerTrust): void {
     this.assertActive?.();
     const parsedTrust = ReefPeerTrustSchema.parse(trust);
-    this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      return { ...current, revision: current.revision + 1, trust: parsedTrust };
-    });
+    this.#mutatePeer({ type: "set", input: { key: this.#key(peer), trust: parsedTrust } });
   }
 
   remove(peer: string, assertCurrent?: () => void): boolean {
     this.assertActive?.();
     assertCurrent?.();
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      // Keep a revision tombstone: a reconcile that started before this local
-      // revocation must never recreate trust from its stale relay snapshot.
-      return { revision: current.revision + 1 };
-    });
+    return this.#mutatePeer({ type: "remove", input: { key: this.#key(peer) } });
   }
 
   async beginRemoval(peer: string, assertOwnerCurrent?: () => void): Promise<() => Promise<void>> {
@@ -155,15 +148,9 @@ export class LegacyReefTrustStore {
     assertCurrent?.();
     const normalizedAutonomy = ReefAutonomySchema.parse(autonomy);
     const key = this.#key(peer);
-    const changed = this.#requireUpdate()(key, (value) => {
-      const current = parseReefPeerState(value);
-      if (!current.trust) {
-        return undefined;
-      }
-      return {
-        ...current,
-        trust: { ...current.trust, autonomy: normalizedAutonomy },
-      };
+    const changed = this.#mutatePeer({
+      type: "setAutonomy",
+      input: { key, autonomy: normalizedAutonomy },
     });
     if (!changed) {
       throw new Error(`Reef peer @${requirePeer(peer)} is not locally trusted`);
@@ -172,16 +159,9 @@ export class LegacyReefTrustStore {
 
   markSafetyNumberChanged(peer: string, expectedRevision: number): boolean {
     this.assertActive?.();
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      if (current.revision !== expectedRevision || !current.trust) {
-        return undefined;
-      }
-      return {
-        ...current,
-        revision: current.revision + 1,
-        trust: { ...current.trust, safetyNumberChanged: true },
-      };
+    return this.#mutatePeer({
+      type: "markSafetyNumberChanged",
+      input: { key: this.#key(peer), expectedRevision },
     });
   }
 
@@ -192,27 +172,9 @@ export class LegacyReefTrustStore {
   ): boolean {
     this.assertActive?.();
     const peer = requirePeer(friend.peer);
-    return this.#requireUpdate()(this.#key(peer), (value) => {
-      const current = parseReefPeerState(value);
-      if (
-        current.revision !== options.expectedRevision ||
-        (options.expectedOutboundRequestId !== undefined &&
-          current.outboundRequests?.[options.expectedOutboundRequestId] === undefined)
-      ) {
-        return undefined;
-      }
-      return {
-        revision: current.revision + 1,
-        trust: {
-          autonomy: current.trust?.autonomy ?? "bounded",
-          ed25519PublicKey: friend.ed25519_pub,
-          x25519PublicKey: friend.x25519_pub,
-          keyEpoch: friend.key_epoch,
-          safetyNumberChanged: false,
-          approvedAt,
-        },
-        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
-      };
+    return this.#mutatePeer({
+      type: "commitPeerTrust",
+      input: { key: this.#key(peer), friend, ...options, approvedAt },
     });
   }
 
@@ -240,13 +202,12 @@ export class LegacyReefTrustStore {
     this.assertActive?.();
     assertOwnerCurrent?.();
     if (
-      !update(key, (value) => {
-        const current = parseReefPeerState(value);
-        return {
-          ...current,
-          outboundRequests: { ...current.outboundRequests, [requestId]: requestedAt },
-        };
-      })
+      !update(key, (value) =>
+        transitionReefPeer(
+          { type: "beginRequest", input: { key, requestId, requestedAt } },
+          parseReefPeerState(value),
+        ),
+      )
     ) {
       throw new Error(`Failed to persist outbound Reef request for @${requirePeer(peer)}`);
     }
@@ -607,5 +568,11 @@ export class LegacyReefTrustStore {
       throw new Error("Reef peer trust requires atomic plugin-state updates");
     }
     return update;
+  }
+
+  #mutatePeer(command: ReefPeerMutation): boolean {
+    return this.#requireUpdate()(command.input.key, (value) =>
+      transitionReefPeer(command, parseReefPeerState(value)),
+    );
   }
 }

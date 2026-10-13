@@ -5,11 +5,16 @@ import {
   createSqliteWorkerClient,
   runSqliteWorkerClientOperation,
 } from "./sqlite-worker-client.js";
+import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
 type Operations = { write: { input: string; output: string } };
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
 
 function createActor(): Actor {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  custody.post();
   return {
     nativeStopped: Promise.resolve(),
     markNativeStopped() {},
@@ -24,7 +29,7 @@ function createActor(): Actor {
     },
     references: 1,
     opened: Promise.resolve(),
-    openDispatch: { dispatched: true },
+    openDispatch: { custody },
     initialized: true,
     backendClosed: false,
   };
