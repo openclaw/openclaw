@@ -84,9 +84,14 @@ export async function buildExternalPluginLocalDist(
     }
     const target = `dist/extensions/${plan.pluginDir}`;
     const browserOutput = `${packageDir}/dist/control-ui`;
-    const sourceOutputs = generatedAssets.filter(
-      (asset) => asset.startsWith(`${packageDir}/`) && !asset.includes("/node_modules/"),
-    );
+    // Manifest writers run before compilation. Their fresh manifest fingerprints
+    // browser dependencies; the runtime cache must not restore over that owner.
+    const earlyAssets = generatedAssets.includes(`${packageDir}/openclaw.plugin.json`);
+    const sourceOutputs = earlyAssets
+      ? []
+      : generatedAssets.filter(
+          (asset) => asset.startsWith(`${packageDir}/`) && !asset.includes("/node_modules/"),
+        );
     const step: BuildCacheStep = {
       label: `tsdown:external-plugin:${plan.pluginDir}`,
       cache: {
@@ -95,7 +100,7 @@ export async function buildExternalPluginLocalDist(
           ...plan.bundledSdkSourceFiles,
         ],
         env: ["NODE_ENV", "SOURCE_DATE_EPOCH"],
-        outputs: [target, browserOutput, ...sourceOutputs],
+        outputs: [target, ...(earlyAssets ? [] : [browserOutput, ...sourceOutputs])],
         requiredOutputs: plan.runtimeBuildOutputs.map((output) =>
           path.posix.join(target, output.replace(/^\.\/dist\//u, "")),
         ),
@@ -149,8 +154,10 @@ export async function buildExternalPluginLocalDist(
           }
         }
         fs.rmSync(targetDir, { recursive: true, force: true });
-        assertRealOutputRoot(path.join(repoRoot, browserOutput));
-        fs.rmSync(path.join(repoRoot, browserOutput), { recursive: true, force: true });
+        if (!earlyAssets) {
+          assertRealOutputRoot(path.join(repoRoot, browserOutput));
+          fs.rmSync(path.join(repoRoot, browserOutput), { recursive: true, force: true });
+        }
         if (!restoreBuildStepCacheOutputs(cacheState, cacheParams)) {
           throw new Error(`${packageDir} cache changed before restoration; rerun the build`);
         }
