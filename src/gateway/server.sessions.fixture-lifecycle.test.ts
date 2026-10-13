@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -18,17 +19,21 @@ const hooks = vi.hoisted(() => ({
   setup: [] as Array<() => unknown>,
   cleanup: [] as Array<() => unknown>,
 }));
+const caseHooks = vi.hoisted(() => ({
+  setup: [] as Array<() => unknown>,
+  cleanup: [] as Array<() => unknown>,
+}));
 vi.mock("vitest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("vitest")>()),
   beforeAll: (fn: () => unknown) => hooks.setup.push(fn),
   afterAll: (fn: () => unknown) => hooks.cleanup.push(fn),
-  beforeEach: () => {},
-  afterEach: () => {},
+  beforeEach: (fn: () => unknown) => caseHooks.setup.push(fn),
+  afterEach: (fn: () => unknown) => caseHooks.cleanup.push(fn),
   test: Object.assign(() => {}, { each: () => () => {} }),
 }));
 vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
-  resetPreparedGatewayModelCatalogForTest: async () => {},
+  resetPreparedModelCatalogStateForTest: async () => {},
 }));
 
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
@@ -76,6 +81,8 @@ const gatewayHelpers = await import("./test-helpers.server.js");
 const startHarness = serverHarness.startGatewayServerHarness;
 let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
+  caseHooks.setup.length = 0;
+  caseHooks.cleanup.length = 0;
   env = captureEnv([
     "HOME",
     "USERPROFILE",
@@ -579,3 +586,78 @@ test("retains fixture state and fences successors after a required Gateway close
       producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
     });
   }));
+
+test.each(["test", "suite"] as const)(
+  "%s teardown closes a late test-body startup before releasing state and admitting a successor",
+  async (scope) => {
+    gatewayHelpers.installGatewayTestHooks({ scope });
+    const registered = scope === "suite" ? hooks : caseHooks;
+    const fixture = { setup: registered.setup.splice(0), cleanup: registered.cleanup.splice(0) };
+    const serverModule = await import("./server.js");
+    const entered = createDeferredCore();
+    const releaseStartup = createDeferredCore();
+    const closeEntered = createDeferredCore();
+    const releaseClose = createDeferredCore();
+    const homeBefore = process.env.HOME;
+    let closeCalls = 0;
+    let home: string | undefined;
+    const server = {
+      startupSettled: Promise.resolve(),
+      getTailscaleIngressEndpoint: () => undefined,
+      close: async () => {
+        closeCalls++;
+        closeEntered.resolve();
+        await releaseClose.promise;
+        expect(process.env.HOME).toBe(home);
+        expect(fsSync.existsSync(home!)).toBe(true);
+      },
+    } satisfies import("./server.js").GatewayServer;
+    const start = vi.spyOn(serverModule, "startGatewayServer").mockImplementation(async () => {
+      entered.resolve();
+      await releaseStartup.promise;
+      return server;
+    });
+    const releaseClaim = vi.fn(async () => {});
+    let starting: Promise<import("./server.js").GatewayServer> | undefined;
+    let pendingCleanup: Promise<void> | undefined;
+    try {
+      await setup(fixture);
+      home = process.env.HOME!;
+      starting = gatewayHelpers.startTestGatewayServer({ port: 12345, release: releaseClaim });
+      await awaitGateBeforeSettlement(entered.promise, starting, "startup settled before its gate");
+      pendingCleanup = cleanup(fixture);
+      releaseStartup.resolve();
+      await awaitGateBeforeSettlement(
+        closeEntered.promise,
+        pendingCleanup,
+        "teardown released state before closing the acquired Gateway",
+      );
+      expect(process.env.HOME).toBe(home);
+      expect(fsSync.existsSync(home)).toBe(true);
+      releaseClose.resolve();
+      await Promise.all([starting, pendingCleanup]);
+      expect(closeCalls).toBe(1);
+      expect(releaseClaim).toHaveBeenCalledTimes(1);
+      expect(process.env.HOME).toBe(homeBefore);
+      expect(fsSync.existsSync(home)).toBe(false);
+
+      gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+      const successor = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+      try {
+        await setup(successor);
+        expect(fsSync.existsSync(process.env.HOME!)).toBe(true);
+      } finally {
+        await cleanup(successor);
+      }
+    } finally {
+      releaseStartup.resolve();
+      releaseClose.resolve();
+      await Promise.allSettled([starting, pendingCleanup]);
+      if (starting) {
+        await (await starting).close();
+      }
+      await emergencyCleanup(fixture);
+      start.mockRestore();
+    }
+  },
+);

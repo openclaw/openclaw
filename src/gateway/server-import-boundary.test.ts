@@ -110,4 +110,12 @@ describe("gateway startup import boundaries", () => {
       "src/gateway/session-reset-service.ts",
     );
   });
+
+  it("keeps initial-turn dispatch out of the session creation import graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-methods/sessions-create.ts");
+    const modules = [...graph.keys()].map((filePath) => path.relative(repoRoot, filePath));
+
+    expect(modules).not.toContain("src/gateway/server-methods/chat-send-external-entry.ts");
+    expect(modules).not.toContain("src/gateway/server-methods/chat-send-handler.ts");
+  });
 });

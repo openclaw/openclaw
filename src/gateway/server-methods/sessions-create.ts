@@ -11,6 +11,7 @@ import { resolveSessionPublicShare } from "../../config/sessions/session-public-
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
@@ -43,7 +44,6 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
-import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
@@ -85,6 +85,10 @@ import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { prepareSessionModelAccountAccess } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
+
+const loadChatSendExternalEntry = createLazyRuntimeModule(
+  () => import("./chat-send-external-entry.js"),
+);
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": idempotentSessionCreate(async (options) => {
@@ -600,6 +604,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
+        const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
         const sendOptions = bindGatewayRequestHandlerMutationAuthority(
           options,
           {
@@ -625,6 +630,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
+        assertSessionCreateCurrent();
         // The initial child turn must acquire its own writer, not the spawning parent's.
         await runWithoutOwnedSessionTranscriptWrites(() =>
           handleDirectExternalChatSend(sendOptions),
