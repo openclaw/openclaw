@@ -450,7 +450,7 @@ describe("memory index", () => {
     expect(replacement === first).toBe(false);
   });
 
-  it("retains a failed global close owner until provider retirement succeeds", async () => {
+  it("reports failed global cleanup until an explicit close succeeds", async () => {
     const cfg = createCfg({});
     const first = requireManager(
       await getMemorySearchManager({
@@ -474,28 +474,35 @@ describe("memory index", () => {
     expect(globalCloseRejected).toBe(true);
     expect(providerFixture.providerCloseCalls).toBe(2);
 
+    const unavailable = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
+    expect(unavailable.manager).toBeNull();
+    expect(unavailable.error).toContain("Embedding provider retirement failed");
+
     let releaseProviderClose: () => void = () => {};
     providerFixture.providerCloseGate = new Promise<void>((resolve) => {
       releaseProviderClose = resolve;
     });
     const callsBeforeReplacement = providerFixture.providerCalls.length;
+    const retryGlobalClose = closeAllMemorySearchManagers();
     const replacementPromise = getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg,
       agentId: "main",
     }).then((result) => requireManager(result));
-    let concurrentGlobalClose: Promise<void> = Promise.resolve();
     try {
       await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(3));
       expect(providerFixture.providerCalls).toHaveLength(callsBeforeReplacement);
-      concurrentGlobalClose = closeAllMemorySearchManagers();
     } finally {
       releaseProviderClose();
       providerFixture.providerCloseGate = null;
     }
 
     const replacement = await replacementPromise;
-    await concurrentGlobalClose;
+    await retryGlobalClose;
     trackManager(replacement);
     expect(replacement === first).toBe(false);
     expect((replacement as unknown as { closed: boolean }).closed).toBe(false);

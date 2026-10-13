@@ -63,10 +63,7 @@ export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplicati
   return render(() => <OpenClawApp host={host} runtime={runtime} />, host);
 }
 
-export function OpenClawApp(props: {
-  host: HTMLElement;
-  runtime: ApplicationRuntime;
-}): SolidJSX.Element {
+function OpenClawApp(props: { host: HTMLElement; runtime: ApplicationRuntime }): SolidJSX.Element {
   // The bootstrap epoch and its DOM host stay fixed until this root is disposed.
   const runtime = untrack(() => props.runtime);
   const host = untrack(() => props.host);

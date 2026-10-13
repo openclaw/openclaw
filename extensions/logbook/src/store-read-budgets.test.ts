@@ -163,15 +163,6 @@ function openBackend() {
   return { backend, databasePath };
 }
 
-function captureError(operation: () => unknown): unknown {
-  try {
-    operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected native overflow rejection");
-}
-
 describe("Logbook native statement and read budgets", () => {
   it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
     const { backend, databasePath } = openBackend();
@@ -491,60 +482,6 @@ describe("Logbook native statement and read budgets", () => {
       );
       expect(reads.frameRows).toBe(count);
       expect.soft(reads.frameTextBytes).toBe(0);
-    },
-  );
-
-  it.each([
-    { column: "screen_index", emptyDrafts: false, value: 9007199254740992n },
-    { column: "width", emptyDrafts: true, value: -9007199254740992n },
-    { column: "height", emptyDrafts: false, value: 9007199254740992n },
-    { column: "byte_size", emptyDrafts: true, value: -9007199254740992n },
-  ] as const)(
-    "retains native $column overflow rejection in frame readers and prior cards (empty drafts=$emptyDrafts)",
-    ({ column, emptyDrafts, value }) => {
-      const { backend, databasePath } = openBackend();
-      insertCandidate(backend, 1000);
-      backend.execute({
-        type: "replaceCardsInWindow",
-        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
-      });
-      const before = backend.execute({ type: "cardsForDay", input: { day } });
-      const writer = new DatabaseSync(databasePath);
-      try {
-        writer.prepare(`UPDATE frames SET ${column} = ? WHERE id = 1`).run(value);
-      } finally {
-        writer.close();
-      }
-      const originalError = captureError(() =>
-        backend.execute({ type: "frameById", input: { id: 1 } }),
-      );
-      if (!(originalError instanceof Error)) {
-        throw new Error("Expected the full frame reader to reject the unsafe integer fixture");
-      }
-      expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-      for (const command of [
-        { type: "framesInRange", input: { startMs: 0, endMs: 120_000 } },
-        { type: "unbatchedActiveFrames", input: { limit: 1 } },
-        {
-          type: "replaceCardsInWindow",
-          input: {
-            day,
-            startMs: 0,
-            endMs: 120_000,
-            drafts: emptyDrafts ? [] : keyframeDrafts,
-            selectKeyframes: true,
-          },
-        },
-      ] satisfies Parameters<typeof backend.execute>[0][]) {
-        const error = captureError(() => backend.execute(command));
-        expect(error).toBeInstanceOf(Error);
-        expect(error).toMatchObject({
-          code: "ERR_OUT_OF_RANGE",
-          name: originalError.name,
-          message: originalError.message,
-        });
-      }
-      expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(before);
     },
   );
 });

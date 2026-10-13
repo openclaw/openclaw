@@ -5,10 +5,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
@@ -124,7 +121,6 @@ export function createInterruptedRecoveryCoordinator(params: {
       ) {
         return false;
       }
-      warnLegacySubagentAuthority(entry, params.warn);
       if (entry.execution.status === "terminal" && params.isTerminalTailActive(entry)) {
         // Replay drains orphaned winners; this process is still draining this one.
         return true;

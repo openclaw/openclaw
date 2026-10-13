@@ -40,8 +40,9 @@ vi.mock("../../commands/node-runtime-diagnostics.js", () => ({
 vi.mock("../../commands/doctor-session-sqlite-warnings.js", () => ({
   readSessionSqliteMigrationWarnings: () => [],
 }));
-vi.mock("../../infra/deferred-plugin-migrations.js", () => ({
-  readDeferredPluginMigrations: () => [],
+vi.mock("../../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/deferred-plugin-migrations.js")>()),
+  readDeferredPluginMigrationsAsync: async () => [],
   formatDeferredPluginMigration: () => "",
 }));
 vi.mock("../../config/config.js", () => ({

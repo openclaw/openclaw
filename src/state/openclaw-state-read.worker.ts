@@ -89,7 +89,7 @@ import {
   isConfigMachineStateReadCommand,
   readConfigMachineStateCommandInDatabase,
 } from "./config-machine-state.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
