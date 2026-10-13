@@ -223,17 +223,19 @@ export async function withSessionStoreTarget<T>(
       }
       memo.install(read.value);
       const target = read.value;
-      // Select once; the worker opens the canonical target and retains its own identity.
-      assertSessionStoreReadCandidate(target.sourcePath, candidates);
+      const assertTargetCurrent = () => {
+        assertCurrent();
+        assertSessionStoreReadCandidate(target.sourcePath, candidates);
+      };
       return operation(target, {
-        assertCurrent,
+        assertCurrent: assertTargetCurrent,
         onRegistryChange: registry.assertAdmissionCurrent,
         async refreshBeforeDispatch(assertRetainedTarget) {
           assertRetainedTarget();
-          assertCurrent();
+          assertTargetCurrent();
         },
         async revalidateTarget() {
-          assertCurrent();
+          assertTargetCurrent();
         },
       });
     },
