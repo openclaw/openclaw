@@ -90,15 +90,15 @@ describe("core/doctor/workspace-suggestions", () => {
     ]);
   });
 
-  it("preserves the explicit empty-roster failure", async () => {
+  it("returns no workspaces for an explicitly empty roster", async () => {
     const check = createWorkspaceSuggestionsCheck(async () => []);
 
-    await expect(
-      check.detect({
-        mode: "lint",
-        runtime,
-        cfg: { agents: { entries: {} } },
-      }),
-    ).rejects.toThrow("No agents configured");
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: { agents: { entries: {} } },
+    });
+
+    expect(findings).toEqual([]);
   });
 });
