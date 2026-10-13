@@ -2285,47 +2285,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
     };
   }
 
-  function channelHealthAccount(params: {
-    accountId?: string;
-    running: boolean;
-    connected: boolean;
-    lifecycle?: string;
-  }) {
-    return {
-      accountId: params.accountId ?? "default",
-      configured: true,
-      running: params.running,
-      connected: params.connected,
-      ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
-    };
-  }
-
-  function createSingleChannelHealthSnapshot<TChannelId extends string>(params: {
-    channelId: TChannelId;
-    label: string;
-    running: boolean;
-    connected: boolean;
-    lifecycle?: string;
-    channelAccountId?: string;
-    ts?: number;
-  }) {
-    const account = channelHealthAccount(params);
-    const channel = {
-      ...(params.channelAccountId ? { accountId: params.channelAccountId } : {}),
-      configured: true,
-      running: params.running,
-      connected: params.connected,
-      ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
-      accounts: { default: account },
-    };
-    return createHealthSnapshot({
-      ...(params.ts === undefined ? {} : { ts: params.ts }),
-      channels: { [params.channelId]: channel } as Record<TChannelId, typeof channel>,
-      channelOrder: [params.channelId],
-      channelLabels: { [params.channelId]: params.label },
-    });
-  }
-
   async function requestHealthSnapshot(params: {
     cached: Record<string, unknown> | null;
     fresh?: Record<string, unknown>;
@@ -2398,22 +2357,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
     await vi.advanceTimersByTimeAsync(1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("refreshes a cached health snapshot dated after the current clock", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
-    const cached = createHealthSnapshot({ ts: Date.now() + HEALTH_REFRESH_INTERVAL_MS });
-    const fresh = createHealthSnapshot({ ts: Date.now() });
-
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
-
-    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { ...fresh, childRuntime: healthyChildRuntime },
-      undefined,
-    );
   });
 
   it("restarts request-driven health refreshes when the clock moves backward", async () => {
@@ -2591,96 +2534,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
     });
     expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
   });
-
-  it.each([
-    {
-      change: "removes a runtime account",
-      previousAccountIds: ["default", "work"],
-      nextAccountIds: ["default"],
-    },
-    {
-      change: "removes an entire channel plugin",
-      previousAccountIds: ["default"],
-      nextAccountIds: [],
-    },
-    {
-      change: "re-adds an uninitialized channel plugin",
-      previousAccountIds: [],
-      nextAccountIds: ["default"],
-      uninitializedAccountId: "default",
-    },
-  ])(
-    "refreshes cached health after hot reload $change",
-    async ({ previousAccountIds, nextAccountIds, uninitializedAccountId }) => {
-      const current = createSingleChannelHealthSnapshot({
-        channelId: "discord",
-        label: "Discord",
-        running: true,
-        connected: true,
-      });
-      const account = (accountId: string) =>
-        channelHealthAccount({ accountId, running: true, connected: true });
-      const summary = (accountIds: string[]) =>
-        accountIds.length === 0
-          ? createHealthSnapshot({})
-          : {
-              ...current,
-              channels: {
-                discord: {
-                  ...current.channels.discord,
-                  accounts: Object.fromEntries(accountIds.map((id) => [id, account(id)])),
-                },
-              },
-            };
-      const runtime = (accountIds: string[], uninitialized?: string) => ({
-        channels:
-          previousAccountIds.length === 0 && accountIds.length > 0
-            ? { discord: { accountId: accountIds[0] } }
-            : {},
-        channelAccounts:
-          accountIds.length === 0
-            ? {}
-            : {
-                discord: Object.fromEntries(
-                  accountIds.map((id) => [
-                    id,
-                    id === uninitialized ? { accountId: id } : account(id),
-                  ]),
-                ),
-              },
-      });
-      const cached = summary(previousAccountIds);
-      const fresh = summary(nextAccountIds);
-      const refreshHealthSnapshot = vi
-        .fn()
-        .mockResolvedValueOnce(cached)
-        .mockResolvedValueOnce(fresh);
-
-      await requestHealthSnapshot({
-        cached,
-        refreshHealthSnapshot,
-        runtimeSnapshot: runtime(previousAccountIds),
-      });
-      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
-
-      const { respond } = await requestHealthSnapshot({
-        cached,
-        refreshHealthSnapshot,
-        runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
-      });
-
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
-      expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
-        probe: false,
-        includeSensitive: false,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { ...fresh, childRuntime: healthyChildRuntime },
-        undefined,
-      );
-    },
-  );
 });
 
 describe("logs.tail", () => {

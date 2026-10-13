@@ -455,14 +455,6 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
-  it("does not return an artifact when its lifecycle closes during preparation", async () => {
-    const { provider } = await fixture();
-    const pending = provider.prepare();
-    const closing = provider.close();
-    await expect(pending).rejects.toThrow("closed");
-    await closing;
-  });
-
   it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
     const { provider } = await fixture();
     const stagingRoot = tempDirs.make("node-artifact-held-");

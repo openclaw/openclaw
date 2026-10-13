@@ -212,9 +212,6 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     }
     let result;
     if (params.action === "preview") {
-      if (!hasCurrentReportAuthority()) {
-        return;
-      }
       result = {
         status: "ready" as const,
         attemptId: prepared.attemptId,

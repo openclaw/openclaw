@@ -1111,49 +1111,45 @@ async function recordMemoryFlushFailure(
   const { sessionKey, storePath } = run;
   if (!isAbortError(error) && storePath && sessionKey) {
     try {
-      const adoptEntry = (entry: SessionEntry | null) => {
-        if (entry) {
-          sessionEntry = entry;
-          if (run.sessionStore) {
-            run.sessionStore[sessionKey] = entry;
-          }
-        }
-      };
-      const updateEntry = (update: Parameters<typeof updateSessionEntry>[1]) =>
-        updateSessionEntry({ storePath, sessionKey }, update, {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-        });
-      const failedEntry = await updateEntry(async (currentEntry) => ({
-        memoryFlush: {
-          kind: "failed",
-          ...(currentEntry.memoryFlush?.compactionCount !== undefined
-            ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-            : {}),
-          failureCount:
+      let failureCount = 0;
+      const updatedEntry = await updateSessionEntry(
+        { storePath, sessionKey },
+        (currentEntry) => {
+          failureCount =
             (currentEntry.memoryFlush?.kind === "failed"
               ? currentEntry.memoryFlush.failureCount
-              : 0) + 1,
+              : 0) + 1;
+          return {
+            memoryFlush:
+              failureCount >= MAX_FLUSH_FAILURES
+                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
+                : {
+                    kind: "failed",
+                    ...(currentEntry.memoryFlush?.compactionCount !== undefined
+                      ? { compactionCount: currentEntry.memoryFlush.compactionCount }
+                      : {}),
+                    failureCount,
+                  },
+          };
         },
-      }));
-      adoptEntry(failedEntry);
-      const failureCount =
-        failedEntry?.memoryFlush?.kind === "failed" ? failedEntry.memoryFlush.failureCount : 0;
+        { skipMaintenance: true, takeCacheOwnership: true },
+      );
+      if (updatedEntry) {
+        sessionEntry = updatedEntry;
+        if (run.sessionStore) {
+          run.sessionStore[sessionKey] = updatedEntry;
+        }
+      } else {
+        failureCount = 0;
+      }
       logVerbose(
         `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
       );
-      if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
+      if (updatedEntry && failureCount >= MAX_FLUSH_FAILURES) {
         outcome = "exhausted";
         logVerbose(
           `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
         );
-        const exhaustedEntry = await updateEntry(async (currentEntry) => ({
-          memoryFlush: {
-            kind: "succeeded",
-            compactionCount: currentEntry.compactionCount ?? 0,
-          },
-        }));
-        adoptEntry(exhaustedEntry);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
