@@ -390,7 +390,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. The request sequence
+`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+use lossless JSON escaping so control characters cannot forge log lines; their
+values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
 `httpRequestId` when supplied by the provider. Responses SSE and WebSocket
 `stream_start` / `stream_done` logs record the actual requested tier and

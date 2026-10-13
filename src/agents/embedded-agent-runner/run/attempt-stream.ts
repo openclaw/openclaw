@@ -390,6 +390,7 @@ export function installEmbeddedAttemptStreamGuards(
     };
   }
   const modelCallSequence = (attempt.modelCallSequence ??= { value: 0 });
+  const firstModelCallNumber = modelCallSequence.value + 1;
   let modelResponseTerminal = false;
   let activeModelCallId: string | undefined;
   installStreamWrapper(wrapStreamFnWithDiagnosticModelCallEvents, {
@@ -430,7 +431,7 @@ export function installEmbeddedAttemptStreamGuards(
     onStarted: (callId) => {
       activeModelCallId = callId;
       modelResponseTerminal = false;
-      if (diagnosticModelCallSeq === 1) {
+      if (modelCallSequence.value === firstModelCallNumber) {
         input.setup.prepStages.mark("model-dispatch");
         input.setup.emitPrepStageSummary("model-dispatch");
       }

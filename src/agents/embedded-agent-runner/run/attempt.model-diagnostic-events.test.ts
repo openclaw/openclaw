@@ -168,8 +168,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     );
     expect(observed.toSorted()).toEqual(
       ["create", "iterate", "result"].flatMap((phase) => [
-        `${phase} sessionKey=session-1 runId=run-1 requestId=run-1:model:7 requestNumber=7`,
-        `${phase} sessionKey=session-2 runId=run-2 requestId=run-2:model:7 requestNumber=7`,
+        `${phase} sessionKey="session-1" runId="run-1" requestId="run-1:model:7" requestNumber=7`,
+        `${phase} sessionKey="session-2" runId="run-2" requestId="run-2:model:7" requestNumber=7`,
       ]),
     );
     expect(formatModelTransportContext()).toBe("");

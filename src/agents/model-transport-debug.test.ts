@@ -108,7 +108,8 @@ describe("guarded model fetch logging", () => {
       };
     });
     const fetch = buildGuardedModelFetch(model);
-    const requests = [1, 2].map((number) =>
+    const identities = ["1", '2\n\r\u001b[31m"\\'];
+    const requests = identities.map((number) =>
       withModelTransportContext(
         {
           sessionKey: `session-${number}`,
@@ -124,17 +125,24 @@ describe("guarded model fetch logging", () => {
     }
     const responses = await Promise.all(requests);
     await Promise.all(responses.map((response) => response.text()));
-    for (const number of [1, 2]) {
+    for (const number of identities) {
       const messages = log.debug.mock.calls.map(([message]) => String(message));
       const correlated = messages.filter((message) =>
-        message.includes(`sessionKey=session-${number} `),
+        message.includes(`sessionKey=${JSON.stringify(`session-${number}`)} `),
       );
       expect(correlated).toHaveLength(2);
       expect(
         correlated.every((message) =>
-          message.includes(`runId=run-${number} requestId=run-${number}:model:3 requestNumber=3`),
+          message.includes(
+            `runId=${JSON.stringify(`run-${number}`)} requestId=${JSON.stringify(`run-${number}:model:3`)} requestNumber=3`,
+          ),
         ),
       ).toBe(true);
+      for (const message of correlated) {
+        for (const control of ["\n", "\r", "\u001b"]) {
+          expect(message).not.toContain(control);
+        }
+      }
       expect(correlated.find((message) => message.includes("[model-fetch] response "))).toContain(
         "httpRequestId=req_upstream",
       );

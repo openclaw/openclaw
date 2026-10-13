@@ -373,7 +373,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
         : retryBudget;
       log.warn(
-        `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${params.runId} sessionId=${input.getSessionId()}`,
+        `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
       );
       try {
         await retry.onRetry?.({
