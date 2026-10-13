@@ -1863,6 +1863,7 @@ src/state/openclaw-state-lease-heartbeat.ts
 src/state/openclaw-state-lease-heartbeat.worker.ts
 src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
+src/state/openclaw-state-lease-renewal.worker.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
 src/state/openclaw-state-lease-worker-operation.ts
@@ -2239,6 +2240,7 @@ src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
 src/config/sessions/session-actor-memory-side-effects.ts
+src/config/sessions/observer-digest.ts
 src/config/sessions/session-actor-memory-sources.ts
 src/config/sessions/session-actor-memory-state.ts
 src/config/sessions/session-actor-memory-storage-dispatch.ts
@@ -2317,6 +2319,7 @@ src/shared/chat-envelope.ts
 src/shared/keyboard-shortcuts.ts
 src/shared/markdown-code.ts
 src/shared/provider-login-command.ts
+src/shared/session-list-visibility.ts
 src/shared/text/assistant-visible-text.ts
 src/shared/text/code-regions.ts
 src/shared/text/downgraded-tool-call-text.ts

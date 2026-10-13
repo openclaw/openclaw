@@ -95,7 +95,7 @@ export async function createReplyTranscriptFixture(
     : undefined;
   const qualified =
     loaded &&
-    prepareQualifiedSessionEntryTarget(
+    (await prepareQualifiedSessionEntryTarget(
       {
         ...loaded,
         requestedKey: sessionKey,
@@ -103,7 +103,7 @@ export async function createReplyTranscriptFixture(
         readSource: loaded.capturedReadSource,
       },
       loaded.capturedReadSources,
-    );
+    ));
   let current = true;
   const abortController = new AbortController();
   const dispatch = createChatSendReplyDispatch({
@@ -127,8 +127,7 @@ export async function createReplyTranscriptFixture(
       cfg: loaded?.cfg ?? {},
       ...(qualified
         ? {
-            sessionTarget: qualified.target,
-            assertSessionTargetCurrent: qualified.assertCurrent,
+            sessionTarget: qualified,
             capturedReadSources: loaded?.capturedReadSources,
           }
         : {}),
@@ -146,7 +145,9 @@ export async function createReplyTranscriptFixture(
     rewriteSync,
     dispatch,
     abortController,
-    release: () => qualified?.release(),
+    release: () => {
+      current = false;
+    },
     retire: () => {
       current = false;
     },

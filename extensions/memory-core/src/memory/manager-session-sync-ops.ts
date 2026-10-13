@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   createSubsystemLogger,
   onInternalSessionTranscriptUpdate,
+  observeAgentRunActivity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -34,7 +35,8 @@ import {
 } from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
-const SESSION_DIRTY_DEBOUNCE_MS = 5000;
+const SESSION_QUIET_PERIOD_MS = 30_000;
+const SESSION_MAX_DEFERRAL_MS = 5 * 60_000;
 const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = Parameters<
@@ -42,6 +44,9 @@ type MemorySessionTranscriptUpdate = Parameters<
 >[0];
 
 export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps {
+  private sessionPendingSince: number | undefined;
+  private sessionLastActivity = 0;
+  private sessionFullSyncPending = false;
   protected async inspectDiagnosticSourceState(): Promise<void> {
     if (this.sources.has("memory")) {
       try {
@@ -138,7 +143,18 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
+    const unsubscribeActivity = observeAgentRunActivity(this.agentId, (busy) => {
+      this.runInBackgroundContext(() => {
+        const wasBusy = this.sessionAgentBusy;
+        this.sessionAgentBusy = busy;
+        this.sessionLastActivity = Date.now();
+        if (wasBusy && !busy && this.sessionPendingSince !== undefined) {
+          this.sessionPendingSince = this.sessionLastActivity;
+        }
+        this.scheduleSessionIndexPass();
+      });
+    });
+    const unsubscribeTranscripts = this.subscribeSessionTranscriptUpdates((update) => {
       this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
@@ -158,6 +174,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         }
       });
     });
+    this.sessionUnsubscribe = () => {
+      unsubscribeActivity();
+      unsubscribeTranscripts();
+    };
   }
 
   protected subscribeSessionTranscriptUpdates(
@@ -300,7 +320,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (!this.sessionsDirty || this.closing || this.closed) {
       return dirtyFiles;
     }
-    this.syncInBackground({ reason: "session-startup-catchup" });
+    this.sessionFullSyncPending = true;
+    this.deferSessionIndexFiles(dirtyFiles);
     return dirtyFiles;
   }
 
@@ -313,45 +334,120 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     } else {
       this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
     }
+    this.sessionPendingSince ??= Date.now();
+    this.sessionLastActivity = Date.now();
+    this.scheduleSessionIndexPass();
+  }
+
+  protected deferSessionIndexFiles(
+    files: string[],
+    corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
+  ): void {
+    const entriesByFile = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
+    for (const file of files) {
+      const entry = entriesByFile.get(file);
+      if (entry?.transcriptSource === "sqlite") {
+        const target = {
+          agentId: entry.agentId,
+          sessionId: entry.sessionId,
+          ...(entry.sessionKey ? { sessionKey: entry.sessionKey } : {}),
+        };
+        this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
+      } else {
+        this.sessionPendingFiles.add(file);
+      }
+    }
+    this.sessionPendingSince ??= Date.now();
+    this.sessionLastActivity = Date.now();
+    this.scheduleSessionIndexPass();
+  }
+
+  private scheduleSessionIndexPass(): void {
     if (this.sessionWatchTimer) {
+      clearTimeout(this.sessionWatchTimer);
+      this.sessionWatchTimer = null;
+    }
+    if (
+      this.sessionPendingSince === undefined ||
+      this.sessionAgentBusy ||
+      this.sessionBackgroundIndexing ||
+      this.closing ||
+      this.closed
+    ) {
       return;
     }
-    this.sessionWatchTimer = setTimeout(() => {
-      this.sessionWatchTimer = null;
-      if (this.closing || this.closed) {
-        return;
-      }
-      const failed = (err: unknown) => {
-        log.warn(`memory session update failed: ${String(err)}`);
-      };
-      try {
-        void this.runInBackgroundContext(() =>
-          this.withManagerOperation(() => this.processSessionUpdateBatch()),
-        ).catch(failed);
-      } catch (err) {
-        failed(err);
-      }
-    }, SESSION_DIRTY_DEBOUNCE_MS);
+    const deadline = Math.min(
+      this.sessionLastActivity + SESSION_QUIET_PERIOD_MS,
+      this.sessionPendingSince + SESSION_MAX_DEFERRAL_MS,
+    );
+    this.sessionWatchTimer = setTimeout(
+      () => {
+        this.sessionWatchTimer = null;
+        if (this.closing || this.closed) {
+          return;
+        }
+        const failed = (err: unknown) => {
+          log.warn(`memory session update failed: ${String(err)}`);
+        };
+        try {
+          void this.runInBackgroundContext(() =>
+            this.withManagerOperation(() => this.processSessionUpdateBatch()),
+          ).catch(failed);
+        } catch (err) {
+          failed(err);
+        }
+      },
+      Math.max(0, deadline - Date.now()),
+    );
+    this.sessionWatchTimer.unref();
   }
 
   private async processSessionUpdateBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0 && this.sessionPendingTargets.size === 0) {
+    if (this.sessionAgentBusy) {
+      this.scheduleSessionIndexPass();
       return;
     }
+    if (
+      !this.sessionFullSyncPending &&
+      this.sessionPendingFiles.size === 0 &&
+      this.sessionPendingTargets.size === 0
+    ) {
+      return;
+    }
+    const fullSync = this.sessionFullSyncPending;
+    this.sessionFullSyncPending = false;
     const pending = Array.from(this.sessionPendingFiles);
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
+    this.sessionPendingSince = undefined;
     for (const sessionFile of pending) {
       this.sessionsDirtyFiles.add(sessionFile);
     }
-    if (pending.length > 0 || pendingTargets.length > 0) {
+    if (fullSync || pending.length > 0 || pendingTargets.length > 0) {
       this.sessionsDirty = true;
       // Resolve identities once in the sync owner, after queued work can proceed.
-      this.syncInBackground(
-        { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
-        "session update",
-      );
+      this.sessionBackgroundIndexing = true;
+      try {
+        await this.sync(
+          fullSync
+            ? { reason: "session-startup-catchup" }
+            : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
+        );
+      } catch (error) {
+        this.sessionFullSyncPending ||= fullSync;
+        this.sessionPendingFiles = new Set([...pending, ...this.sessionPendingFiles]);
+        this.sessionPendingTargets = new Map([
+          ...pendingTargets.map((target) => [memorySessionSyncTargetKey(target), target] as const),
+          ...this.sessionPendingTargets,
+        ]);
+        this.sessionLastActivity = Date.now();
+        this.sessionPendingSince = this.sessionLastActivity;
+        throw error;
+      } finally {
+        this.sessionBackgroundIndexing = false;
+        this.scheduleSessionIndexPass();
+      }
     }
   }
 
@@ -463,6 +559,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   protected shouldSyncSessions(params?: MemorySyncParams, needsFullReindex = false) {
     if (!this.sources.has("sessions")) {
+      return false;
+    }
+    // Search consumes the published index; transcript notifications own freshness.
+    if (params?.reason === "search" && !params.force) {
       return false;
     }
     if (

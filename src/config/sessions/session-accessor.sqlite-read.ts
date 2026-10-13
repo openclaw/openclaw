@@ -153,82 +153,92 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   return loadTranscriptReadSnapshotSync(scope).events;
 }
 
+type TranscriptExportOptions = {
+  projection?: "reset-boundary";
+  /** Reduce each decoded event synchronously before retaining the snapshot. */
+  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
+  /** Worker-owned projection from the preceding export; null starts an incremental reader. */
+  previous?: {
+    events: TranscriptEvent[];
+    generation: string | null;
+    throughSeq: number;
+  } | null;
+};
+
 /** Snapshot export payloads and their identity without opening the writable lifecycle. */
 export function readTranscriptExportSnapshotReadOnlySync(
   scope: SessionTranscriptReadScope,
-  options: {
-    projection?: "reset-boundary";
-    /** Reduce each decoded event synchronously before retaining the snapshot. */
-    projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-    /** Worker-owned projection from the preceding export; null starts an incremental reader. */
-    previous?: {
-      events: TranscriptEvent[];
-      generation: string | null;
-      throughSeq: number;
-    } | null;
-  } = {},
+  options: TranscriptExportOptions = {},
 ) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteDeferredTransactionSync(
         database.db,
-        () => {
-          const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-          const { stats, generation, cold } =
-            options.previous !== undefined
-              ? readTranscriptExportStatsFromDatabase(database, resolved.sessionId)
-              : {
-                  stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
-                  generation: null,
-                  cold: false,
-                };
-          // Cached rows must still enter the existing archive restoration path.
-          if (cold) {
-            throw new SessionTranscriptColdError(resolved.sessionId);
-          }
-          const throughSeq = Math.min(
-            stats.eventCount === 0 ? -1 : stats.maxSeq,
-            fence ? fence.beforeRawSeq - 1 : Number.POSITIVE_INFINITY,
-          );
-          const previous =
-            generation !== null &&
-            options.previous?.generation === generation &&
-            options.previous.throughSeq <= throughSeq
-              ? options.previous
-              : undefined;
-          const sessionKey =
-            resolved.sessionKey ??
-            executeSqliteQueryTakeFirstSync(
-              database.db,
-              getSessionKysely(database.db)
-                .selectFrom("session_windows")
-                .select("session_key")
-                .where("session_id", "=", resolved.sessionId)
-                .limit(1),
-            )?.session_key;
-          return {
-            events: [
-              ...(previous?.events ?? []),
-              ...(previous?.throughSeq === throughSeq
-                ? []
-                : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-                    ...options,
-                    beforeEventSeq: fence?.beforeRawSeq,
-                    afterEventSeq: previous?.throughSeq,
-                    maxEventBytes: scope.maxEventBytes,
-                  })),
-            ],
-            stats,
-            sessionKey,
-            ...(options.previous !== undefined ? { generation, throughSeq } : {}),
-          };
-        },
+        () => readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
         { operationLabel: "session transcript export snapshot" },
       ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : undefined;
+}
+
+/** The memory worker shares one read transaction across its bounded source batch. */
+export function readTranscriptExportSnapshotFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  resolved: ResolvedTranscriptReadScope,
+  scope: SessionTranscriptReadScope,
+  options: TranscriptExportOptions,
+) {
+  const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+  const { stats, generation, cold } =
+    options.previous !== undefined
+      ? readTranscriptExportStatsFromDatabase(database, resolved.sessionId)
+      : {
+          stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
+          generation: null,
+          cold: false,
+        };
+  // Cached rows must still enter the existing archive restoration path.
+  if (cold) {
+    throw new SessionTranscriptColdError(resolved.sessionId);
+  }
+  const throughSeq = Math.min(
+    stats.eventCount === 0 ? -1 : stats.maxSeq,
+    fence ? fence.beforeRawSeq - 1 : Number.POSITIVE_INFINITY,
+  );
+  const previous =
+    generation !== null &&
+    options.previous?.generation === generation &&
+    options.previous.throughSeq <= throughSeq
+      ? options.previous
+      : undefined;
+  const sessionKey =
+    resolved.sessionKey ??
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_windows")
+        .select("session_key")
+        .where("session_id", "=", resolved.sessionId)
+        .limit(1),
+    )?.session_key;
+  return {
+    events: [
+      ...(previous?.events ?? []),
+      ...(previous?.throughSeq === throughSeq
+        ? []
+        : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+            ...options,
+            beforeEventSeq: fence?.beforeRawSeq,
+            afterEventSeq: previous?.throughSeq,
+            maxEventBytes: scope.maxEventBytes,
+          })),
+    ],
+    stats,
+    sessionKey,
+    ...(options.previous !== undefined ? { generation, throughSeq } : {}),
+  };
 }
 
 /** Pair loaded bytes with the watermark that also fences opaque navigation edits. */

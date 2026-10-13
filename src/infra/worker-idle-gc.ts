@@ -53,6 +53,9 @@ export function scheduleWorkerIdleGc(): void {
   if (pending || collecting) {
     return;
   }
+  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+    return;
+  }
   // A reply can immediately trigger another task; allow that burst to finish first.
   pending = setTimeout(() => {
     void collectWorkerIdleGarbage();
