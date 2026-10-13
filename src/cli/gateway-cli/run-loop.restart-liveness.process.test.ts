@@ -5,7 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
@@ -262,17 +262,14 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
     60_000,
   );
 
-  posixIt.each([false, true])(
+  posixIt.for([false, true])(
     "naturally exits nonzero after settled close failure (ownsProcessLifecycle=%s)",
-    async (ownsProcessLifecycle) => {
+    { timeout: 60_000 },
+    async (ownsProcessLifecycle, { signal }) => {
       const fixture = startFixture(false, "rejected", { ownsProcessLifecycle });
       await fixture.waitForOutput("ready:1");
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
-      const exited = await withTestTimeout(
-        fixture.closed,
-        15_000,
-        "settled close failure retained a referenced shutdown deadline",
-      );
+      const exited = await withinTest(fixture.closed, signal);
       expect(exited, fixture.output()).toEqual([1, null]);
       expect(fixture.output()).toContain("http-closed:1");
       expect(fixture.output()).toContain("loop-returned:1");
@@ -303,7 +300,6 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       );
       expect(fixture.output()).not.toContain("start:2");
     },
-    60_000,
   );
 
   it.skipIf(process.platform !== "darwin")(
