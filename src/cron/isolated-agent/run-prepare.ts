@@ -54,7 +54,7 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   setCronSessionRuntimeModel,
-  persistCronSkillsSnapshotIfChanged,
+  setCronSessionAgentHarnessId,
   type CronSessionRowWriter,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
@@ -165,6 +165,7 @@ export async function prepareCronRunContext(params: {
   const prepareSession = () =>
     withCronSessionPreparation(
       {
+        agentId,
         storePath: resolveSessionStorePathCore(runtimeCfg.session?.store, { agentId }),
         sessionKey: agentSessionKey,
         signal: input.abortSignal ?? input.signal,
@@ -215,6 +216,7 @@ export async function prepareCronRunContext(params: {
       ? `${agentSessionKey}:run:${runSessionId}`
       : agentSessionKey;
     const sessionWorkAdmission = await beginCronSessionWorkAdmission({
+      agentId,
       cronSession,
       agentSessionKey,
       runSessionKey,
@@ -537,18 +539,24 @@ export async function prepareCronRunContext(params: {
         librarySelections: cronSession.sessionEntry.skillLibrarySelections,
         isFastTestEnv: params.isFastTestEnv,
       });
-      await persistCronSkillsSnapshotIfChanged({
-        isFastTestEnv: params.isFastTestEnv,
-        cronSession,
-        skillsSnapshot,
-        nowMs: Date.now(),
-        persistSessionEntry,
-      });
+      if (!params.isFastTestEnv && skillsSnapshot !== cronSession.sessionEntry.skillsSnapshot) {
+        cronSession.sessionEntry = {
+          ...cronSession.sessionEntry,
+          updatedAt: Date.now(),
+          skillsSnapshot,
+        };
+      }
 
       setCronSessionRuntimeModel({ entry: cronSession.sessionEntry, provider, model });
+      setCronSessionAgentHarnessId({
+        entry: cronSession.sessionEntry,
+        agentHarnessId: effectiveAgentRuntime,
+      });
       cronSession.sessionEntry.systemSent = true;
+      let preRunSessionPersisted = false;
       try {
         await persistSessionEntry();
+        preRunSessionPersisted = true;
       } catch (err) {
         if (err instanceof CronSessionLifecycleClaimError) {
           throw err;
@@ -651,6 +659,7 @@ export async function prepareCronRunContext(params: {
           cronSession,
           sessionWorkAdmission,
           persistSessionEntry,
+          preRunSessionPersisted,
           runContinuationSession,
           withRunSession,
           agentPayload,

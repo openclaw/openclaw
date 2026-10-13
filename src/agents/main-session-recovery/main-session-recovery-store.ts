@@ -19,7 +19,10 @@ import {
   type MainSessionRecoveryReservation,
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
-import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
+import {
+  captureYieldedMainSessionContinuation,
+  resolveRestartRecoveryDispatchIdentity,
+} from "./main-session-restart-recovery-target.js";
 
 export type MainSessionRecoveryStoreTarget = {
   agentId?: string;
@@ -187,10 +190,12 @@ export async function commitMainSessionRecovery(params: {
         )
       ) {
         yieldedContinuation = captureYieldedMainSessionContinuation({
-          storeAgentId: params.target.agentId,
           entry,
-          sessionKey: candidate.sessionKey,
-          storePath: params.target.storePath,
+          requester: resolveRestartRecoveryDispatchIdentity({
+            storeAgentId: params.target.agentId,
+            sessionKey: candidate.sessionKey,
+            storePath: params.target.storePath,
+          }),
         });
         if (yieldedContinuation?.()) {
           // The durable child batch takes custody before the successor gets its own fence.

@@ -2,7 +2,15 @@
 
 import { html, nothing, render } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
-import { Show, createMemo, createSignal, onCleanup } from "solid-js";
+import {
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+} from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -236,6 +244,90 @@ describe("Lit and Solid content boundaries", () => {
     }
   });
 
+  it("remounts initially unowned Lit content synchronously under its renderer owner", async () => {
+    const disposed = vi.fn();
+    function Content() {
+      onCleanup(disposed);
+      return <button type="button">Restored content</button>;
+    }
+    const container = document.body.appendChild(document.createElement("div"));
+    const part = render(html`${solidContent(Content, {})}`, container);
+    const original = container.querySelector("button")!;
+    container.remove();
+    part.setConnected(false);
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledOnce();
+
+    const [connected, setConnected] = createSignal(false);
+    const view = mountSolid(() => {
+      const owner = getOwner();
+      createEffect(connected, (active) => {
+        if (active) {
+          document.body.append(container);
+          // The composer and Lit mount restore their renderer owner for later commits.
+          runWithOwner(owner, () => part.setConnected(true));
+        }
+      });
+      return null;
+    });
+    try {
+      setConnected(true);
+      expect(() => flush()).not.toThrow();
+      const restored = container.querySelector("button")!;
+      expect(restored.textContent).toBe("Restored content");
+      expect(restored).not.toBe(original);
+      expect(disposed).toHaveBeenCalledOnce();
+
+      render(nothing, container);
+      await Promise.resolve();
+      expect(disposed).toHaveBeenCalledTimes(2);
+    } finally {
+      render(nothing, container);
+      container.remove();
+      view.unmount();
+    }
+  });
+
+  it("mounts and reconnects Solid content introduced by a Lit content effect", async () => {
+    const disposed = vi.fn();
+    function Counter(props: { label: string }) {
+      const [count, setCount] = createSignal(0);
+      onCleanup(disposed);
+      return (
+        <button type="button" onClick={() => setCount((current) => current + 1)}>
+          {props.label}: {count()}
+        </button>
+      );
+    }
+    const [value, setValue] = createSignal<unknown>(nothing);
+    const [presented, setPresented] = createSignal(true);
+    const content = (label: string) => html`${solidContent(Counter, { label })}`;
+    const view = mountSolid(() => (
+      <SolidContentPresentation value={presented}>
+        <LitContent value={value()} />
+      </SolidContentPresentation>
+    ));
+
+    setValue(content("First"));
+    flush();
+    const button = view.getByRole("button", { name: "First: 0" });
+    button.click();
+    flush();
+    setValue(content("Second"));
+    flush();
+    expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
+
+    setPresented(false);
+    flush();
+    await Promise.resolve();
+    expect(disposed).not.toHaveBeenCalled();
+    setPresented(true);
+    flush();
+    expect(view.getByRole("button", { name: "Second: 1" })).toBe(button);
+    view.unmount();
+    await Promise.resolve();
+    expect(disposed).toHaveBeenCalledOnce();
+  });
   it.each(["replace", "unmount"] as const)(
     "parks nested Solid content and retires it on %s",
     async (removal) => {

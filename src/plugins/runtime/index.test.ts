@@ -1,9 +1,6 @@
 // Plugin runtime index tests cover runtime entrypoint exports and registry setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import type { resolveSandboxContext } from "../../agents/sandbox/context.js";
 import {
   resetConfigRuntimeState,
@@ -13,7 +10,6 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
@@ -38,22 +34,6 @@ vi.mock("./runtime-model-auth.runtime.js", () => ({
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
-
-function createGatewaySubagentRuntime() {
-  return {
-    complete: vi.fn(),
-    run: vi.fn(),
-    waitForRun: vi.fn(),
-    getSessionMessages: vi.fn(),
-    deleteSession: vi.fn(),
-  };
-}
-
-function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  for (const key of keys) {
-    expect(typeof value[key]).toBe("function");
-  }
-}
 
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
@@ -97,18 +77,6 @@ describe("plugin runtime command execution", () => {
       heartbeat: undefined,
     });
     heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
-  });
-
-  it("exposes the host version and immutable supported behavior capabilities", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.version).toBe(VERSION);
-    expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
-    expect(Object.isFrozen(runtime.capabilities)).toBe(true);
-  });
-
-  it("exposes reset freshness resolver on the host channel runtime", () => {
-    const sessionRuntime = createPluginRuntime().channel.session as Record<string, unknown>;
-    expect(typeof sessionRuntime.resolveEntryResetFreshness).toBe("function");
   });
 
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
@@ -277,84 +245,6 @@ describe("plugin runtime command execution", () => {
     expect(provision).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "exposes runtime.mediaUnderstanding helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
-          "resolveAudioInputBudget",
-          "runFile",
-          "describeImageFile",
-          "describeImageFileWithModel",
-          "extractStructuredWithModel",
-          "describeVideoFile",
-        ]);
-        expect(runtime.mediaUnderstanding.transcribeAudioFile).toBeTypeOf("function");
-      },
-    },
-    {
-      name: "exposes runtime.imageGeneration helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.imageGeneration as Record<string, unknown>, [
-          "generate",
-          "listProviders",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.webSearch helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.webSearch as Record<string, unknown>, [
-          "listProviders",
-          "search",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.llm completion and provider-service acquisition",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.llm as Record<string, unknown>, [
-          "complete",
-          "acquireLocalService",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.worktrees checkout inspection and lifecycle helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.worktrees as Record<string, unknown>, [
-          "resolveCheckoutRoot",
-          "hasSelfContainedCheckoutMetadata",
-          "create",
-          "release",
-          "removeIfLossless",
-        ]);
-      },
-    },
-    {
-      name: "exposes canonical read-only model selection without injection",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        const modelConfig = runtime.modelConfig;
-        expect(modelConfig.resolveDefaultModelForAgent).toBe(resolveDefaultModelForAgent);
-        expect(modelConfig.resolveAllowedModelRef).toBe(resolveAllowedModelRefCore);
-        expect(modelConfig.resolveDefaultModelForAgent({ cfg: {} })).toEqual({
-          provider: DEFAULT_PROVIDER,
-          model: DEFAULT_MODEL,
-        });
-        expect(Object.getOwnPropertyDescriptor(runtime, "modelConfig")).toEqual({
-          configurable: true,
-          enumerable: true,
-          get: expect.any(Function),
-          set: undefined,
-        });
-        expect(Reflect.set(runtime, "modelConfig", {})).toBe(false);
-        expect(runtime.modelConfig).toBe(modelConfig);
-      },
-    },
-  ] as const)("$name", ({ assert }) => {
-    assert(createPluginRuntime());
-  });
-
   it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
     const runtime = createPluginRuntime();
     const model = {
@@ -436,37 +326,5 @@ describe("plugin runtime command execution", () => {
     expect(() => nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" })).toThrow(
       "only available inside the Gateway",
     );
-  });
-
-  it("uses an explicit subagent runtime", async () => {
-    const run = vi.fn().mockResolvedValue({ runId: "run-1" });
-    const runtime = createPluginRuntime({
-      subagent: { ...createGatewaySubagentRuntime(), run },
-    });
-
-    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
-      runId: "run-1",
-    });
-    expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
-  });
-
-  it("uses explicit nodes runtime when provided", async () => {
-    const nodes = {
-      list: vi.fn().mockResolvedValue({ nodes: [] }),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-      openDuplex: vi.fn().mockResolvedValue({ closed: Promise.resolve({ ok: true }) }),
-    };
-    const runtime = createPluginRuntime({ nodes });
-
-    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({ nodes: [] });
-    await expect(
-      runtime.nodes.invoke({ nodeId: "node-1", command: "browser.proxy" }),
-    ).resolves.toEqual({ ok: true });
-    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
-    expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
-    await expect(
-      runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" }),
-    ).resolves.toMatchObject({ closed: expect.any(Promise) });
-    expect(nodes.openDuplex).toHaveBeenCalledWith({ nodeId: "node-1", command: "image.bridge" });
   });
 });

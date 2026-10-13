@@ -1,7 +1,13 @@
 /** Verifies non-duplex plugin commands inherit the node invocation lifetime. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type {
@@ -15,8 +21,11 @@ afterEach(() => {
 });
 
 describe("non-duplex node-host plugin cancellation", () => {
-  it("passes the actual invocation signal into the node-owned plugin context", async () => {
+  it("passes the actual invocation signal into the node-owned plugin context", async ({
+    signal,
+  }) => {
     const controller = new AbortController();
+    const handlerReady = createDeferred();
     const sendNodeEvent = vi.fn(async () => undefined);
     const handle = vi.fn(
       async (
@@ -35,11 +44,21 @@ describe("non-duplex node-host plugin cancellation", () => {
               ),
             { once: true },
           );
+          handlerReady.resolve();
         });
         return '{"stale":true}';
       },
     );
     const registry = createEmptyPluginRegistry();
+    registry.plugins = [
+      createPluginRecord({
+        id: "ollama",
+        source: "test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: true,
+      }),
+    ];
     registry.nodeHostCommands = [
       {
         pluginId: "ollama",
@@ -64,11 +83,21 @@ describe("non-duplex node-host plugin cancellation", () => {
       undefined,
       { signal: controller.signal, pluginCommandContext: { sendNodeEvent } },
     );
-    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          handlerReady.promise,
+          invocation,
+          "node plugin invocation settled before its handler installed the abort listener",
+        ),
+        signal,
+      );
+    } finally {
+      controller.abort(new Error("paired inference canceled"));
+      await invocation;
+    }
 
-    controller.abort(new Error("paired inference canceled"));
-    await invocation;
-
+    expect(handle).toHaveBeenCalledOnce();
     expect(handle).toHaveBeenCalledWith('{"model":"local-only:small"}', undefined, {
       sendNodeEvent,
       sessionKey: "agent:main:local-model",

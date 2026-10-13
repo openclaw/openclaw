@@ -311,7 +311,7 @@ describe("shared question panel", () => {
     expect(hosts.value).toBe("api.example.test");
     expect(secret.autocomplete).toBe("off");
     expect(secret.placeholder).toBe("FAKE_DEPLOYMENT_API_KEY");
-    expect(secret.closest("label")?.textContent).toContain("API key");
+    expect(secret.labels?.[0]?.textContent).toContain("API key");
     expect(container.querySelector(".chat-question-panel__options")).toBeNull();
     expect(container.querySelector(".chat-question-panel__option-marker")).toBeNull();
     expect(container.querySelector("kbd")).toBeNull();
@@ -336,8 +336,57 @@ describe("shared question panel", () => {
     expect(container.textContent).not.toContain(fakeSecret);
     expect(container.innerHTML).not.toContain(fakeSecret);
 
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Show secret"]')!;
+    expect(toggle).not.toBeNull();
+    toggle.click();
+    flush();
+    expect(secret.type).toBe("text");
+    expect(secret.value).toBe(fakeSecret);
+    expect(toggle.getAttribute("aria-label")).toBe("Hide secret");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(container.textContent).not.toContain(fakeSecret);
+    expect(container.innerHTML).not.toContain(fakeSecret);
+    toggle.click();
+    flush();
+    expect(secret.type).toBe("password");
+    expect(secret.value).toBe(fakeSecret);
+
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
+  });
+
+  it("remasks secrets when moving to another question or request", async () => {
+    const prompt = gatewayPrompt({
+      questions: [
+        freeTextQuestion({ questionId: "first", isSecret: true }),
+        freeTextQuestion({ questionId: "second", isSecret: true }),
+      ],
+    });
+    drawGateway(prompt);
+    await panelIn(container);
+    const input = () => container.querySelector<HTMLInputElement>("input")!;
+    const reveal = () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Show secret"]')!.click();
+      flush();
+    };
+    input().value = "fake-secret-first";
+    input().dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    reveal();
+    expect(input().type).toBe("text");
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    flush();
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("");
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__back")!.click();
+    flush();
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("fake-secret-first");
+    reveal();
+    drawGateway(gatewayPrompt({ id: "question-2", questions: prompt.questions }));
+    await panelIn(container);
+    expect(input().type).toBe("password");
+    expect(input().value).toBe("");
   });
 
   it.each([
@@ -385,7 +434,7 @@ describe("shared question panel", () => {
     const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       "input, textarea",
     )!;
-    expect(input.closest("label")?.textContent).toContain("Answer");
+    expect(input.labels?.[0]?.textContent).toContain("Answer");
     expect(input.placeholder).toBe("Answer");
   });
 

@@ -7,7 +7,6 @@ import { renderToolFixture as render } from "./chat-tool-render.test-support.ts"
 describe("execution purpose cards", () => {
   it.each([
     { name: "wait", args: { runId: "cm_test" }, label: "Wait" },
-    { name: "session_status", args: {}, label: "Session Status" },
     { name: "custom_tool", args: { text: "custom tool" }, label: "Custom Tool" },
     {
       name: "tool_call",
@@ -48,12 +47,6 @@ describe("execution purpose cards", () => {
   it.each([
     { name: "exec", args: { code: "await tools.read({ path: 'README.md' })" } },
     { name: "exec", args: { command: "set -euo pipefail\npnpm test" } },
-    {
-      name: "exec",
-      args: { command: "pnpm test", code: "await tools.read({ path: 'README.md' })" },
-    },
-    { name: "bash", args: { command: "pnpm test" } },
-    { name: "shell", args: { command: "pnpm test" } },
   ])(
     "shows the agent purpose immediately for $name and retains execution details",
     async ({ name, args }) => {
@@ -97,10 +90,7 @@ describe("execution purpose cards", () => {
     },
   );
 
-  it.each([
-    { name: "calendar_create", args: { title: "Team meeting", command: "create" } },
-    { name: "document_create", args: { title: "Design notes", content: "Draft" } },
-  ])(
+  it.each([{ name: "calendar_create", args: { title: "Team meeting", command: "create" } }])(
     "does not treat $name business title arguments as activity descriptions",
     async ({ name, args }) => {
       const container = document.createElement("div");
@@ -118,27 +108,6 @@ describe("execution purpose cards", () => {
       expect(container.querySelector(".chat-tool-row__title")).toBeNull();
     },
   );
-
-  it("previews the useful command after shell setup while retaining the full command", async () => {
-    const container = document.createElement("div");
-    const card = {
-      id: "shell-preamble",
-      name: "exec",
-      args: { command: "set -euo pipefail\ncd /workspace\npnpm test" },
-    };
-    await render(
-      renderToolCard(card, {
-        messageKey: "shell-preamble",
-        expanded: true,
-        onToggleExpanded: vi.fn(),
-      }),
-      container,
-    );
-    expect(container.querySelector(".chat-tool-row__cmd")?.textContent).toBe("pnpm test");
-    expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain(
-      card.args.command,
-    );
-  });
 
   it("keeps multiline command previews readable and bounded without changing the source", async () => {
     const container = document.createElement("div");

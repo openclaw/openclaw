@@ -103,7 +103,7 @@ export type SubagentRunReadRecord = {
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
   swarmRequesterSessionKey?: string;
   childSessionKey: string;
-  /** Agent captured at registration for raw child session keys. */
+  /** Selected child agent; historical qualified keys may carry ownership without this field. */
   childAgentId?: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -135,16 +135,3 @@ export type SubagentRunReadRecord = {
     status: SwarmCollectorStatus;
   };
 };
-
-/** Cloneable comparison input; source custody and the deletion verdict remain with the caller. */
-export type SubagentRunsDurableBasis = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  databaseBirthtime?: string;
-  sessionKeys: readonly string[];
-  liveTopology: readonly Readonly<{
-    childSessionKey: string;
-    requesterSessionKey: string;
-  }>[];
-  digest: string | null;
-}>;

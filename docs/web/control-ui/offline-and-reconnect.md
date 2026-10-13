@@ -79,6 +79,12 @@ their header. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets keep one loading surface while their board metadata and document
 arrive. Widget requests still require the current Gateway connection.
 
+Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
+routing roster retains its first page; the sidebar separately keeps its visible
+rows, pinned destinations, and selected view for display while connecting. The
+Pages view saves and restores its dashboard catalog without waiting for the
+inactive Sessions roster.
+
 Boot and roster records retain the existing 30-day expiry, and transcripts keep
 their bounded cache limits. Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection

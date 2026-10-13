@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   assignHumanOwner,
@@ -32,7 +33,10 @@ import type { SessionRetirementReadOperation } from "./session-retirement-read.t
 import { runSessionStartupMigration } from "./startup-migration.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 type LegacyMainSessionMigrationOutcomeKind = Awaited<
   ReturnType<typeof migrateLegacyMainSessionKeys>
@@ -512,6 +516,7 @@ it("reports legacy session repairs without rewriting stored claims at startup", 
   await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir }, async () => {
     const env = { ...process.env };
     const cfg = { agents: { entries: { ops: { workspace } } } };
+    setRuntimeConfigSnapshot(cfg);
     const legacy = { agentId: "main", env, sessionKey: "agent:main:retained" };
     const canonical = { agentId: "ops", env, sessionKey: "agent:ops:retained" };
     const worktree = { agentId: "ops", env, sessionKey: "agent:ops:workspace" };

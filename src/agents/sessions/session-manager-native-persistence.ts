@@ -16,7 +16,6 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
@@ -261,7 +260,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
             ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
           };
     }
-    const appendOptions = copyCodeModeSourceAppendOptions(options, {
+    const appendOptions = {
       cwd: this.cwd,
       eventId: entry.id,
       ...(options?.beforeFreshMessageCommit
@@ -274,7 +273,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
+    } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1];
     const loadedVersion = this.transcriptVersion;
     const outcome = appendTranscriptMessageSnapshotSync(
       scope,

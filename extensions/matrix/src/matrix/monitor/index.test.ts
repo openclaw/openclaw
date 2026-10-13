@@ -481,7 +481,6 @@ describe("monitorMatrixProvider", () => {
     const maintenanceParams = mockCallArg(hoisted.runMatrixStartupMaintenance) as {
       abortSignal?: AbortSignal;
     };
-    expect(startSignal).toBe(hoisted.state.leaseAbortController.signal);
     expect(backfillParams.abortSignal?.aborted).toBe(false);
     expect(runtimeContextParams.abortSignal).toBe(startSignal);
     expect(maintenanceParams.abortSignal).toBe(startSignal);

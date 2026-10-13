@@ -13,6 +13,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
 import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -119,14 +120,20 @@ async function inspectUpdateAdmission(
     delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return await withOwnedManagedUpdateEnv(env, async () => {
       const timeoutMs = context.request.timeoutMs ?? 120_000;
-      const readConfigSnapshot = (coreOnly = false) =>
-        createConfigIO({
+      const readConfigSnapshot = async (coreOnly = false) => {
+        // Pending facts belong to update admission after its storage compatibility check.
+        const deferredPluginMigrations = coreOnly
+          ? undefined
+          : await readDeferredPluginMigrationsAsync({ env });
+        return createConfigIO({
           env: cloneEnvWithPlatformSemantics(env),
           ...(coreOnly ? { pluginValidation: "core-only" as const } : {}),
+          deferredPluginMigrations,
           observe: false,
           shellEnvFallback: "defer",
           suppressFutureVersionWarning: true,
         }).readConfigFileSnapshotForWrite();
+      };
       const checks = new Map<
         string,
         Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">

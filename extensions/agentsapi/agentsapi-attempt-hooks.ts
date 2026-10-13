@@ -4,7 +4,7 @@ import {
   buildEmbeddedForegroundPromptContext,
   formatErrorMessage,
   resolveAgentDir,
-  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
   runAgentHarnessLlmOutputHook,
   type AgentHarnessAttemptParamsV2,
   type EmbeddedRunAttemptResult,
@@ -76,7 +76,7 @@ export function createAgentsApiAttemptHooks(
     if (!params.messageChannel && !params.messageProvider) {
       await awaitAgentEndSideEffects(agentEnd);
     } else {
-      runAgentEndSideEffects(agentEnd);
+      await runAgentEndSideEffectsAsync(agentEnd);
     }
   }
 }

@@ -57,7 +57,7 @@ function renderIconShapes(nodes: readonly IconNode[]) {
   return svg`${unsafeSVG(iconMarkup(nodes))}`;
 }
 
-export function renderIconData({ attributes: a, children }: IconData): TemplateResult {
+function renderIconData({ attributes: a, children }: IconData): TemplateResult {
   return svg`<svg
     viewBox=${a.viewBox ?? nothing}
     fill=${a.fill ?? nothing}

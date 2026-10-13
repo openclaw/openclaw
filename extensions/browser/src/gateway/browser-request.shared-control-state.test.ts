@@ -20,7 +20,8 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) =>
     await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   return {
     ...actual,
-    getRuntimeConfig: () => mocks.runtimeConfig,
+    readRuntimeConfig: () => mocks.runtimeConfig,
+    captureRuntimeConfigAsyncReader: () => async () => mocks.runtimeConfig,
     getRuntimeConfigSourceSnapshot: () => mocks.runtimeSourceConfig,
     loadConfig: () => mocks.runtimeConfig,
   };

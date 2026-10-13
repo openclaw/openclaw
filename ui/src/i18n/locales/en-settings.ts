@@ -780,7 +780,7 @@ const enSettings = {
       test: "Test connection",
       testing: "Testing…",
       unavailable: "Connection testing requires a newer gateway.",
-      latency: "{ms} ms",
+      latency: "Request round-trip: {ms} ms",
       status: {
         ok: "Connected",
         auth: "Authentication failed",
@@ -837,6 +837,9 @@ const enSettings = {
       disabled: "Disabled",
       fallback: "Fallback Model",
       noFallback: "No fallback model",
+      clearFallbacks: "No fallback model (remove all {count})",
+      moreFallbackOne: "1 more fallback after this one",
+      moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",

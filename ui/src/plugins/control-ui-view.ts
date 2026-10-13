@@ -1,4 +1,4 @@
-import { ContextConsumer } from "@lit/context";
+import { ContextEvent } from "@lit/context";
 import { html, LitElement, nothing, type ChildPart } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import type {
@@ -13,7 +13,9 @@ export type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replace
 
 class PluginSurfaceDirective extends AsyncDirective {
   private host?: LitElement;
-  private consumer?: ContextConsumer<typeof applicationContext, LitElement>;
+  private part?: ChildPart;
+  private contextTarget?: Element;
+  private unsubscribeContext?: () => void;
   private runtime?: ControlUiPluginCapability;
   private unsubscribe?: () => void;
   private args?: [ControlUiSurface, unknown, unknown, PresentationValue, unknown];
@@ -24,32 +26,53 @@ class PluginSurfaceDirective extends AsyncDirective {
     args: [ControlUiSurface, unknown, unknown, PresentationValue, unknown],
   ) {
     this.args = args;
+    this.part = part;
     const host = part.options?.host;
-    if (host instanceof LitElement && this.host !== host) {
+    const nextHost = host instanceof LitElement ? host : undefined;
+    if (this.host !== nextHost) {
       this.disconnect();
-      this.host = host;
+      this.host = nextHost;
     }
     this.connect();
+    // Solid hands the marker range through a fragment before attaching its DOM.
+    if (!this.contextTarget) {
+      this.refresh();
+    }
     return this.render(...args);
   }
 
   private connect() {
-    if (!this.isConnected || !this.host || this.consumer) {
+    if (!this.isConnected) {
       return;
     }
-    this.consumer = new ContextConsumer(this.host, {
-      context: applicationContext,
-      subscribe: true,
-      callback: (context) => {
-        if (this.runtime === context?.plugins) {
-          return;
-        }
-        this.unsubscribe?.();
-        this.runtime = context?.plugins;
-        this.unsubscribe = this.runtime?.subscribe(() => this.refresh());
-        this.refresh();
-      },
-    });
+    const target = this.host ?? this.part?.startNode?.parentElement;
+    if (!target?.isConnected || target === this.contextTarget) {
+      return;
+    }
+    this.disconnect();
+    // A reconnect must resolve the current provider before selecting a view.
+    this.runtime = undefined;
+    this.contextTarget = target;
+    target.dispatchEvent(
+      new ContextEvent(
+        applicationContext,
+        target,
+        (context, unsubscribe) => {
+          if (this.unsubscribeContext !== unsubscribe) {
+            this.unsubscribeContext?.();
+            this.unsubscribeContext = unsubscribe;
+          }
+          if (this.runtime === context?.plugins) {
+            return;
+          }
+          this.unsubscribe?.();
+          this.runtime = context?.plugins;
+          this.unsubscribe = this.runtime?.subscribe(() => this.refresh());
+          this.refresh();
+        },
+        true,
+      ),
+    );
   }
 
   private refresh() {
@@ -60,6 +83,7 @@ class PluginSurfaceDirective extends AsyncDirective {
     queueMicrotask(() => {
       this.pending = false;
       if (this.isConnected && this.args) {
+        this.connect();
         this.setValue(this.render(...this.args));
       }
     });
@@ -68,12 +92,10 @@ class PluginSurfaceDirective extends AsyncDirective {
   private disconnect() {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
-    this.consumer?.hostDisconnected();
-    if (this.consumer) {
-      this.host?.removeController(this.consumer);
-    }
-    this.consumer = undefined;
-    this.runtime = undefined;
+    this.unsubscribeContext?.();
+    this.unsubscribeContext = undefined;
+    this.contextTarget = undefined;
+    // Parked ranges still update their retained view while subscriptions sleep.
   }
 
   override disconnected() {
@@ -103,7 +125,9 @@ class PluginSurfaceDirective extends AsyncDirective {
           .defaultHost=${this.host}
           .presented=${livePresentation(presented)}
         ></openclaw-plugin-view>`
-      : defaultView;
+      : // A nested AsyncDirective must remain a template child: replacing its
+        // value must not retire this surface's own connection registration.
+        html`${defaultView}`;
   }
 }
 

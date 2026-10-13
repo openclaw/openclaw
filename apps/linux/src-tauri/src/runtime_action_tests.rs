@@ -127,9 +127,11 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn fresh_install_carries_null_definition_and_bundled_path() {
+fn fresh_install_with_unknown_mutation_capability_carries_null_definition_and_bundled_path() {
     let fixture = Fixture::new();
-    fixture.write_state(&fixture.absent());
+    let mut absent = fixture.absent();
+    absent["service"]["definitionMutation"] = "unknown".into();
+    fixture.write_state(&absent);
     fresh(&fixture.cli(), &fixture.runtime(), &|| true).unwrap();
     assert_eq!(fixture.installs(), 1);
     assert_eq!(

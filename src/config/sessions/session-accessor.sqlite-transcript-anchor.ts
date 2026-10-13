@@ -1,8 +1,5 @@
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import {
-  getSqliteReadScopeRevision,
-  readSqliteNativeMutationRevision,
-} from "../../infra/sqlite-schema-facts.js";
+import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
@@ -26,7 +23,10 @@ import {
 } from "./session-transcript-append-postimage.js";
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
-import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import {
+  sameTranscriptEntryAnchor,
+  type TranscriptEntryAnchor,
+} from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -34,6 +34,38 @@ export type TranscriptSourceAuthority = Pick<
   InternalSessionEntry,
   "permissionMode" | "lifecycleRevision"
 >;
+
+/** Read one active identity using the caller's existing admitted snapshot. */
+export function readActiveTranscriptEntryIdentityInSnapshot(
+  projection: CurrentTranscriptProjection,
+  entryId: string,
+) {
+  const db = getSessionKysely(projection.database.db);
+  return executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    db
+      .selectFrom("transcript_event_identities as identity")
+      .innerJoin("session_transcript_active_events as active", (join) =>
+        join
+          .onRef("active.session_id", "=", "identity.session_id")
+          .onRef("active.event_seq", "=", "identity.seq"),
+      )
+      .select(["identity.seq", "identity.parent_id as parentId"])
+      .where("identity.session_id", "=", projection.resolved.sessionId)
+      .where("identity.event_id", "=", entryId)
+      .limit(1),
+  );
+}
+
+export function readActivePathEntryRelationFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
+  if (projection.state.leafEventId === entryId || entryId === null) {
+    return projection.state.leafEventId === entryId ? "exact" : "off-path";
+  }
+  return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
+}
 
 /** The caller owns admission; anchor and source authority share the current statement snapshot. */
 export function assertSessionTranscriptContextAnchorInDatabase(
@@ -89,12 +121,7 @@ export function assertSessionTranscriptContextAnchorInDatabase(
   } else {
     current = readActiveTranscriptEntryAnchorInTransaction(params);
   }
-  if (
-    !current ||
-    (["generation", "rawSeq", "effectiveParentId", "activeMessagePosition"] as const).some(
-      (field) => current[field] !== through[field],
-    )
-  ) {
+  if (!sameTranscriptEntryAnchor(through, current)) {
     throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
   }
 }
@@ -233,10 +260,7 @@ export function readTranscriptMessageAppendMetadataInTransaction(params: Transcr
   const row = readActiveTranscriptEntryFacts(params, undefined, true);
   const anchor = createTranscriptEntryAnchor({ ...params, row });
   const postimage: TranscriptAppendPostimage | undefined =
-    revision &&
-    getSqliteReadScopeRevision(params.database.db) === revision &&
-    anchor &&
-    typeof row?.latestSeq === "number"
+    revision && anchor && typeof row?.latestSeq === "number"
       ? {
           revision,
           anchor,
@@ -250,13 +274,7 @@ export function readTranscriptMessageAppendMetadataInTransaction(params: Transcr
   return retainTranscriptAppendPostimage(
     {
       anchor,
-      visibleTailEntryId:
-        anchor &&
-        row?.seq === row?.latestSeq &&
-        revision !== undefined &&
-        readSqliteNativeMutationRevision(params.database.db) === revision.mutationRevision
-          ? params.entryId
-          : undefined,
+      visibleTailEntryId: anchor && row?.seq === row?.latestSeq ? params.entryId : undefined,
     },
     postimage,
   );

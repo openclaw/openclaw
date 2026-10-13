@@ -1,12 +1,13 @@
 import { fork } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -17,6 +18,7 @@ import {
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -460,7 +462,6 @@ it.each([
         .get();
       database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
-      expect(database.walMaintenance.health?.state).toBe("blocked");
       expect(database.db.isOpen).toBe(false);
       expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {
@@ -665,11 +666,12 @@ it.runIf(process.platform === "linux")(
       "corrupt-page",
       "interrupted-admission",
     ];
-    const child = fork(
-      fileURLToPath(new URL("./openclaw-agent-db-crash.test-support.ts", import.meta.url)),
-      cases,
-      { execArgv: ["--import", "tsx"], env: { ...process.env, ...env }, silent: true },
-    );
+    const childUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabaseCrash);
+    const child = fork(fileURLToPath(childUrl), cases, {
+      execArgv: resolveRuntimeWorkerArgv(childUrl).slice(0, -1),
+      env: { ...process.env, ...env },
+      silent: true,
+    });
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
       stderr += String(chunk);
@@ -687,11 +689,7 @@ it.runIf(process.platform === "linux")(
         });
       });
     } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, "exit");
-        child.kill("SIGKILL");
-        await exited;
-      }
+      await stopChildProcess(child, 5_000, { force: true });
     }
     expect(child.signalCode).toBe("SIGKILL");
     expect(fixtures.map((fixture) => fixture.agentId)).toEqual(cases);

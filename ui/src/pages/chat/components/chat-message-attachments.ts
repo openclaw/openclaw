@@ -1,5 +1,5 @@
 import { solidContent } from "../../../lit/solid-content.tsx";
-import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
+import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import type { AssistantAttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
@@ -27,21 +27,5 @@ export function renderAssistantAttachments(
     onOpenSidebar,
     onAssistantAttachmentLoaded,
     inlinePlayback,
-  });
-}
-
-export function renderMessageAttachment(
-  item: AssistantAttachmentItem,
-  options: ImageRenderOptions,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  onAssistantAttachmentLoaded?: () => void,
-  presentation: "inline" | "card" | "preview" = "inline",
-) {
-  return solidContent(MessageAttachment, {
-    item,
-    options,
-    onOpenSidebar,
-    onAssistantAttachmentLoaded,
-    presentation,
   });
 }

@@ -219,6 +219,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       reason === undefined ? undefined : { cause: reason },
     );
   };
+  const assertCurrent = () => {
+    throwIfAborted();
+    assertAgentRunLifecycleGenerationCurrent(options.getLifecycleGeneration());
+    options.getParams().preparedRunAdmission?.assertSourceCurrent();
+  };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,
     allowPendingGlobalAdmissionHeartbeat = false,
@@ -374,7 +379,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          () => {
+          (signal) => {
+            params = { ...params, abortSignal: signal };
+            options.setParams(params);
             assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
             return task();
           },
@@ -463,5 +470,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     setLaneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
+    assertCurrent,
   };
 }

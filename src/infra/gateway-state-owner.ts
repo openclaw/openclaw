@@ -267,12 +267,20 @@ function acquireOwnerFile(
 ) {
   const deadline = performance.now() + busyTimeoutMs;
   ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
-  const observed: { holder: LockPayload | null } = { holder: null };
+  const observed: { raw?: string; holder: LockPayload | null } = { holder: null };
+  const parsePayload = (raw: string) => {
+    // Physical verification still reads the lock; immutable bytes need decoding only once.
+    if (raw !== observed.raw) {
+      observed.holder = parseGatewayLockPayload(raw);
+      observed.raw = raw;
+    }
+    return observed.holder;
+  };
   const stale = ({ payload: value }: { payload: unknown }) =>
     isGatewayStateOwnerDefinitelyStale(value, pathname);
   if (busyTimeoutMs > 0) {
     try {
-      const previous = parseGatewayLockPayload(fs.readFileSync(pathname, "utf8"));
+      const previous = parsePayload(fs.readFileSync(pathname, "utf8"));
       if (
         previous &&
         !stale({ payload: previous }) &&
@@ -289,34 +297,43 @@ function acquireOwnerFile(
       }
     }
   }
-  try {
-    return acquireFileLockSync(pathname, {
-      lockPath: pathname,
-      retry:
-        busyTimeoutMs > 0
-          ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
-          : { retries: 0 },
-      timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
-      staleMs: Infinity,
-      staleRecovery: "remove-if-unchanged",
-      reentrantOwner: payload.ownerId,
-      payload: () => payload,
-      parsePayload: (raw) => (observed.holder = parseGatewayLockPayload(raw)),
-      shouldReclaim: stale,
-      shouldRemoveStaleLock: stale,
-    });
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "file_lock_timeout" || code === "file_lock_stale") {
-      const { holder } = observed;
-      const holderDetail = describeGatewayLockHolder(
-        holder ?? {},
-        pathname,
-        holder && isPidAlive(holder.pid) ? "live" : "unknown",
-      );
-      throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
+  for (let retriedMissingParent = false; ;) {
+    try {
+      return acquireFileLockSync(pathname, {
+        lockPath: pathname,
+        retry:
+          busyTimeoutMs > 0
+            ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
+            : { retries: 0 },
+        timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
+        staleMs: Infinity,
+        staleRecovery: "remove-if-unchanged",
+        reentrantOwner: payload.ownerId,
+        payload: () => payload,
+        parsePayload,
+        shouldReclaim: stale,
+        shouldRemoveStaleLock: stale,
+      });
+    } catch (error) {
+      const code = extractErrorCode(error);
+      if (code === "ENOENT" && !retriedMissingParent) {
+        // Final lease cleanup can remove the parent before exclusive creation.
+        // Recreate it once without extending the original contention budget.
+        retriedMissingParent = true;
+        ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+        continue;
+      }
+      if (code === "file_lock_timeout" || code === "file_lock_stale") {
+        const { holder } = observed;
+        const holderDetail = describeGatewayLockHolder(
+          holder ?? {},
+          pathname,
+          holder && isPidAlive(holder.pid) ? "live" : "unknown",
+        );
+        throw new GatewayStateOwnerContentionError(databasePath, error, holderDetail);
+      }
+      throw error;
     }
-    throw error;
   }
 }
 

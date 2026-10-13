@@ -8,15 +8,11 @@ import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-comp
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import {
@@ -24,7 +20,6 @@ import {
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
-import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -56,9 +51,15 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  defersTokenCompactionToChatGPTBoundary,
+  followupOwnsNativeCompaction,
+  followupUsesCliRuntime,
+  resolveFollowupAgentRuntimeId,
+  resolveFollowupContextTokens,
+} from "./agent-runner-memory-runtime.js";
+import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
-  type TranscriptTokenEstimate,
 } from "./agent-runner-memory-transcript-context.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
@@ -85,12 +86,11 @@ import {
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
-  resolveEffectivePromptTokens,
+  resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
-import { resolveContextTokens } from "./model-selection-context.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
@@ -110,103 +110,8 @@ const memoryFlushPreparationLoader = createLazyImportLoader(
   () => import("./memory-flush-prepare.js"),
 );
 
-type FollowupRuntimeParams = {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: Pick<
-    SessionEntry,
-    | "agentHarnessId"
-    | "agentRuntimeOverride"
-    | "modelSelectionLocked"
-    | "pluginOwnerId"
-    | "sessionId"
-  >;
-  sessionKey?: string;
-  agentHarnessId?: string;
-};
-
-function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string): boolean {
-  const provider = params.followupRun.run.provider;
-  if (params.agentHarnessId) {
-    return isCliRuntimeAliasForProvider({
-      provider,
-      runtime: params.agentHarnessId,
-      cfg: params.cfg,
-    });
-  }
-  if (isCliProvider(provider, params.cfg)) {
-    return true;
-  }
-  return [resolvePersistedSessionRuntimeId(params.sessionEntry), runtimeId].some((runtime) =>
-    isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }),
-  );
-}
-
-function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
-  if (params.agentHarnessId) {
-    return params.agentHarnessId;
-  }
-  const matchingSessionEntry =
-    params.sessionEntry?.sessionId === params.followupRun.run.sessionId
-      ? params.sessionEntry
-      : undefined;
-  return resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider: params.followupRun.run.provider,
-    modelId: params.followupRun.run.model,
-    agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
-    // Model/runtime selection belongs to execution; sandbox policy has its own classification key.
-    sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-    sessionEntry: matchingSessionEntry,
-  });
-}
-
-function followupOwnsNativeCompaction(params: FollowupRuntimeParams, runtimeId: string): boolean {
-  // Backends that persist resumable native transcripts must remain the sole
-  // compaction owner; OpenClaw maintenance would corrupt that runtime state.
-  return (
-    resolveCliBackendConfig(runtimeId, params.cfg, {
-      agentId: params.followupRun.run.agentId,
-    })?.ownsNativeCompaction === true
-  );
-}
-
-function resolveFollowupContextTokens(
-  { cfg, followupRun, defaultModel }: FollowupRuntimeParams & { defaultModel: string },
-  runtimeId: string,
-): number {
-  const { provider } = followupRun.run;
-  const model = followupRun.run.model ?? defaultModel;
-  const catalogModel = findModelInCatalog(followupRun.run.thinkingCatalog ?? [], provider, model);
-  return resolveContextTokens({
-    cfg,
-    provider: resolveContextConfigProviderForRuntime({ provider, runtimeId, config: cfg }),
-    model,
-    modelContextWindow: catalogModel?.contextWindow,
-    modelContextTokens: catalogModel?.contextTokens,
-  });
-}
-
 // Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-
-function projectPromptTokens(
-  persistedPromptTokens: number | undefined,
-  promptTokenEstimate: number | undefined,
-  transcript: TranscriptTokenEstimate | undefined,
-): number {
-  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    typeof promptTokens === "number"
-      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
-      : 0;
-  return Math.max(
-    project(persistedPromptTokens, transcript?.outputTokens),
-    project(
-      transcript?.promptTokens,
-      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
-    ),
-  );
-}
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -393,7 +298,7 @@ export async function runSessionCompactionIfNeeded(params: {
     return entry;
   }
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     freshPersistedTokens,
     promptTokenEstimate,
     transcriptUsageTokens,
@@ -436,6 +341,15 @@ export async function runSessionCompactionIfNeeded(params: {
       sessionEntry: refreshed,
       beforeCompaction: undefined,
     });
+  }
+
+  if (
+    shouldCompactByTokens &&
+    !shouldCompactByTranscriptBytes &&
+    (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run))
+  ) {
+    assertActive();
+    return entry;
   }
 
   const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
@@ -544,6 +458,11 @@ export async function runSessionCompactionIfNeeded(params: {
         thinkLevel: params.followupRun.run.thinkLevel,
         bashElevated: params.followupRun.run.bashElevated,
         trigger: "budget",
+        modelCallUrgency: resolveModelCallUrgency({
+          ...params.followupRun.run,
+          trigger: params.isHeartbeat ? "heartbeat" : "user",
+          currentInboundEventKind: params.followupRun.currentInboundEventKind,
+        }),
         force: true,
         forcePreflight: true,
         preflightRequired: true,
@@ -817,16 +736,13 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
-  const shouldCheckTranscriptSizeForForcedFlush = Boolean(
-    entry && Number.isFinite(forceFlushTranscriptBytes) && forceFlushTranscriptBytes > 0,
-  );
   const sessionLogSnapshot = entry
     ? await readSessionLogSnapshot({
         agentId: params.followupRun.run.agentId,
         sessionId: params.followupRun.run.sessionId,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
         storePath: params.storePath,
-        includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeByteSize: asPositiveFiniteNumber(forceFlushTranscriptBytes) !== undefined,
         includeTurnTaint: true,
         includeUsage: shouldReadTranscript,
         abortSignal,
@@ -896,7 +812,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
-  const projectedTokenCount = projectPromptTokens(
+  const projectedTokenCount = resolveProjectedPromptTokens(
     asPositiveFiniteNumber(persistedPromptTokens),
     promptTokenEstimate,
     transcriptPromptTokens === 0 ? undefined : transcriptUsageTokens,
@@ -1024,6 +940,7 @@ export async function runMemoryFlushIfNeeded(params: {
       preparedRunAdmission,
       modelResolve: {
         prompt: activeMemoryFlushPlan.prompt,
+        awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
         cwd: maintenanceRun.cwd,
         modelSelectionLocked: maintenanceRun.modelSelectionLocked,
         context: buildModelResolveContext({
@@ -1085,6 +1002,7 @@ export async function runMemoryFlushIfNeeded(params: {
         const result = await runtime.runEmbeddedAgent({
           preparedRunAdmission,
           ...runBaseParams,
+          awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
           ...memorySession,
           agentHarnessId: resolveSessionPinnedHarnessId(entry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,

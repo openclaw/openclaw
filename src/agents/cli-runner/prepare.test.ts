@@ -6,7 +6,16 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -15,7 +24,11 @@ import {
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   loadSessionEntryReadOnly,
@@ -59,12 +72,16 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -317,6 +334,8 @@ type CliContextBudgetTestCase = {
 };
 
 describe("prepareCliRunContext", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-prepare-");
+  const retainedStateDirs: string[] = [];
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
   async function withAuthenticatedHistory(
@@ -633,13 +652,25 @@ describe("prepareCliRunContext", () => {
       loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
-    getRuntimeConfigMock.mockReturnValue({});
+    const config: OpenClawConfig = {};
+    getRuntimeConfigMock.mockReturnValue(config);
+    setRuntimeConfigSnapshot(config);
     mockBuildMediaTaskRuntimeContext.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
     // Discovery cases explicitly opt out of the prepared empty catalog.
-    fixture = createCliRunnerPrepareFixture((params) =>
-      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
+    fixture = createCliRunnerPrepareFixture(
+      (params) => {
+        setRuntimeConfigSnapshot(params.config ?? {});
+        return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+      },
+      {
+        make() {
+          const dir = sessionDirs.make();
+          retainedStateDirs.push(dir);
+          return dir;
+        },
+      },
     );
   });
 
@@ -658,6 +689,13 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     await fixture.cleanup();
+    // A few retained cases keep both broker workers warm below their store capacity.
+    for (const dir of retainedStateDirs.splice(0, retainedStateDirs.length - 4)) {
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+      );
+    }
+    clearRuntimeConfigSnapshot();
   });
 
   it.each(["process", "plugin"] as const)(
@@ -1091,6 +1129,7 @@ describe("prepareCliRunContext", () => {
         profileId: authProfileId,
         profileType: refreshedCredential.type,
         credential: refreshedCredential,
+        readCurrentCredential: null,
       };
     });
     setCliRunnerPrepareTestDeps({
@@ -2992,13 +3031,14 @@ describe("prepareCliRunContext", () => {
           sessionKey: original.sessionKey,
           resetTriggered: false,
         });
-        sourceOperation.bindToolAuthoritySnapshot(
+        await sourceOperation.bindToolAuthoritySnapshotAsync(
           prepareReplyToolAuthority({
             run: { ...original, provider: sourceRoute.provider, traceAuthorized: true },
           }),
         );
       }
-      const toolAuthorityFingerprint = sourceOperation?.bindToolAuthorityRoute(sourceRoute);
+      const toolAuthorityFingerprint =
+        await sourceOperation?.bindToolAuthorityRouteAsync(sourceRoute);
       const context = await fixture.prepare({
         ...original,
         runId,
@@ -3059,12 +3099,12 @@ describe("prepareCliRunContext", () => {
               resetTriggered: false,
             });
             const nextRoute = { provider: "next-policy", model: "next-model" };
-            answeringPlaceholder.bindToolAuthoritySnapshot(
+            await answeringPlaceholder.bindToolAuthoritySnapshotAsync(
               prepareReplyToolAuthority({
                 run: { ...original, ...nextRoute, clientCaps: [] },
               }),
             );
-            answeringPlaceholder.bindToolAuthorityRoute(nextRoute);
+            await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
             expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>

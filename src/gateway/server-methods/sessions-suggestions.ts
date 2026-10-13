@@ -40,7 +40,7 @@ import {
   authorizeIncognitoSessionTarget,
   canManageSessionSharing,
   prepareProjectedSessionSharing,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
@@ -55,7 +55,6 @@ import {
 } from "./session-typing-state.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import {
-  authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
   suggestionScope,
   requireSuggestionTarget,
@@ -67,7 +66,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
   suggestion: StoredSessionSuggestion,
 ): SessionSuggestion {
   return {
@@ -87,7 +86,7 @@ function protocolSuggestion(
 
 function publishSuggestion(
   context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  target: NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>,
   requestedSessionKey: string,
   action: SessionSuggestionEvent["action"],
   stored: StoredSessionSuggestion,
@@ -126,16 +125,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     "session.suggestions.add",
     validateSessionSuggestionsAddParams,
     async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
-      const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       const author = gatewayClientSessionCreator(client);
-      if (
-        !target ||
-        !authorizeSessionSuggestionMutation(
-          { client, cfg, sessionKey: params.sessionKey, target, respond },
-          "add",
-        )
-      ) {
+      if (!target) {
         return;
       }
       if (!author) {
@@ -324,21 +316,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       signal,
       sessionMutationAuthorization,
     }) => {
-      const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       if (!target) {
         return;
       }
       const resolution = params.resolution;
       const dispatching = resolution === "send" || resolution === "queue";
-      if (
-        !authorizeSessionSuggestionMutation(
-          { client, cfg, sessionKey: params.sessionKey, target, respond },
-          resolution,
-        )
-      ) {
-        return;
-      }
       if (dispatching && !client) {
         respond(
           false,

@@ -433,33 +433,6 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
-function normalizeViteImporterPath(importer: string): string {
-  return path.normalize(importer.replace(/[?#].*$/u, ""));
-}
-
-export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
-  const browserRedactPath = path.join(here, "src/lib/browser-redact.ts");
-  const sharedRedactImporters = new Set([
-    path.join(repoRoot, "src/agents/tool-display-common.ts"),
-    path.join(repoRoot, "src/agents/tool-display-exec.ts"),
-    path.join(repoRoot, "src/agents/tool-display.ts"),
-  ]);
-  return {
-    name: "control-ui-browser-only-shared-module-aliases",
-    enforce: "pre",
-    resolveId(source, importer) {
-      if (
-        source === "../logging/redact.js" &&
-        importer &&
-        sharedRedactImporters.has(normalizeViteImporterPath(importer))
-      ) {
-        return browserRedactPath;
-      }
-      return null;
-    },
-  };
-}
-
 function controlUiBuildOutputPlugin(buildId: string): Plugin {
   let publicAssets: string[] = [];
   let cacheId: string | undefined;
@@ -636,13 +609,13 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
 }
 
 export default function controlUiViteConfig(
-  options: { outDir?: string; command?: "serve" | "build" } = {},
+  options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
-  const buildInfo = resolveControlUiBuildInfo();
+  const buildInfo = options.buildInfo ?? resolveControlUiBuildInfo();
   const devGateway =
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
@@ -657,10 +630,17 @@ export default function controlUiViteConfig(
     if (context.hostType !== "js") {
       return pending;
     }
-    // The executing importer has already loaded its direct static JS imports.
+    // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
-    const loaded = staticImports.get(context.hostId);
-    return loaded ? pending.filter((dep) => !loaded.includes(dep)) : pending;
+    const loaded = new Set<string>();
+    const imports = [...(staticImports.get(context.hostId) ?? [])];
+    for (const dependency of imports) {
+      if (!loaded.has(dependency)) {
+        loaded.add(dependency);
+        imports.push(...(staticImports.get(dependency) ?? []));
+      }
+    }
+    return pending.filter((dep) => !loaded.has(dep));
   };
   return {
     base,
@@ -740,7 +720,6 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
-      controlUiBrowserOnlySharedModuleAliases(),
       controlUiBootPreloadsPlugin(),
       controlUiBuildOutputPlugin(buildInfo.buildId),
       {

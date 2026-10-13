@@ -124,6 +124,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     selectedSession: GatewaySessionRow | undefined;
     transcriptMetadata?: ChatTranscriptMetadata;
     boardProvider?: BoardProvider;
+    widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
     announceTranscript?: boolean;
     loading: boolean;
     routeLoadingSkeleton?: boolean;
@@ -167,6 +168,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     userId?: string | null;
     userName?: string | null;
     userAvatar?: string | null;
+    channelAvatar?: import("../../../lib/chat/channel-sender-avatar.ts").ChannelSenderAvatarSource;
     basePath?: string;
     sessionPublicOrigin?: string;
     resourceBasePath?: string;
@@ -212,7 +214,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
-    onOpenSubagents?: () => void;
+    onOpenSubagents?: (focus?: boolean) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   };

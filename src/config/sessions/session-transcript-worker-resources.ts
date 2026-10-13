@@ -74,6 +74,8 @@ export type HistoryDatabaseResource = {
   closing?: Promise<void>;
   unregister: () => void;
   retainAlias: (alias: string) => void;
+  matchesPath: (pathname: string) => boolean;
+  retire: () => Promise<void>;
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
@@ -255,6 +257,25 @@ export async function settleSessionHistoryWorkerEviction(
   }
 }
 
+/** Finish admitted usage cleanup while deletion still permits its retained writers to settle. */
+export async function retireSessionHistoryWorkerDatabases(options: {
+  agentId: string;
+  paths: readonly string[];
+}): Promise<void> {
+  const agentId = normalizeAgentId(options.agentId);
+  const paths = [...new Set(options.paths.map((pathname) => path.resolve(pathname)))];
+  const selected = [...historyDatabases.values()].filter(
+    (resource) =>
+      resource.database.agentId === agentId &&
+      paths.some((pathname) => resource.matchesPath(pathname)),
+  );
+  const results = await Promise.allSettled(selected.map((resource) => resource.retire()));
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Session database work is still draining");
+  }
+}
+
 export function acquireHistoryDatabaseResource(
   options: SessionHistoryDatabaseTarget,
 ): HistoryDatabaseResource {
@@ -265,7 +286,11 @@ export function acquireHistoryDatabaseResource(
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
   let created = false;
-  if (!resource || resource.revoked) {
+  if (resource?.revoked) {
+    // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
+    throw new WorkerTaskError("Session database work is still draining", "unavailable");
+  }
+  if (!resource) {
     const aliases = new Map<string, () => void>();
     const owned: HistoryDatabaseResource = {
       database,
@@ -276,6 +301,11 @@ export function acquireHistoryDatabaseResource(
       cleanups: new Set(),
       aborters: new Set(),
       unregister: () => {},
+      matchesPath: (pathname) => pathname === database.path || aliases.has(pathname),
+      retire() {
+        revoke();
+        return close();
+      },
       retainAlias(alias) {
         if (!aliases.has(alias)) {
           aliases.set(
@@ -496,14 +526,13 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
         }
       }
-      const readStoreTargetResult = async (
-        request: Omit<SessionStoreTargetReadRequest, "candidates">,
-      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
-        const preparedRequest = {
-          ...request,
-          env: captureSessionTranscriptStorageEnvironment(request.env),
-          candidates: capturedCandidates,
-        };
+      const runRead = async (
+        input: Extract<
+          SessionHistoryWorkerInput,
+          { kind: "session-store-target" | "session-target-inventory" }
+        >,
+        inputBytes: number,
+      ) => {
         const reply = await runWithSqliteDatabaseAdmissionTurn(
           admissionPaths,
           () =>
@@ -512,13 +541,26 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 assertCurrent();
                 dispatched = true;
                 lane.nativeSequence++;
-                return { kind: "session-store-target", request: preparedRequest };
+                return input;
               },
-              { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+              { inputBytes, timeoutMs: 60_000 },
             ),
           admissionFamilies,
         );
-        const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+        return unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
+      };
+      const readStoreTargetResult = async (
+        request: Omit<SessionStoreTargetReadRequest, "candidates">,
+      ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+        const preparedRequest = {
+          ...request,
+          env: captureSessionTranscriptStorageEnvironment(request.env),
+          candidates: capturedCandidates,
+        };
+        const result = await runRead(
+          { kind: "session-store-target", request: preparedRequest },
+          JSON.stringify(preparedRequest).length * 2,
+        );
         if (
           typeof result === "boolean" ||
           Array.isArray(result) ||
@@ -587,25 +629,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             env: captureSessionTranscriptStorageEnvironment(request.env),
             candidates: capturedCandidates,
           };
-          const reply = await runWithSqliteDatabaseAdmissionTurn(
-            admissionPaths,
-            () =>
-              lane.pool.run(
-                () => {
-                  assertCurrent();
-                  dispatched = true;
-                  lane.nativeSequence++;
-                  return { kind: "session-target-inventory", request: preparedRequest };
-                },
-                {
-                  inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-                  timeoutMs: 60_000,
-                },
-              ),
-            admissionFamilies,
+          const result = await runRead(
+            { kind: "session-target-inventory", request: preparedRequest },
+            measureSessionStoreTargetInventoryInputBytes(preparedRequest),
           );
-          const result =
-            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

@@ -21,7 +21,7 @@ import {
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
@@ -121,7 +121,7 @@ function createInputHandoff(sharedStore = false) {
         ).toMatchObject({ appended: true, messageId: aggregate.inputId });
       }
       if (params.completion) {
-        receipt.complete!(params.completion);
+        await receipt.completeAsync!(params.completion);
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
@@ -192,7 +192,7 @@ describe("legacy main session input handoff", () => {
       ],
     });
     expect(
-      listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
+      await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
     ).toEqual([{ runId: "consumed", state: "consumed", consumedByEventId }]);
     expect(await f.accept(f.destination, "consumed")).toMatchObject({
       state: "consumed",

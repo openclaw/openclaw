@@ -128,8 +128,8 @@ describe.runIf(browserMode)("agent file preview", () => {
         }),
         agentFileConflict: conflict,
       });
-      const { webAwesomeDialog } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+      const { modal } = await getRenderedModalDialog(container);
+      const shown = afterOwnTransition(modal, "wa-after-show");
       await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
       await shown;
       expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
@@ -155,7 +155,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         "Close preview",
       ]);
       expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
-      const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+      const closed = afterOwnTransition(modal, "wa-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
     },
@@ -172,7 +172,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         throw new Error("Missing agent file editor");
       }
       const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { modal, webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
+      const { modal, dialog } = await getRenderedModalDialog(container);
       expect(dialog.open).toBe(false);
       expect(textarea.value).toBe(expectedDraft);
       let hiddenMutations = 0;
@@ -187,7 +187,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
         preview.focus();
         // Opening animations may start after dialog.open becomes true.
-        const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+        const shown = afterOwnTransition(modal, "wa-after-show");
         await userEvent.keyboard("{Enter}");
         await shown;
         expect(dialog.open).toBe(true);
@@ -204,7 +204,7 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-        const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+        const closed = afterOwnTransition(modal, "wa-after-hide");
         await userEvent.click(
           requireButton(
             action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]',
@@ -246,8 +246,8 @@ describe.runIf(browserMode)("agent file preview", () => {
         "# Workspace operating instructions\n\n" + "Readable document content.\n\n".repeat(80),
       );
       const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+      const { modal, dialog } = await getRenderedModalDialog(container);
+      const shown = afterOwnTransition(modal, "wa-after-show");
       await userEvent.click(preview);
       await shown;
       expect(dialog.open).toBe(true);
@@ -294,7 +294,7 @@ describe.runIf(browserMode)("agent file preview", () => {
           await expect.element(metadata).toBeVisible();
         }
       }
-      const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+      const closed = afterOwnTransition(modal, "wa-after-hide");
       await userEvent.keyboard("{Escape}");
       await closed;
       expect(dialog.open).toBe(false);

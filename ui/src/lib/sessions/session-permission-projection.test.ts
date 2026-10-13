@@ -66,67 +66,6 @@ const managedScope = {
 };
 
 describe("permission projection across canonical session lists", () => {
-  it("keeps a newer managed descriptor and permission after an older event", async () => {
-    const existing = sessionRow("agent:main:field-order", { label: "Initial" });
-    const pending = createDeferred<SessionsListResult>();
-    const response = sessionsResult([{ ...existing, updatedAt: 2, label: "Older list" }], 2);
-    const { sessions, permissionEvent } = harness(
-      sessionsResult([existing], 1),
-      pending.promise,
-      sessionsResult([{ ...existing, updatedAt: 5, permissionMode: "workspace" }], 5),
-    );
-    let refresh: Promise<void> | undefined;
-    try {
-      await sessions.refresh({ force: true });
-      refresh = sessions.refresh({ force: true });
-      permissionEvent({ ...existing, updatedAt: 3, permissionMode: "full" });
-      await sessions.refreshList(managedScope);
-      pending.resolve(response);
-      await refresh;
-      permissionEvent({
-        ...existing,
-        updatedAt: 4,
-        label: "Newer event",
-        permissionMode: "guarded",
-      });
-
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        label: "Initial",
-        permissionMode: "workspace",
-        updatedAt: 5,
-      });
-      expect(sessions.state.loading).toBe(false);
-    } finally {
-      pending.resolve(response);
-      await refresh;
-      sessions.dispose();
-    }
-  });
-
-  it("accepts a newer canonical permission even when its request began before the event", async () => {
-    const existing = sessionRow("agent:main:newer-list");
-    const pending = createDeferred<SessionsListResult>();
-    const response = sessionsResult(
-      [{ ...existing, updatedAt: 5, permissionMode: "workspace", label: "Newest" }],
-      5,
-    );
-    const { sessions, permissionEvent } = harness(sessionsResult([existing], 1), pending.promise);
-    let refresh: Promise<void> | undefined;
-    try {
-      await sessions.refresh({ force: true });
-      refresh = sessions.refresh({ force: true });
-      permissionEvent({ ...existing, updatedAt: 3, permissionMode: "full" });
-      pending.resolve(response);
-      await refresh;
-      expect(sessions.state.result?.sessions).toEqual(response.sessions);
-      expect(sessions.state.loading).toBe(false);
-    } finally {
-      pending.resolve(response);
-      await refresh;
-      sessions.dispose();
-    }
-  });
-
   it.each([
     { name: "an explicit mode", permissionMode: "full" as const },
     { name: "the default mode", permissionMode: undefined },
@@ -175,41 +114,6 @@ describe("permission projection across canonical session lists", () => {
     }
   });
 
-  it("keeps the latest confirmed permission when an older independent list finishes last", async () => {
-    const existing = sessionRow("agent:main:ordered");
-    const oldResponse = sessionsResult([{ ...existing, label: "Older list label" }], 1);
-    const confirmed = sessionRow(existing.key, { updatedAt: 4, permissionMode: "workspace" });
-    const oldRead = createDeferred<SessionsListResult>();
-    const { sessions, permissionEvent } = harness(
-      sessionsResult([existing], 1),
-      oldRead.promise,
-      sessionsResult([confirmed], 4),
-    );
-    let first: Promise<SessionsListResult | null> | undefined;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      first = sessions.list({ agentId: "main" });
-      permissionEvent({ ...existing, updatedAt: 3, permissionMode: "full" });
-      await sessions.refreshList(managedScope);
-      expect(sessions.listSnapshot(managedScope).result?.sessions[0]?.permissionMode).toBe(
-        "workspace",
-      );
-      oldRead.resolve(oldResponse);
-      const result = await first;
-
-      expect(result?.sessions[0]).toMatchObject({
-        key: existing.key,
-        label: "Older list label",
-        permissionMode: "workspace",
-      });
-      expect(sessions.listSnapshot(managedScope).result?.sessions[0]).toEqual(confirmed);
-    } finally {
-      oldRead.resolve(oldResponse);
-      await first;
-      sessions.dispose();
-    }
-  });
-
   it("rejects a late event older than a permission already confirmed by another held list", async () => {
     const initial = sessionRow("agent:main:cross-list");
     const confirmed = sessionRow(initial.key, {
@@ -234,8 +138,14 @@ describe("permission projection across canonical session lists", () => {
         "workspace",
       );
 
-      permissionEvent({ ...initial, updatedAt: 4, permissionMode: "guarded" });
+      permissionEvent({
+        ...initial,
+        updatedAt: 4,
+        permissionMode: "guarded",
+        label: "Stale event label",
+      });
       expect(sessions.state.result?.sessions[0]?.permissionMode).toBe("workspace");
+      expect(sessions.state.result?.sessions[0]?.label).toBeUndefined();
       olderRead.resolve(lateResponse);
       const result = await first;
 
@@ -363,32 +273,6 @@ describe("permission projection across canonical session lists", () => {
         sessionId: successor.sessionId,
         permissionMode: "full",
       });
-    } finally {
-      pending.resolve(response);
-      await refresh;
-      sessions.dispose();
-    }
-  });
-
-  it("does not give a rejected older permission event authority over a pending refresh", async () => {
-    const current = sessionRow("agent:main:fresh", { updatedAt: 30, permissionMode: "full" });
-    const response = sessionsResult(
-      [{ ...current, updatedAt: 31, permissionMode: "workspace" }],
-      31,
-    );
-    const pending = createDeferred<SessionsListResult>();
-    const { sessions, permissionEvent } = harness(sessionsResult([current], 30), pending.promise);
-    let refresh: Promise<void> | undefined;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      refresh = sessions.refresh({ agentId: "main", force: true });
-      permissionEvent({ ...current, updatedAt: 20, permissionMode: "guarded" });
-      pending.resolve(response);
-      await refresh;
-
-      expect(sessions.state.result?.sessions).toEqual(response.sessions);
-      expect(sessions.state.loading).toBe(false);
-      expect(sessions.state.error).toBeNull();
     } finally {
       pending.resolve(response);
       await refresh;

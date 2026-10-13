@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -45,4 +46,25 @@ export function chatSessionPresentationKey(
     // Empty chat renders recent sessions from the whole roster.
     state.chatMessages.length === 0 ? rows : undefined,
   ]);
+}
+
+export function resolveChatPaneUserPresentation(params: {
+  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
+  presencePayload: Parameters<typeof readPresenceEntries>[0];
+  previousUserId: string | null;
+  state: Pick<ChatPageHost, "userName" | "userAvatar">;
+  selectedSession: GatewaySessionRow | null | undefined;
+}) {
+  const selfUser = resolveCurrentSelfUser({
+    snapshotUser: params.gatewaySnapshot.selfUser,
+    presenceEntries: readPresenceEntries(params.presencePayload),
+    presenceInstanceId: params.gatewaySnapshot.client?.instanceId,
+  });
+  return {
+    selfUser,
+    userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : params.previousUserId,
+    userName: selfUser?.name ?? params.state.userName,
+    userAvatar: selfUser?.avatarUrl ?? params.state.userAvatar,
+    channelAvatar: params.selectedSession ?? undefined,
+  };
 }

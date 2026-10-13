@@ -712,6 +712,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
   if (!reportOnly) {
     const artifactContractMetrics = new Set([
+      "chat boot JS requests",
+      "new boot JS requests",
       "isolated Mermaid JS assets",
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",

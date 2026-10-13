@@ -135,7 +135,9 @@ describe("subagent session reconciliation ownership", () => {
             childAgentId: encodedAgent === "main" ? "worker" : "main",
             cfg,
           };
-          expect((await loadSubagentSessionEntry(target))?.sessionId).toBe(`${encodedAgent}-child`);
+          await expect(loadSubagentSessionEntry(target)).rejects.toThrow(
+            "Subagent owning agent is unresolved",
+          );
         }
         await expect(
           loadSubagentSessionEntry({
@@ -143,10 +145,10 @@ describe("subagent session reconciliation ownership", () => {
             childAgentId: "worker",
             cfg,
           }),
-        ).rejects.toThrow("Malformed agent session key");
+        ).rejects.toThrow("Subagent owning agent is unresolved");
         await expect(async () =>
           loadSubagentSessionEntry({ childSessionKey: "global", cfg }),
-        ).rejects.toThrow("Session key does not contain an agent id");
+        ).rejects.toThrow("Subagent owning agent is unresolved");
       } finally {
         await closeOpenClawAgentDatabasesAsync(state.root);
       }

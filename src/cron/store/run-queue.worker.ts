@@ -109,9 +109,6 @@ export function requestCronRunsInWorker(
   database: OpenClawStateDatabase,
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
 ): CronRunQueueOperations["cron.requestRuns"]["output"] {
-  if (ownerStartTime === null) {
-    throw new Error("cron request cannot identify its Gateway process");
-  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
@@ -196,12 +193,9 @@ export function requestCronRunsInWorker(
         const runReceipt = claimCronRunReceiptInDatabase({
           database: db,
           receiptSchema,
-          prepared: {
-            handle,
-            storeKey: input.storeKey,
-            observedStale: false,
-            requestRunId: request.requestRunId,
-          },
+          handle,
+          job,
+          requestRunId: request.requestRunId,
           resolveAgentId: (current) =>
             resolveCronJobEffectiveAgentId(current, input.defaultAgentId),
         });
@@ -237,7 +231,6 @@ export function drainCronQueueInWorker(
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadJobs(db, input.storeKey);
       const contexts = new Map(input.requests.map((request) => [request.receiptId, request]));
-      const locallyOwned = new Set(input.locallyOwnedReceiptIds);
       const jobOrder = new Map([...jobs.keys()].map((jobId, index) => [jobId, index]));
       const cancelled =
         input.requests.length === 0
@@ -283,10 +276,6 @@ export function drainCronQueueInWorker(
         skipped: cancelled,
       };
       for (const receipt of queued) {
-        if (!contexts.has(receipt.receiptId) && locallyOwned.has(receipt.receiptId)) {
-          // Another service in this Gateway owns the transient launch context.
-          continue;
-        }
         const handle = receiptHandle(receipt);
         const job = jobs.get(receipt.jobId)!;
         const timed = parseCronScheduledRunId(receipt.receiptId);
@@ -295,11 +284,14 @@ export function drainCronQueueInWorker(
           (timed?.storeKey === input.storeKey && timed.jobId === job.id
             ? { receiptId: receipt.receiptId, mode: "scheduled" as const }
             : undefined);
+        if (!context) {
+          // A sibling facade may hold this transient payload; startup owns lost-context recovery.
+          continue;
+        }
         const agentId = tryResolveCronJobEffectiveAgentId(job, input.defaultAgentId);
-        const error = !context
-          ? "cron: queued request lost its launch context"
-          : (!isJobEnabled(job) && context.mode !== "force" && context.mode !== "on-exit") ||
-              (context.mode === "on-exit" && !matchingExit(job, context))
+        const error =
+          (!isJobEnabled(job) && context.mode !== "force" && context.mode !== "on-exit") ||
+          (context.mode === "on-exit" && !matchingExit(job, context))
             ? "cron: queued job is no longer eligible"
             : !agentId ||
                 !hasCanonicalCronDeliveryMode(job.delivery) ||
@@ -320,13 +312,10 @@ export function drainCronQueueInWorker(
           continue;
         }
         if (
-          (input.schedulingPaused && context?.mode === "scheduled") ||
+          (input.schedulingPaused && context.mode === "scheduled") ||
           activeCount >= Math.max(1, input.maxConcurrentRuns)
         ) {
           continue;
-        }
-        if (ownerStartTime === null) {
-          throw new Error("cron request cannot identify its Gateway process");
         }
         // Payload edits take effect while queued; active runs keep this committed snapshot.
         const currentHandle = {
@@ -336,22 +325,10 @@ export function drainCronQueueInWorker(
           agentId,
           configRevision: resolveCronJobConfigRevision(job),
         };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("cron_run_receipts")
-            .set({
-              config_revision: currentHandle.configRevision,
-              agent_id: agentId,
-              owner_pid: currentHandle.ownerPid,
-              owner_start_time: currentHandle.ownerStartTime,
-            })
-            .where("receipt_id", "=", handle.receiptId)
-            .where("status", "=", "running"),
-        );
         const runReceipt = activateCronRunReceiptInDatabase({
           database: db,
           handle: currentHandle,
+          job,
           startedAtMs: input.nowMs,
           resolveAgentId: (current) =>
             resolveCronJobEffectiveAgentId(current, input.defaultAgentId),

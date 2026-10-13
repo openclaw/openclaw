@@ -18,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
@@ -157,6 +158,7 @@ export function createGatewayHttpServer(opts: {
   getRuntimeConfig?: () => OpenClawConfig;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
+  waitForRequestRuntime?: () => Promise<void>;
   isStartupPluginRuntimeReady?: () => boolean;
   isTerminalEnabled?: () => boolean;
   tlsOptions?: TlsOptions;
@@ -191,7 +193,7 @@ export function createGatewayHttpServer(opts: {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runGatewayHttpRequest(req, res, opts.httpRequestLifetime, () =>
       runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-        handleRequest(req, res, expectation),
+        runWithMainThreadTask("gateway:http", () => handleRequest(req, res, expectation)),
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
@@ -272,7 +274,8 @@ export function createGatewayHttpServer(opts: {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return undefined;
       }
-      if (classifyGatewayProbePath(requestPath) === "live") {
+      const probeKind = classifyGatewayProbePath(requestPath);
+      if (probeKind === "live") {
         await handleGatewayProbeRequest(
           req,
           res,
@@ -287,6 +290,9 @@ export function createGatewayHttpServer(opts: {
         return undefined;
       }
 
+      if (probeKind === "outside" || probeKind === "namespace") {
+        await opts.waitForRequestRuntime?.();
+      }
       const configSnapshot = loadGatewayConfig();
       const controlUiEnabled =
         opts.controlUiEnabled ?? configSnapshot.gateway?.controlUi?.enabled ?? true;

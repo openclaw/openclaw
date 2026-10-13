@@ -1,6 +1,9 @@
 // Operator-approval kind migration: exact-legacy fail-closed repair.
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertCanonicalOperatorApprovalKinds,
   repairOperatorApprovalSchema,
@@ -81,9 +84,10 @@ function expectAlterAppendedLegacyRepair(strict: boolean): void {
 
 describe("repairOperatorApprovalKinds", () => {
   it("migrates the exact legacy two-kind schema and preserves rows", () => {
-    const db = new DatabaseSync(":memory:");
+    const db = openNodeSqliteDatabase(":memory:");
     db.exec(legacyTwoKindCreateSql());
     seedRow(db, "exec");
+    admitSqliteSchema(db);
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
       "legacy operator approval schema",
     );
@@ -138,11 +142,24 @@ describe("repairOperatorApprovalKinds", () => {
     db.close();
   });
 
-  it("is a no-op when the schema is already canonical", () => {
-    const db = new DatabaseSync(":memory:");
+  it("reuses admitted canonical definitions without querying SQLite", () => {
+    using db = openNodeSqliteDatabase(":memory:");
     db.exec(canonicalOperatorApprovalCreateSql());
-    expect(repairOperatorApprovalSchema(db)).toEqual([]);
-    db.close();
+    admitSqliteSchema(db);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(repairOperatorApprovalSchema(db)).toEqual([]);
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+      expect(observation.queries).toEqual([]);
+      db.exec(`BEGIN; DROP TABLE operator_approvals; ${legacyTwoKindCreateSql()}`);
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
+        "legacy operator approval schema",
+      );
+      db.exec("ROLLBACK");
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+    } finally {
+      observation.restore();
+    }
   });
 
   it("refuses to replace an arbitrarily different table", () => {

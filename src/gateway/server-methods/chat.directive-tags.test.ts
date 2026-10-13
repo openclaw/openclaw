@@ -58,6 +58,7 @@ import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
+import * as gatewaySessionUtils from "../session-utils.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentHandlers } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
@@ -133,7 +134,7 @@ const mockState = vi.hoisted(() => {
     replyDispatchRun: undefined as ReplyDispatchRun | undefined,
     triggerUserMessagePersisted: false,
     runtimeUserMessagePersistenceError: null as Error | null,
-    onAfterAgentRunStart: null as (() => void) | null,
+    onAfterAgentRunStart: null as (() => void | Promise<void>) | null,
     agentRunId: "run-agent-1",
     sessionEntry: {} as Record<string, unknown>,
     sessionIdsByKey: new Map<string, string>(),
@@ -269,6 +270,8 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...original,
     loadSessionEntry: loadFixtureSessionEntry,
+    loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
+      loadFixtureSessionEntry(params.key, { agentId: params.agentId }),
     loadGatewaySessionEntryReadOnly: loadFixtureSessionEntry,
   };
 });
@@ -344,7 +347,7 @@ dispatchInboundMessageMock.mockImplementation(
         undefined,
         mockState.replyDispatchRun,
       );
-      mockState.onAfterAgentRunStart?.();
+      await mockState.onAfterAgentRunStart?.();
     }
     if (mockState.triggerUserMessagePersisted) {
       params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersisted({
@@ -2860,12 +2863,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         lifecycleRevision: "revision-a",
         activeWriterRunId: "run-settled",
       };
+      await seedSqliteSessionEntry(mockState.sessionEntry);
       if (replaced) {
-        mockState.onAfterAgentRunStart = () => {
+        mockState.onAfterAgentRunStart = async () => {
           mockState.sessionEntry = {
             lifecycleRevision: "revision-a",
             activeWriterRunId: "replacement-run",
           };
+          await seedSqliteSessionEntry(mockState.sessionEntry);
         };
       }
       const reply: TestReply = replaced
@@ -3724,12 +3729,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const storePath = mockState.storePath;
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
+    const sessionSelected = createDeferred();
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("../session-utils-store-worker.js")
+    >("../session-utils-store-worker.js");
+    const readSession = vi
+      .spyOn(gatewaySessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (params) =>
+        loadGatewaySessionEntryReadOnlyInWorker({
+          ...params,
+          onSelected: (target) => {
+            params.onSelected?.(target);
+            sessionSelected.resolve();
+          },
+        }),
+      );
     const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: storePath,
       identities: ["main", mockState.sessionId],
       run: async () => {
         mutationStarted.resolve();
         await releaseMutation.promise;
+        await seedSqliteSessionEntry({ archivedAt: Date.now() });
       },
     });
     await mutationStarted.promise;
@@ -3747,8 +3768,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         isWebchatConnect: () => false,
         context,
       });
-      await waitForAssertion(() => expect(mockState.loadSessionEntryCalls).toHaveLength(1));
-      mockState.sessionEntry = { archivedAt: Date.now() };
+      await withinTest(sessionSelected.promise, testSignal);
       releaseMutation.resolve();
       await mutation;
       await inject;
@@ -3761,6 +3781,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     } finally {
       releaseMutation.resolve();
       await mutation;
+      readSession.mockRestore();
     }
   });
 
