@@ -661,7 +661,6 @@ export async function appendSessionTranscriptReport(
   const selection = {
     kind: report.kind,
     customTypes: [...report.customTypes],
-    suppressWhenAssistantRun: report.suppressWhenAssistantRun,
   };
   const selectReport = report.selectReport;
   return withReportWorker(

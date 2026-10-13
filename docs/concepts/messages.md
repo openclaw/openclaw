@@ -188,15 +188,18 @@ begins. Steering updates the current prompt only after the new input is committe
 and consumed by the running agent; pending or rejected input does not retarget a
 reaction. Collected inputs use their committed combined prompt.
 
-Acknowledgment reactions do not replace the final answer. Omit `final` or set
-`final: false` when more work follows. Only an explicit `final: true` addition,
-requested as the complete response, can count as source-reply completion. Removals,
-no-ops, dry runs, and failed reactions never count. Normal message-tool permissions
+Omit `final` or set `final: false` when more work follows. An added reaction with
+explicit `final: true` can be the complete reply when the agent chooses it. Once
+delivery is confirmed on the current source message, OpenClaw ends the turn without
+requesting another text response. Removals, reactions to other messages, no-ops,
+dry runs, and failed reactions never count. Normal message-tool permissions
 still apply, and the current-prompt capability expires with its admitted turn.
 
 ## Silent replies
 
 The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
+
+Token-only uppercase fragments from `NO_` through `NO_REPL` are also suppressed if a model stops before completing `NO_REPLY`. A final `NO`, mixed-case text such as `No`, and longer replies such as `NO_R alert` remain visible. Streaming previews hold shorter prefixes until the text diverges from the token or the final reply arrives.
 
 Silence policy resolves by conversation type:
 

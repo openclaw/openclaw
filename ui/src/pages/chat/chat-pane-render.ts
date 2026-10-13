@@ -37,6 +37,7 @@ import {
   readChatPaneMutationAccess,
   readChatPublicationAccess,
   renderChatPaneComposerControls,
+  openChatPaneModelPicker,
 } from "./chat-pane-session-controls.ts";
 import { resolveChatPaneUserPresentation } from "./chat-pane-session-presentation.ts";
 import {
@@ -46,6 +47,7 @@ import {
 import {
   chatSubmitState,
   createChatPaneSendActions,
+  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
   projectChatPaneTranscript,
@@ -65,7 +67,7 @@ import type { ChatProps } from "./chat-view.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
-import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
+import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
@@ -591,6 +593,15 @@ export class ChatPane extends ChatPaneLayoutRender {
         modelRequiredReason,
         continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
         addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
+      }),
+      ...createChatPaneRunRecoveryActions(state, {
+        canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
+        canChangeModel: mutationAccess.model.allowed && !catalogKey && !suggestionViewer,
+        isCurrent: () =>
+          this.state === state && this.connectionGeneration === selectionConnectionGeneration,
+        latestFailedRunId: () =>
+          chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
+        openModelPicker: () => openChatPaneModelPicker(state),
       }),
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),

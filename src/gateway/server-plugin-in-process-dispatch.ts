@@ -111,7 +111,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
           import("./server-methods.js"),
         ]);
       assertLifetime();
-      const { error } = await authorizeGatewayRequestPreDispatch({
+      const authorization = await authorizeGatewayRequestPreDispatch({
         method: "agent",
         requestParams: { agentId: params.agentId },
         client,
@@ -119,9 +119,11 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
         methodRegistry:
           resolved.context.getGatewayMethodRegistry?.() ?? createRequestGatewayMethodRegistry(),
       });
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
       assertLifetime();
-      if (error) {
-        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
+      if (authorization.error) {
+        unwrapGatewayMethodDispatchResponse("agent", { ok: false, error: authorization.error });
       }
       operatorSource ??= await captureGatewayOperatorRunAuthority({
         client,
@@ -242,6 +244,7 @@ export function withInProcessGatewayRead<T>(
         assertCurrent();
         return await run(resolved, assertCurrent);
       } finally {
+        authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();
       }
     },
@@ -305,6 +308,7 @@ export async function runWithInProcessGatewaySessionMutation<T>(
         assertCurrent();
         return await run(assertCurrent);
       } finally {
+        authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();
       }
     },

@@ -287,6 +287,7 @@ it.for([
     Object.assign(env, pause?.env);
     const preparationRelease = createDeferredCore();
     const preparationEntered = createDeferredCore();
+    const maintenanceCompleted = createDeferredCore();
     let sessionPrepared = false;
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
@@ -337,20 +338,28 @@ it.for([
     });
     if (outcome === "recover" || outcome === "superseded") {
       const session = await import("./server-startup-session-migration.js");
-      const migrate = session.runGatewaySessionStartupMaintenance;
+      const prepare = session.prepareGatewayStartupSessions;
+      vi.spyOn(session, "prepareGatewayStartupSessions").mockImplementation(async (params) => {
+        const databases = await prepare(params);
+        if (params.agentIds?.has(agentId)) {
+          if (outcome === "recover") {
+            const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
+              logOutput: false,
+            });
+            preparationParent = Number(result.stdout);
+          }
+          sessionPrepared = true;
+          preparationEntered.resolve();
+          await preparationRelease.promise;
+        }
+        return databases;
+      });
+      const maintain = session.runGatewaySessionStartupMaintenance;
       vi.spyOn(session, "runGatewaySessionStartupMaintenance").mockImplementation(
         async (params) => {
-          await migrate(params);
+          await maintain(params);
           if (params.databases.some(({ database: prepared }) => prepared.agentId === agentId)) {
-            if (outcome === "recover") {
-              const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
-                logOutput: false,
-              });
-              preparationParent = Number(result.stdout);
-            }
-            sessionPrepared = true;
-            preparationEntered.resolve();
-            await preparationRelease.promise;
+            maintenanceCompleted.resolve();
           }
         },
       );
@@ -622,6 +631,7 @@ it.for([
           () => expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined(),
           { timeout: 10000 },
         );
+        await withinTest(maintenanceCompleted.promise, signal);
         expect(
           withOpenClawAgentDatabaseReadOnly(
             ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),

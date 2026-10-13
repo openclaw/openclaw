@@ -159,8 +159,9 @@
 }
 
 .cron-filter-popover {
-  position: relative;
-  flex: 0 0 auto;
+  --oc-popover-padding: 0;
+  --oc-overlay-max-width: min(280px, calc(100vw - 48px));
+  --oc-overlay-max-height: calc(100dvh - 16px);
 }
 
 .cron-filter-popover__trigger {
@@ -172,14 +173,7 @@
 }
 
 .cron-filter-popover__panel {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 8px);
-  right: 0;
   width: min(280px, calc(100vw - 48px));
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   padding: var(--space-3);
   display: grid;
   gap: var(--space-3);
@@ -1160,20 +1154,6 @@
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
-/* stylelint-disable-next-line no-duplicate-selectors -- popover sizing stays with its Web Awesome part overrides */
-.cron-filter-popover {
-  --max-width: min(280px, calc(100vw - 48px));
-}
-
-.cron-filter-popover::part(body) {
-  padding: 0;
-}
-
-.cron-filter-popover .cron-filter-popover__panel {
-  position: static;
-  width: min(280px, calc(100vw - 48px));
-}
-
 .cron-job-menu::part(menu),
 .cron-filter-dropdown__details::part(menu) {
   padding: var(--menu-padding);

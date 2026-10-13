@@ -1,5 +1,4 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { html } from "lit";
 import { action } from "solid-js";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
@@ -12,12 +11,12 @@ it("lets browser tasks complete while waiting for a route presentation commit", 
       definePage({
         id: "page",
         path: "/page",
-        component: () => ({ render: () => html`<p>Previous destination</p>` }),
+        component: () => ({ render: () => <p>Previous destination</p> }),
       }),
       definePage({
         id: "next",
         path: "/next",
-        component: () => ({ render: () => html`<p>Current destination</p>` }),
+        component: () => ({ render: () => <p>Current destination</p> }),
       }),
     ],
   });

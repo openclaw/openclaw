@@ -303,7 +303,15 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     machineClass?: string,
     os?: string,
-  ) => { machineClass: string; platform: string; arch?: string } | undefined;
+  ) =>
+    | {
+        machineClass: string;
+        platform: string;
+        arch?: string;
+        /** SHA-256 of provider-owned disk/boot settings, excluding runtime and lease policy. */
+        profileKey?: string;
+      }
+    | undefined;
   /** Maximum unused ready-worker lifetime, measured from the original session demand. */
   resolvePreparedIdleTimeoutMs?: (profile: WorkerProfile) => number | undefined;
   /** Record successful demand in metadata only; must not allocate, capture, or renew reserves. */

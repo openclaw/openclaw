@@ -1,8 +1,7 @@
 import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
-import { html, LitElement, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
+import { solidContent } from "../lit/solid-content.tsx";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   disposeRouterOutlets,
@@ -43,9 +42,8 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 
 describe("openclaw-router-outlet", () => {
   it("settles the active route when a parked descendant's update fails", async () => {
-    class ParkedSurface extends LitElement {}
-    customElements.define(`test-parked-surface-${crypto.randomUUID()}`, ParkedSurface);
-    const parked = new ParkedSurface();
+    const parked = document.createElement("test-parked-surface");
+    const ParkedRoute = () => <section>{parked}</section>;
     const context = { label: "page" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -55,14 +53,14 @@ describe("openclaw-router-outlet", () => {
           component: () => ({
             retainOnNavigate: true,
             renderOwnerKey: () => "retained-page",
-            render: () => html`<section>${parked}</section>`,
+            render: () => solidContent(ParkedRoute, {}),
           }),
           loader: () => ({ label: "page" }),
         }),
         definePage({
           id: "next",
           path: "/next",
-          component: () => ({ render: () => html`<p>Current destination</p>` }),
+          component: () => ({ render: () => <p>Current destination</p> }),
         }),
       ],
     });
@@ -93,20 +91,19 @@ describe("openclaw-router-outlet", () => {
   it("retains MCP Apps across route IDs that share an explicit owner", async () => {
     const teardownView = vi.fn(async () => undefined);
     const nextData = createDeferredCore<TestData>();
+    const OwnedRoute = (props: { label: string }) => (
+      <>
+        <mcp-app-view
+          ref={(element) => {
+            Reflect.set(element, "restartAfterTeardown", vi.fn());
+            Reflect.set(element, "teardown", teardownView);
+          }}
+        />
+        <div data-testid="owned-route">{props.label}</div>
+      </>
+    );
     const renderOwnedRoute = vi.fn((data: TestData | undefined) =>
-      data
-        ? html`
-            <mcp-app-view
-              ${ref((element) => {
-                if (element) {
-                  Reflect.set(element, "restartAfterTeardown", vi.fn());
-                  Reflect.set(element, "teardown", teardownView);
-                }
-              })}
-            ></mcp-app-view>
-            <div data-testid="owned-route">${data.label}</div>
-          `
-        : nothing,
+      data ? solidContent(OwnedRoute, { label: data.label }) : undefined,
     );
     const ownedModule: TestModule = {
       renderOwnerKey: () => "shared-owner",
@@ -185,7 +182,7 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.textContent).not.toContain("Loading panel");
 
     routeModule.resolve({
-      render: (data) => html`<div data-testid="route-page">${data?.label}</div>`,
+      render: (data) => <div data-testid="route-page">{data?.label}</div>,
     });
     await navigation;
     await settleOutlet(outlet);
@@ -200,6 +197,17 @@ describe("openclaw-router-outlet", () => {
   it.each(["finish", "disconnect"])("settles a retiring MCP route after %s", async (completion) => {
     const teardown = createDeferredCore();
     const teardownView = vi.fn(() => teardown.promise);
+    const RetiringRoute = () => (
+      <>
+        <mcp-app-view
+          ref={(element) => {
+            Reflect.set(element, "restartAfterTeardown", vi.fn());
+            Reflect.set(element, "teardown", teardownView);
+          }}
+        />
+        <div data-testid="route-page">page</div>
+      </>
+    );
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -207,17 +215,7 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: () => html`
-              <mcp-app-view
-                ${ref((element) => {
-                  if (element) {
-                    Reflect.set(element, "restartAfterTeardown", vi.fn());
-                    Reflect.set(element, "teardown", teardownView);
-                  }
-                })}
-              ></mcp-app-view>
-              <div data-testid="route-page">page</div>
-            `,
+            render: () => solidContent(RetiringRoute, {}),
           }),
           loader: () => ({ label: "page" }),
         }),
@@ -225,7 +223,7 @@ describe("openclaw-router-outlet", () => {
           id: "next",
           path: "/next",
           component: () => ({
-            render: () => html`<div data-testid="route-next">next</div>`,
+            render: () => <div data-testid="route-next">next</div>,
           }),
           loader: () => ({ label: "next" }),
         }),
@@ -274,8 +272,9 @@ describe("openclaw-router-outlet", () => {
           id: "page",
           path: "/page",
           component: () => ({
-            render: (data: TestData | undefined) =>
-              html`<div data-testid="route-page">${data?.label ?? "pending"}</div>`,
+            render: (data: TestData | undefined) => (
+              <div data-testid="route-page">{data?.label ?? "pending"}</div>
+            ),
           }),
           loader: (context) => {
             loadCount += 1;
@@ -398,7 +397,7 @@ describe("openclaw-router-outlet", () => {
             }
             // Vite remembers a failed CSS dependency as seen, so a repeated
             // component import can succeed without the required stylesheet.
-            return { render: () => html`<div data-testid="unstyled-page">Agents</div>` };
+            return { render: () => <div data-testid="unstyled-page">Agents</div> };
           },
           loader: (context) => ({ label: context.label }),
         }),

@@ -328,6 +328,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           output.usage.input = compacted.usage.input_tokens;
           output.usage.output = compacted.usage.output_tokens;
           output.usage.totalTokens = compacted.usage.input_tokens + compacted.usage.output_tokens;
+          output.usage.usageReport = { state: "available" };
           compactRequest.resolve(compacted);
           finalizeTransportStream({ stream, output, signal: options?.signal });
           return;

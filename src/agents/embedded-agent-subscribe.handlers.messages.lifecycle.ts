@@ -18,7 +18,7 @@ import {
   emitPersistentReasoning,
   emitReasoningEnd,
   extractStandaloneMessageToolText,
-  hasMessageToolOnlySourceDelivery,
+  shouldSuppressSourceReplyOutput,
   isOpenAiCompletionsAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   resolveAssistantStreamBlockIndex,
@@ -91,11 +91,11 @@ export function handleMessageEnd(
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
-  const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx);
   const canEmitReply = () =>
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput;
+    !suppressSourceReplyOutput;
   const appendRawMessage = (getText: () => string) =>
     appendRawStream(
       () => ({
@@ -109,7 +109,7 @@ export function handleMessageEnd(
       ctx.params.sessionKey,
     );
   // Provider completion can omit thinking_end; close the visible lane before final output.
-  if (!suppressMessageToolOnlySourceReplyOutput) {
+  if (!suppressSourceReplyOutput) {
     emitReasoningEnd(ctx);
   }
   ctx.noteLastAssistant(assistantMessage);

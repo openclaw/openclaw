@@ -31,6 +31,7 @@ import {
 import { inspectMemorySourceState } from "./manager-source-state.js";
 import {
   hasTargetedSessionSyncParams,
+  MemoryBackgroundRebuildInterruptedError,
   memorySessionSyncTargetKey,
 } from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
@@ -454,6 +455,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionBackgroundIndexing = true;
       this.sessionIndexRetryRequested = false;
       let completed = false;
+      let interrupted = false;
       try {
         await this.sync(
           fullSync
@@ -461,6 +463,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
         );
         completed = !this.sessionIndexRetryRequested;
+      } catch (error) {
+        if (!(error instanceof MemoryBackgroundRebuildInterruptedError)) {
+          throw error;
+        }
+        interrupted = true;
+        this.sessionFullSyncPending = true;
       } finally {
         if (completed) {
           this.sessionRetryAttempt = 0;
@@ -475,9 +483,11 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             ...this.sessionPendingTargets,
           ]);
           this.sessionPendingSince = pendingSince ?? this.sessionPendingSince ?? Date.now();
-          const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
-          // After three automatic retries, fresh activity can start another bounded series.
-          this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+          if (!interrupted) {
+            const delay = SESSION_RETRY_DELAYS_MS[this.sessionRetryAttempt++];
+            // After three automatic retries, fresh activity can start another bounded series.
+            this.sessionRetryAt = delay === undefined ? Infinity : Date.now() + delay;
+          }
         }
         this.sessionBackgroundIndexing = false;
         this.scheduleSessionIndexPass();

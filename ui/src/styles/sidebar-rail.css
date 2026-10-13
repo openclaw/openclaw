@@ -88,6 +88,34 @@
   outline-offset: -2px;
 }
 
+.sidebar-rail__create {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  width: 36px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-rail__create .sidebar-new-session {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+}
+
+.sidebar-rail__create .sidebar-new-session:focus-visible {
+  outline-color: var(--accent-foreground);
+  outline-offset: -4px;
+}
+
+.sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .sidebar-rail__button svg {
   width: 20px;
   height: 20px;
@@ -249,6 +277,7 @@ html:is(.openclaw-native-desktop, .openclaw-native-macos)
 }
 
 .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-controls-width: 68px;
   --shell-nav-width: var(--shell-nav-rail-width);
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
 }

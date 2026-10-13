@@ -3,7 +3,6 @@ import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js"
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -78,16 +77,12 @@ export function bindSqliteWorkerBackend(
       scope.storePath = context.databasePath;
       if (command.type === "category.prepare") {
         const database = workerDatabase(scope);
-        return withSqlitePostCommitPublications(db, () =>
-          runSqliteDeferredTransactionSync(db, () => {
-            categoryPlan = {
-              from: command.input.from,
-              storePath: database.path,
-              keys: readSessionGroupCategoryKeys(database, command.input.from),
-            };
-            return categoryPlan.keys;
-          }),
-        );
+        categoryPlan = {
+          from: command.input.from,
+          storePath: database.path,
+          keys: readSessionGroupCategoryKeys(database, command.input.from),
+        };
+        return categoryPlan.keys;
       }
       let candidate: SessionSharingCommitReceipt | undefined;
       let keys = [scope.sessionKey];

@@ -291,12 +291,15 @@ These are intentionally guarded by the `ci-workflow-guards`,
   main/same-repository PRs add three assignments; fork PRs can add six because
   their logical GitHub check profile emits five lint rows. These fit the fresh
   71-row union and reserved 84-row non-Node allowance described above.
-  Automatic hybrid first-attempt `preflight` requests the existing
-  16-class after hosted assignment stalled across three nearby runs while
-  Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
-  and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
-  4-class; hybrid retries, manual dispatches, noncanonical contexts,
-  and the `github` override retain hosted routing. `security-fast` stays hosted
+  Automatic canonical hybrid and RunsOn first-attempt `preflight` uses the
+  existing 4-class, matching default Blacksmith preflight. The former 16-class
+  placement addressed hosted queue stalls. October 13 observations found 610
+  4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
+  also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
+  logical planner profile, cache trust, and 20-minute deadline. Hybrid/RunsOn
+  retries, manual dispatches, noncanonical contexts, and the `github` override
+  retain hosted routing. Monitor assignment latency before claiming rollout savings.
+  `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
   outage override remains intact. Budget three control-job registrations per eligible
@@ -590,12 +593,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI-only jobs use the 16-class when every group has
-  one or two explicit files and the existing two-worker fallback, without build,
-  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
-  inventories, runtime selection, timing identities, and process boundaries.
-  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
-  choice for retained Blacksmith CLI jobs.
+- Precisely selected serial CLI and Gateway client jobs use the 16-class when
+  every group belongs to either family, has one or two explicit files, and keeps
+  its two-worker fallback, without build, dist, memory, or large-runner anchors.
+  Gateway client groups must pair `agentic-gateway-core-2` with
+  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+  Apply capacity after packing; preserve inventories, runtime selection, timing
+  identities, and process boundaries. Full families retain their planned capacity.
+  RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

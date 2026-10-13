@@ -2,7 +2,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import type { Browser, Page, Response } from "playwright-core";
+import { errors, type Browser, type Page, type Response } from "playwright-core";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
@@ -61,6 +62,9 @@ import {
   readDocumentIdentitiesForPage,
 } from "./pw-session.page-cdp.js";
 import { dispatchBrowserTabClose, readBrowserDashboardTabs } from "./session-tab-store.js";
+
+/** Opening navigation budget when the caller does not request one. */
+const DEFAULT_OPEN_NAVIGATION_TIMEOUT_MS = 30_000;
 
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
@@ -506,6 +510,7 @@ export async function createPageViaPlaywright(
     assertCurrent?: () => void;
     /** Own an empty context; never reuse profile cookies for a session-scoped dashboard. */
     isolatedContext?: true;
+    timeoutMs?: number;
   } & BrowserNavigationPolicyOptions,
 ): Promise<PlaywrightOwnedPage> {
   const assertCurrent = () => {
@@ -568,13 +573,15 @@ export async function createPageViaPlaywright(
     clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
     if (targetUrl !== "about:blank") {
-      let response: Response | null;
+      let response: Response | null = null;
       try {
         response = await gotoPageWithNavigationGuard({
           cdpUrl: opts.cdpUrl,
           page,
           url: targetUrl,
-          timeoutMs: 30_000,
+          timeoutMs: resolveBrowserNavigationTimeoutMs(
+            opts.timeoutMs ?? DEFAULT_OPEN_NAVIGATION_TIMEOUT_MS,
+          ),
           ...navigationPolicy,
           targetId: createdTargetId ?? undefined,
           assertPageCurrent: assertCurrent,
@@ -582,7 +589,15 @@ export async function createPageViaPlaywright(
       } catch (error) {
         // Guarded navigation already owns close/quarantine for a policy denial.
         navigationClosedBlockedTarget = isPolicyDenyNavigationError(error);
-        throw error;
+        // A committed page can be usable while subresources still delay load.
+        // Return it through normal adoption after the same safety checks.
+        if (
+          !(error instanceof errors.TimeoutError) ||
+          page.isClosed() ||
+          page.url() === "about:blank"
+        ) {
+          throw error;
+        }
       }
       assertCurrent();
       await assertPageNavigationCompletedSafely({

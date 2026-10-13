@@ -928,6 +928,42 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+/* Creation has one compact header equivalent when the navigation rail is hidden. */
+.header-new-session {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  text-decoration: none;
+}
+
+.header-new-session svg {
+  width: 20px;
+  height: 20px;
+}
+
+.header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--accent-hover);
+  color: var(--accent-foreground);
+}
+
+.header-new-session:focus-visible {
+  outline: 2px solid var(--accent-foreground);
+  outline-offset: -4px;
+}
+
+.header-new-session:is(:disabled, [aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .topbar-icon-btn {
   width: 32px;
   height: 32px;
@@ -2953,6 +2989,7 @@ a:is(
     .sidebar-online__person,
     .sidebar-brand__new-thread,
     .sidebar-new-session,
+    .header-new-session,
     .sidebar-session-catalog-new,
     .settings-sidebar__item,
     .settings-sidebar__subitem,

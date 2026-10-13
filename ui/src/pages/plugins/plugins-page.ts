@@ -8,6 +8,7 @@ import {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
@@ -270,12 +271,12 @@ export class PluginsPageController implements ReactiveControllerHost {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    // WebAwesome dismisses its open dropdown at document bubble. Let that
-    // owner close the menu and restore focus before this page handles Escape.
+    // Overlay owners handle Escape after document capture and restore focus.
     if (
       event.key !== "Escape" ||
       isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
+      registryFor(document).stack.at(-1)?.open ||
       (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
     ) {
       return;

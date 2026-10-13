@@ -173,6 +173,7 @@ it.for(["missing", "drifted"] as const)(
           activateGatewayAgentDatabaseStartup({
             admission,
             preparationReady: Promise.resolve(),
+            waitForPostReadyWork: async () => {},
             getConfig: () => config,
             getPluginRegistry: vi.fn(),
             getPluginMetadataSnapshot: () => undefined,

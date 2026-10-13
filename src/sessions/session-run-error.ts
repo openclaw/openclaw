@@ -61,7 +61,6 @@ export async function recordGatewaySessionRunFailure(
         {
           kind: "custom",
           customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-          suppressWhenAssistantRun: runId,
           selectReport: (latest) => {
             params.assertCommitAllowed?.();
             return isRecord(latest?.details) && latest.details.runId === runId ? undefined : report;

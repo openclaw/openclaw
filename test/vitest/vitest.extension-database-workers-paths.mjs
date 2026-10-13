@@ -338,6 +338,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/feishu/src/monitor.post-replay.test.ts",
   "extensions/feishu/src/monitor.reaction.test.ts",
   "extensions/feishu/src/monitor.startup.test.ts",
+  "extensions/feishu/src/monitor.vc-meeting-invited-handler.test.ts",
   "extensions/feishu/src/monitor.webhook-e2e.test.ts",
   "extensions/feishu/src/outbound-delivery.test.ts",
   "extensions/feishu/src/outbound.send-authority.test.ts",

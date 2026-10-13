@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { renderContextNewSessionAction } from "../../components/new-session-link.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -43,7 +44,8 @@ class PendingSessionCreate extends OpenClawLightDomElement {
       () => this.context?.chatSubmissions.readCreateComposer(this.sessionKey),
       (composer, notify) => composer.subscribe(notify),
     )
-    .watchStore(() => this.context?.placementStartup);
+    .watchStore(() => this.context?.placementStartup)
+    .watchStore(() => this.context?.theme);
   private readonly closeImage = () => {
     this.image?.release?.();
     this.image = null;
@@ -110,6 +112,10 @@ class PendingSessionCreate extends OpenClawLightDomElement {
             narrow: this.narrow,
             mergedChrome: this.mergedChrome,
             navDrawerOpen: this.navDrawerOpen,
+            newSessionAction:
+              this.mergedChrome && !this.navDrawerOpen
+                ? renderContextNewSessionAction(this.context, "header-new-session", agentId)
+                : nothing,
             title: t("newSession.title"),
             session: undefined,
             incognito: isIncognitoSessionKey(this.sessionKey),

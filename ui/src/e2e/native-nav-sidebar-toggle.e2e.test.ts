@@ -243,8 +243,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
     await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-    const sidebarToolbar = page.locator(".sidebar-session-toolbar");
-    const sidebarNewThread = sidebarToolbar.locator(".sidebar-new-session");
+    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
       .poll(() =>

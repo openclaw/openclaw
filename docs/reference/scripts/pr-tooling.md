@@ -29,6 +29,17 @@ intact until the command finishes. This setting applies at both dependency
 materialization handoffs; in-place wrappers keep their checkout's dependency
 context, and wrapper selection stays unchanged.
 
+Provisioning failures print a redacted error graph to stderr. Preserve that output:
+the wrapper does not create a failure receipt. Lease heartbeat responsiveness
+errors include the verification, renewal, or acknowledgement phase, the failure
+trigger, request counters, elapsed time, and remaining response, operation, and
+lease budgets. These are observations taken before failure changes heartbeat
+status (`0` starting, `1` ready, `2` closed, `3` lost). An odd renewal-progress
+counter means renewal occupied the worker; a completed-request counter can explain
+why a negative response budget alone did not fail earlier. Neither extends the
+lease or operation budget. The diagnostics do not change timeout or recovery
+behavior, and a successful retry does not establish the cause of an earlier failure.
+
 ## Rerun failed CI tests
 
 `pnpm test:ci-failed <pr-number|run-id|run-or-pr-url>` reads failed CI jobs using

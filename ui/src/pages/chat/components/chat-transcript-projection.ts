@@ -151,6 +151,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
   const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const transcriptChain = projectTranscriptChain(chatItems, {
     sessionKey: props.sessionKey,
+    messages: props.messages,
+    activeRunId: props.runActive || props.runWorking ? props.runId : null,
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
@@ -326,6 +328,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     branding: props.branding,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
+    retryAt: props.retryAt,
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagents.wait ?? undefined,
     runningSubagents: subagents.running,
@@ -497,7 +500,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
         return () => renderChatDivider(item);
       }
       if (item.kind === "notice") {
-        return () => renderChatNotice(item, props.onPermissionRetry);
+        return () => renderChatNotice(item, props.onPermissionRetry, props);
       }
       if (item.kind === "agent-run-frame") {
         return () =>
@@ -600,6 +603,10 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     activityGroupKey,
     Boolean(props.runWorking),
     props.startupLabel,
+    props.retryAt,
+    props.onRetryRun,
+    props.onChangeFailureModel,
+    props.failureActionsRunId,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     state.asyncQuestionRevision,

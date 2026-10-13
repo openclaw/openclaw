@@ -468,6 +468,7 @@ export async function recoverEmbeddedRunAttempt(input: {
             retryAttempt,
             maxRetries,
             delayMs,
+            retryAt: Date.now() + delayMs,
             attempt: retryAttempt + 1,
             maxAttempts: maxRetries + 1,
             reason,

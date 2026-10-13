@@ -533,7 +533,7 @@ describe("gateway chat metadata lifecycle", () => {
       sidecarOwner.publish,
     );
     await Promise.all(reads);
-    expect(outcomes).toEqual([expect.stringContaining("owner is unavailable")]);
+    expect(outcomes).toEqual([expect.stringContaining("metadata is unavailable")]);
     expect(broadcast).toHaveBeenCalledOnce();
     getPreparedOwner.mockReturnValue(owner);
     const modelListener = mocks.registerModelListener.mock.calls[0]![0];

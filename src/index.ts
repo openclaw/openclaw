@@ -129,7 +129,10 @@ if (!isMain) {
 
 const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
 const compileCacheDirectory = shouldRunCli
-  ? resolveOpenClawCompileCacheDirectory({ installRoot: fileURLToPath(packageRootUrl) })
+  ? resolveOpenClawCompileCacheDirectory({
+      installRoot: fileURLToPath(packageRootUrl),
+      foregroundGateway: isForegroundGatewayRunArgv(process.argv),
+    })
   : undefined;
 const compileCacheRespawnEnv =
   shouldRunCli &&

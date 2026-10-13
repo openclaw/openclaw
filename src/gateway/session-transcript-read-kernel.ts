@@ -27,6 +27,7 @@ import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-wi
 import {
   createChatHistoryRecoveryProjection,
   isPendingAssistantError,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -360,15 +361,17 @@ export async function filterSessionMessageHistoryVisibility(
       sessionStartedAt: visibility.sessionStartedAt,
     });
     // The scanner may stop at a user boundary before appending its final chunk.
-    const projected = createRecovery();
-    projected.append([result.message, ...context]);
-    if (
-      !projected
-        .result()
-        .messages.some((message) => readChatHistoryMessageId(message) === messageId)
-    ) {
+    const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      subagentCoordination: readers.subagentCoordination,
+    });
+    const projectedMessage = projected.messages.find(
+      (message) => readChatHistoryMessageId(message) === messageId,
+    );
+    if (!projectedMessage) {
       return { found: false, oversized: false, historyHidden: true };
     }
+    return { ...result, message: projectedMessage };
   }
   return result;
 }

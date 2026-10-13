@@ -2800,6 +2800,17 @@ export const en: TranslationMap & {
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
+    recovery: {
+      retrying: "Retrying…",
+      retryingIn: "Retrying in {seconds}s",
+      tryingFallback: "Trying fallback model…",
+      failedTitle: "Unable to finish this reply",
+      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
+      tryAgain: "Try again",
+      changeModel: "Change model",
+      continuePrompt:
+        "Continue from where you stopped. Check which actions already completed before retrying anything.",
+    },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",

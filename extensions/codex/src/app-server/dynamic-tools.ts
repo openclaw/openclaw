@@ -79,7 +79,10 @@ import {
   failedToolResult,
   type CodexDynamicToolRuntimeResponse,
 } from "./dynamic-tool-response-state.js";
-import { resolveCodexToolResultSourceReply } from "./dynamic-tool-source-reply.js";
+import {
+  applyCurrentMessageProvider,
+  resolveCodexToolResultSourceReply,
+} from "./dynamic-tool-source-reply.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolSpec } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
@@ -142,21 +145,6 @@ function assertCodexDynamicToolInputMatchesSchema(params: {
   throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
 }
 
-function applyCurrentMessageProvider(
-  toolName: string,
-  args: Record<string, unknown>,
-  currentProvider: string | undefined,
-): Record<string, unknown> {
-  const hasProvider =
-    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
-    (typeof args.channel === "string" && args.channel.trim().length > 0);
-  const provider = currentProvider?.trim();
-  if (toolName !== "message" || hasProvider || !provider) {
-    return args;
-  }
-  return { ...args, provider };
-}
-
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
   availableTools: AnyAgentTool[];
@@ -182,6 +170,7 @@ export type CodexDynamicToolBridge = {
   telemetry: AgentHarnessToolResultTelemetry & {
     didDeliverSourceReplyViaMessageTool: boolean;
     sourceReplyDelivered?: true;
+    finalSourceReplyDelivered?: true;
     acceptedSessionSpawns: AcceptedSessionSpawn[];
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
@@ -391,6 +380,7 @@ export function createCodexDynamicToolBridge(params: {
       };
       let executedArgsForPresentation = args;
       let rawIsErrorForPresentation = false;
+      let finalSourceReplyDelivered = false;
       let telemetryRawResultForPresentation: unknown;
       let presentationIsError = false;
       return runAgentHarnessToolInvocation({
@@ -505,6 +495,8 @@ export function createCodexDynamicToolBridge(params: {
                 deliveredPayload: rawResult,
               }),
             });
+          finalSourceReplyDelivered = deliveredSourceReply && executedArgs.final !== false;
+          telemetry.finalSourceReplyDelivered ||= finalSourceReplyDelivered || undefined;
           // Delivery is committed before result middleware; presentation changes
           // cannot erase the source owner's confirmation or infer a new one.
           if (toolName === "message" && messageDelivery?.sourceReplyDelivered) {
@@ -611,7 +603,6 @@ export function createCodexDynamicToolBridge(params: {
             transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
           };
           const sourceReply = resolveCodexToolResultSourceReply({
-            sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
             canDeliverSourceReply: toolEntry.tool.canDeliverSourceReply,
             toolName,
             call,
@@ -716,6 +707,8 @@ export function createCodexDynamicToolBridge(params: {
             executionStarted: executionBoundary.executionStarted,
             replaySafe,
             sideEffectEvidence: (executionBoundary.didStartExecution && !replaySafe) || undefined,
+            terminate: finalSourceReplyDelivered || undefined,
+            finalSourceReplyDelivered: finalSourceReplyDelivered || undefined,
           };
         },
       });
