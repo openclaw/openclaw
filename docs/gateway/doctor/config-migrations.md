@@ -678,18 +678,23 @@ selection.
 
 ## Missing plugins during migration
 
+Doctor owns deferred plugin migrations. Normal CLI commands, Gateway startup,
+and config reads do not inspect pending migration records or apply their
+validation exemptions. They consume canonical config and state.
+
 A configured plugin that is missing or cannot finish installation does not block
-Doctor, updates, or Gateway startup. OpenClaw records a warning that names the
+Doctor from repairing independent state. Doctor records a warning that names the
 plugin, its pending migration, and the command to finish installation or repair.
-The Gateway continues serving the available plugins.
+Available plugins can run when the retained config passes normal validation.
+If a retained legacy setting is rejected, install or repair its owning plugin,
+then run `openclaw doctor --fix` before starting the Gateway.
 
 `doctor --fix` repairs an older shared database schema before recording pending
 plugin migrations. Missing plugins therefore do not prevent the database repair;
 their inputs stay available for a later retry.
 
-Deferred migrations keep their state and legacy config inputs in place. Config
-repairs can still update unrelated settings, while the pending plugin's retired
-fields remain inactive. After installing or repairing the plugin, run
+Doctor keeps deferred state and legacy config inputs in place during its repairs,
+including when it changes unrelated settings. After installing or repairing the plugin, run
 `openclaw doctor --fix` to complete its migration and clear the pending warning.
 During an update driven by an older version, plugin installation can remain
 deferred until that updater finishes; its pending inputs receive the same
@@ -712,13 +717,21 @@ Update rehearsals leave unavailable-owner settlement to live update finalization
 If retained settings or an explicit state/inspection requirement remain, Doctor
 keeps the obligation pending and names the plugin to install or enable. A retired
 plugin may need its maintainer's supported recovery path. Disabling or uninstalling
-the plugin does not by itself complete its migration. Update status and startup
-read the same settled receipts after Doctor finishes; an updating parent that
+the plugin does not by itself complete its migration. Update status reads the settled receipts after Doctor finishes; an updating parent that
 still owns plugin installation continues to defer the work.
 
-While a migration is pending, explicit config edits that would change or remove
-its retained inputs are refused with the recovery command. Unrelated settings
-remain writable. Complete the plugin migration before editing those inputs.
+While a migration is pending, Doctor's migration-aware writes refuse edits that
+would change or remove its retained inputs and recheck pending obligations before
+publication. Ordinary config edits use normal validation and do not inspect
+migration records. Complete the plugin migration before editing its retained
+settings.
+
+`openclaw update` runs the candidate's Doctor during update and plugin convergence,
+including for older supported updaters. After a direct Git/source or package-manager
+upgrade, run `openclaw doctor --fix` before normal commands or Gateway startup.
+Package installation does not perform operator-state migrations. Doctor and
+`openclaw update status` report pending plugin upgrades even when no update run
+exists.
 
 ## Blocked local plugins
 

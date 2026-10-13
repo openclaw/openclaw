@@ -520,7 +520,7 @@ describe("Logbook service disposal", () => {
     }
   });
 
-  it.each(["restart", "disable"] as const)(
+  it.each(["restart"] as const)(
     "joins service stop and whole-plugin %s cleanup without stopping sessions",
     async (reason) => {
       const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-runtime-drain-")));

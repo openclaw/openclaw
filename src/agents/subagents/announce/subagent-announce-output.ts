@@ -394,24 +394,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   const storePath = agentId
     ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
     : undefined;
-  let entry = storePath
+  const entry = storePath
     ? await readSubagentSessionEntry(storePath, params.sessionKey, agentId)
     : undefined;
-  const tokenWaitAttempts = isFastTestRuntimeEnv() ? 1 : 3;
-  for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    if (
-      !storePath ||
-      typeof entry?.inputTokens === "number" ||
-      typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined
-    ) {
-      break;
-    }
-    if (!isFastTestRuntimeEnv()) {
-      await sleep(150);
-    }
-    entry = await readSubagentSessionEntry(storePath, params.sessionKey, agentId);
-  }
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;

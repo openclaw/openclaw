@@ -16,6 +16,7 @@ import { prepareGitHubPublicationFact } from "./worker-environments/worker-githu
 type WorkspaceRow = Pick<SelectionRow, "agentId" | "key" | "entry">;
 type PublicationFact = { available: boolean; github?: WorkerGitHubLaunchBinding };
 const unavailable: PublicationFact = { available: false };
+const PUBLICATION_FACT_MAX_AGE_MS = 60_000;
 let readPublished: ((session: PublicationSessionIdentity) => PublicationFact) | undefined;
 
 /** Discovery can lag a refresh; publication and process launch still validate at the effect. */
@@ -40,17 +41,19 @@ export function startGitHubPublicationDiscovery(params: {
     binding?: string;
     incognito?: Pick<IncognitoSessionBinding["actor"], "path" | "identity">;
     fact: PublicationFact;
+    refreshAfterMs: number;
   }>(256);
   const keyOf = (session: PublicationSessionIdentity) =>
     `${session.agentId}\0${session.sessionKey}`;
   const refresh = (key: string, retireCredentials = false) => {
     const previous = sessions.peek(key);
     if (!previous || scheduler.signal.aborted) {
-      return;
+      return undefined;
     }
     const current = {
       ...previous,
       fact: retireCredentials ? { available: previous.fact.available } : previous.fact,
+      refreshAfterMs: scheduler.now() + PUBLICATION_FACT_MAX_AGE_MS,
     };
     sessions.set(key, current);
     inOwner(() =>
@@ -80,6 +83,7 @@ export function startGitHubPublicationDiscovery(params: {
         },
       }),
     );
+    return current;
   };
   const read = (session: PublicationSessionIdentity) => {
     const key = keyOf(session);
@@ -89,9 +93,13 @@ export function startGitHubPublicationDiscovery(params: {
         session: { ...session },
         incognito: captureIncognitoSessionBinding(session)?.actor,
         fact: unavailable,
+        refreshAfterMs: 0,
       };
       sessions.set(key, current);
       refresh(key);
+    } else if (current.refreshAfterMs <= scheduler.now()) {
+      // Idle sessions need no polling; an expired credential cannot authorize a new launch.
+      current = refresh(key, true) ?? current;
     }
     return current.fact;
   };
@@ -122,7 +130,7 @@ export function startGitHubPublicationDiscovery(params: {
     ]);
     const previous = sessions.peek(key);
     if (previous?.session.sessionId !== session.sessionId || previous.binding !== binding) {
-      sessions.set(key, { session, binding, fact: unavailable });
+      sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
       refresh(key);
     }
   };
@@ -140,12 +148,6 @@ export function startGitHubPublicationDiscovery(params: {
         observe(row);
       }
     },
-  });
-  scheduler.schedule({
-    id: "github-publication-discovery",
-    delayMs: 60_000,
-    everyMs: 60_000,
-    run: () => refreshAll(),
   });
   return {
     stop: async () => {

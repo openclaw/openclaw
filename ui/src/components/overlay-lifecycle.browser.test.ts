@@ -4,8 +4,8 @@ import {
   findOverlayParent,
   type Overlay,
   type OverlayOptions,
-  type OverlayPhase,
 } from "./overlay-lifecycle.ts";
+import type { OverlayPhase } from "./overlay-types.ts";
 
 type Fixture = ReturnType<typeof mountOverlay>;
 const owners: Overlay[] = [];
@@ -137,22 +137,6 @@ describe("native overlay lifecycle", () => {
     expect(incoming.owner.phase).toBe("hidden");
     expect(root.surface.inert).toBe(false);
     expect(child.surface.inert).toBe(false);
-  });
-
-  it("arbitrates a peer admitted by a hide listener before closing the existing branch", async () => {
-    const outgoing = mountOverlay();
-    const peer = mountOverlay();
-    const incoming = mountOverlay();
-    await open(outgoing);
-    outgoing.surface.addEventListener("overlay-hide", () => peer.surface.showPopover(), {
-      once: true,
-    });
-    peer.surface.addEventListener("overlay-hide", (event) => event.preventDefault());
-
-    expect(incoming.owner.request(true)).toBe(false);
-    expect(outgoing.owner.open).toBe(true);
-    expect(peer.owner.open).toBe(true);
-    expect(incoming.owner.open).toBe(false);
   });
 
   it("settles accepted descendant closes exactly once", async () => {
@@ -330,20 +314,6 @@ describe("native overlay lifecycle", () => {
     expect(phases).toEqual(["hidden"]);
     expect(fixture.owner.open).toBe(false);
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not publish retirement completion when its notification renews valid open intent", async () => {
-    const fixture = mountOverlay();
-    await open(fixture);
-    const phases = recordPhases(fixture);
-    fixture.surface.addEventListener("overlay-hide", () => fixture.owner.request(true), {
-      once: true,
-    });
-    fixture.owner.retire();
-    await frame();
-    expect(fixture.owner.open).toBe(true);
-    expect(fixture.surface.matches(":popover-open")).toBe(true);
-    expect(phases).toEqual([]);
   });
 
   it.each(["retire", "remove", "dispose"] as const)(

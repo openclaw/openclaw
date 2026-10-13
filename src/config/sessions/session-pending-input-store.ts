@@ -194,7 +194,7 @@ export async function preparePendingInputStore(
   };
   return {
     assertCurrent: assertOpen,
-    withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
+    async withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
       let entered = false;
       const run = () =>
         runOpenClawAgentWriteAdmission(
@@ -204,13 +204,15 @@ export async function preparePendingInputStore(
             return operation();
           },
           reentrant,
-        ).catch((error: unknown) => {
-          if (!entered) {
-            unregister();
-          }
-          throw error;
-        });
-      return actor ? actor.sessions.withSharedState(run) : run();
+        );
+      try {
+        return await (actor ? actor.sessions.withSharedState(run) : run());
+      } catch (error) {
+        if (!entered) {
+          unregister();
+        }
+        throw error;
+      }
     },
     sessionKey: resolved.sessionKey,
     databaseAgentId: options.agentId ?? resolved.agentId,

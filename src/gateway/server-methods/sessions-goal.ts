@@ -56,7 +56,7 @@ async function handleSessionGoalMutation(
     | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
     | undefined;
   try {
-    const authorization = options.sessionMutationAuthorization
+    const resolvedAuthorization = options.sessionMutationAuthorization
       ? { authorization: options.sessionMutationAuthorization, error: null }
       : await resolveSessionMutationAuthorizationAsync({
           client,
@@ -64,6 +64,14 @@ async function handleSessionGoalMutation(
           requestParams: request,
           context,
         });
+    using authorization = {
+      ...resolvedAuthorization,
+      [Symbol.dispose]: () => {
+        if (!options.sessionMutationAuthorization) {
+          resolvedAuthorization.authorization?.release?.();
+        }
+      },
+    };
     if (authorization.error) {
       respond(false, undefined, authorization.error);
       return;
