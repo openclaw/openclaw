@@ -124,7 +124,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       this.renderer.connect();
       if (this.connected && this.virtualizer.scrollElement !== this.scrollElement) {
         this.layout.connect(this.scrollElement);
-        this.virtualizer._willUpdate();
+        const { _willUpdate: updateVirtualizer } = this.virtualizer;
+        updateVirtualizer();
         this.host.requestUpdate();
       }
     });
@@ -222,12 +223,13 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
     // Virtual-core exposes these lifecycle hooks as bound arrow functions.
+    const { _didMount: mountVirtualizer, _willUpdate: updateVirtualizer } = this.virtualizer;
     let cleanupVirtualizer: (() => void) | undefined;
     this.addController({
       hostConnected: () => {
-        cleanupVirtualizer = this.virtualizer._didMount();
+        cleanupVirtualizer = mountVirtualizer();
       },
-      hostUpdated: this.virtualizer._willUpdate,
+      hostUpdated: updateVirtualizer,
       hostDisconnected: () => cleanupVirtualizer?.(),
     });
     this.presentation = new TranscriptPresentation(this, this.virtualizer, () => {
@@ -653,8 +655,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (command?.target !== "message") {
       return;
     }
-    const virtualizer = this.virtualizer;
-    if (this.messageReveal.reveal(this.threadInnerElement, command, virtualizer)) {
+    if (this.messageReveal.reveal(this.threadInnerElement, command, this.virtualizer)) {
       this.offsetState.scrollCommand = { behavior: command.behavior, target: "index" };
       return;
     }
@@ -664,7 +665,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (rowIndex !== undefined) {
       // Native scroll and row mounts continue the reveal. Requesting another
       // render here can starve the offset notification that changes the range.
-      virtualizer.scrollToIndex(rowIndex, { align: "center" });
+      this.virtualizer.scrollToIndex(rowIndex, { align: "center" });
     }
   }
 
