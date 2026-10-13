@@ -45,3 +45,21 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
 
   return merged;
 }
+
+/** Projects the run's channel context onto the tool-context fields every runtime receives. */
+export function resolveRunContextToolFields(runContext: AgentRunContext) {
+  return {
+    agentAccountId: runContext.accountId,
+    groupId: runContext.groupId,
+    groupChannel: runContext.groupChannel,
+    groupSpace: runContext.groupSpace,
+    currentChannelId: runContext.currentChannelId,
+    currentMessagingTarget: runContext.currentMessagingTarget,
+    chatId: runContext.chatId,
+    channelContext: runContext.channelContext,
+    currentThreadTs: runContext.currentThreadTs,
+    currentInboundAudio: runContext.currentInboundAudio,
+    replyToMode: runContext.replyToMode,
+    senderId: runContext.senderId,
+  };
+}
