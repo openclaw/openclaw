@@ -49,7 +49,7 @@ describe("Team-shaped fixture CLI", () => {
       process.env.GIT_DIR = path.join(sentinel, ".git");
       process.env.GIT_WORK_TREE = sentinel;
       process.env.GIT_INDEX_FILE = path.join(sentinel, "redirected-index");
-      await generateTeamShapeFixture(
+      const generated = await generateTeamShapeFixture(
         parseTeamShapeOptions([
           "--state-dir",
           stateDir,
@@ -67,6 +67,12 @@ describe("Team-shaped fixture CLI", () => {
           "1",
         ]),
       );
+      expect(generated.env).toMatchObject({
+        OPENCLAW_PROFILE: "team-shape-40967",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-team-shape-40967",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.team-shape-40967",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (team-shape-40967)",
+      });
     } finally {
       await flushLogger();
       environment.restore();

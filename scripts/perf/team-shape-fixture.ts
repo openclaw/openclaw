@@ -4,6 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../../src/daemon/constants.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -75,11 +80,17 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
   for (const directory of ["home", "tmp", "workspace"]) {
     mkdirSync(path.join(stateDir, directory));
   }
+  const profile = `team-shape-${options.port}`;
   const env = {
     ...createGatewayBenchEnv(path.join(stateDir, "home"), configPath, { startupTrace: false }),
     OPENCLAW_STATE_DIR: stateDir,
     TMPDIR: path.join(stateDir, "tmp"),
     OPENCLAW_SKIP_CHANNELS: "1",
+    // Dev builds inspect service ownership; never select the host's default Gateway.
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_LAUNCHD_LABEL: resolveGatewayLaunchAgentLabel(profile),
+    OPENCLAW_SYSTEMD_UNIT: resolveGatewaySystemdServiceName(profile),
+    OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
     ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}),
   };
   // Git and source resolvers inherit this process: routing variables must not escape the fixture.
@@ -124,6 +135,7 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     const { sessions, generationMs: sessionGenerationMs, ...sessionMetrics } = seeded;
     summary = {
       format: "openclaw-team-shape-v1",
+      profile,
       seed: options.seed,
       now: options.now,
       sessionCount: sessions.length,
