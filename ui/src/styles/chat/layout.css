@@ -3345,3 +3345,14 @@ openclaw-chat-ci-details {
   flex-basis: 100%;
   padding-bottom: 6px;
 }
+
+.chat-pr__accounts-panel .oc-menu-item__check {
+  display: none;
+}
+
+.chat-pr__checks-overlay {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}

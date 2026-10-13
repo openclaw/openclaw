@@ -106,7 +106,7 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
-    revision: getSessionCostUsageUpdatedAt(),
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}`,
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary(params)

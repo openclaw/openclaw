@@ -168,6 +168,12 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+Transcript history and search lanes likewise retire surplus workers after 30
+seconds idle. Each lane keeps one worker until its existing five-minute idle
+retirement, which waits for logical reader leases to be released. Surplus
+retirement preserves those leases and waits for active tasks; a later concurrent
+read starts another worker on demand.
+
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
 child reads current credential rows through its bounded native reader pool without
