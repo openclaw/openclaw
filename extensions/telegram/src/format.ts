@@ -303,14 +303,87 @@ function renderSupportedTelegramHtml(html: string): string {
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
+/**
+ * Downgrades escaped rich-contract block tags (see agentPrompt
+ * "markdown_telegram_rich") into their Telegram-HTML caption equivalents. Rich
+ * messages render those tags as native blocks, but media captions stay on the
+ * Telegram HTML contract, where unsupported tags arrive escaped and surface as
+ * literal `<ul>`/`<li>` text. List markers follow the rich plain-text
+ * projection (`• `/`N. `/`[x] `), asides become blockquotes, and dividers drop
+ * exactly like the rich plain-text fallback does.
+ */
+export function downgradeEscapedRichBlockTags(html: string): string {
+  if (!html.includes("&lt;")) {
+    return html;
+  }
+  let listMarker: (() => string) | undefined;
+  ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
+  return transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
+    text.replace(
+      ESCAPED_HTML_TAG_PATTERN,
+      (match: string, closing: string, name: string, attrs: string) => {
+        if (closing) {
+          if (name === "ul" || name === "ol") {
+            listMarker = undefined;
+            return "";
+          }
+          if (name === "aside") {
+            return "</blockquote>";
+          }
+          if (name === "li") {
+            return "";
+          }
+          return match;
+        }
+        switch (name) {
+          case "ul":
+            listMarker = () => "• ";
+            return "";
+          case "ol": {
+            const start = Number.parseInt(
+              /(?:^|\s)start\s*=\s*"(\d+)"/.exec(attrs)?.[1] ?? "1",
+              10,
+            );
+            let value = Number.isFinite(start) && start > 0 ? start : 1;
+            listMarker = () => `${value++}. `;
+            return "";
+          }
+          case "li":
+            return listMarker?.() ?? "• ";
+          case "aside":
+            return "<blockquote>";
+          case "hr":
+            return "";
+          case "input":
+            return /\btype\s*=\s*"checkbox"/.test(attrs)
+              ? /\bchecked\b/.test(attrs)
+                ? "[x] "
+                : "[ ] "
+              : match;
+          default:
+            return match;
+        }
+      },
+    ),
+  );
+}
+
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: {
+    textMode?: "markdown" | "html";
+    tableMode?: MarkdownTableMode;
+    downgradeRichPromptTags?: boolean;
+  } = {},
 ): string {
   if (options.textMode === "html") {
-    return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
+    const html = escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
+    return options.downgradeRichPromptTags === true ? downgradeEscapedRichBlockTags(html) : html;
   }
-  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  const rendered = markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  return options.downgradeRichPromptTags === true
+    ? downgradeEscapedRichBlockTags(rendered)
+    : rendered;
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {

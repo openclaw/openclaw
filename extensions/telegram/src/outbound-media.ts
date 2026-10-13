@@ -70,6 +70,10 @@ export function prepareTelegramOutboundMedia(params: {
         : renderTelegramHtmlText(trimmedText, {
             textMode: params.textMode ?? "markdown",
             tableMode: params.tableMode,
+            // Rich-prompt block tags (lists, asides, dividers) have no native
+            // caption blocks; without the downgrade they arrive as escaped
+            // literal text under the Telegram HTML caption contract.
+            downgradeRichPromptTags: true,
           })
       : undefined;
   const { caption, followUpText } = isVideoNote
