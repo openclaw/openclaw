@@ -11,8 +11,8 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { personalCredentialPublication } from "../../state/user-model-account-authority.js";
 import {
-  encodeUserModelAuthProfile,
   readUserModelAuthProfile,
   readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
@@ -68,33 +68,33 @@ export const authProfileOperations = {
     const database = open();
     let committed: UserModelAuthProfile | undefined;
     const options = { ...stateOptions(), database };
-    updateUserModelAuthProfile(
-      input.profileId,
-      (profile) => {
-        if (!isDeepStrictEqual(profile, input.expected)) {
-          return false;
-        }
-        profile.credential = input.next.credential;
-        profile.usageStats = input.next.usageStats;
-        return true;
-      },
-      options,
-      (stage) => {
-        if (stage === "transaction") {
-          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-        } else {
-          committed = readUserModelAuthProfileInDatabase(database.db, input.profileId);
-          if (
-            !committed ||
-            encodeUserModelAuthProfile(committed) !== encodeUserModelAuthProfile(input.next)
-          ) {
-            throw new Error("Personal credential codec changed the prepared update");
+    personalCredentialPublication.capture(database.db, () =>
+      updateUserModelAuthProfile(
+        input.profileId,
+        (profile) => {
+          if (!isDeepStrictEqual(profile, input.expected)) {
+            return false;
           }
-          const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
-          requestSqliteWorkerOperationAdmission({ stage, facts: digest });
-          deferSqliteWorkerCommitReceipt(database.db, digest);
-        }
-      },
+          profile.credential = input.next.credential;
+          profile.usageStats = input.next.usageStats;
+          return true;
+        },
+        options,
+        (stage) => {
+          if (stage === "transaction") {
+            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+          } else {
+            committed = input.next;
+            const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
+            requestSqliteWorkerOperationAdmission({ stage, facts: digest });
+            deferSqliteWorkerCommitReceipt(database.db, {
+              digest,
+              personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+                .receipt,
+            });
+          }
+        },
+      ),
     );
     return committed;
   },

@@ -13,6 +13,7 @@ import {
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
+type SlackMentionPolicy = "escape" | "escape-controls";
 
 function isAllowedSlackAngleToken(token: string): boolean {
   const inner = token.slice(1, -1);
@@ -28,7 +29,7 @@ function isAllowedSlackAngleToken(token: string): boolean {
   );
 }
 
-function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
+function escapeSlackMrkdwnContent(text: string, mentions?: SlackMentionPolicy): string {
   if (mentions === "escape") {
     return escapeSlackMrkdwn(text);
   }
@@ -43,7 +44,8 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
     const matchIndex = match.index;
     out.push(escapeSlackMrkdwn(text.slice(lastIndex, matchIndex)));
     const token = match[0];
-    out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwn(token));
+    const escapeControl = mentions === "escape-controls" && /^<[@#!]/u.test(token);
+    out.push(isAllowedSlackAngleToken(token) && !escapeControl ? token : escapeSlackMrkdwn(token));
     lastIndex = matchIndex + token.length;
   }
 
@@ -51,7 +53,7 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
   return out.join("");
 }
 
-function escapeSlackMrkdwnText(text: string, mentions?: "escape"): string {
+function escapeSlackMrkdwnText(text: string, mentions?: SlackMentionPolicy): string {
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
@@ -93,8 +95,8 @@ type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
   /** The caller wraps the output in this emphasis; Slack cannot nest the same style, so inner markers are dropped. */
   enclosingStyle?: "bold" | "italic";
-  /** Escape every Slack angle token (mentions, special commands, links) instead of preserving it. */
-  mentions?: "escape";
+  /** Escape every angle token, or only mention/control tokens while preserving rendered links. */
+  mentions?: SlackMentionPolicy;
 };
 
 const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;

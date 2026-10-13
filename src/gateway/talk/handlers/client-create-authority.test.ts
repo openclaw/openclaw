@@ -1,7 +1,7 @@
 import { copyFileSync, readFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
@@ -9,7 +9,7 @@ import {
   observeSqliteReadSql,
   trackSqliteStatementExecutions,
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { closeAuthProfileReadPool } from "../../../agents/auth-profiles/sqlite-read-pool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -49,7 +49,10 @@ import * as voiceKernel from "../../../talk/client-voice-session-write.kernel.js
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../../test-utils/session-state-cleanup.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { makeClient } from "../../server-broadcast.test-helpers.js";
@@ -145,31 +148,31 @@ async function invokeClose(params: Record<string, unknown>) {
 }
 
 describe("voice creation authority", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((remove) =>
-    afterEach(async () => {
-      for (const authorization of authorizations.splice(0)) {
-        authorization.release?.();
-      }
-      if (ownedVoiceSessionId) {
-        await closeTalkClientGatewayControlSession({
-          voiceSessionId: ownedVoiceSessionId,
-          sessionKey: ownedVoiceSessionKey,
-          connId: "conn-close",
-        });
-      }
-      cleanupTalkConnection("conn-close", { warn: vi.fn() });
-      clientVoiceSessionTesting.reset();
-      try {
-        await cleanupSessionStateForTest({ stateDir: tempDir });
-        clearRuntimeConfigSnapshot();
-      } finally {
-        envSnapshot.restore();
-        remove();
-        vi.restoreAllMocks();
-      }
-      expect(forbiddenSnapshotStacks).toEqual([]);
-    }),
-  );
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-voice-authority-");
+  afterEach(async () => {
+    for (const authorization of authorizations.splice(0)) {
+      authorization.release?.();
+    }
+    if (ownedVoiceSessionId) {
+      await closeTalkClientGatewayControlSession({
+        voiceSessionId: ownedVoiceSessionId,
+        sessionKey: ownedVoiceSessionKey,
+        connId: "conn-close",
+      });
+    }
+    cleanupTalkConnection("conn-close", { warn: vi.fn() });
+    clientVoiceSessionTesting.reset();
+    try {
+      await drainSessionStateForTest({ stateDir: tempDir });
+      closeAuthProfileReadPool({ kind: "root", rootPath: tempDir });
+      await closeOpenClawAgentDatabasesAsync(tempDir);
+      clearRuntimeConfigSnapshot();
+    } finally {
+      envSnapshot.restore();
+      vi.restoreAllMocks();
+    }
+    expect(forbiddenSnapshotStacks).toEqual([]);
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     forbiddenSnapshotStacks = [];
@@ -208,7 +211,7 @@ describe("voice creation authority", () => {
     );
     ownedVoiceSessionId = undefined;
     ownedVoiceSessionKey = sessionKey;
-    tempDir = tempDirs.make("openclaw-voice-authority-");
+    tempDir = tempDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     setRuntimeConfigSnapshot({});
     const seedEntry = { sessionId, updatedAt: Date.now() };

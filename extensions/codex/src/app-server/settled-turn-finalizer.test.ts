@@ -349,6 +349,7 @@ describe("runCodexSettledTurnFinalization", () => {
         provider: "openai",
         profileId: "openai:captured",
         profileType: "token",
+        readCurrentCredential: null,
       });
       const ordinaryNativeHome = homeScope === "user";
       if (ordinaryNativeHome) {

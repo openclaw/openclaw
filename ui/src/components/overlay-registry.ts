@@ -537,8 +537,3 @@ function retainRoot(registry: OverlayRegistry, root: OverlayRoot): () => void {
     }
   };
 }
-
-/** Optional document listener lifetime for callers that mount overlays later. */
-export function installOverlayKeyboard(doc: Document): () => void {
-  return retainRoot(registryFor(doc), doc);
-}

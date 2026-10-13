@@ -329,7 +329,10 @@ vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Restart fixtures publish their explicit config without loading a live config file.
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  getRuntimeConfigSnapshot: mocks.getRuntimeConfig,
+}));
 
 vi.mock("../channels/plugins/session-conversation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/plugins/session-conversation.js")>()),

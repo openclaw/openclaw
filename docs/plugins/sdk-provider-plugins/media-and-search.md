@@ -61,6 +61,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
+    `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
+    provider network policy. Pass the embedding provider ID, API, effective base URL,
+    and configured `request.allowPrivateNetwork` value; reuse the returned policy for
+    embedding requests and batch upload, status, and download requests.
+
     If an endpoint documents an input-array limit, set the optional
     `maxInputsPerRequest` field on the created provider instance. Use a positive
     safe integer for the selected endpoint and model; omit it when unknown.

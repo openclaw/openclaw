@@ -394,7 +394,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "keeps a working fallback until child activity replaces it, leaving wait text to the composer (bubble mode: %s)",
+    "keeps a working fallback until child activity replaces it (bubble mode: %s)",
     (bubbleMode) => {
       const container = document.createElement("div");
       const onOpenSubagent = vi.fn();
