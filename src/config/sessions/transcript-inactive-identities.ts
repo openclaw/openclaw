@@ -72,7 +72,7 @@ async function isInactiveRecordedIdentity(
         return {
           env: owner.scope?.env,
           sessionId,
-          storePath: owner.incognito?.actor.path ?? owner.scope?.storePath ?? storePath,
+          storePath: owner.source?.path ?? owner.scope?.storePath ?? storePath,
         };
       },
     );
