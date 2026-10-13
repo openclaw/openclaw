@@ -1,18 +1,25 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, afterEach, beforeEach } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "../config/sessions/session-transcript-read-fence.js";
+import { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  withOpenClawTestState,
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { withCodexSessionTranscriptMirrorWriteLock as withMirrorLock } from "./codex-session-transcript-runtime.js";
 import { getSessionEntry, upsertSessionEntry } from "./session-store-runtime.js";
 import {
@@ -28,6 +35,7 @@ import {
   withSessionTranscriptWriteLock as withWriteLock,
   type SessionTranscriptMessageEntry,
   type SessionTranscriptReadParams,
+  appendSessionTranscriptMessageByIdentity,
 } from "./session-transcript-runtime.js";
 
 const identity = {
@@ -246,6 +254,141 @@ describe("configured SDK transcript store parity", () => {
           message,
         }),
       ).rejects.toThrow("is owned by");
+    });
+  });
+});
+
+describe("assistant transcript delivery projection", () => {
+  let tempDir: string;
+  let storePath: string;
+  let state: OpenClawTestState;
+
+  beforeEach(async () => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-transcript-delivery-",
+      applyEnv: false,
+    });
+    tempDir = state.root;
+    storePath = path.join(tempDir, "sessions.json");
+  });
+
+  afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest(tempDir);
+    await state.cleanup();
+  });
+
+  it.each([
+    {
+      name: "persisted delivery facts",
+      stored: {
+        replyToId: "42",
+        audioAsVoice: true,
+        mediaUrls: ["/tmp/voice.ogg"],
+        tts: {
+          tagged: true,
+          text: "Spoken answer",
+          directives: [{ provider: "test", values: { voice: "synthetic" } }],
+        },
+      },
+      projected: {
+        replyToId: "42",
+        audioAsVoice: true,
+        mediaUrls: ["/tmp/voice.ogg"],
+        tts: {
+          tagged: true,
+          text: "Spoken answer",
+          directives: [{ provider: "test", values: { voice: "synthetic" } }],
+        },
+      },
+    },
+    {
+      name: "malformed and non-delivery fields",
+      stored: {
+        replyToId: 42,
+        replyToCurrent: true,
+        audioAsVoice: "true",
+        mediaUrls: [null, "", "/tmp/file.txt"],
+        trustedLocalMedia: true,
+        sessionWriterDeliveryAuthority: { expectedWriterRunId: "untrusted" },
+        tts: { tagged: true, text: 12, directives: [{ values: { voice: 3 } }] },
+      },
+      projected: {
+        replyToCurrent: true,
+        mediaUrls: ["/tmp/file.txt"],
+        tts: { tagged: true, directives: [] },
+      },
+    },
+  ])("appends scoped messages and reads exact text with $name", async ({ stored, projected }) => {
+    const scope = {
+      agentId: "main",
+      sessionFile: path.join(tempDir, "mirror-target.jsonl"),
+      sessionId: "mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const deliveredMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "    hello()\n\n" }],
+      openclawDelivery: stored,
+      timestamp: 1,
+    };
+
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: deliveredMessage,
+    });
+
+    expect(appended).toBeDefined();
+    expect(appended?.message).toMatchObject(deliveredMessage);
+    const latest = await readLatestAssistantTextByIdentity(scope);
+    expect(latest).toEqual({
+      id: appended?.messageId,
+      text: "    hello()\n\n",
+      timestamp: 1,
+      openclawDelivery: projected,
+    });
+    await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
+    ]);
+  });
+
+  it("preserves code padding and delivery facts in retained JSONL reads", async () => {
+    const sessionFile = path.join(tempDir, "retained.jsonl");
+    const text = "    preserved()\n\n";
+    const openclawDelivery = {
+      replyToCurrent: true,
+      audioAsVoice: true,
+      mediaUrls: ["/tmp/note.ogg"],
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        {
+          type: "message",
+          id: "assistant-final",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            timestamp: 123,
+            openclawDelivery,
+          },
+        },
+        {
+          type: "message",
+          id: "empty",
+          message: { role: "assistant", content: [{ type: "text", text: "  \n" }], timestamp: 124 },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    await expect(readLatestAssistantTextFromSessionTranscript(sessionFile)).resolves.toEqual({
+      id: "assistant-final",
+      text,
+      timestamp: 123,
+      openclawDelivery,
     });
   });
 });

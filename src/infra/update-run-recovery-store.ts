@@ -28,9 +28,17 @@ function readRecoveryRows(db: DatabaseSync) {
       .orderBy("state_key", "asc"),
   ).rows;
 }
-export function readRecoveries(db: DatabaseSync): UpdateRecoveryRecord[] {
-  return readRecoveryRows(db).map((row) =>
-    decodeUpdateRecovery(row.value_json, row.state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
+/** Execution reads only its named operation; unrelated history is not execution input. */
+export function readRecovery(db: DatabaseSync, runId: string): UpdateRecoveryRecord | undefined {
+  const row = readRecoveryRows(db).find(
+    (entry) => entry.state_key === UPDATE_RECOVERY_KEY_PREFIX + runId,
+  );
+  return row ? decodeUpdateRecovery(row.value_json, runId) : undefined;
+}
+
+export function inspectRecoveryRows(db: DatabaseSync): UpdateRecoveryInspection[] {
+  return readRecoveryRows(db).map(({ value_json, state_key }) =>
+    inspectUpdateRecovery(value_json, state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
   );
 }
 /** Private read-only compatibility surface for diagnostics and retained-pair
@@ -41,10 +49,7 @@ export function inspectUpdateRecoveries(
 ): UpdateRecoveryInspection[] {
   return (
     withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db }) =>
-        readRecoveryRows(db).map(({ value_json, state_key }) =>
-          inspectUpdateRecovery(value_json, state_key.slice(UPDATE_RECOVERY_KEY_PREFIX.length)),
-        ),
+      ({ db }) => inspectRecoveryRows(db),
       options,
     ) ?? []
   );

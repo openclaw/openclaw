@@ -1,4 +1,3 @@
-// Derives method lookup, authorization, startup, and dispatch policy from the canonical table.
 import type { OperatorScope } from "../operator-scopes.js";
 import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
 import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
@@ -29,19 +28,16 @@ export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPEC_LIST
   (spec) => spec.startup === true,
 ).map((spec) => spec.name);
 
-/** Returns the core methods that should be advertised to external gateway clients. */
 export function listCoreAdvertisedGatewayMethodNames(): string[] {
   return CORE_GATEWAY_METHOD_SPEC_LIST.filter((spec) => spec.advertise !== false).map(
     (spec) => spec.name,
   );
 }
 
-/** Returns all registered core method names, including hidden/internal compatibility methods. */
 export function listCoreGatewayMethodNames(): string[] {
   return CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => spec.name);
 }
 
-/** Returns the public metadata emitted for every core gateway method. */
 export function listCoreGatewayMethodMetadata(): readonly CoreGatewayMethodMetadata[] {
   return CORE_GATEWAY_METHOD_SPEC_LIST.map(({ name, scope, since }) => ({ name, scope, since }));
 }
@@ -70,22 +66,18 @@ export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorS
     : scope;
 }
 
-/** Returns true for core methods reserved for authenticated node clients. */
 export function isCoreNodeGatewayMethod(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === NODE_GATEWAY_METHOD_SCOPE;
 }
 
-/** Returns true for core methods whose required operator scope is resolved by the handler. */
 export function isDynamicOperatorGatewayMethod(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === DYNAMIC_GATEWAY_METHOD_SCOPE;
 }
 
-/** Returns true when a method name has an explicit core policy entry. */
 export function isCoreGatewayMethodClassified(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
 }
 
-/** Creates dispatch descriptors for core handlers and fails if any handler lacks policy. */
 export function createCoreGatewayMethodDescriptors(
   handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {

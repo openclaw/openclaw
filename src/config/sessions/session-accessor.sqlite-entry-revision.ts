@@ -1,99 +1,104 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  createSqliteQueryCache,
-  getNodeSqliteKysely,
-  prepareSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
-  readSqliteCacheDataVersion,
+  installSqliteTempTrackingSchema,
+  readSqliteRollbackRevision,
 } from "../../infra/sqlite-schema-facts.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */
 export type SqliteSessionEntryRevision = {
-  dataVersion: number;
+  siblingWriteRevision: number | undefined;
   sessionNodesGeneration: number;
 };
 
-const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
-
-type SessionEntryRevisionDatabase = {
-  openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
+type SessionNodesGeneration = {
+  schemaVersion?: number;
+  generation: number;
+  rollbackRevision: number | undefined;
 };
-
-const generationQuery = createSqliteQueryCache((database) =>
-  prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
-    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-      .withSchema("temp")
-      .selectFrom("openclaw_session_nodes_cache_generation")
-      .select("generation")
-      .where("id", "=", 1),
-  ),
+const sessionNodesGenerations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionNodesGenerations"),
+  () => new WeakMap<DatabaseSync, SessionNodesGeneration>(),
 );
+const generationFunction = "openclaw_session_nodes_changed";
 
-function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
+function ensureSessionNodesGenerationTracker(database: DatabaseSync): SessionNodesGeneration {
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     throw new Error("SQLite session entry caching requires admitted schema facts");
   }
   const { schemaVersion } = schema;
-  const trackedSchemaVersion = sessionNodesGenerationTrackerSchemaVersions.get(database);
-  if (trackedSchemaVersion === schemaVersion) {
-    return;
+  let tracker = sessionNodesGenerations.get(database);
+  if (!tracker) {
+    const created: SessionNodesGeneration = {
+      generation: 0,
+      rollbackRevision: readSqliteRollbackRevision(database),
+    };
+    database.function(generationFunction, () => {
+      created.generation += 1;
+      return null;
+    });
+    sessionNodesGenerations.set(database, created);
+    tracker = created;
+  }
+  if (tracker.schemaVersion === schemaVersion) {
+    return tracker;
   }
   const hasParticipants = schema.tables.has("session_participants");
-  // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary: they
-  // observe unpublished raw DML. A main-schema change bumps the generation before reinstalling
-  // them, so dropping/recreating session_nodes cannot make an old snapshot look current.
-  database.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS openclaw_session_nodes_cache_generation (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT;
-    INSERT OR IGNORE INTO openclaw_session_nodes_cache_generation (id, generation) VALUES (1, 0);
-    ${trackedSchemaVersion === undefined ? "" : "UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1;"}
-    ${["session_nodes", "session_participants"]
-      .map((table) => {
-        const operations = ["insert", "update", "delete"];
-        const drop = operations.map(
-          (operation) => `DROP TRIGGER IF EXISTS openclaw_${table}_cache_generation_${operation};`,
-        );
-        const create =
-          table === "session_nodes" || hasParticipants
-            ? operations.map(
-                (operation) => `CREATE TEMP TRIGGER openclaw_${table}_cache_generation_${operation}
-              AFTER ${operation.toUpperCase()} ON main.${table} BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;`,
-              )
-            : [];
-        return [...drop, ...create].join("\n");
-      })
-      .join("\n")}
-  `);
+  if (tracker.schemaVersion !== undefined) {
+    tracker.generation += 1;
+  }
+  installSqliteTempTrackingSchema(database, {
+    kind: "generation",
+    functionName: generationFunction,
+    triggers: ["session_nodes", "session_participants"].flatMap((table) =>
+      (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => ({
+        name: `openclaw_${table}_cache_generation_${operation.toLowerCase()}`,
+        table,
+        operation,
+        enabled: table === "session_nodes" || hasParticipants,
+      })),
+    ),
+  });
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
-    sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);
+    tracker.schemaVersion = schemaVersion;
   } else {
+    const installed = tracker;
     stageSqliteTransactionState(database, {
-      stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion),
-      rollback: () => sessionNodesGenerationTrackerSchemaVersions.delete(database),
+      stage: () => {
+        installed.schemaVersion = schemaVersion;
+      },
+      rollback: () => {
+        installed.schemaVersion = undefined;
+      },
       commit: () => {},
     });
   }
+  return tracker;
 }
 
 export function readSessionNodesGeneration(database: DatabaseSync): number {
-  ensureSessionNodesGenerationTracker(database);
-  const row = generationQuery(database)();
-  if (typeof row?.generation !== "number") {
-    throw new Error("SQLite session_nodes cache generation is unavailable");
+  const tracker = ensureSessionNodesGenerationTracker(database);
+  const rollbackRevision = readSqliteRollbackRevision(database);
+  // JS callbacks are not rolled back by SQLite. Advance again so an abandoned
+  // snapshot can never reuse the token observed after its uncommitted writes.
+  if (rollbackRevision === undefined || rollbackRevision !== tracker.rollbackRevision) {
+    tracker.generation += 1;
+    tracker.rollbackRevision = rollbackRevision;
   }
-  return row.generation;
+  return tracker.generation;
 }
 
 export function readSessionEntryCacheValidityToken(
   database: DatabaseSync,
-  mode: "fresh" | "cached" = "fresh",
 ): SqliteSessionEntryRevision {
+  // Shared writer receipts cover other handles; TEMP triggers cover this connection's writes.
   return {
-    dataVersion: readSqliteCacheDataVersion(database, mode),
+    siblingWriteRevision: readSqliteDatabaseSiblingWriteRevision(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
@@ -103,7 +108,8 @@ export function cacheValidityTokensEqual(
   right: SqliteSessionEntryRevision,
 ): boolean {
   return (
-    left.dataVersion === right.dataVersion &&
+    left.siblingWriteRevision !== undefined &&
+    left.siblingWriteRevision === right.siblingWriteRevision &&
     left.sessionNodesGeneration === right.sessionNodesGeneration
   );
 }
@@ -111,8 +117,6 @@ export function cacheValidityTokensEqual(
 class SessionEntryRevisionConflictError extends Error {
   readonly code = "invalid_state";
 }
-
-export class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
 
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
@@ -123,8 +127,8 @@ export function createSessionEntryRevisionGuard(
   let verified: SqliteSessionEntryRevision | undefined;
   return () => {
     assertSourceCurrent();
-    const before = readSessionEntryCacheValidityToken(database);
-    if (verified && cacheValidityTokensEqual(verified, before)) {
+    const revision = readSessionEntryCacheValidityToken(database);
+    if (verified && !database.isTransaction && cacheValidityTokensEqual(verified, revision)) {
       assertSourceCurrent();
       return;
     }
@@ -134,28 +138,11 @@ export function createSessionEntryRevisionGuard(
         "Prepared session entry facts are no longer current",
       );
     }
-    const after = readSessionEntryCacheValidityToken(database);
     assertSourceCurrent();
-    // A foreign commit during the predicate must not be hidden by its later revision.
-    if (!cacheValidityTokensEqual(before, after)) {
-      throw new SessionEntryRevisionChangedError(
-        "Session entry facts changed during their mutation check",
-      );
-    }
+    // A concurrent receipt invalidates this pre-read token on the next check.
+    // Transactional predicates are checked at each effect, not cached past settlement.
     if (!database.isTransaction) {
-      verified = after;
-    } else {
-      // A first-use TEMP tracker can disappear on rollback and later restart at the same value.
-      // Unmanaged transactions cannot retain a verified snapshot past their unknown settlement.
-      stageSqliteTransactionState(database, {
-        stage: () => {
-          verified = after;
-        },
-        rollback: () => {
-          verified = undefined;
-        },
-        commit: () => {},
-      });
+      verified = revision;
     }
   };
 }

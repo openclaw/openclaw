@@ -47,6 +47,13 @@ export function projectSessionResultRows(
     : result;
 }
 
+export function mapSessionResultRows(
+  result: SessionsListResult | null,
+  project: (row: GatewaySessionRow) => GatewaySessionRow,
+): SessionsListResult | null {
+  return result && projectSessionResultRows(result, result.sessions.map(project));
+}
+
 function replaceSessionResultRow(
   result: SessionsListResult,
   key: string,
@@ -97,11 +104,8 @@ export function reconcileRosterPresentationMetadata(
     return incoming;
   }
   const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
-  return projectSessionResultRows(
-    incoming,
-    incoming.sessions.map((session) =>
-      preserveRosterPresentationMetadata(session, existingByKey.get(session.key)),
-    ),
+  return mapSessionResultRows(incoming, (session) =>
+    preserveRosterPresentationMetadata(session, existingByKey.get(session.key)),
   );
 }
 

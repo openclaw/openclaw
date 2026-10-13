@@ -40,7 +40,6 @@ describe("queued turn steering", () => {
       const entry: SessionEntry = {
         sessionId: "session",
         updatedAt: 1,
-        status: "running",
         restartRecoveryTerminalRunIds: ["previous-input"],
       };
       await replaceSessionEntry({ storePath, sessionKey }, entry);

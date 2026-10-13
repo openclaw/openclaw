@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -151,18 +152,28 @@ export async function prepareGatewaySessionStoreReadPlan(params: {
   legacy: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore | null> | null;
   prepareCurrent: () => GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
   prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>;
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
 }): Promise<{
   target: GatewaySessionStoreTargetWithStore;
   plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
 }> {
-  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    return await params.prepareReads(plan.reads, () => {
+  const resolve = async <T extends GatewaySessionStoreTargetWithStore | null>(
+    plan: GatewaySessionStorePlan<T>,
+  ) =>
+    await params.prepareReads(plan.reads, () => {
       if (plan.reads.some((read) => read.result === undefined)) {
         throw new Error("Session lookup facts were not prepared");
       }
-      return plan.resolve();
+      const target = plan.resolve();
+      if (target && params.onSelected) {
+        const result = params.onSelected(target);
+        if (isPromiseLike(result)) {
+          void Promise.resolve(result).catch(() => {});
+          throw new Error("Session selection consumers must remain synchronous");
+        }
+      }
+      return target;
     });
-  };
   const deletedMain = params.legacy;
   if (deletedMain) {
     const target = await resolve(deletedMain);

@@ -160,7 +160,11 @@ export function inferCodexAppServerConnectionClass(params: {
   if (params.transport !== "websocket") {
     return "local-loopback";
   }
-  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+  const parsed = params.url ? URL.parse(params.url) : null;
+  return (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    isLoopbackHost(parsed.hostname)
+    ? "local-loopback"
+    : "remote";
 }
 
 /** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
@@ -172,33 +176,16 @@ export function assertCodexAppServerConnectionSecurity(params: {
 }): void {
   if (
     inferCodexAppServerConnectionClass(params) === "remote" &&
-    !hasIdentityBearingWebSocketAuth(params)
+    !readNonEmptyString(params.authToken) &&
+    !Object.entries(params.headers).some(
+      ([key, value]) =>
+        key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+    )
   ) {
     throw new Error(
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
-}
-
-function isLoopbackWebSocketUrl(value: string): boolean {
-  const parsed = URL.parse(value);
-  if (parsed?.protocol !== "ws:" && parsed?.protocol !== "wss:") {
-    return false;
-  }
-  return isLoopbackHost(parsed.hostname);
-}
-
-function hasIdentityBearingWebSocketAuth(params: {
-  authToken?: string;
-  headers: Record<string, string>;
-}): boolean {
-  if (readNonEmptyString(params.authToken)) {
-    return true;
-  }
-  return Object.entries(params.headers).some(
-    ([key, value]) =>
-      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
-  );
 }
 
 export function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {

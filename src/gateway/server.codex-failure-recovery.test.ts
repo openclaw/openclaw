@@ -2,7 +2,7 @@ import childProcess, { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import { syncBuiltinESMExports } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import nodeProcess from "node:process";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,6 +10,10 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { captureEnv } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -74,6 +78,12 @@ it.each(cases)(
     const state = path.join(root, "state");
     const plugin = path.join(root, "instruction-plugin");
     await Promise.all([workspace, state, plugin].map((dir) => fs.mkdir(dir, { recursive: true })));
+    // Native plugins and their SDK must share the built worker graph.
+    const sdkHost = path.join(root, "sdk-host");
+    await fs.mkdir(path.join(sdkHost, "src"), { recursive: true });
+    await fs.mkdir(path.join(sdkHost, "extensions"));
+    await fs.copyFile(path.join(process.cwd(), "package.json"), path.join(sdkHost, "package.json"));
+    await fs.symlink(path.join(process.cwd(), "dist"), path.join(sdkHost, "dist"), "junction");
     const instruction = path.join(root, "instructions.txt");
     await fs.writeFile(instruction, "INITIAL_POLICY");
     await fs.writeFile(
@@ -208,6 +218,7 @@ it.each(cases)(
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
+      OPENCLAW_DEV_SOURCE_ROOT: sdkHost,
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       HTTP_PROXY: "http://127.0.0.1:9",
       HTTPS_PROXY: "http://127.0.0.1:9",
@@ -331,11 +342,24 @@ it.each(cases)(
         }
       },
     });
+    let nativeConfig: typeof import("../plugin-sdk/runtime-config-snapshot.js") | undefined =
+      undefined;
     onTestFinished(async () => {
       releaseSibling.resolve();
       await disconnectGatewayClient(gateway.client);
       await gateway.server.close();
+      nativeConfig?.clearRuntimeConfigSnapshot();
     });
+    const runtimeConfig = getRuntimeConfigSnapshot();
+    assert(runtimeConfig, "Gateway must publish its prepared runtime config before a turn");
+    // The native SDK has a separate module graph from the source Gateway fixture.
+    nativeConfig = createRequire(path.join(sdkHost, "package.json"))(
+      "openclaw/plugin-sdk/runtime-config-snapshot",
+    ) as typeof import("../plugin-sdk/runtime-config-snapshot.js");
+    nativeConfig.setRuntimeConfigSnapshot(
+      runtimeConfig,
+      getRuntimeConfigSourceSnapshot() ?? runtimeConfig,
+    );
     const runPrefix = randomUUID();
     const sessionKey = `agent:main:recovery-proof-${runPrefix}`;
     let siblingSessionKey = `agent:main:recovery-sibling-${runPrefix}`;

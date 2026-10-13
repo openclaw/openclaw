@@ -1,5 +1,3 @@
-// Gateway probe auth resolver.
-// Adapts gateway credential precedence for local/remote reachability checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -68,7 +66,6 @@ function resolveGatewayProbeWarning(error: unknown): string | undefined {
   return `${error.path} SecretRef is unresolved in this command path; checking without configured auth credentials.`;
 }
 
-/** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
 export function resolveGatewayProbeAuth(
   params: Omit<GatewayProbeCredentialParams, "explicitAuth" | "localPrecedence">,
 ): { token?: string; password?: string } {
@@ -137,7 +134,6 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
   return { auth };
 }
 
-/** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
 export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   params: GatewayProbeCredentialParams,
 ): Promise<{
@@ -184,7 +180,6 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   }
 }
 
-/** Synchronous safe probe auth wrapper for config-only credential paths. */
 export function resolveGatewayProbeAuthSafe(
   params: Omit<GatewayProbeCredentialParams, "localPrecedence">,
 ): {

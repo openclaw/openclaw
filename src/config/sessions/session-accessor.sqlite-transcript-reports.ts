@@ -54,12 +54,13 @@ import type {
   AbortedSessionTranscriptPartial,
   AbortedSessionTranscriptPartialResult,
   TranscriptReport,
+  TranscriptReportCommit,
   TranscriptReportWorkerOperations,
-  StartupSessionSettlement,
-  StartupSessionSettlementOutcome,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import type { TranscriptReportWorkerTarget } from "./session-accessor.sqlite-transcript-reports.worker.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { withMemoryReportWorker } from "./session-actor-transcript-reports.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
@@ -82,7 +83,6 @@ import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
-  withSessionTranscriptWriteAssertion,
 } from "./transcript-write-context.js";
 
 const log = createSubsystemLogger("sessions/transcript-reports");
@@ -166,9 +166,6 @@ async function withIncognitoReportWorker<T>(
           type: "session.report.assistant",
           input: { ...target, report },
         }),
-      startupSettlement: async () => {
-        throw new Error("Startup settlement requires a durable session");
-      },
       abortedPartial: (report) =>
         actor.sessions.transcript(authority, {
           type: "session.report.abortedPartial",
@@ -293,15 +290,23 @@ async function withReportWorker<T>(
   run: (
     operation: Pick<SqliteWorkerStore<TranscriptReportWorkerOperations>, "execute">,
     assertCurrent: () => void,
-    publish: (result: {
-      projectionNeedsReconcile: boolean;
-      cliHistoryChanged?: boolean;
-      sessionEntryChanged?: boolean;
-    }) => void,
+    publish: (
+      result: Pick<
+        TranscriptReportCommit,
+        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+      >,
+    ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
   sessionEntryCurrent?: SessionEntryCurrentCheck,
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<T, TranscriptAppendRefusal>> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    if (sessionEntryCurrent) {
+      throw new Error("A file session source cannot authorize a memory transcript report");
+    }
+    return withMemoryReportWorker(scope, memory, run);
+  }
   if (incognito) {
     if (sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize an incognito transcript report");
@@ -453,6 +458,7 @@ async function withReportWorker<T>(
                           storePath: execution.path,
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
+                          entry: publication.entry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {
@@ -511,7 +517,9 @@ export async function appendAbortedSessionTranscriptPartial(
   },
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<AbortedSessionTranscriptPartialResult, TranscriptAppendRefusal>> {
-  const binding = incognito ?? captureIncognitoSessionOperation(scope);
+  const binding = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (incognito ?? captureIncognitoSessionOperation(scope));
   const publicationScope = {
     ...scope,
     ...(binding
@@ -527,7 +535,7 @@ export async function appendAbortedSessionTranscriptPartial(
     throw new Error("Aborted partial requires prepared assistant storage bytes");
   }
   const settlement =
-    !binding && isProcessHeldTranscript(publicationScope)
+    !getSessionActorStorageBinding(scope) && !binding && isProcessHeldTranscript(publicationScope)
       ? await withNativeCurrentTranscript(publicationScope, (database, resolved) =>
           appendAbortedSessionTranscriptPartialInTransaction(
             database,
@@ -576,9 +584,11 @@ export async function readLatestSessionTranscriptReport(
   customTypes: readonly string[],
   incognito?: IncognitoTranscriptReportBinding,
 ): Promise<Result<CustomMessageReport | undefined, TranscriptAppendRefusal>> {
-  const binding = incognito ?? captureIncognitoSessionOperation(scope);
+  const binding = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (incognito ?? captureIncognitoSessionOperation(scope));
   const selectedTypes = [...customTypes];
-  if (!binding && isProcessHeldTranscript(scope)) {
+  if (!getSessionActorStorageBinding(scope) && !binding && isProcessHeldTranscript(scope)) {
     // Process-held incognito databases retain their sole native owner.
     return withNativeCurrentTranscript(
       scope,
@@ -605,33 +615,6 @@ export async function readLatestSessionTranscriptReport(
   );
 }
 
-/** Startup recovery supplies data; the existing worker owns the atomic entry/report settlement. */
-export async function settleStartupSession(
-  scope: SessionTranscriptWriteScope,
-  input: StartupSessionSettlement,
-  assertCommitAllowed: () => void,
-): Promise<Result<StartupSessionSettlementOutcome, TranscriptAppendRefusal>> {
-  if (isProcessHeldTranscript(scope)) {
-    throw new Error("Startup settlement requires a durable session");
-  }
-  return withSessionTranscriptWriteAssertion(scope, assertCommitAllowed, () =>
-    withReportWorker<StartupSessionSettlementOutcome>(
-      scope,
-      "append",
-      async (operation, _assertCurrent, publish) => {
-        const result = await operation.execute({ type: "startupSettlement", input });
-        if (!result.ok) {
-          return result;
-        }
-        if (result.value.committed) {
-          publish(result.value);
-        }
-        return ok(result.value.outcome);
-      },
-    ),
-  );
-}
-
 /** Selects and appends one report against the same authoritative branch revision. */
 export async function appendSessionTranscriptReport(
   scope: SessionTranscriptWriteScope,
@@ -641,8 +624,10 @@ export async function appendSessionTranscriptReport(
     incognito?: IncognitoTranscriptReportBinding;
   },
 ): Promise<Result<void, TranscriptAppendRefusal>> {
-  const incognito = options?.incognito ?? captureIncognitoSessionOperation(scope);
-  if (!incognito && isProcessHeldTranscript(scope)) {
+  const incognito = getSessionActorStorageBinding(scope)
+    ? undefined
+    : (options?.incognito ?? captureIncognitoSessionOperation(scope));
+  if (!getSessionActorStorageBinding(scope) && !incognito && isProcessHeldTranscript(scope)) {
     if (options?.sessionEntryCurrent) {
       throw new Error("A file session source cannot authorize a process-held transcript report");
     }

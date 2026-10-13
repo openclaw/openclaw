@@ -343,7 +343,6 @@ it("uses incognito transaction postimages for currency and steering while delive
       ...originalCurrency,
       incognito: true,
       updatedAt: 1,
-      status: "running",
       restartRecoveryDeliveryRunId: "original-run",
       restartRecoveryDeliverySourceRunId: "original-source",
       restartRecoveryTerminalRunIds: ["earlier-source"],

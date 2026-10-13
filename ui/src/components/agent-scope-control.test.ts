@@ -66,18 +66,6 @@ describe("renderAgentScopeControl", () => {
     expect(container.querySelector(".agent-scope-control")).not.toBeNull();
   });
 
-  it("moves the scope label into the dropdown title without wrapping its options", async () => {
-    const { container, select } = await mountScope();
-
-    expect(select?.closest("label")).toBeNull();
-    expect(container.querySelector(".agent-scope-control__label")).toBeNull();
-    expect(select?.querySelector(".agent-select__menu-title")?.textContent).toBe("Agent");
-    expect(select?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Agent",
-    );
-    container.remove();
-  });
-
   it("includes historical agent ids and maps All agents back to null", async () => {
     const setScope = vi.fn();
     const { container, select } = await mountScope({

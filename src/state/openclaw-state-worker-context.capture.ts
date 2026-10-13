@@ -4,6 +4,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -20,6 +21,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "existingSchemaPath"
   | "runInCapturedSchemaScope"
   | "stateIntegrity"
+  | "artifactPreservingReads"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
@@ -54,6 +56,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     existingSchemaPath: schema?.path,
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
+    artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
   };
 }
 

@@ -6,7 +6,6 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
-const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const native = vi.hoisted(() => ({
   post: vi.fn(),
   disconnect: vi.fn(),
@@ -69,14 +68,12 @@ async function capture(
   return captureDiagnosticHeapProfile({ ...params, signal, hasAuthority: () => true });
 }
 beforeEach(() => {
-  if (hostBunVersion) {
-    // Mocked native cases exercise the Node owner; the real Bun capture stays unsupported.
-    Object.defineProperty(process.versions, "bun", { ...hostBunVersion, value: undefined });
-  }
   vi.resetModules();
   vi.resetAllMocks();
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
+  vi.stubEnv("BUN_INSPECT", "");
+  vi.stubEnv("BUN_INSPECT_CONNECT_TO", "");
   native.wait.mockResolvedValue(undefined);
   native.heapSpaces.mockReturnValue([]);
   native.resolveRoot.mockResolvedValue("/fixture/openclaw");
@@ -85,9 +82,6 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
-  if (hostBunVersion) {
-    Object.defineProperty(process.versions, "bun", hostBunVersion);
-  }
   vi.unstubAllEnvs();
 });
 
@@ -395,26 +389,25 @@ describe("diagnostic heap profile owner", () => {
     expect(JSON.stringify(outcome)).not.toContain("/fixture");
   });
 
-  it.skipIf(Boolean(process.versions.bun))(
-    "attributes retained allocations and opt-in collected allocations within the byte cap",
-    async ({ signal }) => {
-      const env: NodeJS.ProcessEnv = {};
-      for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
-        if (process.env[key]) {
-          env[key] = process.env[key];
-        }
+  it("attributes retained allocations and opt-in collected allocations within the byte cap", async ({
+    signal,
+  }) => {
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of ["PATH", "HOME", "OPENCLAW_STATE_DIR", "TMPDIR", "TMP", "TEMP"]) {
+      if (process.env[key]) {
+        env[key] = process.env[key];
       }
-      const root = fileURLToPath(new URL("../../", import.meta.url));
-      const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.heap);
-      const workloadUrl = new URL("./diagnostic-heap-profile.test-helpers.ts", import.meta.url)
-        .href;
-      const preparedWorkloadUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.workload);
-      const source = `
+    }
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.heap);
+    const workloadUrl = new URL("./diagnostic-heap-profile.test-helpers.ts", import.meta.url).href;
+    const preparedWorkloadUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.workload);
+    const source = `
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { registerHooks, syncBuiltinESMExports } from 'node:module';
 import timers from 'node:timers/promises';
-import { url } from 'node:inspector/promises';
+import { Session, url } from 'node:inspector/promises';
 import { captureDiagnosticHeapProfile } from ${JSON.stringify(ownerUrl.href)};
 // Preserve the workload's real source location for the owner's attribution policy.
 if (${JSON.stringify(preparedWorkloadUrl.href)} !== ${JSON.stringify(workloadUrl)}) {
@@ -427,6 +420,7 @@ if (${JSON.stringify(preparedWorkloadUrl.href)} !== ${JSON.stringify(workloadUrl
 }
 const { allocateHeapProfileWorkload, allocateDroppedHeapProfileWorkload } = await import(${JSON.stringify(workloadUrl)});
 assert.equal(url(), undefined);
+assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
 // Run each workload at the capture window boundary, without timer sleeps or polling.
 let retained;
 timers.setTimeout = async () => { retained = allocateHeapProfileWorkload(); };
@@ -453,7 +447,7 @@ const resultBytes = Buffer.byteLength(JSON.stringify(result));
 assert.ok(resultBytes <= 1024 * 1024);
 assert.ok(!JSON.stringify(result).includes(${JSON.stringify(root)}));
 assert.equal(url(), undefined);
-console.log(JSON.stringify({ functionName: 'allocateHeapProfileWorkload', selfBytes, count, resultBytes, durationMs: result.durationMs, samplingIntervalBytes: result.samplingIntervalBytes, heapUsedBefore: result.heapUsedBefore, heapUsedAfter: result.heapUsedAfter, rssBefore: result.rssBefore, rssAfter: result.rssAfter, truncated: result.truncated, unattributedSampleCount: result.unattributedSampleCount, unattributedSampleBytes: result.unattributedSampleBytes, listener: false }));
+console.log(JSON.stringify({ node: process.version, bun: process.versions.bun ?? null, functionName: 'allocateHeapProfileWorkload', selfBytes, count, resultBytes, durationMs: result.durationMs, samplingIntervalBytes: result.samplingIntervalBytes, heapUsedBefore: result.heapUsedBefore, heapUsedAfter: result.heapUsedAfter, rssBefore: result.rssBefore, rssAfter: result.rssAfter, truncated: result.truncated, unattributedSampleCount: result.unattributedSampleCount, unattributedSampleBytes: result.unattributedSampleBytes, listener: false }));
 assert.ok(retained.length > 0);
 retained = undefined;
 // Initialize V8's retained feedback and allocation sites outside the sampled window.
@@ -491,23 +485,34 @@ for (const includeCollected of [false, true]) {
   assert.ok(!JSON.stringify(result).includes(${JSON.stringify(root)}));
 }
 assert.equal(url(), undefined);
+const inspector = new Session();
+inspector.connect();
+try {
+  await assert.rejects(inspector.post('HeapProfiler.getSamplingProfile'), /sampling heap profiler was not started/);
+} finally {
+  inspector.disconnect();
+}
 `;
-      const result = await runNodeScript(
-        (workerArgv) => [
-          ...workerArgv(ownerUrl).slice(0, -1),
-          "--expose-gc",
-          "--input-type=module",
-          "--eval",
-          source,
-        ],
-        env,
-        20000,
-        { cwd: root, signal, maxBuffer: 32768, requireProcessTreeExit: true },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
-      console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());
-    },
-    30000,
-  );
+    const result = await runNodeScript(
+      (workerArgv) => [
+        ...workerArgv(ownerUrl).slice(0, -1),
+        "--expose-gc",
+        "--input-type=module",
+        "--eval",
+        source,
+      ],
+      env,
+      20000,
+      {
+        cwd: root,
+        signal,
+        maxBuffer: 32768,
+        requireProcessTreeExit: true,
+        executable: process.execPath,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
+    console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());
+  }, 30000);
 });

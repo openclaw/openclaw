@@ -87,7 +87,6 @@ function isLineAuthenticationFailure(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
-/** The imageSet a LINE inbound event belongs to, when it reported one. */
 // A set is one person's single send. In a group the lane is the whole room, so
 // the sender is what separates two members' sets - without it, a member the
 // group policy denies could have their image carried into an allowed member's

@@ -36,10 +36,9 @@ export function startSessionPatchDiagnostics(method: "sessions.patch" | "session
       }
       let phase: SessionPatchPhase | undefined = initialPhase;
       let phaseStartedAt = performance.now();
-      let closed = false;
       const scope: PhaseScope = {
         mark(nextPhase) {
-          if (closed || finished) {
+          if (!scopes.has(scope)) {
             return;
           }
           const now = performance.now();
@@ -50,11 +49,7 @@ export function startSessionPatchDiagnostics(method: "sessions.patch" | "session
           phaseStartedAt = now;
         },
         finish() {
-          if (closed) {
-            return;
-          }
           scope.mark();
-          closed = true;
           scopes.delete(scope);
         },
       };

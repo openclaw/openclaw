@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
@@ -12,11 +13,12 @@ import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
-import type {
-  SpawnSubagentContext,
-  SpawnSubagentParams,
-  SpawnSubagentResult,
+import {
+  rejectSubagentSpawnRequest,
+  type SpawnSubagentContext,
+  type SpawnSubagentParams,
 } from "./subagent-spawn-contract.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -26,10 +28,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-
-function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
-  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
-}
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
@@ -112,6 +110,7 @@ export async function resolveSubagentSpawnRequest(
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
   let completionRequesterLifecycleRevision: string | undefined;
+  let requesterEntry: SessionEntry | undefined;
   const captureRequester = async () => {
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
@@ -120,10 +119,21 @@ export async function resolveSubagentSpawnRequest(
         agentId: ctx.requesterAgentIdOverride,
         assertActive: ctx.assertActive,
       });
+      const completionEntry = target.store[target.canonicalKey];
+      completionRequesterSessionId = completionEntry?.sessionId;
+      completionRequesterLifecycleRevision = completionEntry?.lifecycleRevision;
+      // Proxied completion never supplies the controller's isolation or preferences.
+      const requesterTarget =
+        requesterInternalKey === ownership.completionRequesterSessionKey
+          ? target
+          : await resolveGatewaySessionStoreTargetInWorker({
+              cfg,
+              key: requesterInternalKey,
+              agentId: ctx.requesterAgentIdOverride,
+              assertActive: ctx.assertActive,
+            });
       ctx.assertActive?.();
-      const requesterEntry = target.store[target.canonicalKey];
-      completionRequesterSessionId = requesterEntry?.sessionId;
-      completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+      requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
@@ -202,6 +212,10 @@ export async function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterAgentId, requesterInternalKey, swarmGroupId])
     : undefined;
+  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
   const resolveAdmission = (pendingChildren = 0) => {
     const collectorRuns = params.collect
       ? swarmGroupId
@@ -210,6 +224,7 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      callerDepth,
       inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {
@@ -327,40 +342,33 @@ export async function resolveSubagentSpawnRequest(
   return {
     ok: true as const,
     resolved: {
-      request: {
-        taskName,
-        spawnMode,
-        cleanup,
-        expectsCompletionMessage,
-        completionRequesterSessionId,
-        completionRequesterLifecycleRevision,
-      },
-      runtime: {
-        hookRunner,
-        cfg,
-        runTimeoutSeconds,
-        contextMode,
-        requesterInternalKey,
-        ownership,
-        requesterAgentId,
-        targetAgentId,
-      },
-      swarm: {
-        config: swarmConfig,
-        groupId: swarmGroupId,
-        schedulerGroupKey: swarmSchedulerGroupKey,
-        launchReplayKey: swarmLaunchReplayKey,
-        soleImplicitMember,
-        reservationPending,
-        reservation,
-      },
-      admission: {
-        resolve: resolveAdmission,
-        initial: admission,
-        reservation: admissionReservation?.ok ? admissionReservation : undefined,
-        childDepth,
-        maxSpawnDepth,
-      },
+      taskName,
+      spawnMode,
+      cleanup,
+      expectsCompletionMessage,
+      completionRequesterSessionId,
+      completionRequesterLifecycleRevision,
+      hookRunner,
+      cfg,
+      runTimeoutSeconds,
+      contextMode,
+      requesterInternalKey,
+      ownership,
+      requesterEntry,
+      requesterAgentId,
+      targetAgentId,
+      swarmConfig,
+      swarmGroupId,
+      swarmSchedulerGroupKey,
+      swarmLaunchReplayKey,
+      soleImplicitMember,
+      reservationPending,
+      swarmReservation: reservation,
+      resolveAdmission,
+      admission,
+      admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,
+      childDepth,
+      maxSpawnDepth,
       childIdem,
     },
   };

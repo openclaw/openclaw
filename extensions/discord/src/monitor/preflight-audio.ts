@@ -53,15 +53,6 @@ const discordPreflightAudio = createChannelPreflightAudio({
   deferTranscriptEcho: false,
 });
 
-function collectAudioAttachments(
-  attachments: DiscordAudioAttachment[] | undefined,
-): DiscordAudioAttachment[] {
-  if (!Array.isArray(attachments)) {
-    return [];
-  }
-  return attachments.filter(discordPreflightAudio.isAudio);
-}
-
 export async function resolveDiscordPreflightAudioMentionContext(params: {
   message: {
     attachments?: DiscordAudioAttachment[];
@@ -73,7 +64,9 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   cfg: OpenClawConfig;
   abortSignal?: AbortSignal;
 }) {
-  const audioAttachments = collectAudioAttachments(params.message.attachments);
+  const audioAttachments = Array.isArray(params.message.attachments)
+    ? params.message.attachments.filter(discordPreflightAudio.isAudio)
+    : [];
   const hasAudioAttachment = audioAttachments.length > 0;
   const hasTypedText = Boolean(params.message.content?.trim());
   const needsPreflightTranscription =

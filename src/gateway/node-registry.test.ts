@@ -20,6 +20,7 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -686,6 +687,7 @@ describe("gateway/node-registry", () => {
         capacity: { total: 2, available: 0 },
         environmentSession: 1,
         capturedExecPolicy: true,
+        promptContext: 1,
       });
       expect(transport.isCurrent(proof, true)).toBe(false);
       for (const command of [
@@ -778,6 +780,99 @@ describe("gateway/node-registry", () => {
         await expect(registry.getCurrentConnected("node-1")).resolves.toBeUndefined();
         expect(registry.listConnected()).toHaveLength(1);
         expect(isDispatchAuthorized).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["prompt-context", "authority"] as const)(
+    "rechecks %s after the private launch pairing await",
+    async (closed) => {
+      const pairing = createDeferred<{ identity: string; generation: string }>();
+      const currentPairing = { identity: "identity-a", generation: "generation-a" };
+      const resolveCurrentPairingState = vi.fn().mockResolvedValue(currentPairing);
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createPrivateRegistry({ resolveCurrentPairingState });
+      const frames: string[] = [];
+      registerNodeSession(
+        registry,
+        makeClient("conn-1", "node-1", frames, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST }),
+        pairingA,
+      );
+      const workerHost = {
+        enabled: true as const,
+        capacity: { total: 1, available: 1 },
+        environmentSession: 1 as const,
+        capturedExecPolicy: true as const,
+        promptContext: 1 as const,
+      };
+      publishRunner(registry, workerHost);
+      const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
+      resolveCurrentPairingState.mockImplementationOnce(() => pairing.promise);
+      let authorized = true;
+      const dispatched = vi.fn();
+      const outcome = transport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        params: {},
+        isDispatchAuthorized: () => authorized,
+        onDispatchReady: dispatched,
+      });
+      if (closed === "prompt-context") {
+        publishRunner(registry, { ...workerHost, promptContext: undefined });
+      } else {
+        authorized = false;
+      }
+      pairing.resolve(currentPairing);
+      await expect(outcome).resolves.toMatchObject({ ok: false });
+      expect(frames).toEqual([]);
+      expect(dispatched).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["current", "owner-revoked", "node-revoked"] as const)(
+    "settles a dispatched maintenance response with %s completion custody",
+    async (completion) => {
+      const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+        createPrivateRegistry();
+      const frames: string[] = [];
+      registerNodeSession(
+        registry,
+        makeClient("conn-1", "node-1", frames, {
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
+        }),
+        pairingA,
+      );
+      publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
+      const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
+      const dispatched = createDeferred();
+      let dispatchCurrent = true;
+      let completionCurrent = true;
+      const invocation = transport.invoke({
+        node: proof,
+        command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+        isDispatchAuthorized: () => dispatchCurrent,
+        isCompletionAuthorized: () => completionCurrent,
+        onDispatchReady: () => dispatched.resolve(),
+      });
+      await dispatched.promise;
+      dispatchCurrent = false;
+      if (completion === "owner-revoked") {
+        completionCurrent = false;
+      } else if (completion === "node-revoked") {
+        publishRunner(registry, { enabled: false });
+      }
+      const payloadJSON = JSON.stringify({ applied: true, deleted: 0, hasMore: false });
+      expect(finish(registry, readRequest(frames).id, { ok: true, payloadJSON })).toBe(
+        completion === "current",
+      );
+      if (completion === "current") {
+        await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON });
+      } else {
+        await expect(invocation).resolves.toMatchObject({
+          ok: false,
+          error: { code: "APPROVAL_AUTHORITY_CLOSED" },
+        });
       }
     },
   );

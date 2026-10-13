@@ -8,6 +8,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
@@ -26,7 +27,7 @@ import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-
 import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { notifyListeners } from "../../shared/listeners.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
@@ -66,7 +67,9 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
-  sessionTarget: Readonly<BoundAgentRunSessionTarget>;
+  sessionTarget: Readonly<
+    BoundAgentRunSessionTarget & ReturnType<typeof captureSessionTranscriptTargetBinding>
+  >;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
@@ -97,6 +100,7 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    inference?: WorkerInferenceExecutor;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
@@ -163,7 +167,7 @@ export async function bindWorkerTurnOwner(
   }>
 > {
   let claim = structuredClone(requestedClaim);
-  const sessionTarget = Object.freeze({ ...requestedSource });
+  const sessionTarget = Object.freeze(captureSessionTranscriptTargetBinding(requestedSource));
   const preparedPromptCacheContext = promptCacheContext
     ? Object.freeze({ ...promptCacheContext })
     : undefined;
@@ -191,7 +195,6 @@ export async function bindWorkerTurnOwner(
         throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
       }
     };
-    assertPreparedCurrent();
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
@@ -226,15 +229,8 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [
-      delegatedSource.assertCurrent,
-      assertRunActive,
-      operatorAuthority?.assertCurrent,
-      delegatedSource.assertCurrent,
-    ],
+    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
     (assertSources) => {
-      // A closed claim must not consult its retired source. Callbacks can also revoke it.
-      assertOwnerCurrent();
       assertSources();
       assertOwnerCurrent();
     },
@@ -350,7 +346,6 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    isBoundCurrent() &&
     validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
     isBoundCurrent();
 }
@@ -409,6 +404,7 @@ export function bindWorkerTurnCapabilities(
   capabilities: {
     toolSurface: WorkerGatewayToolRuntime;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
+    inference?: WorkerInferenceExecutor;
   },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
@@ -431,6 +427,10 @@ export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.inference;
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */

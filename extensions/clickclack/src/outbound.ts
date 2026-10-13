@@ -137,20 +137,15 @@ function createOutboundContext(params: {
   assertDirectAdapterHandoff?: () => void;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const assertDirectAdapterHandoff = params.assertDirectAdapterHandoff;
   const client = createClickClackClient({
     baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
-    beforeRequest: assertDirectAdapterHandoff,
+    beforeRequest: params.assertDirectAdapterHandoff,
   });
   return { account, client };
 }
 
-/**
- * Sends visible text to a normalized ClickClack target and returns the created
- * message id, or undefined when sanitization removes all content.
- */
 export async function sendClickClackText(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -169,12 +164,12 @@ export async function sendClickClackText(params: {
   /** Records recipient-visible dispatch immediately before message creation. */
   onPlatformSendDispatch?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
-}): Promise<string | undefined> {
+}): Promise<{ messageId: string } | { outcome: "not_sent" }> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
   const text = sanitizeAssistantVisibleText(params.text);
   if (!text) {
-    return undefined;
+    return { outcome: "not_sent" };
   }
   const { account, client } = createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
@@ -190,7 +185,7 @@ export async function sendClickClackText(params: {
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
-  return message.id;
+  return { messageId: message.id };
 }
 
 export async function sendClickClackMedia(

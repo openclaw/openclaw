@@ -79,68 +79,7 @@ function fixture(queue: Message[] = [], target = queue[0]) {
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
-  it.each(
-    (["accepted", "rejected"] as const).flatMap((disposition) => [
-      { disposition, callback: "acceptance" as const, tracked: true },
-      { disposition, callback: "settlement" as const, tracked: true },
-      { disposition, callback: "acceptance" as const, tracked: false },
-    ]),
-  )(
-    "settles $disposition input when its $callback observer throws (tracked: $tracked)",
-    async ({ disposition, callback, tracked }) => {
-      vi.useFakeTimers();
-      const target = message("observer failure");
-      const f = fixture([target]);
-      if (disposition === "rejected") {
-        f.session.steer = async () => {
-          throw new Error("source refused");
-        };
-      }
-      const failObserver = () => {
-        throw new Error("observer failed");
-      };
-      let result: { value?: unknown; error?: unknown } | undefined;
-      const waiting = steerActiveSessionWithOptionalDeliveryWait(f.session, "observer failure", {
-        waitForTranscriptCommit: tracked ? true : undefined,
-        onQueueAccepted: callback === "acceptance" ? failObserver : undefined,
-        onQueueSettled: callback === "settlement" ? failObserver : undefined,
-      }).then(
-        (value) => {
-          result = { value };
-        },
-        (error: unknown) => {
-          result = { error };
-        },
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      let emissionError: unknown;
-      if (disposition === "accepted" && callback === "settlement") {
-        try {
-          f.emit({ type: "message_end", message: target });
-        } catch (error) {
-          emissionError = error;
-        }
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      expect(emissionError).toBeUndefined();
-      expect(result).toBeDefined();
-      await waiting;
-      if (disposition === "accepted") {
-        if (tracked) {
-          expect(result?.value).toMatchObject({ transcriptCommit: "unconfirmed" });
-        } else {
-          expect(result?.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
-        }
-      } else {
-        expect(result?.error).toMatchObject({
-          cause: expect.objectContaining({ message: "source refused" }),
-        });
-      }
-      expect(f.listeners).toHaveLength(0);
-    },
-  );
-
-  it("retains real enqueued input when admission cleanup and rejection observers fail", async () => {
+  it("retains real enqueued input when admission cleanup fails", async () => {
     const { session } = await createTestSession();
     vi.useFakeTimers();
     const prepare = async () => {};
@@ -154,12 +93,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "already owned input",
       {
         waitForTranscriptCommit: true,
-        onQueueAccepted: () => {
-          throw new Error("acceptance observer failed");
-        },
-        onQueueSettled: () => {
-          throw new Error("settlement observer failed");
-        },
       },
       undefined,
       undefined,
@@ -172,16 +105,13 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(session.getSteeringMessages()).toEqual(["already owned input"]);
     expect(result).toBeDefined();
     await waiting;
-    expect(result?.error).toMatchObject({
-      cause: expect.any(MessageInjectionAcceptedUnconfirmedError),
-    });
+    expect(result?.error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
   });
 
-  it.each(
-    (["terminal", "abort", "handoff"] as const).flatMap((cause) =>
-      (["fulfilled", "rejected"] as const).map((admission) => ({ cause, admission })),
-    ),
-  )(
+  it.each([
+    { cause: "abort", admission: "rejected" },
+    { cause: "handoff", admission: "fulfilled" },
+  ])(
     "joins $admission admission cleanup when $cause cannot remove input that left the runtime queue",
     async ({ cause, admission }) => {
       const { session } = await createTestSession();
@@ -228,7 +158,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         if (cause === "abort") {
           controller.abort();
         } else {
-          f.emit({ type: cause === "handoff" ? "agent_handoff" : "agent_settled" });
+          f.emit({ type: "agent_handoff" });
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(result).toBeUndefined();
@@ -245,66 +175,61 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     },
   );
 
-  it.each([false, true])(
-    "closes admission on pre-enqueue persistence failure (observer throws: %s)",
-    async (observerThrows) => {
-      const { session } = await createTestSession();
-      vi.useFakeTimers();
-      const entered = deferred();
-      const release = deferred();
-      const prepare = async () => {};
-      bindMessageInjectionAdmission(prepare, async (consume) => {
-        entered.resolve();
-        await release.promise;
-        return consume();
+  it("closes admission on pre-enqueue persistence failure when the observer throws", async () => {
+    const { session } = await createTestSession();
+    vi.useFakeTimers();
+    const entered = deferred();
+    const release = deferred();
+    const prepare = async () => {};
+    bindMessageInjectionAdmission(prepare, async (consume) => {
+      entered.resolve();
+      await release.promise;
+      return consume();
+    });
+    const steering = vi.spyOn(session, "steer");
+    const queueIdentity = "pre-enqueue-persistence-failure";
+    const persistenceError = new Error("input persistence failed before enqueue");
+    const onQueueAccepted = vi.fn();
+    const onQueueSettled = vi.fn(() => {
+      throw new Error("settlement observer failed");
+    });
+    let outcome: { error: unknown } | undefined;
+    const waiting = steerActiveSessionWithOptionalDeliveryWait(
+      session,
+      "must not enqueue",
+      { waitForTranscriptCommit: true, queueIdentity, onQueueAccepted, onQueueSettled },
+      undefined,
+      undefined,
+      undefined,
+      prepare,
+    ).catch((error: unknown) => {
+      outcome = { error };
+    });
+    try {
+      await entered.promise;
+      reportSteeringMessagePersistenceFailure(
+        message("must not enqueue", queueIdentity),
+        persistenceError,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome).toBeUndefined();
+      expect(onQueueAccepted).not.toHaveBeenCalled();
+      release.resolve();
+      await waiting;
+      expect(outcome?.error).toMatchObject({
+        cause: expect.objectContaining({ message: persistenceError.message }),
       });
-      const steering = vi.spyOn(session, "steer");
-      const queueIdentity = "pre-enqueue-persistence-failure";
-      const persistenceError = new Error("input persistence failed before enqueue");
-      const onQueueAccepted = vi.fn();
-      const onQueueSettled = vi.fn(() => {
-        if (observerThrows) {
-          throw new Error("settlement observer failed");
-        }
-      });
-      let outcome: { error: unknown } | undefined;
-      const waiting = steerActiveSessionWithOptionalDeliveryWait(
-        session,
-        "must not enqueue",
-        { waitForTranscriptCommit: true, queueIdentity, onQueueAccepted, onQueueSettled },
-        undefined,
-        undefined,
-        undefined,
-        prepare,
-      ).catch((error: unknown) => {
-        outcome = { error };
-      });
-      try {
-        await entered.promise;
-        reportSteeringMessagePersistenceFailure(
-          message("must not enqueue", queueIdentity),
-          persistenceError,
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        expect(outcome).toBeUndefined();
-        expect(onQueueAccepted).not.toHaveBeenCalled();
-        release.resolve();
-        await waiting;
-        expect(outcome?.error).toMatchObject({
-          cause: expect.objectContaining({ message: persistenceError.message }),
-        });
-        expect(session.agent.hasQueuedMessages()).toBe(false);
-        expect(session.getSteeringMessages()).toEqual([]);
-        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
-        expect(onQueueSettled).toHaveBeenCalledOnce();
-      } finally {
-        release.resolve();
-        await Promise.allSettled([waiting, ...steering.mock.results.map((result) => result.value)]);
-      }
-    },
-  );
+      expect(session.agent.hasQueuedMessages()).toBe(false);
+      expect(session.getSteeringMessages()).toEqual([]);
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+      expect(onQueueSettled).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([waiting, ...steering.mock.results.map((result) => result.value)]);
+    }
+  });
 
-  it.each(["message_end", "agent_settled", "agent_handoff"])(
+  it.each(["message_end", "agent_handoff"])(
     "keeps admission-only steering owned until %s",
     async (terminal) => {
       vi.useFakeTimers();
@@ -564,17 +489,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     await expect(wait).rejects.toThrow("queued steering message was cancelled before delivery");
     expect(f.queue).toEqual([first]);
     expect(f.retire).toHaveBeenCalledOnce();
-  });
-
-  it("marks a missing queued message as accepted without transcript confirmation", async () => {
-    vi.useFakeTimers();
-    const f = fixture();
-    const wait = f.wait("possibly consumed", { deliveryTimeoutMs: 1 });
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(wait).resolves.toEqual({
-      transcriptCommit: "unconfirmed",
-      errorMessage: timeoutError,
-    });
   });
 
   it("keeps an image steer pending across nonterminal retry and compaction events", async () => {

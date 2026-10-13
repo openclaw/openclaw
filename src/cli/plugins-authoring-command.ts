@@ -22,6 +22,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 import { formatCliOperatorError } from "./failure-output.js";
+import { readPluginAuthoringJson as readJsonFile } from "./plugins-authoring-json.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -53,15 +54,6 @@ type PluginsInitOptions = {
 const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = ["tool", "provider", "feature"] as const;
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
 const TOOL_PLUGIN_API_RANGE = ">=2026.5.17";
-
-function readJsonFile(filePath: string): JsonObject {
-  const raw = fs.readFileSync(filePath, "utf8");
-  try {
-    return JSON.parse(raw) as JsonObject;
-  } catch (err) {
-    throw new Error(`Malformed JSON in ${filePath}`, { cause: err });
-  }
-}
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);

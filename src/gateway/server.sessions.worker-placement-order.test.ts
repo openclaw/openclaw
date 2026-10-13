@@ -1,8 +1,8 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, test } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { loadSessionEntry, resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -79,20 +79,14 @@ test.each(["delete", "archive", "recover"] as const)(
         await releaseMove.promise;
         return {
           managedWorktrees: {
-            findLiveByOwner: () => ({
+            findLiveByOwner: async () => ({
               id: "order-worktree",
               ownerId: sessionKey,
               path: "/fixture/worktree",
             }),
           },
-          resolveGatewaySessionStoreTargetWithStore: () => ({
-            storePath,
-            canonicalKey: sessionKey,
-            storeKeys: [sessionKey],
-            agentId: "main",
-            store: { [sessionKey]: loadSessionEntry(sessionKey).entry! },
-          }),
-          resolveCanonicalSessionEntryFromStoreKeys: () => loadSessionEntry(sessionKey).entry,
+          resolveGatewaySessionStoreTargetInWorker,
+          resolveCanonicalSessionEntryFromStoreKeys,
         } as never;
       },
       revokeSessionAuthority: () => {},
@@ -105,6 +99,7 @@ test.each(["delete", "archive", "recover"] as const)(
         readEnvironmentSessionIds: unexpectedPlacementOperation,
         reconcile: unexpectedPlacementOperation,
         reconcileActive: unexpectedPlacementOperation,
+        isInterruptedTurn: () => false,
         resumeProvisioning: unexpectedPlacementOperation,
         move: async () => {
           await moveBarrier({
@@ -176,8 +171,11 @@ test.each(["delete", "archive", "recover"] as const)(
         }),
       ]);
       releaseMove.resolve();
-      await nextTurn();
+      await moving;
       acquiredBeforeCleanup = moveAcquired;
+      if (moveAcquired) {
+        await serializedReclaim;
+      }
     } finally {
       // Unwind the baseline's real queues before asserting the ordering failure.
       releaseMove.resolve();

@@ -24,10 +24,6 @@ import {
   loadPersistedAuthProfileStoreAtDatabasePath,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type {
   AuthProfileCredential,
@@ -44,7 +40,6 @@ export function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): Au
   const stripped = { ...store };
   delete stripped.runtimeExternalProfileIds;
   delete stripped.runtimeExternalProfileIdsAuthoritative;
-  setRuntimeExternalCliProfileIds(stripped, []);
   return stripped;
 }
 
@@ -186,12 +181,6 @@ export function replaceRuntimeAuthProfileStoreCredentials(
         ? [...external].toSorted()
         : undefined,
   };
-  setRuntimeExternalCliProfileIds(
-    next,
-    getRuntimeExternalCliProfileIds(store).filter(
-      (id) => !changed.includes(id) || external.has(id),
-    ),
-  );
   return next;
 }
 
@@ -357,15 +346,6 @@ export function runtimeAuthSharedOwnerRebound(
     : !isDeepStrictEqual(previous, next);
 }
 
-export function runtimeAuthCredentialState(
-  entries: Iterable<[string, RuntimeAuthProfileStore]>,
-): Array<readonly [string, AuthProfileStore["profiles"]]> {
-  return Array.from(entries)
-    .filter(([, store]) => Object.keys(store.profiles).length > 0)
-    .map(([key, store]) => [key, store.profiles] as const)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-}
-
 /** Model metadata follows credentials and availability, never rotation bookkeeping. */
 export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
   return {
@@ -374,7 +354,6 @@ export function runtimeAuthMetadataState(store: RuntimeAuthProfileStore) {
     runtimePersistedProfileIds: store.runtimePersistedProfileIds,
     runtimeExternalProfileIds: store.runtimeExternalProfileIds,
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
-    runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
     availability: Object.fromEntries(
@@ -434,22 +413,16 @@ export function pruneAuthProfileStoreReferences(
         ),
       )
     : undefined;
-  store.runtimePersistedProfileIds = store.runtimePersistedProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
+  for (const field of [
+    "runtimePersistedProfileIds",
+    "runtimeLocalProfileIds",
+    "runtimeExternalProfileIds",
+  ] as const) {
+    store[field] = store[field]?.filter((profileId) => keptProfileIds.has(profileId)).toSorted();
+  }
   if (store.runtimePersistedProfileIds?.length === 0) {
     store.runtimePersistedProfileIds = undefined;
   }
-  store.runtimeLocalProfileIds = store.runtimeLocalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
-  store.runtimeExternalProfileIds = store.runtimeExternalProfileIds
-    ?.filter((profileId) => keptProfileIds.has(profileId))
-    .toSorted();
-  setRuntimeExternalCliProfileIds(
-    store,
-    getRuntimeExternalCliProfileIds(store).filter((profileId) => keptProfileIds.has(profileId)),
-  );
   if (
     store.runtimeExternalProfileIds?.length === 0 &&
     store.runtimeExternalProfileIdsAuthoritative !== true

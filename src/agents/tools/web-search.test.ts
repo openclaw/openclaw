@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import {
-  MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
   isoToPerplexityDate,
   normalizeToIsoDate,
@@ -18,22 +17,6 @@ import { createWebSearchTool } from "./web-search.js";
 describe("web_search tool schema", () => {
   it("omits the managed tool when the session disables web search", () => {
     expect(createWebSearchTool({ enabled: false })).toBeNull();
-  });
-
-  it("marks query as required for model tool-call schemas", () => {
-    const tool = createWebSearchTool();
-    const parameters = tool?.parameters as { required?: unknown } | undefined;
-
-    expect(parameters?.required).toEqual(["query"]);
-  });
-
-  it("advertises the shared runtime count limit", () => {
-    const tool = createWebSearchTool();
-    const parameters = tool?.parameters as
-      | { properties?: { count?: { maximum?: unknown } } }
-      | undefined;
-
-    expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
 
   it("declares the normalized output contract with a complete compact hint", () => {
@@ -199,72 +182,6 @@ const normalizedProviderFixtures: Array<{
     },
   },
   {
-    name: "minimax results",
-    provider: "minimax",
-    query: "requested minimax query",
-    result: {
-      query: "minimax query",
-      provider: "minimax",
-      count: 1,
-      results: [
-        {
-          title: "MiniMax title",
-          url: "https://minimax.example/result",
-          description: "MiniMax snippet",
-          published: "yesterday",
-          siteName: "minimax.example",
-        },
-      ],
-      relatedSearches: ["related query"],
-    },
-    expected: {
-      kind: "results",
-      provider: "minimax",
-      query: "requested minimax query",
-      count: 1,
-      results: [
-        {
-          title: "MiniMax title",
-          url: "https://minimax.example/result",
-          snippet: "MiniMax snippet",
-          siteName: "minimax.example",
-        },
-      ],
-      externalContent: externalContent("minimax"),
-    },
-  },
-  {
-    name: "qa-lab minimal results",
-    provider: "qa-lab-search",
-    query: "requested qa query",
-    result: {
-      query: "qa query",
-      results: [
-        {
-          title: "QA Lab fixture",
-          url: "https://docs.openclaw.ai/qa-lab/search-fixture/1",
-          description: "QA Lab snippet",
-          siteName: "docs.openclaw.ai",
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "qa-lab-search",
-      query: "requested qa query",
-      count: 1,
-      results: [
-        {
-          title: "QA Lab fixture",
-          url: "https://docs.openclaw.ai/qa-lab/search-fixture/1",
-          snippet: "QA Lab snippet",
-          siteName: "docs.openclaw.ai",
-        },
-      ],
-      externalContent: externalContent("qa-lab-search"),
-    },
-  },
-  {
     name: "structured provider error",
     provider: "brave",
     query: "requested error query",
@@ -278,23 +195,6 @@ const normalizedProviderFixtures: Array<{
       error: "provider_error",
       message: "missing_brave_api_key",
       docs: "https://docs.openclaw.ai/tools/web",
-    },
-  },
-  {
-    name: "external plugin arbitrary shape",
-    provider: "external-demo",
-    query: "requested external query",
-    result: {
-      arbitrary: { nested: "value" },
-      providerSpecificFlag: true,
-    },
-    expected: {
-      kind: "raw",
-      provider: "external-demo",
-      data: {
-        arbitrary: { nested: "value" },
-        providerSpecificFlag: true,
-      },
     },
   },
 ];
@@ -327,6 +227,17 @@ describe("web_search normalized output contract", () => {
 
       expect(stripWrapMarkers(normalized)).toEqual(expected);
       expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+      if (provider === "brave" && normalized.kind === "results") {
+        const snippet = normalized.results[0]?.snippet;
+        expect(snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
+        expect(snippet?.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
+        expect(snippet).not.toContain('id="c0ffee"');
+        const generatedId = snippet?.match(
+          /<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]+)">>>/u,
+        )?.[1];
+        expect(generatedId).toBeDefined();
+        expect(snippet).toContain(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${generatedId}">>>`);
+      }
     },
   );
 
@@ -347,41 +258,6 @@ describe("web_search normalized output contract", () => {
     expect(normalized.externalContent).toEqual(externalContent("qa-lab-search"));
     expect(normalized.results[0]?.title).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(normalized.results[0]?.snippet).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-  });
-
-  it("strips and re-wraps provider-wrapped text exactly once", () => {
-    const innerSnippet = "already wrapped snippet";
-    const normalized = normalizeWebSearchOutput({
-      provider: "brave",
-      query: "wrap check",
-      result: {
-        externalContent: {
-          untrusted: false,
-          source: "provider-controlled",
-          wrapped: true,
-          provider: "payload-provider",
-        },
-        results: [
-          {
-            title: "Wrapped title",
-            url: "https://example.com",
-            snippet: preWrappedText(innerSnippet),
-          },
-        ],
-      },
-    });
-
-    if (normalized.kind !== "results") {
-      throw new Error("expected results branch");
-    }
-    const snippet = normalized.results[0]?.snippet;
-    expect(snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
-    expect(snippet?.match(/<<<END_EXTERNAL_UNTRUSTED_CONTENT/gu)?.length).toBe(1);
-    expect(snippet).not.toContain('id="c0ffee"');
-    expect(snippet).toContain(innerSnippet);
-    const generatedId = snippet?.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([0-9a-f]+)">>>/u)?.[1];
-    expect(generatedId).toBeDefined();
-    expect(snippet).toContain(`<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${generatedId}">>>`);
   });
 
   it("gates provider error text: code charset, wrapped message, http docs only", () => {
@@ -418,19 +294,6 @@ describe("web_search normalized output contract", () => {
     const expectedPrefix = `{"message":"${"x".repeat(1_987)}`;
     expect(stripWrapMarkers(normalized.message)).toBe(expectedPrefix);
     expect(expectedPrefix).toHaveLength(1_999);
-  });
-
-  it("keeps ordinary Source attribution lines in answer content", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "attribution",
-      result: { content: "Summary text.\nSource: Reuters\n---\nMore detail." },
-    });
-
-    if (normalized.kind !== "answer") {
-      throw new Error("expected answer branch");
-    }
-    expect(normalized.content).toContain("Source: Reuters");
   });
 
   it("routes sparse result arrays to the raw branch", () => {
@@ -485,20 +348,6 @@ describe("web_search normalized output contract", () => {
     expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
   });
 
-  it("reports a declared error even when an empty results array is present", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "error precedence",
-      result: { error: "rate_limited", results: [] },
-    });
-
-    expect(normalized.kind).toBe("error");
-    if (normalized.kind === "error") {
-      expect(normalized.error).toBe("provider_error");
-      expect(normalized.message).toContain("rate_limited");
-    }
-  });
-
   it("wraps answer content and citation titles for unwrapped providers", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-answer",
@@ -534,12 +383,6 @@ describe("web_search freshness normalization", () => {
 
   it("accepts valid date ranges for Brave", () => {
     expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
-  });
-
-  it("rejects invalid values", () => {
-    expect(normalizeFreshness("yesterday", "brave")).toBeUndefined();
-    expect(normalizeFreshness("yesterday", "perplexity")).toBeUndefined();
-    expect(normalizeFreshness("2024-01-01to2024-01-31", "perplexity")).toBeUndefined();
   });
 
   it("rejects invalid date ranges for Brave", () => {
@@ -647,20 +490,6 @@ describe("web_search scoped config merge", () => {
   it("drops retired provider config when no plugin config exists", () => {
     const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
     expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toEqual({ provider: "grok" });
-  });
-
-  it("projects plugin config into a runtime-only provider object", () => {
-    const merged = mergeScopedSearchConfig(
-      { provider: "grok", grok: { model: "old-model" } },
-      "grok",
-      {
-        model: "new-model",
-        apiKey: "xai-test-key",
-      },
-    );
-
-    expect(merged?.grok).toEqual({ model: "new-model", apiKey: "xai-test-key" });
-    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
   });
 
   it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {

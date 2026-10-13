@@ -83,6 +83,25 @@ export function isIncognitoOpenClawAgentSqlitePath(
   );
 }
 
+/** An explicit sentinel names its physical root; ambient state cannot redirect it. */
+export function resolveExplicitIncognitoAgentSqliteTarget(
+  pathname: string | undefined,
+  options: { agentId?: string; env?: NodeJS.ProcessEnv } = {},
+): { agentId: string; env: NodeJS.ProcessEnv; path: string } | undefined {
+  if (!pathname || path.basename(pathname) !== INCOGNITO_AGENT_SQLITE_BASENAME) {
+    return undefined;
+  }
+  const resolved = path.resolve(pathname);
+  const agentId = normalizeAgentId(
+    options.agentId ?? path.basename(path.dirname(path.dirname(resolved))),
+  );
+  const env = options.env ?? { OPENCLAW_STATE_DIR: path.resolve(resolved, "../../../..") };
+  if (!isIncognitoOpenClawAgentSqlitePath(resolved, { agentId, env })) {
+    throw new Error("Explicit incognito database target does not match its agent and state root");
+  }
+  return { agentId, env, path: resolved };
+}
+
 type AgentDatabasePathIdentity = { lexicalPath: string } & (
   | { realPath: string; device: bigint; inode: bigint }
   | {
@@ -103,15 +122,10 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
   }
   const lowercaseEquivalent = left.toLowerCase() === right.toLowerCase();
   const uppercaseEquivalent = left.toUpperCase() === right.toUpperCase();
-  if (!lowercaseEquivalent && !uppercaseEquivalent) {
-    return false;
-  }
-  // Keep dotted-I expansions distinct even on filesystems that collapse them.
-  // That existing isolation contract avoids locale-sensitive owner aliasing.
-  return !(
-    Array.from(left).length !== Array.from(right).length &&
-    lowercaseEquivalent &&
-    !uppercaseEquivalent
+  // Keep lowercase-only dotted-I expansions distinct even on filesystems that collapse them.
+  return (
+    uppercaseEquivalent ||
+    (lowercaseEquivalent && Array.from(left).length === Array.from(right).length)
   );
 }
 
@@ -257,6 +271,7 @@ function areSameAgentDatabasePathIdentities(
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
 export function createOpenClawAgentDatabasePathMatcher(): {
   (left: string, right: string): boolean;
+  createIndex(): (pathname: string) => string;
   isCurrent(): boolean;
 } {
   const identities = new Map<string, AgentDatabasePathIdentity>();
@@ -275,6 +290,53 @@ export function createOpenClawAgentDatabasePathMatcher(): {
     (left: string, right: string) =>
       areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
     {
+      // Independent groups share observations, but retain their own first path spelling.
+      createIndex() {
+        const keys = new Map<string, string>();
+        const groups: AgentDatabasePathIdentity[] = [];
+        const fileGroups = new Map<string, number>();
+        const realPathGroups = new Map<string, number>();
+        const missingParentGroups = new Map<string, number[]>();
+        return (pathname: string) => {
+          const identity = resolveIdentity(pathname);
+          const cached = keys.get(identity.lexicalPath);
+          if (cached !== undefined) {
+            return cached;
+          }
+          let group: number | undefined;
+          if ("realPath" in identity) {
+            const fileKey = `${identity.device}:${identity.inode}`;
+            const fileGroup = fileGroups.get(fileKey);
+            const realPathGroup = realPathGroups.get(identity.realPath);
+            group =
+              fileGroup === undefined
+                ? realPathGroup
+                : realPathGroup === undefined
+                  ? fileGroup
+                  : Math.min(fileGroup, realPathGroup);
+            if (group === undefined) {
+              group = groups.push(identity) - 1;
+              fileGroups.set(fileKey, group);
+              realPathGroups.set(identity.realPath, group);
+            }
+          } else {
+            const parentKey = `${identity.parentDevice}:${identity.parentInode}`;
+            const candidates = missingParentGroups.get(parentKey) ?? [];
+            group = candidates.find((index) =>
+              areSameAgentDatabasePathIdentities(groups[index]!, identity),
+            );
+            if (group === undefined) {
+              group = groups.push(identity) - 1;
+              candidates.push(group);
+              missingParentGroups.set(parentKey, candidates);
+            }
+          }
+          // Only retained representatives enter the index, preserving first-match ownership.
+          const key = groups[group]!.lexicalPath;
+          keys.set(identity.lexicalPath, key);
+          return key;
+        };
+      },
       isCurrent() {
         for (const previous of identities.values()) {
           const current = resolveAgentDatabasePathIdentity(previous.lexicalPath);

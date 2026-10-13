@@ -46,7 +46,8 @@ vi.mock("./push-apns-store-transaction.js", () => ({
   clearApnsRegistrationFromDatabase: mocks.native,
   nextApnsRegistrationVersion: mocks.native,
 }));
-vi.mock("./push-apns.relay.js", () => ({
+// mock-isolation: Worker-read forwarding must not decode or validate APNs rows on the host.
+vi.mock("./push-apns-relay-url.js", () => ({
   normalizeApnsRelayBaseUrl: mocks.native,
   normalizePersistedApnsRelayBaseUrl: mocks.native,
 }));

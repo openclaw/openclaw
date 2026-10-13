@@ -35,9 +35,7 @@ export type ExtensionToRelayMessage =
       method: string;
       params?: unknown;
     }
-  /** Successful response to a relay command (cdp/attach/createTab/...). */
   | { type: "result"; seq: number; result?: unknown }
-  /** Failed response to a relay command. */
   | { type: "error"; seq: number; message: string }
   /** chrome.debugger detached outside relay control (infobar cancel, tab gone). */
   | { type: "detached"; tabId: number; reason: string }

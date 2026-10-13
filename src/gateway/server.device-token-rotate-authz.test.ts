@@ -243,16 +243,11 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
     ).toBeUndefined();
   });
 
-  test.each([
-    { method: "device.token.rotate", admin: false },
-    { method: "device.token.rotate", admin: true },
-    { method: "device.token.revoke", admin: false },
-    { method: "device.pair.remove", admin: false },
-  ])(
-    "delivers self $method before close and fences later frames (admin=$admin)",
-    async ({ method, admin }) => {
-      const scopes = admin ? ["operator.admin"] : ["operator.pairing", "operator.read"];
-      const device = await issueOperator(`self-${method}-${admin}`, scopes);
+  test.each(["device.token.rotate", "device.token.revoke", "device.pair.remove"])(
+    "delivers self %s before close and fences later frames",
+    async (method) => {
+      const scopes = ["operator.pairing", "operator.read"];
+      const device = await issueOperator(`self-${method}`, scopes);
       const before = await getPairedDevice(device.deviceId);
       const ws = await openWs();
       await connectOk(ws, {
@@ -297,9 +292,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
         expect(after).toBeNull();
       } else {
         expect(after?.approvedScopes).toEqual(before?.approvedScopes);
-        expect(after?.tokens?.operator?.scopes).toEqual(
-          admin ? ["operator.admin", "operator.read", "operator.write"] : scopes,
-        );
+        expect(after?.tokens?.operator?.scopes).toEqual(scopes);
         if (method === "device.token.rotate") {
           const payload = frames[0]?.payload;
           expect(payload?.tokenDelivery).toBe("in-band");

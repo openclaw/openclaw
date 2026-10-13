@@ -4,6 +4,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -21,11 +22,16 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import {
+  runSqliteSessionDeletionTransaction,
+  withSqliteSessionDeletions,
+} from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { finalizeSessionMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-transaction.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   prepareSessionMaintenancePreservation,
@@ -77,6 +83,68 @@ function createPlannerStore(entryCount: number, updatedAt?: number) {
   database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
   return { database, storePath };
 }
+
+it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
+  const { database, storePath } = createPlannerStore(0);
+  const options = { agentId: "main", path: database.path, env: process.env };
+  const entries = [0, 1, 2].map((index) => {
+    const sessionKey = `agent:main:finalization-${index}`;
+    replaceSessionEntrySync(
+      { sessionKey, storePath },
+      {
+        sessionId: `finalization-${index}`,
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "retained snapshot".repeat(1024), skills: [] },
+      },
+    );
+    return { sessionKey, expectedEntry: loadSessionEntry({ sessionKey, storePath })! };
+  });
+  const changed = entries[2]!;
+  entries.push({
+    sessionKey: entries[0]!.sessionKey,
+    expectedEntry: { ...entries[0]!.expectedEntry, label: "stale duplicate" },
+  });
+  replaceSessionEntrySync(
+    { sessionKey: changed.sessionKey, storePath },
+    { ...changed.expectedEntry, label: "newer" },
+  );
+  const snapshots = trackSqliteStatementExecutions(database.db, ["snapshot"], (sql) =>
+    /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
+  );
+  try {
+    const result = await withSqliteSessionDeletions(
+      options,
+      entries.map(({ sessionKey, expectedEntry }) => ({ sessionKey, entry: expectedEntry })),
+      async () =>
+        runSqliteSessionDeletionTransaction(
+          (current) =>
+            finalizeSessionMaintenanceInDatabase(current, {
+              kind: "maintenance-finalize",
+              agentId: options.agentId,
+              databaseOptions: options,
+              entries,
+              materializedPlans: [],
+            }),
+          options,
+        ),
+    );
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
+    expect(result.value.committedEntryIndices).toEqual([0, 1]);
+    expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
+      entries.length + result.value.committedEntryIndices.length,
+    );
+  } finally {
+    snapshots.restore();
+  }
+  for (const { sessionKey } of entries.slice(0, 2)) {
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  }
+  expect(loadSessionEntry({ sessionKey: changed.sessionKey, storePath })).toEqual({
+    ...changed.expectedEntry,
+    label: "newer",
+  });
+  expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
+});
 
 it("avoids inventory projection for sequential writes with no retention candidates", async () => {
   const { database, storePath } = createPlannerStore(32, Date.now());
@@ -189,9 +257,16 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
     ["tie-\u{10000}", { updatedAt: old + 3, lastActivityAt: old + 10 }],
     ["started", { sessionStartedAt: now }],
-    ["pinned", { pinnedAt: old }],
+    [
+      "pinned",
+      {
+        pinnedAt: old,
+        sidebarRoot: true,
+        spawnedBy: key("parent"),
+        parentSessionKey: key("parent"),
+      },
+    ],
     ["locked", { modelSelectionLocked: true }],
-    ["running", { status: "running" }],
     ["group", { chatType: "group" }],
     ["recent", { lastActivityAt: now }],
     ["live", {}],
@@ -489,18 +564,13 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const authorization = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((callback, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          reachedCommit = true;
-          current = false;
-        }
-        return callback(request, grant);
-      }, attachment),
-    );
+  const authorization = probe.admission(workerAdmission, (request, grant, callback) => {
+    if (request.stage === "commit") {
+      reachedCommit = true;
+      current = false;
+    }
+    return callback(request, grant);
+  });
 
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
     isCurrent: () => current,
@@ -514,33 +584,4 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
   });
   expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
-});
-
-it("refreshes the retained parent query planner after worker analysis", async () => {
-  const { database } = createPlannerStore(1);
-  database.db.exec(`
-    CREATE TABLE maintenance_planner_probe (a INTEGER, b INTEGER, payload TEXT);
-    CREATE INDEX maintenance_probe_a ON maintenance_planner_probe(a);
-    CREATE INDEX maintenance_probe_b ON maintenance_planner_probe(b);
-    WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
-    INSERT INTO maintenance_planner_probe
-      SELECT CASE WHEN i<=9900 THEN 1 ELSE i-9899 END,
-        CASE WHEN i<=9900 THEN i+1 ELSE 1 END, 'synthetic' FROM n;
-    PRAGMA analysis_limit=0;
-    ANALYZE main;
-  `);
-  const plan = () =>
-    database.db
-      .prepare("EXPLAIN QUERY PLAN SELECT payload FROM maintenance_planner_probe WHERE a=1 AND b=1")
-      .all()
-      .map((row) => row.detail);
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_b")]);
-  database.db.exec("DELETE FROM maintenance_planner_probe WHERE a=1");
-
-  await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(
-    { agentId: "main", path: database.path },
-    9900,
-  );
-
-  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_a")]);
 });

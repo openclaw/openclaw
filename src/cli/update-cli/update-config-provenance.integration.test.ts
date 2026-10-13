@@ -251,6 +251,7 @@ describe("update config provenance", () => {
         expect(persisted.bindings).toEqual([
           narrowerRoute,
           { agentId: "ops", match: { channel: "discord", accountId: "default" } },
+          { agentId: "ops", match: { channel: "discord", accountId: "*" } },
         ]);
       });
     },

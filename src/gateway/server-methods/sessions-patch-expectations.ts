@@ -17,6 +17,7 @@ import {
   assertSessionPatchCommitAllowed,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import { prepareSessionPatchSidebarAncestors } from "./sessions-patch-sidebar-ancestors.js";
 import type {
   MutationOutcome,
   MutationTarget,
@@ -62,6 +63,12 @@ export function resolveSessionPatchTargetError(
   const { fullPatch: patch, initialEntry } = target;
   const changed =
     (patch.expectedSessionId !== undefined && entry?.sessionId !== patch.expectedSessionId) ||
+    (patch.expectedSidebarRoot !== undefined &&
+      (entry?.sidebarRoot === true) !== patch.expectedSidebarRoot) ||
+    (patch.expectedCategory !== undefined &&
+      (entry?.category ?? null) !== patch.expectedCategory) ||
+    (patch.expectedArchived !== undefined &&
+      (entry?.archivedAt !== undefined) !== patch.expectedArchived) ||
     (patch.expectedLifecycleRevision !== undefined &&
       entry?.lifecycleRevision !== patch.expectedLifecycleRevision) ||
     (initialEntry !== undefined && entry === undefined) ||
@@ -104,38 +111,15 @@ export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
     ...(patch.expectedToolOverrides !== undefined
       ? { expectedToolOverrides: patch.expectedToolOverrides }
       : {}),
+    ...(patch.expectedSidebarRoot !== undefined
+      ? { expectedSidebarRoot: patch.expectedSidebarRoot }
+      : {}),
+    ...(patch.expectedCategory !== undefined ? { expectedCategory: patch.expectedCategory } : {}),
+    ...(patch.expectedArchived !== undefined ? { expectedArchived: patch.expectedArchived } : {}),
+    ...(patch.expectedSidebarAncestors !== undefined
+      ? { expectedSidebarAncestors: patch.expectedSidebarAncestors }
+      : {}),
     expectedMarkedUnreadAt: patch.expectedMarkedUnreadAt,
-  };
-}
-
-/** The retained source and target keep the existing personal-account error boundary. */
-function bindPreparedSessionPatchTarget(params: {
-  key: string;
-  originalGuard: () => ErrorShape | undefined;
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  personalModelSelection: UserModelAccountSelection | undefined;
-  preparation: { facts: { matchesCurrent: (cfg: OpenClawConfig) => boolean } } | { error: unknown };
-  getCurrentConfig: () => OpenClawConfig;
-}): () => ErrorShape | undefined {
-  return () => {
-    try {
-      assertSessionPatchCommitAllowed({
-        personalModelSelection: params.personalModelSelection,
-        guards: [params.originalGuard],
-        archiveTransitions: [],
-      });
-      params.operatorAuthority?.assertCurrent();
-      if ("error" in params.preparation) {
-        throw params.preparation.error instanceof Error
-          ? params.preparation.error
-          : new Error("Session target preparation failed", { cause: params.preparation.error });
-      }
-      return params.preparation.facts.matchesCurrent(params.getCurrentConfig())
-        ? undefined
-        : sessionChangedError(params.key);
-    } catch (error) {
-      return unexpectedPatchError(params.key, error);
-    }
   };
 }
 
@@ -192,7 +176,11 @@ export async function prepareSessionPatchTargets(params: {
     ),
   );
   let targetCustody: ReturnType<typeof prepareGatewaySessionLifecycleTargets> | undefined;
+  const ancestorReads: Array<Awaited<ReturnType<typeof prepareSessionPatchSidebarAncestors>>> = [];
   const release = async () => {
+    for (const ancestors of ancestorReads.splice(0)) {
+      ancestors.release();
+    }
     const errors: unknown[] = [];
     try {
       await targetCustody?.[Symbol.asyncDispose]();
@@ -236,20 +224,65 @@ export async function prepareSessionPatchTargets(params: {
         (facts) => ({ facts }),
         (error: unknown) => ({ error }),
       );
-      const guard = bindPreparedSessionPatchTarget({
-        key: target.key,
-        originalGuard: params.originalCommitGuards[target.index]!,
-        operatorAuthority,
-        personalModelSelection: params.personalModelSelection,
-        preparation: result,
-        getCurrentConfig: params.getCurrentConfig,
-      });
+      const originalGuard = params.originalCommitGuards[target.index]!;
+      const guard = () => {
+        try {
+          assertSessionPatchCommitAllowed({
+            personalModelSelection: params.personalModelSelection,
+            guards: [originalGuard],
+            archiveTransitions: [],
+          });
+          operatorAuthority?.assertCurrent();
+          if ("error" in result) {
+            throw result.error instanceof Error
+              ? result.error
+              : new Error("Session target preparation failed", { cause: result.error });
+          }
+          return result.facts.matchesCurrent(params.getCurrentConfig())
+            ? undefined
+            : sessionChangedError(target.key);
+        } catch (error) {
+          return unexpectedPatchError(target.key, error);
+        }
+      };
       params.mutationTargets[target.index]!.commitGuard = guard;
       if ("error" in result) {
         // Original caller errors retain precedence; failed preparation never reaches a fallback open.
         params.outcomes[target.index] = {
           ok: false,
           error: expectDefined(guard(), "failed session preparation error"),
+        };
+      }
+    }
+    for (const target of params.prepared) {
+      const ancestors = target.fullPatch.expectedSidebarAncestors;
+      if (!ancestors?.length || params.outcomes[target.index] !== undefined) {
+        continue;
+      }
+      const originalGuard = params.mutationTargets[target.index]!.commitGuard;
+      try {
+        const read = await prepareSessionPatchSidebarAncestors({
+          cfg: params.cfg,
+          getCurrentConfig: params.getCurrentConfig,
+          key: target.canonicalKey,
+          agentId: target.targetAgentId,
+          ancestors,
+          assertCallerCurrent: () =>
+            assertSessionPatchCommitAllowed({ guards: [originalGuard], archiveTransitions: [] }),
+        });
+        ancestorReads.push(read);
+        params.mutationTargets[target.index]!.commitGuard = () => {
+          try {
+            read.assertCurrent();
+            return undefined;
+          } catch (error) {
+            return unexpectedPatchError(target.key, error);
+          }
+        };
+      } catch (error) {
+        params.outcomes[target.index] = {
+          ok: false,
+          error: unexpectedPatchError(target.key, error),
         };
       }
     }

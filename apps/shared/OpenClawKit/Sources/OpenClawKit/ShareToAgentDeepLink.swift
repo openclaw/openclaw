@@ -34,24 +34,16 @@ public enum ShareToAgentDeepLink {
         let resolvedInstruction = instruction?.trimmedNonEmpty
         let hasSharedContent = title != nil || text != nil || urlText != nil
 
-        guard hasSharedContent || resolvedInstruction != nil else { return "" }
-
         var lines: [String] = []
         if hasSharedContent {
             lines.append("Shared from iOS.")
         }
-        if let title {
-            lines.append("Title: \(title)")
-        }
-        if let urlText {
-            lines.append("URL: \(urlText)")
-        }
-        if let text {
-            lines.append("Text:\n\(text)")
-        }
-        if let resolvedInstruction {
-            lines.append(resolvedInstruction)
-        }
+        lines.append(contentsOf: [
+            title.map { "Title: \($0)" },
+            urlText.map { "URL: \($0)" },
+            text.map { "Text:\n\($0)" },
+            resolvedInstruction,
+        ].compactMap(\.self))
 
         let message = lines.joined(separator: "\n\n")
         return String(message.prefix(2400))

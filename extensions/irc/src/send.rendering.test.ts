@@ -48,7 +48,7 @@ describe("IRC formatted text on the wire", () => {
         sendFormattedIrcText({
           cfg,
           to: "#room",
-          text: String.raw`\n`,
+          text: "\u0001",
           replyToId,
           onDeliveryResult,
         }),
@@ -62,17 +62,17 @@ describe("IRC formatted text on the wire", () => {
     },
   );
 
-  it("decodes message content once when adding a reply reference", async () => {
+  it("sends literal backslash sequences unchanged with a reply reference", async () => {
     const results = await sendFormattedIrcText({
       cfg,
       to: "#room",
-      text: String.raw`\x5cn`,
+      text: String.raw`Run C:\tools\new.exe or printf("%d\n") with \x41`,
       replyToId: "parent-1",
     });
     await disconnected;
 
     expect(lines.filter((line) => line.startsWith("PRIVMSG "))).toEqual([
-      String.raw`PRIVMSG #room :\n  [reply:parent-1]`,
+      String.raw`PRIVMSG #room :Run C:\tools\new.exe or printf("%d\n") with \x41  [reply:parent-1]`,
     ]);
     expect(results).toHaveLength(1);
     expect(results[0]?.receipt?.replyToId).toBe("parent-1");

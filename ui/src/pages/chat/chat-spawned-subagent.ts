@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -11,13 +12,22 @@ import {
 
 /** The session's direct children as the pane holds them. */
 export type SubagentRoster = {
+  /** Owner-qualified ancestry key from the pane's admitted read target. */
+  subagentParentKey?: string;
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
+  /** A newly named child is still awaiting a covering read before the wait can count it. */
+  subagentSessionsPending?: boolean;
+  /**
+   * True once the pane's own child query answered at least once. Seeded rows
+   * take ancestry from the broad list, which outlives the child-link retention.
+   */
+  subagentSessionsRead?: boolean;
 };
 
 /** What a launch row needs to show its subagent's session and open it. */
-export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions"> & {
+export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions" | "subagentParentKey"> & {
   /** Shows a subagent the Subagents panel lists. */
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */
@@ -40,9 +50,6 @@ export type SpawnedSubagent = {
 };
 
 type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText">;
-
-const text = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim() ? value.trim() : undefined;
 
 /**
  * What one `sessions_spawn` call started. It opened a session in its own right,
@@ -79,12 +86,8 @@ export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
   return launch && !launch.ownSession ? launch.label : undefined;
 }
 
-/** The children the Subagents panel lists. A swarm's workers report through its own progress. */
 export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {
-  return (
-    (row.classification === "subagent" || isSubagentSessionKey(row.key)) &&
-    !row.swarmGroupId?.trim()
-  );
+  return row.classification === "subagent" || isSubagentSessionKey(row.key);
 }
 
 /** A subagent that handed off to its own subagents is still at work. */

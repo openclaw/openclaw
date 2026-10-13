@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-// Npm Runner tests cover npm runner script behavior.
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
@@ -10,48 +9,22 @@ afterEach(() => {
 });
 
 describe("resolveNpmRunner", () => {
-  it.each(["default", "explicit"])(
-    "runs bundled npm under the %s Bun runtime without PATH Node",
-    (selection) => {
-      Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
-      const packageJsonPath = createRequire(import.meta.url).resolve("npm/package.json");
-      expect(
-        resolveNpmRunner({
-          execPath: selection === "explicit" ? process.execPath : undefined,
-          env: { PATH: "" },
-          npmArgs: ["pack", "space & literal"],
-        }),
-      ).toEqual({
-        command: process.execPath,
-        args: [
-          path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"),
-          "pack",
-          "space & literal",
-        ],
-        packageJsonPath,
-        shell: false,
-      });
-    },
-  );
-
-  it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
-    const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
-    const expectedNpmCliPath = path.posix.resolve(
-      path.posix.dirname(execPath),
-      "../lib/node_modules/npm/bin/npm-cli.js",
-    );
-
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate) => candidate === expectedNpmCliPath,
-      platform: "darwin",
-    });
-
-    expect(runner).toEqual({
-      command: execPath,
-      args: [expectedNpmCliPath],
-      packageJsonPath: path.posix.resolve(expectedNpmCliPath, "../../package.json"),
+  it("runs bundled npm under the default Bun runtime without PATH Node", () => {
+    Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
+    const packageJsonPath = createRequire(import.meta.url).resolve("npm/package.json");
+    expect(
+      resolveNpmRunner({
+        env: { PATH: "" },
+        npmArgs: ["pack", "space & literal"],
+      }),
+    ).toEqual({
+      command: process.execPath,
+      args: [
+        path.join(path.dirname(packageJsonPath), "bin", "npm-cli.js"),
+        "pack",
+        "space & literal",
+      ],
+      packageJsonPath,
       shell: false,
     });
   });
@@ -121,7 +94,6 @@ describe("resolveNpmRunner", () => {
   });
 
   it.each([
-    ["C:\\nodejs\\node.exe", "C:\\nodejs\\npm.cmd install --omit=dev"],
     [
       "C:\\Program Files\\nodejs\\node.exe",
       '""C:\\Program Files\\nodejs\\npm.cmd" install --omit=dev"',

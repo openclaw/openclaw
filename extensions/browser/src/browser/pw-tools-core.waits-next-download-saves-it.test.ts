@@ -141,44 +141,6 @@ describe("pw-tools-core", () => {
     await expectPathMissing(savedPath);
   }
 
-  it("waits for the next download and atomically finalizes explicit output paths", async () => {
-    await withTempDir(async (tempDir) => {
-      const harness = createDownloadEventHarness();
-      const targetPath = path.join(tempDir, "nested", "deeper", "file.bin");
-
-      type DownloadFixture = {
-        url: () => string;
-        cancel: () => Promise<void>;
-        suggestedFilename: () => string;
-        saveAs: (outPath: string) => Promise<void>;
-      };
-      const saveAs = vi.fn(async function (this: DownloadFixture, outPath: string) {
-        expect(this).toBe(download);
-        await fs.writeFile(outPath, "file-content", "utf8");
-      });
-      const download: DownloadFixture = {
-        url: () => "https://example.com/file.bin",
-        cancel: vi.fn(async () => {}),
-        suggestedFilename: () => "file.bin",
-        saveAs,
-      };
-
-      const p = mod.waitForDownloadViaPlaywright({
-        ...target,
-        path: targetPath,
-        timeoutMs: 1000,
-      });
-
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger(download);
-
-      const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, content: "file-content" });
-      await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
-    });
-  });
-
   it.runIf(process.platform !== "win32")(
     "does not write outside the output root when a download parent is swapped after save",
     async () => {

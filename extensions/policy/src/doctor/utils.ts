@@ -1,4 +1,3 @@
-// Shared policy doctor value readers.
 import {
   normalizeStringEntries,
   normalizeStringEntriesLower,

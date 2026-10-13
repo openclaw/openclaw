@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -189,30 +189,22 @@ export function createNodesTool(options?: {
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readToolStringParam(params, "requestId", {
-              required: true,
-            });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
-            return jsonResult(
-              await callGatewayTool(
-                "node.pair.approve",
-                gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
-              ),
-            );
-          }
+          case "approve":
           case "reject": {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {

@@ -11,7 +11,7 @@ import { selectChatTarget } from "./scenario.mjs";
 import { currentTelegramRun, withTelegramRun, runTelegramCli } from "./telegram-run-scope.mjs";
 import { telegramPythonArgs } from "./telegram-runtime.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
-import { prepareTelegramTestGroup } from "./telegram-test-group.mjs";
+import { prepareTelegramTestForum, prepareTelegramTestGroup } from "./telegram-test-group.mjs";
 
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USER_DRIVER_PATH = path.join(SKILL_DIR, "scripts", "user-driver.py");
@@ -44,6 +44,7 @@ export async function checkTelegramTestCredential({
   dm = false,
   chat = "",
   requireForum = false,
+  createForum = false,
   fetchImpl = fetch,
   runCommandImpl = runCommand,
 }) {
@@ -52,7 +53,7 @@ export async function checkTelegramTestCredential({
   if (dm && requireForum) throw new Error("Forum-topic proof requires a forum group target.");
   lease.assertHealthy();
   const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
-  const requiredChat = dm || chat ? "" : credential.groupId;
+  const requiredChat = dm || chat || createForum ? "" : credential.groupId;
   const statusArgs = telegramPythonArgs(
     driverEnv,
     USER_DRIVER_PATH,
@@ -170,6 +171,12 @@ export async function checkTelegramTestCredential({
       testerId: credential.testerUserId,
     });
     return { ...result, chatTarget: { kind: "dm", botId: credential.sutBotId } };
+  }
+  if (createForum) {
+    // The created forum then passes the same selected-chat readiness below.
+    chat = (await prepareTelegramTestForum(credential, { runCommandImpl })).groupId;
+    requireForum = true;
+    lease.assertHealthy();
   }
   let selectedChat = chat || credential.groupId;
   if (chat) {
@@ -296,6 +303,7 @@ export async function checkTelegramTestCredential({
     groupMembership: true,
     testerGroupWriteAccess: true,
     testGroup: credential.testGroup,
+    testForum: credential.testForum,
   };
 }
 

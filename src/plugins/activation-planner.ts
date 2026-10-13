@@ -189,7 +189,16 @@ function matchesActivation(
     return false;
   };
   const { activation } = plugin;
-  switch (trigger.kind) {
+  const capability = trigger.kind === "capability" ? trigger.capability : undefined;
+  if (
+    capability &&
+    record(activation?.onCapabilities?.includes(capability), "activation-capability-hint")
+  ) {
+    return true;
+  }
+  const owns = (values: readonly string[] | undefined, normalize: (value: string) => string) =>
+    capability ? values?.length : listHasNormalizedValue(values, expected, normalize);
+  switch (trigger.kind === "capability" ? trigger.capability : trigger.kind) {
     case "command":
       return (
         record(
@@ -209,16 +218,12 @@ function matchesActivation(
       );
     case "provider":
       return (
+        record(owns(activation?.onProviders, normalizeProviderId), "activation-provider-hint") ||
+        record(owns(plugin.providers, normalizeProviderId), "manifest-provider-owner") ||
         record(
-          listHasNormalizedValue(activation?.onProviders, expected, normalizeProviderId),
-          "activation-provider-hint",
-        ) ||
-        record(
-          listHasNormalizedValue(plugin.providers, expected, normalizeProviderId),
-          "manifest-provider-owner",
-        ) ||
-        record(
-          plugin.setup?.providers?.some((entry) => normalizeProviderId(entry.id) === expected),
+          capability
+            ? plugin.setup?.providers?.length
+            : plugin.setup?.providers?.some((entry) => normalizeProviderId(entry.id) === expected),
           "manifest-setup-provider-owner",
         )
       );
@@ -229,46 +234,18 @@ function matchesActivation(
       );
     case "channel":
       return (
-        record(
-          listHasNormalizedValue(activation?.onChannels, expected, normalizeCommandId),
-          "activation-channel-hint",
-        ) ||
-        record(
-          listHasNormalizedValue(plugin.channels, expected, normalizeCommandId),
-          "manifest-channel-owner",
-        )
+        record(owns(activation?.onChannels, normalizeCommandId), "activation-channel-hint") ||
+        record(owns(plugin.channels, normalizeCommandId), "manifest-channel-owner")
       );
     case "route":
       return record(
         listHasNormalizedValue(activation?.onRoutes, expected, normalizeCommandId),
         "activation-route-hint",
       );
-    case "capability":
-      if (
-        record(
-          activation?.onCapabilities?.includes(trigger.capability),
-          "activation-capability-hint",
-        )
-      ) {
-        return true;
-      }
-      switch (trigger.capability) {
-        case "provider":
-          return (
-            record(activation?.onProviders?.length, "activation-provider-hint") ||
-            record(plugin.providers?.length, "manifest-provider-owner") ||
-            record(plugin.setup?.providers?.length, "manifest-setup-provider-owner")
-          );
-        case "channel":
-          return (
-            record(activation?.onChannels?.length, "activation-channel-hint") ||
-            record(plugin.channels?.length, "manifest-channel-owner")
-          );
-        case "tool":
-          return record(plugin.contracts?.tools?.length, "manifest-tool-contract");
-        case "hook":
-          return record(plugin.hooks?.length, "manifest-hook-owner");
-      }
+    case "tool":
+      return record(plugin.contracts?.tools?.length, "manifest-tool-contract");
+    case "hook":
+      return record(plugin.hooks?.length, "manifest-hook-owner");
   }
   return false;
 }

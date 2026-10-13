@@ -1,8 +1,13 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
-import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -22,9 +27,9 @@ import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-s
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
+import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
@@ -106,7 +111,7 @@ function withSelectedFacts<T>(
 
 describe("trusted plugin selected session facts", () => {
   it.each(["config-presentation", "secret registry"] as const)(
-    "refreshes exact and selected redaction while preserving PR state after %s changes",
+    "preserves exact and selected text and PR state after %s changes",
     (change) =>
       withFixture(async (fixture) => {
         const releaseForeground = retainSessionListForegroundWork();
@@ -158,14 +163,15 @@ describe("trusted plugin selected session facts", () => {
           }
           const exact = await read(fixture, [plainKey]);
           const current = await selected();
-          expect(exact.sessions[0]?.label).toBe("***");
-          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe("***");
+          expect(exact.sessions[0]?.label).toBe(marker);
+          expect(current.sessions.find((row) => row.key === plainKey)?.label).toBe(marker);
           expect(current.retryAt).toBe(stale.retryAt);
           const currentPrs = current.sessions.find((row) => row.key === sessionKey)!;
           expect(currentPrs.pullRequestsUnavailable).toBe(true);
           expect(currentPrs.pullRequestsStale).toBe(true);
-          expect(currentPrs.pullRequests).toEqual([{ number: 12, state: "open" }]);
-          expect(current.redactionRevision).not.toBe(stale.redactionRevision);
+          expect(currentPrs.pullRequests).toEqual([
+            { number: 12, state: "open", title: prTitle.slice(0, 120) },
+          ]);
         } finally {
           resetLogger();
           resetSecretRedactionRegistryForTest();
@@ -173,60 +179,6 @@ describe("trusted plugin selected session facts", () => {
         }
       }),
   );
-
-  it("shares the snapshot and revision across concurrent cold and changed reads", ({ signal }) =>
-    withFixture(async (fixture) => {
-      const releaseForeground = retainSessionListForegroundWork();
-      const projection = getSessionRowProjection(fixture.context)!;
-      const prepare = projection.withPreparedExactRows.bind(projection);
-      const selected = () => withSelectedFacts(fixture, async (value) => value);
-      let previous: RuntimeSessionFactsSelectionResult | undefined;
-      try {
-        for (const label of ["Cold concurrent selection", "Changed concurrent selection"]) {
-          await fixture.seed(sessionKey, fixture.profile.id, { label });
-          await fixture.subscriptions.replace(fixture.client.connId, [sessionKey]);
-          await projection.ensureMaterialized();
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          let arrivals = 0;
-          using _ = vi
-            .spyOn(projection, "withPreparedExactRows")
-            .mockImplementation(async (queries, consume, options) => {
-              if (++arrivals === 2) {
-                entered.resolve();
-              }
-              await release.promise;
-              return prepare(queries, consume, options);
-            });
-          const reading = Promise.all([selected(), selected()]);
-          try {
-            await withinTest(
-              awaitGateBeforeSettlement(
-                entered.promise,
-                reading,
-                "Concurrent selections completed before both reached facts preparation",
-              ),
-              signal,
-            );
-            release.resolve();
-            const [first, second] = await withinTest(reading, signal);
-            expect(first.sessions).toMatchObject([{ key: sessionKey, label }]);
-            expect(second).toBe(first);
-            expect(second.revision).toBe(first.revision);
-            if (previous) {
-              expect(first.revision).not.toBe(previous.revision);
-            }
-            expect(await selected()).toBe(first);
-            previous = first;
-          } finally {
-            release.resolve();
-            await reading.catch(() => {});
-          }
-        }
-      } finally {
-        releaseForeground();
-      }
-    }));
 
   it("retains unchanged facts while persistent rows and authority epochs change", () =>
     withFixture(async (fixture) => {
@@ -403,29 +355,29 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it("refreshes a cached selection when background transcript enrichment publishes", () =>
+  it("refreshes a cached selection from committed previews while background reads are held", () =>
     withFixture(async (fixture) => {
       const release = retainSessionListForegroundWork();
       try {
-        await persistSessionTranscriptTurn(
-          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
-          {
-            messages: [{ message: { role: "assistant", content: "Prepared background preview" } }],
-            touchSessionEntry: false,
-            updateMode: "none",
-          },
-        );
         const projection = getSessionRowProjection(fixture.context)!;
         await projection.ensureMaterialized();
         const before = await withSelectedFacts(fixture, async (value) => value);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
-        const published = observeSessionRowBackfill([sessionKey], projection);
-        release();
-        await published;
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+        await persistSessionTranscriptTurn(
+          { agentId: "main", sessionKey, sessionId: fixture.sessionId },
+          {
+            config: fixture.cfg,
+            messages: [{ message: { role: "assistant", content: "Prepared committed preview" } }],
+            touchSessionEntry: false,
+            updateMode: "none",
+          },
+        );
         const after = await withSelectedFacts(fixture, async (value) => value);
-        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared background preview");
+        expect(after.sessions[0]?.lastMessagePreview).toBe("Prepared committed preview");
         expect(after.revision).not.toBe(before.revision);
         expect(before.sessions[0]?.lastMessagePreview).toBeUndefined();
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         release();
       }
@@ -460,13 +412,15 @@ describe("trusted plugin selected session facts", () => {
       const describeRow = vi.spyOn(projection, "describe");
       try {
         sessionChanges.emit({ agentId: "main", sessionKey, scope: "runtime" });
-        acquisition.mockRejectedValueOnce(new Error("Synthetic facts read failed"));
+        acquisition.mockRejectedValueOnce(
+          new Error("Synthetic facts read failed: API_TOKEN = computeToken()"),
+        );
         const failed = await selected();
         expect(failed.sessions).toMatchObject([
           {
             key: sessionKey,
             sessionId: fixture.sessionId,
-            unavailable: "Error: Synthetic facts read failed",
+            unavailable: "Error: Synthetic facts read failed: API_TOKEN = computeToken()",
           },
         ]);
         expect(failed.missingSessionKeys).toBeUndefined();
@@ -487,7 +441,7 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it("expires cached people at the inclusive activity boundary and reselects after clock rollback", () =>
+  it("expires cached people at the inclusive activity boundary", () =>
     withFixture(async (fixture) => {
       const initial = Date.now();
       let now = initial;
@@ -517,8 +471,6 @@ describe("trusted plugin selected session facts", () => {
         expect(expired.sessions.map((row) => row.key)).toEqual([otherKey]);
         expect(people(expired)).toEqual([fixture.other.id]);
         expect(expired.activityExpiresAt).toBe(initial + 60_000);
-        now = initial - 1;
-        expect(people(await selected())).toEqual(people(boundary));
         now = initial + 60_001;
         const empty = await selected();
         expect(empty.sessions).toEqual([]);
@@ -575,6 +527,10 @@ describe("trusted plugin selected session facts", () => {
         await fixture.subscriptions.pollNow();
         expect(fixture.load).toHaveBeenCalledTimes(attempts + 1);
         expect(retried.retryAt).toBe(now + 120_000);
+        await fixture.seed(sessionKey, fixture.profile.id, { label: "Changed stored metadata" });
+        await selected();
+        await fixture.subscriptions.pollNow();
+        expect(fixture.load).toHaveBeenCalledTimes(attempts + 2);
         await fixture.seed(sessionKey, fixture.profile.id, {
           lifecycleRevision: "replacement-generation",
           worktree: {
@@ -679,14 +635,26 @@ describe("trusted plugin session facts", () => {
       expect((await list(fixture.client)).sessions.map(({ key }) => key)).toEqual([sessionKey]);
     }));
 
-  it("projects admitted session identity, trajectory and canonical PR states", () =>
+  it("projects identity, registry-backed liveness, trajectory and canonical PR states", () =>
     withFixture(async (fixture) => {
       const privateKey = "agent:main:private-change";
       const queuedKey = "agent:main:queued-change";
       await fixture.seed(privateKey, fixture.other.id, { visibility: "draft" });
       await fixture.seed(queuedKey, fixture.profile.id, {
-        status: "queued",
         worktree: { id: "queued-worktree", branch: "queued", repoRoot: "/synthetic/repository" },
+        status: "failed",
+        lastRunError: "Old failure",
+      });
+      const runId = "session-facts-queued-run";
+      registerAgentRunContext(runId, {
+        agentId: "main",
+        sessionKey: queuedKey,
+        projectSessionActive: true,
+      });
+      const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      onTestFinished(() => {
+        releaseWait?.();
+        clearAgentRunContext(runId);
       });
       fixture.load.mockResolvedValueOnce({
         pullRequests: [
@@ -740,6 +708,10 @@ describe("trusted plugin session facts", () => {
           { key: queuedKey, run: "active" },
         ],
       });
+      releaseWait?.();
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("active");
+      clearAgentRunContext(runId);
+      expect((await read(fixture, [queuedKey])).sessions[0]?.run).toBe("failed");
       const listener = vi.fn();
       const unsubscribe = runtime.gateway.subscribeSessionChanges(listener);
       try {
@@ -775,34 +747,6 @@ describe("trusted plugin session facts", () => {
       await fixture.subscriptions.pollNow();
       expect((await read(fixture, [sessionKey])).warnings).toBeUndefined();
       expect(fixture.load).toHaveBeenCalledTimes(2);
-    }));
-
-  it("uses live run liveness instead of a persisted running status", () =>
-    withFixture(async (fixture) => {
-      const staleKey = "agent:main:stale-running";
-      const activeKey = "agent:main:live-running";
-      const queuedKey = "agent:main:queued-input";
-      await fixture.seed(staleKey, fixture.profile.id, { status: "running" });
-      await fixture.seed(activeKey, fixture.profile.id, {
-        status: "failed",
-        lastRunError: "Old failure",
-      });
-      await fixture.seed(queuedKey, fixture.profile.id, { status: "queued" });
-      registerAgentRunContext("facts-live-run", {
-        agentId: "main",
-        sessionKey: activeKey,
-        projectSessionActive: true,
-      });
-      try {
-        expect((await read(fixture, [staleKey, activeKey, queuedKey])).sessions).toMatchObject([
-          { key: staleKey, run: "idle" },
-          { key: activeKey, run: "active" },
-          { key: queuedKey, run: "active" },
-        ]);
-      } finally {
-        clearAgentRunContext("facts-live-run");
-      }
-      expect((await read(fixture, [activeKey])).sessions[0]?.run).toBe("failed");
     }));
 
   it.each([false, true])(
@@ -845,7 +789,7 @@ describe("trusted plugin session facts", () => {
       }),
   );
 
-  it("retries rate-limited snapshots and bounds and redacts PR titles", () =>
+  it("retries rate-limited snapshots and bounds PR titles", () =>
     withFixture(async (fixture) => {
       const pullRequest = {
         number: 42,
@@ -873,7 +817,7 @@ describe("trusted plugin session facts", () => {
         url: pullRequest.url,
       });
       expect(limited.pullRequests[0]?.title?.length).toBeLessThanOrEqual(120);
-      expect(limited.pullRequests[0]?.title).not.toContain("synthetic-secret-value");
+      expect(limited.pullRequests[0]?.title).toContain("synthetic-secret-value");
       expect(limited.pullRequests[1]).toEqual({ number: 43, state: "open" });
       await fixture.subscriptions.pollNow();
       const recovered = (await read(fixture, [sessionKey])).sessions[0]!;
@@ -922,9 +866,11 @@ describe("trusted plugin session facts", () => {
         // filter, so the reader itself must keep it away from preview enrichment.
         const foreignDraft = "agent:main:foreign-draft";
         await fixture.seed(foreignDraft, fixture.other.id, { visibility: "draft" });
+        using backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
         await persistSessionTranscriptTurn(
           { agentId: "main", sessionKey, sessionId: fixture.sessionId },
           {
+            config: fixture.cfg,
             messages: [{ message: { role: "assistant", content: "May I merge this change?" } }],
             touchSessionEntry: false,
             updateMode: "none",
@@ -953,8 +899,9 @@ describe("trusted plugin session facts", () => {
           },
         ]);
         expect(result.sessions.map((session) => session.key)).not.toContain(foreignDraft);
-        // Optional transcript enrichment must not bypass foreground ownership.
-        expect(result.sessions[0]?.lastMessagePreview).toBeUndefined();
+        // Committed preview facts remain available while optional transcript reads wait.
+        expect(result.sessions[0]?.lastMessagePreview).toBe("May I merge this change?");
+        expect(backfill).not.toHaveBeenCalled();
       } finally {
         releaseForeground();
       }

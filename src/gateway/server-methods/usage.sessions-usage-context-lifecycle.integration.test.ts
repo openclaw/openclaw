@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -14,6 +14,7 @@ import {
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -40,12 +41,14 @@ it.for([
     let restoreSummaryLoader: (() => void) | undefined;
     let restoreTargetReader: (() => void) | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const releaseSummary = () => release.resolve();
     const cleanup = () =>
       (cleanupPromise ??= (async () => {
         releaseSummary();
         await Promise.allSettled(request ? [request] : []);
         try {
+          releaseProfileCatalog?.();
           await state.cleanup();
         } finally {
           restoreSummaryLoader?.();
@@ -77,8 +80,9 @@ it.for([
           },
         },
       });
-      const config = getRuntimeConfig();
+      const config = await captureRuntimeConfigAsyncReader()();
       const viewer = ensureProfileForEmail("usage-viewer@example.com");
+      releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
       const client: GatewayClient = {
         connect: {
           minProtocol: 1,
@@ -258,7 +262,16 @@ it.for([
         ]);
         return;
       }
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
+      const [ok, payload, error] = expectDefined(respond.mock.calls[0], "usage response");
+      if (change === "revocation after context read") {
+        expect(ok).toBe(false);
+        expect(payload).toBeUndefined();
+        expect(error).toMatchObject({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("Refresh the usage view"),
+        });
+        return;
+      }
       expect(ok).toBe(true);
       const result = payload as SessionsUsageResult;
       expect(result.sessions).toHaveLength(1);

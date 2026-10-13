@@ -3,6 +3,11 @@ import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/r
 import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
+import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
@@ -13,9 +18,47 @@ import type {
   RestartRecoveryTerminalDeliveryEvidenceResult,
   SessionRestartRecoveryState,
 } from "./restart-recovery-types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, RestartRecoveryRun, SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
+
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  return [...new Map([...runs].map((run) => [run.runId, run] as const)).values()].toSorted(
+    (left, right) => left.runId.localeCompare(right.runId),
+  );
+}
+
+export function recordLifecycleFence(
+  entry: Pick<InternalSessionEntry, "restartRecoveryRuns">,
+  run: RestartRecoveryRun,
+): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
+}
+
+export function isMainRestartRecoveryCandidate(
+  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  sessionKey: string,
+): boolean {
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return false;
+  }
+  if (entry.subagentRole != null) {
+    return false;
+  }
+  return (
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey)
+  );
+}
 
 type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
@@ -480,6 +523,36 @@ export function hasRestartRecoveryTerminalRun(
   );
 }
 
+/** An unadopted input retains same-ID retry custody until execution claims it. */
+export function isRetryableUnadoptedChatClaim(
+  entry: InternalSessionEntry | undefined,
+  clientRunId = entry?.restartRecoveryDeliveryRunId,
+): entry is InternalSessionEntry & { restartRecoveryDeliveryRequestFingerprint: string } {
+  return Boolean(
+    entry &&
+    clientRunId !== undefined &&
+    entry.abortedLastRun !== true &&
+    (entry.status === "failed" || entry.status === "killed") &&
+    entry.restartRecoveryDeliveryContext === undefined &&
+    entry.restartRecoveryDeliveryRunId === clientRunId &&
+    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
+    entry.restartRecoveryDeliveryRequestFingerprint &&
+    !entry.mainRestartRecovery &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)),
+  );
+}
+
+/** Recovery custody survives process loss independently of the last run's outcome. */
+export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefined): boolean {
+  return Boolean(
+    entry?.mainRestartRecovery ||
+    entry?.restartRecoveryRuns?.some((run) => !hasRestartRecoveryTerminalRun(entry, run.runId)) ||
+    entry?.restartRecoveryDeliveryRunId ||
+    entry?.pendingFinalDelivery,
+  );
+}
+
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,
@@ -493,13 +566,6 @@ export function hasRestartRecoverySourceClaim(
   );
 }
 
-export function hasActiveRestartRecoverySourceClaim(
-  entry: SessionEntry | null | undefined,
-  sourceTurnId: string,
-): entry is SessionEntry {
-  return entry?.status === "running" && hasRestartRecoverySourceClaim(entry, sourceTurnId);
-}
-
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
@@ -507,7 +573,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
   terminalRunId?: string;
   terminalSourceRunId?: string;
-}): Partial<SessionEntry> {
+}): Partial<InternalSessionEntry> {
   const sourceRunId =
     normalizeRunId(params.terminalSourceRunId) ??
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
@@ -550,6 +616,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryOperatorSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,

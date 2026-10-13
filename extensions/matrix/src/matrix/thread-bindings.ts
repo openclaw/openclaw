@@ -1,24 +1,25 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  registerSessionBindingAdapter,
-  resolveThreadBindingFarewellText,
+  registerSessionBindingAdapterV2,
   resolveThreadBindingLifecycle,
-  type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
+  warnPluginSdkDeprecation,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import { claimCurrentTokenStorageState, resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import { assertMatrixSupportedStateFile } from "./retired-state.js";
 import type { MatrixClient } from "./sdk.js";
-import { sendMessageMatrix } from "./send.js";
 import { resolveMatrixSqliteStateEnv, resolveMatrixSqliteStateKey } from "./sqlite-state.js";
+import {
+  createMatrixSessionBindingAdapter,
+  sameBindingIncarnation,
+} from "./thread-bindings-session-adapter.js";
 import {
   deleteMatrixThreadBindingManagerEntry,
   getMatrixThreadBindingManager,
@@ -28,8 +29,7 @@ import {
   resolveBindingKey,
   setBindingRecord,
   setMatrixThreadBindingManagerEntry,
-  toSessionBindingRecord,
-  type MatrixThreadBindingManager,
+  type MatrixThreadBindingManagerV2,
   type MatrixThreadBindingRecord,
 } from "./thread-bindings-shared.js";
 
@@ -38,12 +38,19 @@ const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const TOUCH_PERSIST_DELAY_MS = 30_000;
 
-function createThreadBindingStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
-  return getMatrixRuntime().state.openKeyedStore<MatrixThreadBindingRecord>({
-    namespace: THREAD_BINDINGS_NAMESPACE,
-    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-    env: resolveMatrixSqliteStateEnv(params),
-  });
+function createThreadBindingStore(params: {
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  assertCurrent?: () => void;
+}) {
+  return getMatrixRuntime().state.openKeyedStoreV2<MatrixThreadBindingRecord>(
+    {
+      namespace: THREAD_BINDINGS_NAMESPACE,
+      maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+      env: resolveMatrixSqliteStateEnv(params),
+    },
+    params.assertCurrent ? { assertCurrent: params.assertCurrent } : undefined,
+  );
 }
 
 function buildThreadBindingStoreKey(record: {
@@ -98,6 +105,7 @@ function normalizeBindingRecord(
 
 async function loadBindingsFromPluginState(params: {
   accountId: string;
+  assertCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 }): Promise<MatrixThreadBindingRecord[]> {
@@ -120,92 +128,35 @@ function toPluginJsonValue<T>(value: T): T {
 async function persistBindingsSnapshot(params: {
   accountId: string;
   bindings: MatrixThreadBindingRecord[];
+  assertCurrent?: () => void;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-}): Promise<void> {
+}): Promise<MatrixThreadBindingRecord[]> {
   const store = createThreadBindingStore(params);
   const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
+  const stored = new Map<string, MatrixThreadBindingRecord>();
   for (const entry of await store.entries()) {
     const record = normalizeBindingRecord(entry.value, params.accountId);
+    if (record) {
+      stored.set(entry.key, record);
+    }
     if (record && !liveKeys.has(entry.key)) {
       await store.delete(entry.key);
     }
   }
+  const committed: MatrixThreadBindingRecord[] = [];
   for (const record of params.bindings) {
-    await store.register(buildThreadBindingStoreKey(record), toPluginJsonValue(record));
+    const key = buildThreadBindingStoreKey(record);
+    const previous = stored.get(key);
+    // A snapshot accepted behind a targeted touch must not restore its older activity time.
+    const next =
+      previous && sameBindingIncarnation(previous, record)
+        ? { ...record, lastActivityAt: Math.max(record.lastActivityAt, previous.lastActivityAt) }
+        : record;
+    await store.register(key, toPluginJsonValue(next));
+    committed.push(next);
   }
-}
-
-function buildMatrixBindingIntroText(params: {
-  metadata?: Record<string, unknown>;
-  targetSessionKey: string;
-}): string {
-  const introText = normalizeOptionalString(params.metadata?.introText);
-  if (introText) {
-    return introText;
-  }
-  const label = normalizeOptionalString(params.metadata?.label);
-  const agentId =
-    normalizeOptionalString(params.metadata?.agentId) ||
-    resolveAgentIdFromSessionKey(params.targetSessionKey);
-  const base = label || agentId || "session";
-  return `⚙️ ${base} session active. Messages here go directly to this session.`;
-}
-
-async function sendBindingMessage(params: {
-  cfg: OpenClawConfig;
-  client: MatrixClient;
-  accountId: string;
-  roomId: string;
-  threadId?: string;
-  text: string;
-}): Promise<string | null> {
-  const trimmed = params.text.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const result = await sendMessageMatrix(`room:${params.roomId}`, trimmed, {
-    cfg: params.cfg,
-    client: params.client,
-    accountId: params.accountId,
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-  });
-  return result.messageId || null;
-}
-
-async function sendFarewellMessage(params: {
-  cfg: OpenClawConfig;
-  client: MatrixClient;
-  accountId: string;
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-  reason?: string;
-}): Promise<void> {
-  const roomId = params.record.parentConversationId ?? params.record.conversationId;
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? params.record.idleTimeoutMs
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number" ? params.record.maxAgeMs : params.defaultMaxAgeMs;
-  const farewellText = resolveThreadBindingFarewellText({
-    reason: params.reason,
-    idleTimeoutMs,
-    maxAgeMs,
-  });
-  await sendBindingMessage({
-    cfg: params.cfg,
-    client: params.client,
-    accountId: params.accountId,
-    roomId,
-    threadId:
-      params.record.parentConversationId &&
-      params.record.parentConversationId !== params.record.conversationId
-        ? params.record.conversationId
-        : undefined,
-    text: farewellText,
-  }).catch(() => {});
+  return committed;
 }
 
 export async function createMatrixThreadBindingManager(params: {
@@ -219,7 +170,7 @@ export async function createMatrixThreadBindingManager(params: {
   maxAgeMs: number;
   enableSweeper?: boolean;
   logVerboseMessage?: (message: string) => void;
-}): Promise<MatrixThreadBindingManager> {
+}): Promise<MatrixThreadBindingManagerV2> {
   if (params.auth.accountId !== params.accountId) {
     throw new Error(
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
@@ -251,26 +202,91 @@ export async function createMatrixThreadBindingManager(params: {
     setBindingRecord(record);
   }
 
+  const committedBindings = new Map(loaded.map((record) => [resolveBindingKey(record), record]));
   let persistQueue: Promise<void> = Promise.resolve();
-  const enqueuePersist = (bindings?: MatrixThreadBindingRecord[]) => {
-    const snapshot = bindings ?? listBindingsForAccount(params.accountId);
+  const publishCommittedBindings = (
+    committed: MatrixThreadBindingRecord[],
+    before: MatrixThreadBindingRecord[],
+  ) => {
+    const previousByKey = new Map(before.map((record) => [resolveBindingKey(record), record]));
+    const currentByKey = new Map(
+      listBindingsForAccount(params.accountId).map((record) => [resolveBindingKey(record), record]),
+    );
+    committedBindings.clear();
+    for (const record of committed) {
+      const key = resolveBindingKey(record);
+      committedBindings.set(key, record);
+      if (currentByKey.get(key) === previousByKey.get(key)) {
+        setBindingRecord(record);
+      }
+    }
+    for (const record of before) {
+      const key = resolveBindingKey(record);
+      if (!committedBindings.has(key) && currentByKey.get(key) === record) {
+        removeBindingRecord(record);
+      }
+    }
+  };
+  const persistSnapshot = async (
+    bindings: MatrixThreadBindingRecord[],
+    before: MatrixThreadBindingRecord[],
+    assertCurrent: () => void,
+  ) => {
+    try {
+      const committed = await persistBindingsSnapshot({
+        accountId: params.accountId,
+        bindings,
+        env: params.env,
+        stateDir: sqliteStateDir,
+        assertCurrent,
+      });
+      assertCurrent();
+      return committed;
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        stopping = true;
+        throw new Error(
+          "Matrix thread binding persistence has an unknown outcome; restart the account",
+          { cause: error },
+        );
+      }
+      try {
+        // Individual snapshot writes can commit before a later write fails or loses authority.
+        const committed = await loadBindingsFromPluginState({
+          accountId: params.accountId,
+          env: params.env,
+          stateDir: sqliteStateDir,
+          assertCurrent: assertManagerCurrent,
+        });
+        assertManagerCurrent();
+        publishCommittedBindings(committed, before);
+      } catch (reconciliationError) {
+        stopping = true;
+        throw new AggregateError(
+          [error, reconciliationError],
+          "Matrix thread binding persistence could not be reconciled; restart the account",
+          { cause: reconciliationError },
+        );
+      }
+      throw error;
+    }
+  };
+  const enqueuePersist = () => {
     const next = persistQueue
       .catch(() => {})
       .then(async () => {
-        await persistBindingsSnapshot({
-          accountId: params.accountId,
-          bindings: snapshot,
-          env: params.env,
-          stateDir: sqliteStateDir,
-        });
+        assertManagerCurrent();
+        const snapshot = listBindingsForAccount(params.accountId);
+        const committed = await persistSnapshot(snapshot, snapshot, assertManagerCurrent);
+        publishCommittedBindings(committed, snapshot);
         await claimCurrentTokenStorageState({ rootDir: sqliteStateDir });
       });
     persistQueue = next;
     return next;
   };
   const persist = async () => await enqueuePersist();
-  const persistSafely = (reason: string, bindings?: MatrixThreadBindingRecord[]) => {
-    void enqueuePersist(bindings).catch((err: unknown) => {
+  const persistSafely = (reason: string) => {
+    void enqueuePersist().catch((err: unknown) => {
       params.logVerboseMessage?.(
         `matrix: failed persisting thread bindings account=${params.accountId} action=${reason}: ${String(err)}`,
       );
@@ -281,21 +297,34 @@ export async function createMatrixThreadBindingManager(params: {
     maxAgeMs: params.maxAgeMs,
   };
   let persistTimer: NodeJS.Timeout | null = null;
+  let touchPersistPending = false;
   const schedulePersist = (delayMs: number) => {
-    if (persistTimer) {
+    touchPersistPending = true;
+    if (persistTimer || stopPromise) {
       return;
     }
     persistTimer = setTimeout(() => {
       persistTimer = null;
+      touchPersistPending = false;
       persistSafely("delayed-touch");
     }, delayMs);
     persistTimer.unref?.();
   };
   const updateBindingsBySessionKey = (input: {
     targetSessionKey: string;
-    update: (entry: MatrixThreadBindingRecord, now: number) => MatrixThreadBindingRecord;
+    field: "idleTimeoutMs" | "maxAgeMs";
+    value: number;
     persistReason: string;
   }): MatrixThreadBindingRecord[] => {
+    const method =
+      input.field === "idleTimeoutMs" ? "setIdleTimeoutBySessionKey" : "setMaxAgeBySessionKey";
+    warnPluginSdkDeprecation({
+      pluginId: "matrix",
+      family: "conversation-bindings",
+      method: `MatrixThreadBindingManager.${method}`,
+      replacement: `await ${method}Async()`,
+      compatibility: "Legacy methods return cached results synchronously and defer persistence.",
+    });
     const targetSessionKey = input.targetSessionKey.trim();
     if (!targetSessionKey) {
       return [];
@@ -303,7 +332,12 @@ export async function createMatrixThreadBindingManager(params: {
     const now = Date.now();
     const nextBindings = listBindingsForAccount(params.accountId)
       .filter((entry) => entry.targetSessionKey === targetSessionKey)
-      .map((entry) => input.update(entry, now));
+      .map((entry) =>
+        Object.assign({}, entry, {
+          [input.field]: Math.max(0, Math.floor(input.value)),
+          lastActivityAt: now,
+        }),
+      );
     if (nextBindings.length === 0) {
       return [];
     }
@@ -314,7 +348,172 @@ export async function createMatrixThreadBindingManager(params: {
     return nextBindings;
   };
 
-  const manager: MatrixThreadBindingManager = {
+  let stopping = false;
+  let stopPromise: Promise<void> | undefined;
+  const assertManagerCurrent = () => {
+    if (stopping || getMatrixThreadBindingManagerEntry(params.accountId)?.manager !== manager) {
+      throw new Error("Matrix thread binding manager was retired");
+    }
+  };
+  const assertAcceptingMutation = () => {
+    assertManagerCurrent();
+    if (stopPromise) {
+      throw new Error("Matrix thread binding manager is stopping");
+    }
+  };
+  const mutateBindings = (
+    prepare: (current: MatrixThreadBindingRecord[]) => MatrixThreadBindingRecord[] | null,
+    assertInputCurrent?: () => void,
+  ): Promise<MatrixThreadBindingRecord[]> => {
+    assertAcceptingMutation();
+    const operation = persistQueue
+      .catch(() => {})
+      .then(async () => {
+        assertManagerCurrent();
+        const before = listBindingsForAccount(params.accountId);
+        const next = prepare(before);
+        if (!next) {
+          return before;
+        }
+        const beforeByKey = new Map(before.map((record) => [resolveBindingKey(record), record]));
+        const assertCurrent = () => {
+          assertManagerCurrent();
+          assertInputCurrent?.();
+          const current = listBindingsForAccount(params.accountId);
+          if (
+            current.length !== before.length ||
+            current.some((record) => beforeByKey.get(resolveBindingKey(record)) !== record)
+          ) {
+            throw new Error("Matrix thread bindings changed before persistence completed");
+          }
+        };
+        const committed = await persistSnapshot(next, before, assertCurrent);
+        publishCommittedBindings(committed, before);
+        await claimCurrentTokenStorageState({ rootDir: sqliteStateDir });
+        return committed;
+      });
+    persistQueue = operation.then(() => {});
+    void persistQueue.catch(() => {});
+    return operation;
+  };
+  const removeBindingsAsync = async (records: readonly MatrixThreadBindingRecord[]) => {
+    const requested = new Map(records.map((record) => [resolveBindingKey(record), record]));
+    let removed: MatrixThreadBindingRecord[] = [];
+    await mutateBindings((current) => {
+      removed = current.filter((record) => {
+        const expected = requested.get(resolveBindingKey(record));
+        return expected && sameBindingIncarnation(record, expected);
+      });
+      const removedKeys = new Set(removed.map(resolveBindingKey));
+      return removed.length
+        ? current.filter((record) => !removedKeys.has(resolveBindingKey(record)))
+        : null;
+    });
+    return removed;
+  };
+  const touchBinding = (bindingId: string, at?: number) => {
+    warnPluginSdkDeprecation({
+      pluginId: "matrix",
+      family: "conversation-bindings",
+      method: "MatrixThreadBindingManager.touchBinding",
+      replacement: "await touchBindingAsync()",
+      compatibility: "Legacy methods return cached results synchronously and defer persistence.",
+    });
+    assertAcceptingMutation();
+    const record = listBindingsForAccount(params.accountId).find(
+      (entry) => resolveBindingKey(entry) === bindingId.trim(),
+    );
+    if (!record) {
+      return null;
+    }
+    const nextRecord = {
+      ...record,
+      lastActivityAt:
+        typeof at === "number" && Number.isFinite(at)
+          ? Math.max(record.lastActivityAt, Math.floor(at))
+          : Date.now(),
+    };
+    setBindingRecord(nextRecord);
+    schedulePersist(TOUCH_PERSIST_DELAY_MS);
+    return nextRecord;
+  };
+  const touchBindingAsync = (bindingId: string, at?: number): Promise<void> => {
+    assertAcceptingMutation();
+    const expected = listBindingsForAccount(params.accountId).find(
+      (entry) => resolveBindingKey(entry) === bindingId.trim(),
+    );
+    if (!expected) {
+      return Promise.resolve();
+    }
+    const requestedAt = typeof at === "number" && Number.isFinite(at) ? Math.floor(at) : Date.now();
+    const next = persistQueue
+      .catch(() => {})
+      .then(async () => {
+        assertManagerCurrent();
+        const previous = listBindingsForAccount(params.accountId).find(
+          (entry) => resolveBindingKey(entry) === bindingId.trim(),
+        );
+        if (!previous || !sameBindingIncarnation(previous, expected)) {
+          return;
+        }
+        const current = {
+          ...previous,
+          lastActivityAt: Math.max(previous.lastActivityAt, requestedAt),
+        };
+        setBindingRecord(current);
+        const committed = committedBindings.get(resolveBindingKey(current));
+        if (
+          committed &&
+          sameBindingIncarnation(committed, current) &&
+          current.lastActivityAt - committed.lastActivityAt < TOUCH_PERSIST_DELAY_MS
+        ) {
+          if (current.lastActivityAt > committed.lastActivityAt) {
+            schedulePersist(TOUCH_PERSIST_DELAY_MS);
+          }
+          return;
+        }
+        const assertCurrent = () => {
+          assertManagerCurrent();
+          if (!listBindingsForAccount(params.accountId).includes(current)) {
+            throw new Error("Matrix thread binding changed while recording activity");
+          }
+        };
+        // This queue owns every binding write; foreign writers are unsupported.
+        const store = createThreadBindingStore({
+          env: params.env,
+          stateDir: sqliteStateDir,
+          assertCurrent,
+        });
+        await store.register(buildThreadBindingStoreKey(current), toPluginJsonValue(current));
+        assertCurrent();
+        committedBindings.set(resolveBindingKey(current), current);
+      });
+    persistQueue = next;
+    return next;
+  };
+  const updateBindingsBySessionKeyAsync = async (
+    input: Parameters<typeof updateBindingsBySessionKey>[0],
+  ) => {
+    const targetSessionKey = input.targetSessionKey.trim();
+    const value = Math.max(0, Math.floor(input.value));
+    const now = Date.now();
+    const committed = await mutateBindings((current) => {
+      if (
+        !targetSessionKey ||
+        !current.some((record) => record.targetSessionKey === targetSessionKey)
+      ) {
+        return null;
+      }
+      return current.map((record) =>
+        record.targetSessionKey === targetSessionKey
+          ? { ...record, [input.field]: value, lastActivityAt: now }
+          : record,
+      );
+    });
+    return committed.filter((record) => record.targetSessionKey === targetSessionKey);
+  };
+
+  const manager: MatrixThreadBindingManagerV2 = {
     accountId: params.accountId,
     getIdleTimeoutMs: () => defaults.idleTimeoutMs,
     getMaxAgeMs: () => defaults.maxAgeMs,
@@ -334,209 +533,86 @@ export async function createMatrixThreadBindingManager(params: {
         (entry) => entry.targetSessionKey === targetSessionKey.trim(),
       ),
     listBindings: () => listBindingsForAccount(params.accountId),
-    touchBinding: (bindingId, at) => {
-      const record = listBindingsForAccount(params.accountId).find(
-        (entry) => resolveBindingKey(entry) === bindingId.trim(),
-      );
-      if (!record) {
-        return null;
-      }
-      const nextRecord = {
-        ...record,
-        lastActivityAt:
-          typeof at === "number" && Number.isFinite(at)
-            ? Math.max(record.lastActivityAt, Math.floor(at))
-            : Date.now(),
-      };
-      setBindingRecord(nextRecord);
-      schedulePersist(TOUCH_PERSIST_DELAY_MS);
-      return nextRecord;
-    },
-    setIdleTimeoutBySessionKey: ({ targetSessionKey, idleTimeoutMs }) => {
-      return updateBindingsBySessionKey({
+    touchBinding,
+    touchBindingAsync,
+    removeBindingsAsync,
+    setIdleTimeoutBySessionKey: ({ targetSessionKey, idleTimeoutMs }) =>
+      updateBindingsBySessionKey({
         targetSessionKey,
+        field: "idleTimeoutMs",
+        value: idleTimeoutMs,
         persistReason: "idle-timeout-update",
-        update: (entry, now) => ({
-          ...entry,
-          idleTimeoutMs: Math.max(0, Math.floor(idleTimeoutMs)),
-          lastActivityAt: now,
-        }),
-      });
-    },
-    setMaxAgeBySessionKey: ({ targetSessionKey, maxAgeMs }) => {
-      return updateBindingsBySessionKey({
+      }),
+    setMaxAgeBySessionKey: ({ targetSessionKey, maxAgeMs }) =>
+      updateBindingsBySessionKey({
         targetSessionKey,
+        field: "maxAgeMs",
+        value: maxAgeMs,
         persistReason: "max-age-update",
-        update: (entry, now) => ({
-          ...entry,
-          maxAgeMs: Math.max(0, Math.floor(maxAgeMs)),
-          lastActivityAt: now,
-        }),
-      });
-    },
-    stop: async () => {
+      }),
+    setIdleTimeoutBySessionKeyAsync: ({ targetSessionKey, idleTimeoutMs }) =>
+      updateBindingsBySessionKeyAsync({
+        targetSessionKey,
+        field: "idleTimeoutMs",
+        value: idleTimeoutMs,
+        persistReason: "idle-timeout-update",
+      }),
+    setMaxAgeBySessionKeyAsync: ({ targetSessionKey, maxAgeMs }) =>
+      updateBindingsBySessionKeyAsync({
+        targetSessionKey,
+        field: "maxAgeMs",
+        value: maxAgeMs,
+        persistReason: "max-age-update",
+      }),
+    stop: () => {
+      if (stopPromise) {
+        return stopPromise;
+      }
       if (sweepTimer) {
         clearInterval(sweepTimer);
       }
-      let finalPersist = persistQueue;
       if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
-        finalPersist = enqueuePersist();
       }
-      // Retire the live generation now, but settle its captured persistence before
-      // shutdown can close the shared Matrix state store.
-      unregisterSessionBindingAdapter({
-        channel: "matrix",
-        accountId: params.accountId,
-        adapter: sessionBindingAdapter,
-      });
-      if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
-        deleteMatrixThreadBindingManagerEntry(params.accountId);
-        // Live bindings belong to this manager generation; persisted rows reload on restart.
-        for (const record of listBindingsForAccount(params.accountId)) {
-          removeBindingRecord(record);
+      stopPromise = (async () => {
+        try {
+          await persistQueue;
+          // Accepted touches may request a flush while the queue drains during stop.
+          if (touchPersistPending) {
+            touchPersistPending = false;
+            await enqueuePersist();
+          }
+        } finally {
+          stopping = true;
+          unregisterSessionBindingAdapter({
+            channel: "matrix",
+            accountId: params.accountId,
+            adapter: sessionBindingAdapter,
+          });
+          if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
+            deleteMatrixThreadBindingManagerEntry(params.accountId);
+            for (const record of listBindingsForAccount(params.accountId)) {
+              removeBindingRecord(record);
+            }
+          }
         }
-      }
-      await finalPersist;
+      })();
+      return stopPromise;
     },
   };
 
   let sweepTimer: NodeJS.Timeout | null = null;
-  const removeRecords = (records: MatrixThreadBindingRecord[]) => {
-    return records
-      .map((record) => removeBindingRecord(record))
-      .filter((record): record is MatrixThreadBindingRecord => Boolean(record));
-  };
-  const sendFarewellMessages = async (
-    removed: MatrixThreadBindingRecord[],
-    reason: string | ((record: MatrixThreadBindingRecord) => string | undefined),
-  ) => {
-    await Promise.all(
-      removed.map((record) =>
-        sendFarewellMessage({
-          cfg: params.cfg,
-          client: params.client,
-          accountId: params.accountId,
-          record,
-          defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-          defaultMaxAgeMs: defaults.maxAgeMs,
-          reason: typeof reason === "function" ? reason(record) : reason,
-        }),
-      ),
-    );
-  };
-  const unbindRecords = async (records: MatrixThreadBindingRecord[], reason: string) => {
-    const removed = removeRecords(records);
-    if (removed.length === 0) {
-      return [];
-    }
-    await persist();
-    await sendFarewellMessages(removed, reason);
-    return removed.map((record) => toSessionBindingRecord(record, defaults));
-  };
+  const { sessionBindingAdapter, unbindRecords } = createMatrixSessionBindingAdapter(params, {
+    manager,
+    defaults,
+    committedBindings,
+    assertManagerCurrent,
+    assertAcceptingMutation,
+    mutateBindings,
+  });
 
-  const sessionBindingAdapter: SessionBindingAdapter = {
-    channel: "matrix",
-    accountId: params.accountId,
-    capabilities: { placements: ["current", "child"], bindSupported: true, unbindSupported: true },
-    bind: async (input) => {
-      const conversationId = input.conversation.conversationId.trim();
-      const parentConversationId = normalizeOptionalString(input.conversation.parentConversationId);
-      const targetSessionKey = input.targetSessionKey.trim();
-      if (!conversationId || !targetSessionKey) {
-        return null;
-      }
-
-      let boundConversationId = conversationId;
-      let boundParentConversationId = parentConversationId;
-      const introText = buildMatrixBindingIntroText({
-        metadata: input.metadata,
-        targetSessionKey,
-      });
-
-      if (input.placement === "child") {
-        const roomId = parentConversationId || conversationId;
-        const rootEventId = await sendBindingMessage({
-          cfg: params.cfg,
-          client: params.client,
-          accountId: params.accountId,
-          roomId,
-          text: introText,
-        });
-        if (!rootEventId) {
-          return null;
-        }
-        boundConversationId = rootEventId;
-        boundParentConversationId = roomId;
-      }
-
-      const now = Date.now();
-      const record: MatrixThreadBindingRecord = {
-        accountId: params.accountId,
-        conversationId: boundConversationId,
-        ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
-        targetKind: input.targetKind === "subagent" ? "subagent" : "acp",
-        targetSessionKey,
-        agentId:
-          normalizeOptionalString(input.metadata?.agentId) ??
-          resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey }),
-        label: normalizeOptionalString(input.metadata?.label) || undefined,
-        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
-        boundAt: now,
-        lastActivityAt: now,
-        idleTimeoutMs: defaults.idleTimeoutMs,
-        maxAgeMs: defaults.maxAgeMs,
-      };
-      setBindingRecord(record);
-      await persist();
-
-      if (input.placement === "current" && introText) {
-        const roomId = boundParentConversationId || boundConversationId;
-        const threadId =
-          boundParentConversationId && boundParentConversationId !== boundConversationId
-            ? boundConversationId
-            : undefined;
-        await sendBindingMessage({
-          cfg: params.cfg,
-          client: params.client,
-          accountId: params.accountId,
-          roomId,
-          threadId,
-          text: introText,
-        }).catch(() => {});
-      }
-
-      return toSessionBindingRecord(record, defaults);
-    },
-    listBySession: (targetSessionKey) =>
-      manager
-        .listBySessionKey(targetSessionKey)
-        .map((record) => toSessionBindingRecord(record, defaults)),
-    resolveByConversation: (ref) => {
-      const record = manager.getByConversation(ref);
-      return record ? toSessionBindingRecord(record, defaults) : null;
-    },
-    touch: (bindingId, at) => {
-      manager.touchBinding(bindingId, at);
-    },
-    unbind: async (input) => {
-      return unbindRecords(
-        listBindingsForAccount(params.accountId).filter((record) => {
-          if (input.bindingId?.trim()) {
-            return resolveBindingKey(record) === input.bindingId.trim();
-          }
-          if (input.targetSessionKey?.trim()) {
-            return record.targetSessionKey === input.targetSessionKey.trim();
-          }
-          return false;
-        }),
-        input.reason,
-      );
-    },
-  };
-
-  registerSessionBindingAdapter(sessionBindingAdapter);
+  registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   if (params.enableSweeper !== false) {
     sweepTimer = setInterval(() => {
@@ -562,22 +638,16 @@ export async function createMatrixThreadBindingManager(params: {
       const reasonByBindingKey = new Map(
         expired.map(({ record, lifecycle }) => [resolveBindingKey(record), lifecycle.reason]),
       );
-      void (async () => {
-        const removed = removeRecords(expired.map(({ record }) => record));
-        if (removed.length === 0) {
-          return;
-        }
-        for (const record of removed) {
+      void unbindRecords(
+        expired.map(({ record }) => record),
+        (record) => reasonByBindingKey.get(resolveBindingKey(record)),
+        (record) => {
           const reason = reasonByBindingKey.get(resolveBindingKey(record));
           params.logVerboseMessage?.(
             `matrix: auto-unbinding ${record.conversationId} due to ${reason}`,
           );
-        }
-        await persist();
-        await sendFarewellMessages(removed, (record) =>
-          reasonByBindingKey.get(resolveBindingKey(record)),
-        );
-      })().catch((err: unknown) => {
+        },
+      ).catch((err: unknown) => {
         params.logVerboseMessage?.(
           `matrix: failed auto-unbinding expired bindings account=${params.accountId}: ${String(err)}`,
         );

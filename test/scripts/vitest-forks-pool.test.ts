@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { shouldEnableNodeDiagnosticReports } from "../../scripts/lib/node-diagnostic-report.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.ts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
@@ -9,10 +10,10 @@ import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js"
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const posixNodeIt = it.skipIf(process.platform === "win32" || Boolean(process.versions.bun));
+const nodeReportIt = it.skipIf(!shouldEnableNodeDiagnosticReports());
 const teardownTimeoutError = "[vitest-pool-runner]: Timeout waiting for worker to respond";
 
-posixNodeIt.for([
+nodeReportIt.for([
   "normal",
   "write-failure",
   "missing-ack",
@@ -347,7 +348,7 @@ export default {
     }),
 );
 
-posixNodeIt(
+nodeReportIt(
   "preserves real exit arguments, errors, and listeners with the exit marker",
   ({ signal }) =>
     fixture.run(async () => {

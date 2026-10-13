@@ -13,6 +13,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
@@ -43,6 +44,8 @@ import {
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
+  mutatingCodexRequestMethods,
+  oauthProfile,
   readDiagnosticsConfirmationToken,
   requestParams,
   runCommand,
@@ -65,17 +68,6 @@ function publicConversationBinding(data?: Record<string, unknown>) {
     conversationId: "conversation",
     boundAt: 1,
     ...(data ? { data } : {}),
-  };
-}
-
-function oauthProfile(email: string, now: number) {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: now + 60 * 60 * 1000,
-    email,
   };
 }
 
@@ -566,9 +558,7 @@ describe("codex command", () => {
         expect(result.text).toContain("controlled by its parent");
         expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(release).not.toHaveBeenCalled();
-        const mutations = request.mock.calls
-          .map(([method]) => method)
-          .filter((method) => method !== "thread/read");
+        const mutations = mutatingCodexRequestMethods(request.mock.calls);
         expect(mutations).toEqual(
           knownBeforeResume
             ? []
@@ -653,14 +643,14 @@ describe("codex command", () => {
             codexControlRequest,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (bindingIdentity) => {
+              readAsync: async (bindingIdentity) => {
                 if (resumeAccepted) {
                   if (failure === "read") {
                     throw new Error("Invalid Codex app-server binding row");
                   }
                   elapsedClock.mockReturnValue(1_001);
                 }
-                return testCodexAppServerBindingStore.read(bindingIdentity);
+                return await testCodexAppServerBindingStore.readAsync(bindingIdentity);
               },
             },
           },
@@ -957,7 +947,7 @@ describe("codex command", () => {
       const result = await runCommand("resume thread-active-resume", { codexControlRequest });
 
       expect(result.text).toContain("lost its native subscription owner");
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(mutatingCodexRequestMethods(request.mock.calls)).toEqual(["thread/resume"]);
       expect(isCodexAppServerLiveThreadClaimed(harness.client, "thread-active-resume")).toBe(true);
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: existingThreadId,
@@ -1241,7 +1231,9 @@ describe("codex command", () => {
     },
   );
 
-  it("rolls back replacement ownership when the host advances during displaced release", async () => {
+  it("rolls back replacement ownership when the host advances during displaced release", async ({
+    signal,
+  }) => {
     const context = await createCodexRuntimeContextOverrides(
       tempDir,
       "agent:main:test:release-rollover",
@@ -1271,25 +1263,23 @@ describe("codex command", () => {
       clientId: previous.client.getInstanceId(),
       cwd: "/repo",
     });
-    let releaseOld!: () => void;
-    const oldReleaseBlocked = new Promise<void>((resolve) => {
-      releaseOld = resolve;
-    });
-    const oldReleaseStarted = vi.fn();
+    const oldReleaseBlocked = createDeferred<void>();
+    const entered = createDeferred<void>();
+    const oldReleaseStarted = vi.fn(entered.resolve);
     const oldUnsubscribe = vi.fn();
     await retainCodexAppServerLiveThread(
       previous.client,
       "thread-release-rollover",
       async (_threadId, assertCurrent) => {
         oldReleaseStarted();
-        await oldReleaseBlocked;
+        await oldReleaseBlocked.promise;
         assertCurrent?.();
         oldUnsubscribe();
       },
     );
     const replacementRequest = vi
       .spyOn(replacement.client, "request")
-      .mockResolvedValue({} as never);
+      .mockImplementation(async (method) => (method === "skills/list" ? { data: [] } : {}));
     const sharedClientRuntime = await import("./app-server/shared-client.js");
     const retainPreviousClient = vi
       .spyOn(sharedClientRuntime, "retainSharedCodexAppServerClientByInstanceId")
@@ -1305,9 +1295,12 @@ describe("codex command", () => {
 
     const command = runCommand("resume thread-release-rollover", { codexControlRequest }, context);
     try {
-      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce());
+      await expect(
+        withinTest(Promise.race([entered.promise, command]), signal),
+      ).resolves.toBeUndefined();
+      expect(oldReleaseStarted).toHaveBeenCalledOnce();
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: "session-2" }) });
-      releaseOld();
+      oldReleaseBlocked.resolve();
 
       expect((await command).text).toContain("Codex session generation is no longer current");
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
@@ -1327,7 +1320,7 @@ describe("codex command", () => {
         consumeCodexAppServerLiveThread(replacement.client, "thread-release-rollover"),
       ).resolves.toBeUndefined();
     } finally {
-      releaseOld();
+      oldReleaseBlocked.resolve();
       await command;
       retainPreviousClient.mockRestore();
       previous.client.close();
@@ -2560,14 +2553,8 @@ describe("codex command", () => {
   });
 
   it("consumes diagnostics confirmations before async upload work", async () => {
-    let releaseFirstConfirmUpload: () => void = () => undefined;
-    let firstConfirmUploadStarted: () => void = () => undefined;
-    const firstConfirmUpload = new Promise<void>((resolve) => {
-      releaseFirstConfirmUpload = resolve;
-    });
-    const firstConfirmUploadStartedPromise = new Promise<void>((resolve) => {
-      firstConfirmUploadStarted = resolve;
-    });
+    const firstConfirmUpload = createDeferred<void>();
+    const firstConfirmUploadStarted = createDeferred<void>();
     const readBinding = vi.fn(() => ({
       threadId: "thread-race",
       cwd: "/repo",
@@ -2575,12 +2562,16 @@ describe("codex command", () => {
       updatedAt: "2026-04-28T00:00:00.000Z",
     }));
     const safeCodexControlRequest = vi.fn(async () => {
-      firstConfirmUploadStarted();
-      await firstConfirmUpload;
+      firstConfirmUploadStarted.resolve();
+      await firstConfirmUpload.promise;
       return { ok: true as const, value: { threadId: "thread-race" } };
     });
     const deps = createDeps({
-      bindingStore: { ...testCodexAppServerBindingStore, read: readBinding },
+      bindingStore: {
+        ...testCodexAppServerBindingStore,
+        read: readBinding,
+        readAsync: async () => readBinding(),
+      },
       safeCodexControlRequest,
     });
 
@@ -2590,7 +2581,7 @@ describe("codex command", () => {
     try {
       expect(
         await Promise.race([
-          firstConfirmUploadStartedPromise.then(() => "entered"),
+          firstConfirmUploadStarted.promise.then(() => "entered"),
           firstConfirm.then(() => "settled"),
         ]),
       ).toBe("entered");
@@ -2600,7 +2591,7 @@ describe("codex command", () => {
         text: "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.",
       });
     } finally {
-      releaseFirstConfirmUpload();
+      firstConfirmUpload.resolve();
       await firstConfirm;
     }
     const firstConfirmResult = await firstConfirm;
@@ -3150,7 +3141,9 @@ describe("codex command", () => {
           },
         });
         release.resolve();
-        expect((await command).text).toContain("Codex session generation is no longer current");
+        expect((await command).text).toMatch(
+          /Codex session (generation is no longer current|execution policy changed)/,
+        );
         expect(writes).toBe(0);
       } finally {
         release.resolve();

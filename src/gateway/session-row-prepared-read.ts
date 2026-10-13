@@ -67,6 +67,7 @@ export function readPreparedSessionRows<T>(
   consume: (read: SessionRowReadView) => T,
   privateRepositories?: ReadonlyMap<string, PreparedPrivateSessionRepository>,
   capturedPrivateRows?: ReadonlyMap<string, records.Row | undefined>,
+  env?: NodeJS.ProcessEnv,
 ) {
   if (!isActive()) {
     throw new Error("Session row read view is no longer active");
@@ -194,7 +195,7 @@ export function readPreparedSessionRows<T>(
       privateRows.clear();
       childSelections.clear();
     }
-  });
+  }, env);
 }
 
 /** Awaited facade keeps existing callers on one synchronous presentation owner. */

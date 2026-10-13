@@ -104,8 +104,9 @@ export function registerParentRestartRecoveryCases(harness: ParentRestartRecover
       [fixture.sessionKey]: {
         sessionId: fixture.sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "parent-cycle", revision: 1, chargedAttempts: 0 },
         restartRecoveryRuns: fixture.restartRecoveryRuns,
         lifecycleRunId: fixture.lifecycleRunId,
       },
@@ -124,7 +125,7 @@ export function registerParentRestartRecoveryCases(harness: ParentRestartRecover
       message: expect.stringContaining("The restart did not cancel the user's task"),
     });
     const recovered = loadSessionEntry({ sessionKey: fixture.sessionKey, storePath });
-    expect(recovered).toMatchObject({ status: "running" });
+    expect(recovered?.status).toBeUndefined();
     expect(recovered?.restartRecoveryDeliverySourceRunId).toBe(
       fixture.restartRecoveryRuns?.[0]?.runId ?? fixture.lifecycleRunId,
     );

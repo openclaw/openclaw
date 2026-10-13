@@ -4,8 +4,10 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 
-// Preserve the existing tag grammar; only exclude unspaced comparison prose.
+// A tag name ends at whitespace, `/`, or `>`; email addresses remain prose.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+// Bare unknown names can be placeholders or generic arguments, not HTML.
+const ANGLE_PLACEHOLDER_RE = /^<([a-z][a-z0-9_.:-]*)(?:\/[a-z][a-z0-9_.:-]*)?>$/i;
 // Disjoint whitespace/prose branches avoid quadratic backtracking on malformed tags.
 const COMPARISON_PROSE_RE = /^<([a-z][a-z0-9_]*\.?)\s+[^<>=/"'\s][^<>=/"']*>$/i;
 // Alternation avoids Node 26.10's end-anchored character-class failure on astral operands.
@@ -29,17 +31,17 @@ const EMPTY_HTML_ELEMENT_RE =
   /<((?!(?:br|p|div)(?=[\s>]))[a-z][a-z0-9_.:-]*)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>(?:[^\S\r\n\u2028\u2029]|<(?!\/?(?:br|p|div)(?=[\s/>]))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>)*<\/\1\s*>/gi;
 
 function removeMatchesUntilStable(
-  text: string,
+  input: string,
   pattern: RegExp,
   replacement?: (match: string, offset: number, source: string) => string,
 ): string {
+  let text = input;
   let previous: string;
-  let current = text;
   do {
-    previous = current;
-    current = replacement ? current.replace(pattern, replacement) : current.replace(pattern, "");
-  } while (current !== previous);
-  return current;
+    previous = text;
+    text = replacement ? text.replace(pattern, replacement) : text.replace(pattern, "");
+  } while (text !== previous);
+  return text;
 }
 
 function stripHtmlTagUnlessComparison(
@@ -48,6 +50,14 @@ function stripHtmlTagUnlessComparison(
   source: string,
   closingTagNames: ReadonlySet<string>,
 ): string {
+  const placeholderName = ANGLE_PLACEHOLDER_RE.exec(tag)?.[1];
+  if (
+    placeholderName !== undefined &&
+    !HTML_ELEMENT_NAME_RE.test(placeholderName) &&
+    !closingTagNames.has(placeholderName.toLowerCase())
+  ) {
+    return tag;
+  }
   const rightOperand = source.charCodeAt(offset + tag.length);
   if (
     !(rightOperand >= 48 && rightOperand <= 57) ||

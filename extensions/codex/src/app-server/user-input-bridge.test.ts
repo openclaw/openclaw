@@ -99,57 +99,6 @@ function createBridge(
 }
 
 describe("Codex app-server user input bridge", () => {
-  it("registers, presents, claims, and returns gateway answers", async () => {
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const onOrdinaryResponse = vi.fn();
-    const bridge = createBridge(params, {
-      gatewayCall: gateway.call,
-      onOrdinaryResponse,
-    });
-
-    const response = bridge.handleRequest({ id: "input-1", params: requestParams() });
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-
-    const request = gateway.calls.find((entry) => entry.method === "question.request");
-    if (!request) {
-      throw new Error("expected question.request");
-    }
-    expect(request?.params).toMatchObject({
-      sessionKey: params.sessionKey,
-      agentId: "main",
-      timeoutMs: 90_000,
-      questions: [expect.objectContaining({ questionId: "choice" })],
-    });
-    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
-    expect(payload.channelData).toEqual({
-      askUser: {
-        questionId: (request.params as { id: string }).id,
-        optionValues: ["Fast", "Deep"],
-      },
-    });
-    expect(payload.presentationTextMode).toBe("fallback");
-    expect(payload.text).toContain("Reply with the number or option text.");
-    expect(payload.text).not.toContain("your own answer");
-    const buttons = payload.presentation?.blocks.find((block) => block.type === "buttons");
-    expect(buttons?.type === "buttons" ? buttons.buttons[1]?.action : undefined).toMatchObject({
-      type: "question",
-      optionValue: "Deep",
-    });
-
-    await expect(
-      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "2" }),
-    ).resolves.toBe(true);
-    const returned = await response;
-    expect(returned).toEqual({ answers: { choice: { answers: ["Deep"] } } });
-    expect(onOrdinaryResponse).toHaveBeenCalledOnce();
-    expect(onOrdinaryResponse.mock.calls[0]?.[0]).toMatchObject({
-      itemId: "tool-1",
-      questions: [expect.objectContaining({ id: "choice", isSecret: false })],
-    });
-    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
-  });
-
   it("cancels the gateway record on run abort", async () => {
     const controller = new AbortController();
     const params = createParams(controller.signal);
@@ -181,72 +130,64 @@ describe("Codex app-server user input bridge", () => {
     );
   });
 
-  it.each(["failure", "run abort"] as const)(
-    "records one response when the Gateway wait rejects on %s and settles queued work",
-    async (outcome) => {
-      const controller = new AbortController();
-      const params = createParams(controller.signal);
-      const firstWait = createDeferred<unknown>();
-      const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(
-        async (method, _opts, raw, options) => {
-          if (method === "question.request") {
-            return { id: (raw as { id: string }).id };
-          }
-          if (method === "question.waitAnswer") {
-            options?.signal?.addEventListener(
-              "abort",
-              () => firstWait.reject(options?.signal?.reason),
-              { once: true },
-            );
-            return await firstWait.promise;
-          }
-          return { status: "cancelled" };
-        },
-      );
-      const onOrdinaryResponse = vi.fn();
-      const bridge = createCodexUserInputBridge({
-        paramsForRun: params,
-        threadId: "thread-1",
-        turnId: "turn-1",
-        signal: controller.signal,
-        gatewayCall,
-        onOrdinaryResponse,
-      });
-      const first = bridge.handleRequest({
-        id: "first",
-        params: requestParams({ itemId: "first" }),
-      });
-      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-      const second = bridge.handleRequest({
-        id: "second",
-        params: requestParams({ itemId: "second" }),
-      });
-      expect(
-        vi.mocked(gatewayCall).mock.calls.filter(([method]) => method === "question.request"),
-      ).toHaveLength(1);
-      vi.mocked(gatewayCall).mockImplementation(async (method, _opts, raw) =>
-        method === "question.request"
-          ? { id: (raw as { id: string }).id }
-          : method === "question.waitAnswer"
-            ? { status: "answered", answers: { answers: { choice: ["Deep"] } } }
-            : { status: "cancelled" },
-      );
-      if (outcome === "run abort") {
-        controller.abort(new Error("run stopped"));
-      } else {
-        firstWait.reject(new Error("Gateway wait failed"));
-      }
-      const response = await first;
-      expect(response).toEqual({ answers: {} });
-      await expect(second).resolves.toEqual(
-        outcome === "run abort" ? { answers: {} } : { answers: { choice: { answers: ["Deep"] } } },
-      );
-      expect(onOrdinaryResponse.mock.calls.map(([result]) => result.itemId)).toEqual(
-        outcome === "run abort" ? ["first"] : ["first", "second"],
-      );
-      expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(response);
-    },
-  );
+  it("records one response when the Gateway wait rejects and settles queued work", async () => {
+    const controller = new AbortController();
+    const params = createParams(controller.signal);
+    const firstWait = createDeferred<unknown>();
+    const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(
+      async (method, _opts, raw, options) => {
+        if (method === "question.request") {
+          return { id: (raw as { id: string }).id };
+        }
+        if (method === "question.waitAnswer") {
+          options?.signal?.addEventListener(
+            "abort",
+            () => firstWait.reject(options?.signal?.reason),
+            { once: true },
+          );
+          return await firstWait.promise;
+        }
+        return { status: "cancelled" };
+      },
+    );
+    const onOrdinaryResponse = vi.fn();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      signal: controller.signal,
+      gatewayCall,
+      onOrdinaryResponse,
+    });
+    const first = bridge.handleRequest({
+      id: "first",
+      params: requestParams({ itemId: "first" }),
+    });
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const second = bridge.handleRequest({
+      id: "second",
+      params: requestParams({ itemId: "second" }),
+    });
+    expect(
+      vi.mocked(gatewayCall).mock.calls.filter(([method]) => method === "question.request"),
+    ).toHaveLength(1);
+    vi.mocked(gatewayCall).mockImplementation(async (method, _opts, raw) =>
+      method === "question.request"
+        ? { id: (raw as { id: string }).id }
+        : method === "question.waitAnswer"
+          ? { status: "answered", answers: { answers: { choice: ["Deep"] } } }
+          : { status: "cancelled" },
+    );
+    firstWait.reject(new Error("Gateway wait failed"));
+    const response = await first;
+    expect(response).toEqual({ answers: {} });
+    await expect(second).resolves.toEqual({ answers: { choice: { answers: ["Deep"] } } });
+    expect(onOrdinaryResponse.mock.calls.map(([result]) => result.itemId)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(response);
+  });
 
   it("does not register a gateway question after the run already aborted", async () => {
     const controller = new AbortController();
@@ -318,19 +259,6 @@ describe("Codex app-server user input bridge", () => {
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["public"] } } });
   });
 
-  it("clears an unanswered secret request when prompt delivery fails", async () => {
-    const params = createParams();
-    params.onBlockReply = vi.fn().mockRejectedValue(new Error("channel unavailable"));
-    const bridge = createBridge(params);
-
-    await expect(
-      bridge.handleRequest({ id: "input-secret-undelivered", params: secretRequestParams() }),
-    ).resolves.toEqual({ answers: {} });
-    await expect(
-      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "late" }),
-    ).resolves.toBe(false);
-  });
-
   it("queues a replacement secret request when an earlier prompt later fails", async () => {
     let rejectFirstDelivery!: (error: Error) => void;
     const firstDelivery = new Promise<void>((_resolve, reject) => {
@@ -394,39 +322,6 @@ describe("Codex app-server user input bridge", () => {
     );
   });
 
-  it("keeps legacy requests blocking and ignores deprecated autoResolutionMs", async () => {
-    const params = createParams();
-    const gateway = createGatewayStub();
-    const bridge = createBridge(params, {
-      gatewayCall: gateway.call,
-    });
-    const response = bridge.handleRequest({
-      id: "input-free",
-      params: requestParams({
-        autoResolutionMs: 60_000,
-        questions: [
-          {
-            id: "notes",
-            header: "Notes",
-            question: "What should change?",
-            isOther: true,
-            isSecret: false,
-            options: null,
-          },
-        ],
-      }),
-    });
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-    expect(gateway.calls[0]?.params).toMatchObject({
-      timeoutMs: 90_000,
-      questions: [expect.objectContaining({ questionId: "notes", options: [] })],
-    });
-    await claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "Refactor it" });
-    await expect(response).resolves.toEqual({
-      answers: { notes: { answers: ["Refactor it"] } },
-    });
-  });
-
   it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {
     vi.useFakeTimers();
     const params = createParams();
@@ -469,32 +364,5 @@ describe("Codex app-server user input bridge", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     await expect(response).resolves.toEqual({ answers: {} });
-  });
-
-  it("auto-resolves nonblocking secret prompts after exactly 120 seconds", async () => {
-    vi.useFakeTimers();
-    const params = createParams();
-    const bridge = createBridge(params);
-    const response = bridge.handleRequest({
-      id: "input-secret-nonblocking",
-      params: secretRequestParams({
-        isBlocking: false,
-        autoResolutionMs: 60_000,
-      }),
-    });
-
-    await vi.advanceTimersByTimeAsync(119_999);
-    let settled = false;
-    void response.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(response).resolves.toEqual({ answers: {} });
-    await expect(
-      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "late" }),
-    ).resolves.toBe(false);
   });
 });

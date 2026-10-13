@@ -502,13 +502,13 @@ describe("formatCliParseErrorOutput", () => {
 
   it("preserves JSON diagnostics for an unsupported but genuine output flag", async () => {
     const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "fleet", "logs", "--json"];
+    process.argv = ["node", "openclaw", "proxy", "run", "--json"];
     try {
       const program = new OpenClawCommand().name("openclaw").exitOverride();
       program.configureOutput({ writeErr: () => {} });
       program
-        .command("fleet")
-        .command("logs")
+        .command("proxy")
+        .command("run")
         .action(() => {});
 
       const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);

@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -7,6 +6,7 @@ import {
   type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 
 type RetirementIntent = {
   ordinary: boolean;
@@ -99,8 +99,9 @@ export function createStateDatabaseRetainer(
     return reference;
   };
   const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
-    const scope = admit(pathname, ownership);
-    const database = state.cachedDatabases.get(path.resolve(pathname));
+    const resolvedPath = resolveDatabasePath({ path: pathname });
+    const scope = admit(resolvedPath, ownership);
+    const database = state.cachedDatabases.get(resolvedPath);
     return { database: database?.db.isOpen ? database : undefined, scope };
   };
   const retainReadReference = (

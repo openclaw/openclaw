@@ -10,6 +10,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 let proofDir: string;
 beforeEach(() => {
@@ -49,6 +50,12 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const absentAvatarRequests: string[] = [];
+        page.on("request", (request) => {
+          if (new URL(request.url()).pathname === "/api/users/profile-mira/avatar") {
+            absentAvatarRequests.push(request.url());
+          }
+        });
         const sessionList = {
           ...chatSessionListResponse([
             {
@@ -153,6 +160,12 @@ suite.define(() => {
         });
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await expect
+          .poll(() => sidebar.locator("#sidebar-session-owner-title").getAttribute("aria-label"))
+          .toBe("Owners: My sessions");
+        // This flow intentionally opens another person's session from the all-owner roster.
+        await selectAllSidebarSessions(page);
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         const card = page.locator(".session-progress-hovercard");
         await row.waitFor({ state: "visible" });
@@ -183,6 +196,11 @@ suite.define(() => {
           .poll(() => participant.locator(".viewer-avatar").getAttribute("aria-label"))
           .toBe("Mira");
         expect(await participant.getAttribute("href")).toBe("/activity/profile-mira");
+        expect(await participant.locator("img").count()).toBe(0);
+        expect(absentAvatarRequests).toEqual([]);
+        console.log(
+          JSON.stringify({ unadvertisedParticipantAvatarRequests: absentAvatarRequests.length }),
+        );
         await identity.hover();
         expect(
           await identity.evaluate((element) => getComputedStyle(element).textDecorationLine),
@@ -217,6 +235,9 @@ suite.define(() => {
         await captureProof(page, "hovercard-identity-activity.png");
 
         await page.goBack();
+        await expect
+          .poll(() => sidebar.locator("#sidebar-session-owner-title").getAttribute("aria-label"))
+          .toBe("Owners: All owners");
         await row.waitFor({ state: "visible" });
         await row.hover();
         await card.waitFor({ state: "visible" });

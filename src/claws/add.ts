@@ -471,7 +471,7 @@ export async function applyClawAddPlan(
     // Moving this into the callback retains the workspace and reports a write that never landed.
     configCommitted = true;
     try {
-      recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
+      await recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
     } catch (error) {
       throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
     }

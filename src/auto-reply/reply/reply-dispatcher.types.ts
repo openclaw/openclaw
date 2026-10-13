@@ -27,10 +27,10 @@ export type ReplyDispatchReceipt = {
   hasPendingDelivery?: true;
 };
 
-export function mapReplyDispatchCounts<T>(
+export function mapReplyDispatchCounts<T, R>(
   counts: Record<ReplyDispatchKind, T>,
-  select: (counts: T) => number,
-): Record<ReplyDispatchKind, number> {
+  select: (counts: T) => R,
+): Record<ReplyDispatchKind, R> {
   return { tool: select(counts.tool), block: select(counts.block), final: select(counts.final) };
 }
 

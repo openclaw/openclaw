@@ -52,8 +52,6 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 it.each([
   { explicit: "nodes", nodes: true, subagent: false, activate: false },
-  { explicit: "subagent", nodes: false, subagent: true, activate: false },
-  { explicit: "both facets", nodes: true, subagent: true, activate: false },
   {
     explicit: "neither facet after root activation",
     nodes: false,

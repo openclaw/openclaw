@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
+import { readChildRuntimeViability } from "../infra/child-runtime-viability.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
 /**
@@ -159,6 +160,8 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     !command ||
     command.startsWith("-") ||
     !shouldWrapChildForOomScore(options) ||
+    // A shell would start successfully and hide the removed runtime's native ENOENT.
+    (command === process.execPath && !readChildRuntimeViability().available) ||
     (options?.argv0 !== undefined && options.argv0 !== command)
   ) {
     // POSIX sh cannot preserve an argv0 that differs from the exec pathname.

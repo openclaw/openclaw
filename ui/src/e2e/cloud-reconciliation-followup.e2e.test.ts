@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -119,8 +119,8 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("chat.startup");
-        await page.getByRole("button", { name: "Cloud · syncing files" }).waitFor();
-        await page.getByText("Safely applying cloud edits", { exact: false }).waitFor();
+        await page.getByRole("button", { name: "Worker · syncing files" }).waitFor();
+        await page.getByText("Finalizing worker workspace", { exact: false }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();
@@ -229,17 +229,15 @@ suite.define(() => {
           });
         }
 
-        const completedUpdatedAt = await page.evaluate(async (key) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime?: { context: ApplicationContext };
-          };
-          const sessions = app.runtime?.context.sessions;
-          if (!sessions) {
-            throw new Error("session capability unavailable");
-          }
-          await sessions.refresh({ agentId: "main", force: true });
-          return sessions.state.result?.sessions.find((row) => row.key === key)?.updatedAt;
-        }, sessionKey);
+        const completedUpdatedAt = await evaluateControlUiContext(
+          page,
+          async (context, key) => {
+            const sessions = context.sessions;
+            await sessions.refresh({ agentId: "main", force: true });
+            return sessions.state.result?.sessions.find((row) => row.key === key)?.updatedAt;
+          },
+          sessionKey,
+        );
         expect(completedUpdatedAt).toBeGreaterThan(active.updatedAt);
 
         const failed = session("failed");

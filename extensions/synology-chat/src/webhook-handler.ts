@@ -182,7 +182,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
   if (bearerMatch?.[1]) {
     return bearerMatch[1].trim();
   }
-  return auth.trim();
+  return auth;
 }
 
 // Token precedence is body, query, then headers.

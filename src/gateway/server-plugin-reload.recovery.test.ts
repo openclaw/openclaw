@@ -43,7 +43,6 @@ import {
   verifyActiveCallDrainLease,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
-import { verifySharedGatewayCacheOwnership } from "./server-plugin-reload.cache.test-support.js";
 import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
 import {
   verifyDecisionSelectionIsolation,
@@ -57,7 +56,10 @@ import {
   verifyGatewayCleanupRefusal,
   verifyPendingServiceCleanupRollback,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
-import { verifyGatewayMemoryReplacement } from "./server-plugin-reload.memory.test-support.js";
+import {
+  verifyGatewayMemoryReplacement,
+  verifyGatewayMemoryWatcherRestart,
+} from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
   createPluginReloadRecoveryFixture,
@@ -141,8 +143,10 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
-it("reopens a shared resource closed by gateway_stop after a setting changes without restarting its sibling", () =>
-  verifySharedResourceReplacement(createRecoveryFixture));
+it.each(["gateway_stop", "runtime-lifecycle"] as const)(
+  "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
+  (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
+);
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
@@ -258,13 +262,6 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
 
-it("keeps a shared boot setup owner through sibling lookup", () =>
-  verifySharedGatewayCacheOwnership(
-    createRecoveryFixture,
-    makeTrackedTempDir("gateway-shared-setup-owner", tempDirs),
-    (load) => mocks.resolveConfigWidePluginMetadataSnapshot.mockImplementation(load),
-  ));
-
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
@@ -303,6 +300,25 @@ it("keeps another agent's decision request live across a default selection chang
 it.each(["held-close", "failed-close"] as const)(
   "drains retained memory before Gateway provider replacement (%s)",
   (mode) => verifyGatewayMemoryReplacement(createRecoveryFixture, mode),
+);
+
+it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
+  "restarts retained memory watchers after provider-only reload (%s)",
+  (providerState, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
+);
+
+it.for([
+  { owner: "retained", failure: "before-drain" },
+  { owner: "replaced", failure: "before-drain" },
+  { owner: "retained", failure: "checkpoint" },
+  { owner: "replaced", failure: "checkpoint" },
+  { owner: "retained", failure: "restart" },
+  { owner: "replaced", failure: "restart" },
+] as const)(
+  "recovers $owner memory indexing after early $failure failure",
+  (recovery, { signal }) =>
+    verifyGatewayMemoryWatcherRestart(createRecoveryFixture, "initialized", signal, recovery),
 );
 
 it.each(["retry", "shutdown"] as const)(

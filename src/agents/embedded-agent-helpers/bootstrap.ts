@@ -58,6 +58,7 @@ export function stripThoughtSignatures<T>(
   }
   const allowBase64Only = options?.allowBase64Only ?? false;
   const includeCamelCase = options?.includeCamelCase ?? false;
+  const signatureKeys = ["thought_signature", ...(includeCamelCase ? ["thoughtSignature"] : [])];
   const shouldStripSignature = (value: unknown): boolean => {
     if (!allowBase64Only) {
       return typeof value === "string" && value.startsWith("msg_");
@@ -69,17 +70,13 @@ export function stripThoughtSignatures<T>(
       return block;
     }
     const rec = block as ContentBlockWithSignature;
-    const stripSnake = shouldStripSignature(rec.thought_signature);
-    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
-    if (!stripSnake && !stripCamel) {
+    const strippedKeys = signatureKeys.filter((key) => shouldStripSignature(rec[key]));
+    if (strippedKeys.length === 0) {
       return block;
     }
     const next = { ...rec };
-    if (stripSnake) {
-      delete next.thought_signature;
-    }
-    if (stripCamel) {
-      delete next.thoughtSignature;
+    for (const key of strippedKeys) {
+      delete next[key];
     }
     return next;
   }) as T;
@@ -156,10 +153,10 @@ export function resolveBootstrapTotalMaxChars(
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
-  if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
-    return true;
-  }
-  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
+  return (
+    /^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line) ||
+    AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line)
+  );
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -209,7 +206,7 @@ function buildAgentsPolicyDigest(
   };
 }
 
-function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBootstrapResult {
+function trimAgentsBootstrapContent(trimmed: string, maxChars: number): string {
   let headChars = Math.floor(maxChars * AGENTS_POLICY_HEAD_RATIO);
   let tailChars = Math.floor(maxChars * AGENTS_POLICY_TAIL_RATIO);
   let digestBudget = Math.floor(maxChars * AGENTS_POLICY_DIGEST_RATIO);
@@ -266,12 +263,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
     rendered = render();
   }
 
-  return {
-    content: rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered;
 }
 
 function trimBootstrapContent(
@@ -280,16 +272,17 @@ function trimBootstrapContent(
   maxChars: number,
 ): TrimBootstrapResult {
   const trimmed = content.trimEnd();
+  const finish = (value: string, truncated = true): TrimBootstrapResult => ({
+    content: value,
+    truncated,
+    maxChars,
+    originalLength: trimmed.length,
+  });
   if (trimmed.length <= maxChars) {
-    return {
-      content: trimmed,
-      truncated: false,
-      maxChars,
-      originalLength: trimmed.length,
-    };
+    return finish(trimmed, false);
   }
   if (fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase()) {
-    return trimAgentsBootstrapContent(trimmed, maxChars);
+    return finish(trimAgentsBootstrapContent(trimmed, maxChars));
   }
 
   const markerTemplate = (headChars: number, tailChars: number) =>
@@ -365,23 +358,16 @@ function trimBootstrapContent(
     contentWithMarker.length > maxChars
       ? truncateUtf16Safe(contentWithMarker, maxChars)
       : contentWithMarker;
-  return {
-    content: boundedContent,
-    truncated: true,
-    maxChars,
-    originalLength: trimmed.length,
-  };
+  return finish(boundedContent);
 }
 
 function clampToBudget(content: string, budget: number): string {
   if (content.length <= budget) {
     return content;
   }
-  if (budget <= 3) {
-    return truncateUtf16Safe(content, budget);
-  }
-  const safe = budget - 1;
-  return `${truncateUtf16Safe(content, safe)}…`;
+  return budget <= 3
+    ? truncateUtf16Safe(content, budget)
+    : `${truncateUtf16Safe(content, budget - 1)}…`;
 }
 
 export function buildBootstrapContextFiles(
@@ -406,17 +392,21 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
+    const appendContext = (content: string, includePersonalUser = false) => {
+      remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
+      result.push({
+        path: pathValue,
+        content,
+        ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
+      });
+    };
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
-      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
-      result.push({
-        path: pathValue,
-        content: cappedMissingText,
-      });
+      appendContext(cappedMissingText);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
@@ -445,12 +435,7 @@ export function buildBootstrapContextFiles(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
-    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
-    result.push({
-      path: pathValue,
-      content: contentWithinBudget,
-      ...(file.personalUser ? { personalUser: file.personalUser } : {}),
-    });
+    appendContext(contentWithinBudget, true);
   }
   return result;
 }

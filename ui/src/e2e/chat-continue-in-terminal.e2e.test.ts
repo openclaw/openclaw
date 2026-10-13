@@ -51,14 +51,11 @@ const sharedManagementActions = [
   "Pin session",
   "Mark as unread",
   "Rename…",
+  "Advanced",
+  "Copy link",
   "Assign to…",
-  "Icon & color",
-  "Fork conversation",
-  "Copy",
-  "Open in",
   "Move to group",
   "Archive session",
-  "Delete…",
 ] as const;
 const compactManagementActions = sharedManagementActions;
 
@@ -122,6 +119,16 @@ suite.define(() => {
         for (const label of sharedManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await openSessionMenuSubmenu(page, "Advanced");
+        for (const label of [
+          "Fork conversation",
+          "Icon & color",
+          "Copy details",
+          "Open in",
+          "Delete…",
+        ]) {
+          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
+        }
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
@@ -146,6 +153,7 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
+        await openSessionMenuSubmenu(page, "Advanced");
         await openSessionMenuSubmenu(page, "Open in");
         await action.click();
         await dialog.waitFor({ state: "visible" });
@@ -212,11 +220,23 @@ suite.define(() => {
         for (const label of compactManagementActions) {
           await dropdown.getByText(label, { exact: true }).waitFor({ state: "visible" });
         }
+        await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+        for (const label of [
+          "Fork conversation",
+          "Icon & color",
+          "Copy details",
+          "Open in",
+          "Delete…",
+        ]) {
+          await dropdown.getByRole("menuitem", { name: label, exact: true }).waitFor();
+        }
+        await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
           path: path.join(artifactDir, "03-mobile-menu.png"),
         });
+        await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
         await dropdown
           .getByText("Continue in terminal…", { exact: true })

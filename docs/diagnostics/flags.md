@@ -21,17 +21,18 @@ Diagnostics flags turn on extra logging for one subsystem without raising
 
 ## Known flags
 
-| Flag                  | Enables                                                   |
-| --------------------- | --------------------------------------------------------- |
-| `telegram.http`       | Telegram Bot API HTTP error logging                       |
-| `brave.http`          | Brave Search request/response/cache logging               |
-| `profiler`            | Reply-stage profiler and Codex app-server profiler (both) |
-| `reply.profiler`      | Reply-stage profiler only                                 |
-| `codex.profiler`      | Codex app-server profiler only                            |
-| `health`              | Gateway health check/account/binding debug details        |
-| `ingress.timing`      | Session load, model selection, and model catalog timings  |
-| `plugin.load-profile` | Synchronous plugin module-load timings                    |
-| `timeline`            | Structured JSONL timeline artifact (see below)            |
+| Flag                   | Enables                                                       |
+| ---------------------- | ------------------------------------------------------------- |
+| `telegram.http`        | Telegram Bot API HTTP error logging                           |
+| `brave.http`           | Brave Search request/response/cache logging                   |
+| `profiler`             | Reply-stage profiler and Codex app-server profiler (both)     |
+| `reply.profiler`       | Reply-stage profiler only                                     |
+| `codex.profiler`       | Codex app-server profiler only                                |
+| `health`               | Gateway health check/account/binding debug details            |
+| `ingress.timing`       | Session load, model selection, and model catalog timings      |
+| `plugin.load-profile`  | Synchronous plugin module-load timings                        |
+| `sqlite.worker-timing` | SQLite writer request transport timestamps (environment only) |
+| `timeline`             | Structured JSONL timeline artifact (see below)                |
 
 ## Enable via config
 
@@ -242,6 +243,21 @@ For remote gateways, use `openclaw logs --follow` instead (see
 - Flags are safe to leave enabled; they only affect log volume for the
   specific subsystem.
 - Use [/logging](/logging) to change log destinations, levels, and redaction.
+
+## SQLite worker timing
+
+Start the Gateway with `OPENCLAW_DIAGNOSTICS=sqlite.worker-timing` to attach
+monotonic millisecond timestamps to completed `worker.request` diagnostic events
+for SQLite writers. An internal diagnostic subscriber can separate queueing,
+broker dispatch, `postMessage`, worker preparation, backend execution, result
+serialization, and reply delivery. Backend execution includes owner code and SQL;
+it is not a native SQL timer. `replyReceived` marks broker receipt, before the
+caller resumes. Measure caller latency separately.
+
+The flag is sampled at process startup. Failed requests omit stages they never
+reached. Framed requests describe only the initial exchange and may omit execution
+stages; `durationMs` still covers the complete request. Timestamps contain no SQL
+text, bindings, or result payloads. Disabled requests carry no timing data.
 
 ## Related
 

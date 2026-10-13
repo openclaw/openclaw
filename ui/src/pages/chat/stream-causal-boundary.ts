@@ -1,21 +1,11 @@
-import {
-  readAssistantStreamSegmentIdentity,
-  readSessionMessageIdentity,
-} from "@openclaw/gateway-client/browser";
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  advanceAccumulatedStreamText,
-  streamSegmentUsesAccumulatedText,
-  type ChatStreamSegment,
-} from "../../lib/chat/chat-types.ts";
-import { extractText, extractTextCached } from "../../lib/chat/message-extract.ts";
+import { streamSegmentHasItemId, type ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
-import { closeToolStreamBoundary } from "./tool-stream-state.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
@@ -23,13 +13,25 @@ export type StreamCausalBoundaryState = {
   chatStreamSegments?: ChatStreamSegment[];
 };
 
-type StreamRolloverState = Partial<Pick<ToolStreamHost, "toolStreamById" | "chatToolMessages">> & {
+type StreamRolloverState = {
   chatMessages?: unknown[];
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatStreamSegments?: ChatStreamSegment[];
 };
+
+/** A replacement changes cumulative coordinates while preserving independent items and ordering. */
+export function replaceChatStream(
+  state: Pick<StreamRolloverState, "chatRunId" | "chatStream" | "chatStreamSegments">,
+  text: string | null,
+): void {
+  state.chatStreamSegments = state.chatStreamSegments?.filter(
+    (segment) =>
+      !state.chatRunId || segment.runId !== state.chatRunId || streamSegmentHasItemId(segment),
+  );
+  state.chatStream = text;
+}
 
 export function lastUserMessageIndex(messages: unknown[], beforeIndex = messages.length): number {
   for (let index = beforeIndex - 1; index >= 0; index -= 1) {
@@ -45,113 +47,56 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
   return normalizeOptionalString(metadata?.steerTargetRunId) ?? null;
 }
 
-export function indexTurnContinuations<T>(
-  turns: T[][],
-  userMessagesForTurn: (turn: T[]) => unknown[],
-): {
-  continuationTurnIndexes: Map<number, number>;
-  precedingContinuationTurnIndexes: Map<number, number>;
-} {
-  const runTurnIndexes = new Map<string, number>();
-  const steerTurnIndexesByTarget = new Map<string, number[]>();
-  for (const [turnIndex, turn] of turns.entries()) {
-    let runId: string | null = null;
-    let targetRunId: string | null = null;
-    for (const message of userMessagesForTurn(turn)) {
-      runId ??= userTurnRunId(message);
-      targetRunId ??= persistedSteerTargetRunId(message);
-      if (runId && targetRunId) {
-        break;
-      }
-    }
-    if (runId && !runTurnIndexes.has(runId)) {
-      runTurnIndexes.set(runId, turnIndex);
-    }
-    if (targetRunId) {
-      const steerTurns = steerTurnIndexesByTarget.get(targetRunId) ?? [];
-      steerTurns.push(turnIndex);
-      steerTurnIndexesByTarget.set(targetRunId, steerTurns);
-    }
-  }
-
-  const continuationTurnIndexes = new Map<number, number>();
-  const precedingContinuationTurnIndexes = new Map<number, number>();
-  for (const [targetRunId, steerTurnIndexes] of steerTurnIndexesByTarget) {
-    let previousTurnIndex = runTurnIndexes.get(targetRunId);
-    if (previousTurnIndex === undefined) {
-      continue;
-    }
-    for (const steerTurnIndex of steerTurnIndexes) {
-      if (steerTurnIndex <= previousTurnIndex) {
-        continue;
-      }
-      continuationTurnIndexes.set(previousTurnIndex, steerTurnIndex);
-      precedingContinuationTurnIndexes.set(steerTurnIndex, previousTurnIndex);
-      previousTurnIndex = steerTurnIndex;
-    }
-  }
-  return { continuationTurnIndexes, precedingContinuationTurnIndexes };
-}
-
-export function latestPersistedSteerBoundary(
-  messages: readonly unknown[],
-  activeRunId: string,
-): { index: number; runId: string } | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (
-      readSessionMessageIdentity(messages[index])?.role !== "user" ||
-      persistedSteerTargetRunId(messages[index]) !== activeRunId
-    ) {
-      continue;
-    }
-    const runId = userTurnRunId(messages[index]);
-    if (runId) {
-      return { index, runId };
-    }
-  }
-  return null;
-}
-
-export function latestStreamBoundaryRunId(state: StreamCausalBoundaryState): string | undefined {
-  const segments = state.chatStreamSegments ?? [];
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const boundaryRunId = normalizeOptionalString(segments[index]?.boundaryRunId);
-    if (boundaryRunId) {
-      return boundaryRunId;
-    }
-  }
-  return undefined;
+/** Live activity keeps the input boundary seen on arrival, independent of clocks. */
+export function observedRunInputSendId(
+  messages: unknown[] | undefined,
+  runId: string,
+): string | undefined {
+  const input = messages?.findLast(
+    (message) =>
+      readSessionMessageIdentity(message)?.role === "user" &&
+      (userTurnRunId(message) === runId || persistedSteerTargetRunId(message) === runId),
+  );
+  return readSessionMessageIdentity(input)?.sendId ?? undefined;
 }
 
 export function streamCausalInterval(
   messages: unknown[],
-  part: { afterBoundaryRunId?: string; boundaryRunId?: string; runId?: string },
+  part: { runId?: string },
+  afterUserSendId?: string,
 ): { start: number; end: number } {
-  const afterBoundaryIndex = part.afterBoundaryRunId
-    ? messages.findIndex((message) => userTurnRunId(message) === part.afterBoundaryRunId)
+  const inputIndex = afterUserSendId
+    ? messages.findIndex(
+        (message) => readSessionMessageIdentity(message)?.sendId === afterUserSendId,
+      )
     : -1;
-  const boundaryIndex = part.boundaryRunId
-    ? messages.findIndex((message) => userTurnRunId(message) === part.boundaryRunId)
-    : -1;
-  if (boundaryIndex >= 0) {
-    return {
-      start:
-        afterBoundaryIndex >= 0
-          ? afterBoundaryIndex + 1
-          : lastUserMessageIndex(messages, boundaryIndex) + 1,
-      end: boundaryIndex,
-    };
-  }
   const startIndex =
-    afterBoundaryIndex >= 0
-      ? afterBoundaryIndex
+    inputIndex >= 0
+      ? inputIndex
       : part.runId
-        ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
+        ? messages.findIndex(
+            (message) =>
+              userTurnRunId(message) === part.runId ||
+              (readSessionMessageIdentity(message)?.role === "user" &&
+                persistedSteerTargetRunId(message) === part.runId),
+          )
         : -1;
+  if (
+    afterUserSendId &&
+    inputIndex < 0 &&
+    startIndex >= 0 &&
+    persistedSteerTargetRunId(messages[startIndex]) === part.runId
+  ) {
+    // The observed input fell off the loaded page. Its live activity predates
+    // the first retained steer; an unanchored replay or tail does not.
+    return { start: 0, end: startIndex };
+  }
   if (startIndex >= 0) {
     const end = messages.findIndex(
       (message, index) =>
-        index > startIndex && readSessionMessageIdentity(message)?.role === "user",
+        index > startIndex &&
+        readSessionMessageIdentity(message)?.role === "user" &&
+        (inputIndex >= 0 || persistedSteerTargetRunId(message) !== part.runId),
     );
     return { start: startIndex + 1, end: end >= 0 ? end : messages.length };
   }
@@ -175,71 +120,12 @@ export function streamCausalInsertIndex(
   return endIndex;
 }
 
-export function resolveCumulativeAssistantTail(
-  messages: unknown[],
-  cumulativeText: string,
-  runId: string,
-  endIndex = messages.length,
-  replayedCommentaryItemIds?: ReadonlySet<string>,
-): string | null {
-  let ownedPrefixIndex = -1;
-  for (let index = 0; index < endIndex; index += 1) {
-    const message = messages[index];
-    const identity = readSessionMessageIdentity(message);
-    const commentaryIdentity = readAssistantStreamSegmentIdentity(message);
-    const replayOwnsCommentary =
-      commentaryIdentity !== undefined &&
-      (replayedCommentaryItemIds === undefined ||
-        replayedCommentaryItemIds.has(commentaryIdentity.itemId));
-    const persistedText =
-      identity?.runId === runId && !replayOwnsCommentary ? extractTextCached(message) : null;
-    if (
-      identity?.role === "assistant" &&
-      persistedText &&
-      (cumulativeText.startsWith(persistedText) || persistedText.startsWith(cumulativeText))
-    ) {
-      ownedPrefixIndex = index;
-      break;
-    }
-  }
-  const turnStart =
-    ownedPrefixIndex >= 0 ? ownedPrefixIndex : lastUserMessageIndex(messages, endIndex) + 1;
-  const persistedTexts = messages.slice(turnStart, endIndex).map((message) => {
-    const identity = readSessionMessageIdentity(message);
-    const commentaryIdentity = readAssistantStreamSegmentIdentity(message);
-    // A surviving item event owns its keyed commentary mirror. If replay eviction
-    // removed that event, the persisted mirror is the only prefix evidence left.
-    const replayOwnsCommentary =
-      commentaryIdentity !== undefined &&
-      (replayedCommentaryItemIds === undefined ||
-        replayedCommentaryItemIds.has(commentaryIdentity.itemId));
-    const text =
-      identity?.role === "assistant" &&
-      (!identity.runId || identity.runId === runId) &&
-      !replayOwnsCommentary
-        ? extractTextCached(message)
-        : null;
-    return { text, skipOnMismatch: commentaryIdentity !== undefined };
-  });
-  return resolveAssistantTextCandidateTail(persistedTexts, cumulativeText);
-}
-
 export function resolveAssistantTextTail(
   persistedTexts: readonly (string | null)[],
   cumulativeText: string,
 ): string | null {
-  return resolveAssistantTextCandidateTail(
-    persistedTexts.map((text) => ({ text, skipOnMismatch: false })),
-    cumulativeText,
-  );
-}
-
-function resolveAssistantTextCandidateTail(
-  persistedTexts: readonly { text: string | null; skipOnMismatch: boolean }[],
-  cumulativeText: string,
-): string | null {
   let persistedPrefixLength = 0;
-  for (const { text: persistedText, skipOnMismatch } of persistedTexts) {
+  for (const persistedText of persistedTexts) {
     if (!persistedText) {
       continue;
     }
@@ -259,9 +145,6 @@ function resolveAssistantTextCandidateTail(
     if (whitespace && persistedText.startsWith(remaining.slice(whitespace.length))) {
       return null;
     }
-    if (skipOnMismatch) {
-      continue;
-    }
     if (persistedPrefixLength > 0) {
       break;
     }
@@ -269,295 +152,19 @@ function resolveAssistantTextCandidateTail(
   return cumulativeText.slice(persistedPrefixLength);
 }
 
-function persistedBoundaryPrefix(state: StreamCausalBoundaryState, terminalText: string) {
-  const messages = state.chatMessages;
-  const activeRunId = state.chatRunId;
-  if (!Array.isArray(messages) || !activeRunId) {
-    return null;
-  }
-  const boundary = latestPersistedSteerBoundary(messages, activeRunId);
-  if (!boundary || boundary.index <= 0) {
-    return null;
-  }
-  const tail = resolveCumulativeAssistantTail(messages, terminalText, activeRunId, boundary.index);
-  if (tail === terminalText) {
-    return null;
-  }
-  return {
-    boundaryRunId: boundary.runId,
-    prefix: tail === null ? terminalText : terminalText.slice(0, terminalText.length - tail.length),
-  };
-}
-
-function replaceTerminalText(
-  message: Record<string, unknown>,
-  text: string,
-): Record<string, unknown> {
-  if (Array.isArray(message.content)) {
-    let replaced = false;
-    const content = message.content.flatMap((block) => {
-      const entry = asNullableRecord(block);
-      if (!entry) {
-        return [block];
-      }
-      const textBlock =
-        (entry.type === "text" || entry.type === "input_text" || entry.type === "output_text") &&
-        typeof entry.text === "string";
-      if (!textBlock) {
-        return [block];
-      }
-      if (replaced) {
-        return [];
-      }
-      replaced = true;
-      return [{ ...entry, text }];
-    });
-    if (replaced) {
-      return { ...message, content };
-    }
-  }
-  if (typeof message.content === "string") {
-    return { ...message, content: text };
-  }
-  return typeof message.text === "string" ? { ...message, text } : message;
-}
-
-type TerminalStreamBoundaryReconciliation =
-  | { kind: "none" }
-  | {
-      kind: "split";
-      afterBoundaryRunId?: string;
-      afterSequence: number | null;
-      preserveKeyedCommentary?: boolean;
-      replacedSegmentIndexes: number[];
-      tailMessage: Record<string, unknown> | null;
-    };
-
-type TerminalBoundaryCandidate = {
-  boundaryRunId: string;
-  prefix: string;
-};
-
-function terminalBoundaryCandidateMatches(
-  candidate: TerminalBoundaryCandidate | null,
-  terminalText: string,
-): candidate is TerminalBoundaryCandidate {
-  return Boolean(candidate?.boundaryRunId && terminalText.startsWith(candidate.prefix));
-}
-
-function retiredCommentaryBoundary(
-  state: StreamCausalBoundaryState,
-  terminalText: string,
-  boundary: TerminalBoundaryCandidate | null,
-) {
-  const runId = state.chatRunId;
-  if (!runId) {
-    return null;
-  }
-  const messages = state.chatMessages ?? [];
-  const interval = streamCausalInterval(messages, {
-    runId,
-    ...(boundary ? { afterBoundaryRunId: boundary.boundaryRunId } : {}),
-  });
-  for (const segment of (state.chatStreamSegments ?? []).toReversed()) {
-    if (
-      segment.runId !== runId ||
-      segment.persisted !== true ||
-      !segment.retiredItemId ||
-      !streamSegmentUsesAccumulatedText(segment) ||
-      (boundary && !segment.text.startsWith(boundary.prefix)) ||
-      !terminalText.startsWith(segment.text)
-    ) {
-      continue;
-    }
-    const owner = messages.slice(interval.start, interval.end).find((message) => {
-      const identity = readAssistantStreamSegmentIdentity(message);
-      return identity?.runId === runId && identity.itemId === segment.retiredItemId;
-    });
-    const identity = readSessionMessageIdentity(owner);
-    if (identity?.id && !identity.isImported && identity.sequence !== null) {
-      return { prefix: segment.text, afterSequence: identity.sequence };
-    }
-  }
-  return null;
-}
-
-/** Reconciles a cumulative terminal against its persisted steer or retired commentary. */
-export function reconcileTerminalStreamBoundary(
-  message: Record<string, unknown>,
-  state: StreamCausalBoundaryState,
-): TerminalStreamBoundaryReconciliation {
-  const terminalText = extractText(message);
-  if (!terminalText) {
-    return { kind: "none" };
-  }
-  let accumulatedText: string | null = null;
-  const accumulatedSegmentIndexes: number[] = [];
-  let liveBoundary: (TerminalBoundaryCandidate & { segmentIndexes: number[] }) | null = null;
-  for (const [segmentIndex, segment] of (state.chatStreamSegments ?? []).entries()) {
-    if (streamSegmentUsesAccumulatedText(segment) && typeof segment.text === "string") {
-      const nextAccumulatedText = advanceAccumulatedStreamText(accumulatedText, segment.text);
-      if (nextAccumulatedText !== accumulatedText) {
-        accumulatedSegmentIndexes.push(segmentIndex);
-      }
-      accumulatedText = nextAccumulatedText;
-    }
-    const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    if (boundaryRunId && accumulatedText) {
-      liveBoundary = {
-        boundaryRunId,
-        prefix: accumulatedText,
-        segmentIndexes: [...accumulatedSegmentIndexes],
-      };
-    }
-  }
-  const persistedBoundary = persistedBoundaryPrefix(state, terminalText);
-  const selectedBoundary = terminalBoundaryCandidateMatches(liveBoundary, terminalText)
-    ? liveBoundary
-    : terminalBoundaryCandidateMatches(persistedBoundary, terminalText)
-      ? persistedBoundary
-      : null;
-  const commentary = retiredCommentaryBoundary(state, terminalText, selectedBoundary);
-  const retiredPrefix = commentary ?? selectedBoundary;
-  if (!retiredPrefix) {
-    return { kind: "none" };
-  }
-  // A later retired item extends the cumulative prefix without moving the steer
-  // boundary. Keep its durable sequence so the answer cannot adopt either owner.
-  const suffix = terminalText.slice(retiredPrefix.prefix.length);
-  const tail = commentary ? suffix : suffix.trimStart();
-  return {
-    kind: "split",
-    ...(selectedBoundary ? { afterBoundaryRunId: selectedBoundary.boundaryRunId } : {}),
-    afterSequence:
-      commentary?.afterSequence ??
-      readSessionMessageIdentity(
-        state.chatMessages?.find(
-          (entry) => userTurnRunId(entry) === selectedBoundary?.boundaryRunId,
-        ),
-      )?.sequence ??
-      null,
-    ...(commentary ? { preserveKeyedCommentary: true } : {}),
-    replacedSegmentIndexes:
-      selectedBoundary && selectedBoundary === persistedBoundary && liveBoundary
-        ? liveBoundary.segmentIndexes
-        : [],
-    tailMessage: tail ? replaceTerminalText(message, tail) : null,
-  };
-}
-
-// An ordinary queued user is a hard ceiling for text produced before a later steer.
-// Preserve the first intervening user instead of relabeling that text as pre-steer output.
-function interveningUserBoundaryRunId(params: {
-  messages: unknown[] | undefined;
-  runId: string;
-  boundaryRunId: string;
-  afterBoundaryRunId?: string;
-}): string | undefined {
-  const messages = params.messages;
-  if (!messages) {
-    return undefined;
-  }
-  const boundaryIndex = messages.findIndex(
-    (message) => userTurnRunId(message) === params.boundaryRunId,
-  );
-  const floorRunId = params.afterBoundaryRunId ?? params.runId;
-  const floorIndex = messages.findIndex((message) => userTurnRunId(message) === floorRunId);
-  if (floorIndex < 0 || boundaryIndex <= floorIndex) {
-    return undefined;
-  }
-  for (let index = floorIndex + 1; index < boundaryIndex; index += 1) {
-    if (readSessionMessageIdentity(messages[index])?.role !== "user") {
-      continue;
-    }
-    const runId = userTurnRunId(messages[index]);
-    if (runId) {
-      return runId;
-    }
-  }
-  return undefined;
-}
-
-/** Closes cumulative assistant output at a history or user boundary. */
-export function rolloverChatStream(
-  host: StreamRolloverState,
-  options: {
-    runId: string;
-    boundaryRunId?: string;
-    persisted?: true;
-  },
-): void {
-  if (host.chatRunId !== options.runId) {
-    return;
-  }
-  let segments = host.chatStreamSegments ?? [];
-  if (
-    options.boundaryRunId &&
-    segments.some((segment) => segment.boundaryRunId === options.boundaryRunId)
-  ) {
-    return;
-  }
-  const previousBoundaryRunId = latestStreamBoundaryRunId(host);
-  const hasStream = typeof host.chatStream === "string";
-  const hasStreamText = hasStream && Boolean(host.chatStream?.trim());
-  const streamBoundaryRunId = options.boundaryRunId
-    ? (interveningUserBoundaryRunId({
-        messages: host.chatMessages,
-        runId: options.runId,
-        boundaryRunId: options.boundaryRunId,
-        afterBoundaryRunId: previousBoundaryRunId,
-      }) ?? options.boundaryRunId)
-    : undefined;
-  let streamTimestamp = host.chatStreamStartedAt ?? Date.now();
-  if (streamBoundaryRunId) {
-    const toolTimestamp = closeToolStreamBoundary(host, options.runId, streamBoundaryRunId);
-    if (toolTimestamp !== undefined) {
-      // The live tail was below these tools, even if its first byte predates them.
-      streamTimestamp = Math.max(streamTimestamp, toolTimestamp + 1);
-    }
-    const previousBoundaryIndex = segments.findLastIndex((segment) => segment.boundaryRunId);
-    segments = segments.map((segment, index) =>
-      index <= previousBoundaryIndex || segment.boundaryRunId
-        ? segment
-        : { ...segment, boundaryRunId: streamBoundaryRunId },
-    );
-  }
-  if (hasStreamText) {
-    segments = [
-      ...segments,
+/** Keep a durable cumulative prefix hidden until its terminal or next tail arrives. */
+export function retainPersistedStreamPrefix(host: StreamRolloverState): void {
+  if (host.chatStream?.trim() && host.chatRunId) {
+    host.chatStreamSegments = [
+      ...(host.chatStreamSegments ?? []),
       {
-        text: host.chatStream ?? "",
-        ts: streamTimestamp,
-        runId: options.runId,
-        ...(previousBoundaryRunId ? { afterBoundaryRunId: previousBoundaryRunId } : {}),
-        ...(streamBoundaryRunId ? { boundaryRunId: streamBoundaryRunId } : {}),
-        ...(options.persisted ? { persisted: true } : {}),
-      },
-    ];
-  }
-  if (
-    options.boundaryRunId &&
-    !segments.some((segment) => segment.boundaryRunId === options.boundaryRunId)
-  ) {
-    const markerAfterBoundaryRunId =
-      streamBoundaryRunId !== options.boundaryRunId ? streamBoundaryRunId : previousBoundaryRunId;
-    segments = [
-      ...segments,
-      {
-        text: "",
+        text: host.chatStream,
         ts: host.chatStreamStartedAt ?? Date.now(),
-        runId: options.runId,
-        boundaryRunId: options.boundaryRunId,
-        boundaryMarker: true,
-        ...(markerAfterBoundaryRunId ? { afterBoundaryRunId: markerAfterBoundaryRunId } : {}),
+        runId: host.chatRunId,
+        persisted: true,
       },
     ];
-  }
-  host.chatStreamSegments = segments;
-  if (!hasStream) {
-    return;
   }
   host.chatStream = null;
-  // The closed segment owns elapsed time; a later cumulative tail must not restart the run clock.
   host.chatStreamStartedAt = null;
 }

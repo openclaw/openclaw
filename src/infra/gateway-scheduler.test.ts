@@ -1,4 +1,5 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,6 +21,26 @@ function fixture() {
 }
 
 describe("Gateway timed work", () => {
+  it.each(["root", "scope"] as const)(
+    "releases the retiring caller while its %s abort signal remains reachable",
+    (kind) => {
+      class RetiredOwner {
+        close() {
+          const { scheduler } = fixture();
+          const owner = kind === "root" ? scheduler : scheduler.scope();
+          owner.beginClose();
+          return owner.signal;
+        }
+      }
+      const signals = Array.from({ length: 12 }, () => new RetiredOwner().close());
+      expect(queryObjects(RetiredOwner)).toBe(0);
+      for (const signal of signals) {
+        expect(signal.aborted).toBe(true);
+        expect(signal.reason).toMatchObject({ name: "AbortError" });
+      }
+    },
+  );
+
   it("does not wake or allocate async resources before a fractional deadline", async () => {
     const time = createGatewaySchedulerClock(1_000);
     let wakes = 0;

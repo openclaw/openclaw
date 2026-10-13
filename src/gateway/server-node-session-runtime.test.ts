@@ -311,6 +311,7 @@ describe("gateway node session runtime", () => {
     }
     const terminals: Promise<void>[] = [];
     broadcastChatTerminal({
+      terminalEntry: undefined,
       context: {
         broadcast: vi.fn(),
         agentRunSeq: new Map(),

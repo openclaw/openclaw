@@ -8,6 +8,7 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { ExitError } from "../runtime.js";
 import type { SkillStatusReport } from "../skills/discovery/status.js";
 import type * as SourceInstall from "../skills/lifecycle/source-install.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -113,11 +114,18 @@ vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
+// mock-isolation: Skill command fixtures own workspace selection and config without host state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.config,
   loadConfig: mocks.config,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.config>) =>
+    async () =>
+      mocks.config(...args),
 }));
+// mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: () => ["main"],
   resolveAgentIdByWorkspacePath: mocks.inferredAgent,
   resolveConfiguredAgentId: mocks.explicitAgent,
   resolveDefaultAgentId: mocks.defaultAgent,
@@ -195,6 +203,41 @@ async function runCommand(argv: string[]) {
 }
 
 describe("skills cli commands", () => {
+  it.each([
+    {
+      argv: ["install", "skills-sh/invalid"],
+      message: "Invalid skills.sh skill reference: skills-sh/invalid",
+      json: false,
+    },
+    { argv: ["update"], message: "Provide a skill slug or use --all.", json: false },
+    {
+      argv: ["verify", "weather", "--global", "--agent", "main"],
+      message: "Use either --global or --agent, not both.",
+      json: true,
+    },
+  ])(
+    "preserves the reported failure for $argv with an exiting runtime",
+    async ({ argv, message, json }) => {
+      const exit = new ExitError(1);
+      await mocks.runtime.exit.withImplementation(
+        () => {
+          throw exit;
+        },
+        async () => {
+          await expect(runCommand(argv)).rejects.toBe(exit);
+        },
+      );
+      expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mocks.errors).toEqual(json ? [] : [message]);
+      expect(mocks.stdout).toEqual(
+        json ? [JSON.stringify({ ok: false, error: { type: "cli_error", message } }, null, 2)] : [],
+      );
+      expect(mocks.install).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.verify).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(() => {
     mocks.stdout.length = 0;
     mocks.errors.length = 0;
@@ -263,6 +306,7 @@ describe("skills cli commands", () => {
 
   it("installs a versioned ClawHub skill globally with interactive confirmation", async () => {
     setTty(true);
+    mocks.gateway.mockResolvedValue(mocks.report);
     mocks.install.mockResolvedValue({
       ok: true,
       slug: "calendar",
@@ -287,6 +331,14 @@ describe("skills cli commands", () => {
     expect(mocks.runtime.log).toHaveBeenCalledWith(
       "Installed calendar@1.2.3 -> /tmp/openclaw-config/skills/calendar",
     );
+    expect(mocks.gateway).toHaveBeenCalledExactlyOnceWith({
+      config: {},
+      method: "skills.status",
+      params: { agentId: "main", refresh: true },
+      timeoutMs: 120_000,
+      clientName: "cli",
+      mode: "cli",
+    });
   });
   it.each([
     {
@@ -364,6 +416,24 @@ describe("skills cli commands", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.runtime.log).toHaveBeenCalledWith(
       "Installed tools from git -> /tmp/workspace/skills/tools",
+    );
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Skill files changed, but local Gateway refresh failed:"),
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+  it("keeps a local install from refreshing a configured remote Gateway", async () => {
+    mocks.config.mockReturnValue({ gateway: { mode: "remote" } });
+    mocks.install.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+    await runCommand(["install", "calendar"]);
+    expect(mocks.gateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      "Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar",
     );
   });
   it("prints a blocked install failure when no trust warning was emitted", async () => {

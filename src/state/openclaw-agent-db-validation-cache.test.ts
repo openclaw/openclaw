@@ -1,23 +1,49 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
-} from "./openclaw-agent-db-contract.js";
-import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseSchemaAdmissionInvalidError,
+} from "./agent-database-admission-error.js";
+import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
+} from "./openclaw-agent-db-contract.js";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  hasOpenClawAgentReadOnlySchema,
+} from "./openclaw-agent-db-readonly-open.js";
+import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
+import { stageOpenClawAgentDatabaseSchemaExtension } from "./openclaw-agent-db-schema-extension.worker.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  adoptOpenClawAgentDatabaseSchema,
   adoptOpenClawAgentDatabaseValidation,
+  captureOpenClawAgentDatabaseAdmissionPublication,
+  captureOpenClawAgentDatabaseAliasPublication,
+  captureOpenClawAgentDatabaseReadValidation,
   captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
   hasOpenClawAgentCanonicalValidation,
+  invalidateOpenClawAgentDatabaseSchema,
+  invalidateOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   markOpenClawAgentCanonicalValidation,
+  publishOpenClawAgentDatabaseSchema,
   releaseOpenClawAgentDatabaseReadValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
@@ -52,6 +78,207 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it("publishes known derived DDL without repeating agent admission", async () => {
+    await withReceiptFixture(false, (database, options) => {
+      const reader = openOpenClawAgentDatabaseReadOnly(options);
+      if (!reader.found) {
+        throw new Error("Expected independent reader");
+      }
+      const previous = getOpenClawAgentDatabaseValidation(database)!;
+      const retainedReader = captureOpenClawAgentDatabaseReadValidation(database);
+      expect(retainedReader).toBeDefined();
+      try {
+        runSqliteImmediateTransactionSync(database.db, () => {
+          stageOpenClawAgentDatabaseSchemaExtension(database.db);
+          database.db.exec("CREATE TABLE derived_vectors(id TEXT PRIMARY KEY, vector BLOB)");
+        });
+        const observation = trackSqliteStatementExecutions(database.db, ["sql"], () => "sql");
+        const readerObservation = trackSqliteStatementExecutions(
+          reader.database.db,
+          ["sql"],
+          () => "sql",
+        );
+        try {
+          const current = refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(() => retainedReader!.assertCurrent()).not.toThrow();
+          expect(current.valid).toBe(previous.valid);
+          expect(current.schema?.facts.tables.has("derived_vectors")).toBe(true);
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(
+            getAdmittedSqliteSchemaFacts(reader.database.db)?.tables.has("derived_vectors"),
+          ).toBe(true);
+          expect(observation.counts.sql).toBe(0);
+          expect(readerObservation.counts.sql).toBe(0);
+        } finally {
+          readerObservation.restore();
+          observation.restore();
+        }
+        // Unclassified DDL still invalidates the agent contract.
+        database.db.exec("DROP TABLE derived_vectors");
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+      } finally {
+        reader.database.close();
+      }
+    });
+  });
+
+  it("shares republished schema proof with restart readers through a directory symlink", async () => {
+    await withReceiptFixture(true, (database) => {
+      const aliasDir = path.join(path.dirname(database.path), "reader-alias");
+      fs.symlinkSync(path.dirname(database.path), aliasDir, "junction");
+      const alias = {
+        agentId: database.agentId,
+        path: path.join(aliasDir, path.basename(database.path)),
+      };
+      const reader = captureOpenClawAgentDatabaseReadValidation(alias);
+      expect(reader).toBeDefined();
+      const receipt = getOpenClawAgentDatabaseValidation(database)!;
+      const delayed = structuredClone(receipt);
+      const valid = receipt.schema!.valid;
+      const publish = captureOpenClawAgentDatabaseAdmissionPublication(alias);
+      publishOpenClawAgentDatabaseSchema(database);
+      expect(receipt.schema!.valid).toBe(valid);
+      publish(delayed.identity, delayed);
+      expect(() => reader!.assertCurrent()).not.toThrow();
+      expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBe(receipt);
+      expect(alias.path).toContain("reader-alias");
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      expect(() => reader!.assertCurrent()).toThrow(
+        "Session reader validation is no longer current",
+      );
+    });
+  });
+
+  it("shares admitted schema without marker queries while retaining explicit revocation", async () => {
+    await withReceiptFixture(false, (database, options) => {
+      const observe = (db: DatabaseSync) =>
+        trackSqliteStatementExecutions(
+          db,
+          ["data_version", "schema_version", "user_version"],
+          (sql) => {
+            if (/FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)) {
+              return "data_version";
+            }
+            const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
+            return name === "data_version" || name === "schema_version" || name === "user_version"
+              ? name
+              : null;
+          },
+        );
+      const warm = observe(database.db);
+      try {
+        runSqliteReadOperationSync(database.db, () => {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        });
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+        database.db.exec("BEGIN");
+        try {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+        } finally {
+          database.db.exec("COMMIT");
+        }
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+        expect(warm.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+      } finally {
+        warm.restore();
+      }
+
+      const reader = openOpenClawAgentDatabaseReadOnly(options);
+      if (!reader.found) {
+        throw new Error("Expected independent reader");
+      }
+      const cold = observe(reader.database.db);
+      try {
+        expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true);
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+        runSqliteReadOperationSync(reader.database.db, () =>
+          expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
+        );
+        expect(cold.counts).toEqual({ data_version: 0, schema_version: 0, user_version: 0 });
+      } finally {
+        cold.restore();
+        reader.database.close();
+      }
+
+      const writer = new DatabaseSync(database.path);
+      try {
+        writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+        const observation = observe(database.db);
+        try {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+          expect(observation.counts.schema_version).toBe(0);
+          expect(observation.counts.user_version).toBe(0);
+        } finally {
+          observation.restore();
+        }
+      } finally {
+        writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        writer.close();
+      }
+      invalidateOpenClawAgentDatabaseSchema(database);
+      expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+    });
+  });
+
+  it.each(["refreshed", "replacement"] as const)(
+    "shares %s proof published after local DDL without rechecking foreign schema markers",
+    async (receipt) => {
+      await withReceiptFixture(false, (database, options) => {
+        const reader = openOpenClawAgentDatabaseReadOnly(options);
+        if (!reader.found) {
+          throw new Error("Expected independent reader");
+        }
+        expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
+        const original = getOpenClawAgentDatabaseValidation(database)!.schema!;
+        publishOpenClawAgentDatabaseSchema(database);
+        const foreign = new DatabaseSync(database.path);
+        try {
+          database.db.exec("CREATE TABLE late_reader_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
+          if (receipt === "replacement") {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+            setOpenClawAgentDatabaseValidation(database);
+          }
+          expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+          expect(Atomics.load(new Int32Array(original.valid), 0)).toBe(0);
+          expect(
+            getOpenClawAgentDatabaseValidation(database)?.schema?.facts.tables.has(
+              "late_reader_fixture",
+            ),
+          ).toBe(true);
+
+          // TEMP changes preserve MAIN admission; durable DDL still revokes it.
+          reader.database.db.exec("CREATE TEMP TABLE local_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          database.db.exec("CREATE TABLE main.local_fixture(value TEXT)");
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          refreshOpenClawAgentDatabaseSchema(database, () => {});
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+
+          foreign.exec("CREATE TABLE later_foreign_fixture(value TEXT)");
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+
+          foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+          expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+        } finally {
+          foreign.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+          foreign.close();
+          reader.database.close();
+        }
+      });
+    },
+  );
+
   it.each(["durable receipt", "empty view"] as const)(
     "does not certify an uncommitted %s",
     async (proof) => {
@@ -92,6 +319,7 @@ describe("canonical proof on physical database validation", () => {
     // A native first opener can establish proof before the host has any receipt.
     return {
       ...receipt,
+      receiptId: randomUUID(),
       valid: receipt.valid.slice(0),
       canonicalReady: receipt.canonicalReady.slice(0),
     };
@@ -113,10 +341,15 @@ describe("canonical proof on physical database validation", () => {
           expect(adopt(receipt.identity, receipt)).toBe(true);
         }
         closeOpenClawAgentDatabaseByPath(database.path);
+        const blockedDirectory = path.join(source.dir, "not-a-directory");
+        fs.writeFileSync(blockedDirectory, "synthetic non-directory");
         const candidates = [
+          { path: path.join(blockedDirectory, "unreadable.sqlite") },
           { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
         ];
 
+        releaseOpenClawAgentDatabaseReadValidation(candidates, [database.path]);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(receipt.valid);
         releaseOpenClawAgentDatabaseReadValidation(candidates);
 
         expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
@@ -146,6 +379,162 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it("distinguishes raced publication from malformed receipts even after revocation", async () => {
+      await withReceiptFixture(false, (database) => {
+        for (const race of ["capture", "captured proof", "received proof", "schema"] as const) {
+          setOpenClawAgentDatabaseValidation(database);
+          const original = getOpenClawAgentDatabaseValidation(database)!;
+          const received = independentWorkerReceipt(database);
+          const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
+          if (race === "capture") {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+          } else {
+            const cell =
+              race === "captured proof"
+                ? original.valid
+                : race === "received proof"
+                  ? received.valid
+                  : received.schema!.valid;
+            Atomics.store(new Int32Array(cell), 0, 0);
+          }
+          expect(() => publish(received.identity, received), race).toThrow(
+            AgentDatabaseSchemaAdmissionChangedError,
+          );
+          if (race === "schema") {
+            expect(original.schema && Atomics.load(new Int32Array(original.schema.valid), 0)).toBe(
+              0,
+            );
+            expect(() => adoptOpenClawAgentDatabaseSchema(database, true, true)).toThrow(
+              "Agent schema admission changed before handle adoption",
+            );
+          }
+          for (const malformed of [
+            undefined,
+            { ...received, agentId: "another-agent" },
+            { ...received, identity: "another-file" },
+            { ...received, receiptId: undefined },
+            { ...received, receiptId: "" },
+            { ...received, receiptId: 1 },
+            { ...received, schema: undefined },
+          ]) {
+            expect(() => publish(received.identity, malformed), race).toThrow(
+              AgentDatabaseSchemaAdmissionInvalidError,
+            );
+          }
+        }
+      });
+    });
+
+    it.each([
+      { cache: "canonical", transition: "promotion" },
+      { cache: "empty", transition: "promotion" },
+      { cache: "empty", transition: "replacement" },
+      { cache: "canonical", transition: "invalidation" },
+      { cache: "canonical", transition: "registration" },
+    ] as const)(
+      "preserves publication custody across $cache admission $transition",
+      async ({ cache, transition }) => {
+        await withReceiptFixture(true, (database, options) => {
+          runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+          const received = independentWorkerReceipt(database);
+          closeOpenClawAgentDatabaseByPath(database.path);
+          clearOpenClawAgentDatabaseValidationCache(database.path);
+          const reader = openOpenClawAgentDatabaseReadOnly(options);
+          if (!reader.found || !received.schema) {
+            throw new Error("Expected a canonical reader and an independently admitted receipt");
+          }
+          try {
+            expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
+            if (cache === "empty") {
+              clearOpenClawAgentDatabaseValidationCache(database.path);
+            }
+            expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+            const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
+            if (transition === "invalidation") {
+              invalidateOpenClawAgentDatabaseValidation(database.path);
+            } else if (transition === "registration") {
+              registerOpenClawAgentDatabase({ ...options, path: database.path });
+            } else if (transition === "replacement") {
+              reader.database.close();
+              const replacement = `${database.path}.replacement`;
+              fs.copyFileSync(database.path, replacement);
+              fs.renameSync(replacement, database.path);
+            }
+
+            const reopened = openOpenClawAgentDatabase(options);
+            const promoted = getOpenClawAgentDatabaseValidationForTransfer(reopened);
+            if (!promoted?.schema) {
+              throw new Error("Expected the full opener to publish schema admission");
+            }
+            const borrowed = structuredClone(promoted.schema);
+            if (transition === "replacement") {
+              expect(promoted.identity).not.toBe(received.identity);
+            }
+            expect(Atomics.load(new Int32Array(received.valid), 0)).toBe(1);
+            expect(Atomics.load(new Int32Array(received.schema.valid), 0)).toBe(1);
+            if (transition === "promotion") {
+              expect(() => publish(received.identity, received)).not.toThrow();
+            } else {
+              expect(() => publish(received.identity, received)).toThrow(
+                AgentDatabaseSchemaAdmissionChangedError,
+              );
+            }
+            expect(Atomics.load(new Int32Array(promoted.valid), 0)).toBe(1);
+            expect(adoptOpenClawAgentDatabaseSchema(reopened, true, true)).toBe(true);
+            invalidateOpenClawAgentDatabaseSchema(reopened);
+            expect(Atomics.load(new Int32Array(borrowed.valid), 0)).toBe(0);
+          } finally {
+            reader.database.close();
+          }
+        });
+      },
+    );
+
+    it.each(["required", "optional"] as const)(
+      "accepts fresh %s readmission captured after schema revocation",
+      async (mode) => {
+        await withReceiptFixture(false, (database) => {
+          const received = independentWorkerReceipt(database);
+          if (!received.schema) {
+            throw new Error("Expected independently checked schema facts");
+          }
+          received.schema = { ...received.schema, valid: new SharedArrayBuffer(4) };
+          Atomics.store(new Int32Array(received.schema.valid), 0, 1);
+          invalidateOpenClawAgentDatabaseSchema(database);
+          const publish =
+            mode === "required"
+              ? captureOpenClawAgentDatabaseAdmissionPublication(database)
+              : captureOpenClawAgentDatabaseValidationTransfer(database);
+          expect(() => publish(received.identity, received)).not.toThrow();
+          expect(adoptOpenClawAgentDatabaseSchema(database, true, true)).toBe(true);
+        });
+      },
+    );
+
+    it.each(["revoked", "absent"] as const)(
+      "retires borrowed schema when a native integrity receipt reports it %s",
+      async (schemaState) => {
+        await withReceiptFixture(false, (database) => {
+          const receipt = getOpenClawAgentDatabaseValidation(database);
+          if (!receipt?.schema) {
+            throw new Error("Expected the fixture's admitted schema receipt");
+          }
+          const borrowed = structuredClone(receipt.schema);
+          const received = {
+            ...independentWorkerReceipt(database),
+            schema:
+              schemaState === "revoked"
+                ? { ...receipt.schema, valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT) }
+                : undefined,
+          };
+          const publish = captureOpenClawAgentDatabaseValidationTransfer(database);
+          expect(publish(received.identity, received)).toBe(true);
+          expect(Atomics.load(new Int32Array(borrowed.valid), 0)).toBe(0);
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+        });
+      },
+    );
+
     it.each(["current", "revoked"] as const)(
       "preserves a %s native handoff while a reader publishes durable canonical proof",
       async (state) => {
@@ -230,6 +619,62 @@ describe("canonical proof on physical database validation", () => {
       });
     });
 
+    it.each(["superseded", "acknowledged"] as const)(
+      "replaces revoked proof without leaking a live %s alias receipt",
+      async (aliasState) => {
+        await withReceiptFixture(false, (database) => {
+          const original = getOpenClawAgentDatabaseValidation(database)!;
+          const replacement = independentWorkerReceipt(database);
+          const aliasReceipt =
+            aliasState === "superseded"
+              ? independentWorkerReceipt(database)
+              : structuredClone(replacement);
+          const alias = {
+            agentId: database.agentId,
+            path: path.join(path.dirname(database.path), "alias.sqlite"),
+          };
+          const acknowledgeAlias = captureOpenClawAgentDatabaseAdmissionPublication(alias);
+          acknowledgeAlias(aliasReceipt.identity, aliasReceipt);
+          // Worker lease cleanup revokes its transferred proof, not an independent alias.
+          Atomics.store(new Int32Array(structuredClone(original).valid), 0, 0);
+          const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
+
+          publish(replacement.identity, structuredClone(replacement));
+
+          expect(Atomics.load(new Int32Array(aliasReceipt.valid), 0)).toBe(
+            aliasState === "superseded" ? 0 : 1,
+          );
+          expect(Atomics.load(new Int32Array(replacement.valid), 0)).toBe(1);
+          for (const target of [database, alias]) {
+            expect(getOpenClawAgentDatabaseValidationForTransfer(target)).toMatchObject({
+              agentId: database.agentId,
+              identity: replacement.identity,
+            });
+          }
+
+          invalidateOpenClawAgentDatabaseValidation(alias.path);
+
+          expect(Atomics.load(new Int32Array(replacement.valid), 0)).toBe(0);
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          expect(getOpenClawAgentDatabaseValidationForTransfer(alias)).toBeUndefined();
+        });
+      },
+    );
+
+    it("rejects malformed receipt identities on an acknowledged alias", async () => {
+      await withReceiptFixture(false, (database) => {
+        const receipt = getOpenClawAgentDatabaseValidation(database)!;
+        const publish = captureOpenClawAgentDatabaseAliasPublication(database);
+        for (const receiptId of [undefined, "", 1]) {
+          expect(() => publish(receipt.identity, { ...receipt, receiptId })).toThrow(
+            AgentDatabaseSchemaAdmissionInvalidError,
+          );
+        }
+        expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+        expect(() => publish(receipt.identity, receipt)).not.toThrow();
+      });
+    });
+
     it("accepts only valid native receipts without a host handle and shares revocation", async () => {
       await withReceiptFixture(false, (database) => {
         const received = independentWorkerReceipt(database);
@@ -240,9 +685,6 @@ describe("canonical proof on physical database validation", () => {
           { ...received, agentId: "another-agent" },
           { ...received, identity: "another-file" },
           { ...received, valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT) },
-          { ...received, valid: new SharedArrayBuffer(1) },
-          { ...received, valid: new ArrayBuffer(Int32Array.BYTES_PER_ELEMENT) },
-          { ...received, canonicalReady: new SharedArrayBuffer(1) },
         ]) {
           expect(adopt(received.identity, invalid)).toBe(false);
           expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
@@ -272,6 +714,7 @@ describe("canonical proof on physical database validation", () => {
         // A separate worker can retain independent proof for this same physical file.
         const transferred = {
           ...receipt,
+          receiptId: randomUUID(),
           valid: receipt.valid.slice(0),
           canonicalReady: receipt.canonicalReady.slice(0),
         };
@@ -366,6 +809,41 @@ describe("canonical proof on physical database validation", () => {
         } finally {
           raw.close();
         }
+      });
+    },
+  );
+
+  it.each(["commit", "rollback"] as const)(
+    "revokes canonical receipts for offline repair while retaining integrity (%s)",
+    async (outcome) => {
+      await withReceiptFixture(true, (database, options) => {
+        runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+        expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        const physical = getOpenClawAgentDatabaseValidation(database);
+        const mutate = () =>
+          runOpenClawAgentWriteTransaction((current) => {
+            invalidateOpenClawAgentCanonicalValidation(current);
+            expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
+            expect(
+              current.db.prepare("SELECT canonical_ready FROM session_key_contract").get()
+                ?.canonical_ready,
+            ).toBeNull();
+            if (outcome === "rollback") {
+              throw new Error("undo repair");
+            }
+          }, options);
+        if (outcome === "rollback") {
+          expect(mutate).toThrow("undo repair");
+        } else {
+          mutate();
+        }
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBe(physical);
+        expect(Atomics.load(new Int32Array(physical!.valid), 0)).toBe(1);
+        const stored = database.db
+          .prepare("SELECT canonical_ready FROM session_key_contract")
+          .get()?.canonical_ready;
+        expect(stored === null).toBe(outcome === "commit");
       });
     },
   );

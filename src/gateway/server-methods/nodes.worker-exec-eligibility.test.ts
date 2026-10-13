@@ -2,6 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -62,6 +66,7 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
     });
   register();
   const config = { gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } } };
+  setRuntimeConfigSnapshot(config);
   const context = {
     nodeRegistry: runtime.nodeRegistry,
     getRuntimeConfig: () => config,
@@ -83,6 +88,7 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
           enabled: true,
           capacity: { total: 2, available: 2 },
           ...(capturedExecPolicy ? { capturedExecPolicy: true } : {}),
+          promptContext: 1,
         },
       },
       client,
@@ -181,5 +187,6 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
       setActivePluginRegistry(previousRegistry, "node-exec-eligibility-test-restore", "default");
     }
     runtime.nodeRegistry.unregister(client.connId);
+    clearRuntimeConfigSnapshot();
   }
 });

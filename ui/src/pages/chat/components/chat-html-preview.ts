@@ -1,4 +1,4 @@
-import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { LazyCustomElementRequestController } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
@@ -10,7 +10,12 @@ import type {
   AttachmentSidebarRuntime,
   SessionFileSource,
 } from "./chat-sidebar-content-types.ts";
-import type { FileViewControls } from "./chat-sidebar-file-view.ts";
+export type FileHtmlPreviewControls = {
+  source: boolean;
+  presentation: TemplateResult | typeof nothing;
+  sourceFallback?: TemplateResult;
+  onToggle: () => void;
+};
 
 registerFilePreviewEnglish();
 
@@ -25,10 +30,10 @@ export const htmlPreviewElement = {
   get label() {
     return t("chat.detailPanel.renderPreview");
   },
-  loadModule: () => import("./chat-html-preview-element.ts"),
+  loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
-export function renderHtmlPreview(
+function renderHtmlPreview(
   loader: LazyCustomElementRequestController,
   content: string,
   sourceIdentity: string,
@@ -63,18 +68,17 @@ export function renderHtmlPreview(
 }
 
 /** Owns file HTML presentation while the detail panel owns its editor and draft. */
-export class FileHtmlPreviewController implements ReactiveController {
+export class FileHtmlPreviewController {
   private source = false;
   private preview: string | null = null;
   private readonly loader: LazyCustomElementRequestController;
 
   constructor(
-    private readonly host: ReactiveControllerHost,
+    private readonly host: { requestUpdate(): void; readonly updateComplete?: Promise<unknown> },
     private readonly content: () => SidebarContent | null,
     private readonly text: () => string,
   ) {
     this.loader = new LazyCustomElementRequestController(host);
-    host.addController(this);
   }
 
   get file() {
@@ -114,7 +118,7 @@ export class FileHtmlPreviewController implements ReactiveController {
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.loader.requestWhileActive(htmlPreviewElement, false);
   }
 
@@ -124,7 +128,7 @@ export class FileHtmlPreviewController implements ReactiveController {
     onToggle: () => void;
     runtime: AttachmentSidebarRuntime;
     mode: EmbedSandboxMode;
-  }): FileViewControls["htmlPreview"] {
+  }): FileHtmlPreviewControls | undefined {
     const file = this.file;
     if (!file) {
       return undefined;

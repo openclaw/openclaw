@@ -22,6 +22,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedBy",
   "archiveReason",
   "pinnedAt",
+  "sidebarRoot",
   "snoozedUntil",
   "snoozedAt",
   "lastReadAt",
@@ -61,7 +62,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "participants",
   "participantCount",
   "createdAt",
-  "conversationLink",
   "forkSource",
   "previousSessionId",
   "forkedFromParent",
@@ -75,10 +75,12 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicySource",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "delegatedToolPolicy",
   "lifecycleRunId",
   "lastRunId",
   "activeWriterRunId",
   "mainRestartRecovery",
+  "restartRecoveryOperatorSource",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
@@ -171,6 +173,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "contextTokensSource",
   "contextBudgetStatus",
   "compactionCount",
+  "compactionQualityDegraded",
   "transcriptByteCompactionLatch",
   "memoryFlush",
   "cliHistoryBoundary",
@@ -201,6 +204,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
   "pendingTranscriptRepair",
   "visibility",
+  "communication",
   "publicShare",
   "profileInvolvement",
 ] as const satisfies ReadonlyArray<
@@ -222,6 +226,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValu
 );
 const RETIRED_SESSION_SLOT_KEYS = new Set<string>([
   // retired session fields; reserved so plugin slots can never collide with historical data
+  "conversationLink",
   "compactionCheckpoints",
   "execSecurity",
   "execAsk",

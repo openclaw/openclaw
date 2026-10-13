@@ -11,9 +11,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { WORKTREE_CREATE_LEASE_SCOPE } from "./capacity-contract.js";
+import { WORKTREE_MUTATION_LEASE_SCOPE } from "./capacity-contract.js";
 import { lockState } from "./git-lock.js";
 import * as worktreeGit from "./git.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -22,19 +21,20 @@ import {
   readLiveRegistryWorktreeByOwner,
   readLiveRegistryWorktreeIds,
   readRegistryWorktrees,
+  readSessionWorktreeBinding,
 } from "./registry-read.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { resolveWorktreeForPath } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
@@ -62,34 +62,24 @@ async function serviceFixture() {
 function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCommit = false) {
   const entered = createDeferred();
   const release = createDeferred();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
   let writes = 0;
-  const transport = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      run(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              if (command.type !== type) {
-                return scope.execute(command, executeOptions);
-              }
-              writes += 1;
-              if (afterCommit) {
-                await scope.execute(command, executeOptions);
-              }
-              entered.resolve();
-              await release.promise;
-              if (afterCommit) {
-                throw new Error("Synthetic lost registry reply after native commit");
-              }
-              return scope.execute(command, executeOptions);
-            },
-          }),
-        options,
-      ),
-    );
+  const transport = interceptWorktreeWorkerOperation(
+    (execute) => async (command, executeOptions) => {
+      if (command.type !== type) {
+        return execute(command, executeOptions);
+      }
+      writes += 1;
+      if (afterCommit) {
+        await execute(command, executeOptions);
+      }
+      entered.resolve();
+      await release.promise;
+      if (afterCommit) {
+        throw new Error("Synthetic lost registry reply after native commit");
+      }
+      return execute(command, executeOptions);
+    },
+  );
   return {
     entered: entered.promise,
     release: () => release.resolve(),
@@ -247,7 +237,7 @@ describe("managed worktree registry worker reads", () => {
     },
   );
 
-  it.each(["replacement", "retained lock", "allocation lease", "caller"] as const)(
+  it.each(["replacement", "retained lock", "checkout lease", "caller"] as const)(
     "preserves registry and checkout on refused publication (%s)",
     async (kind) => {
       const { env, now, service, params } = await serviceFixture();
@@ -283,10 +273,10 @@ describe("managed worktree registry worker reads", () => {
             "replacement-branch",
             existing.id,
           );
-        } else if (kind === "allocation lease") {
+        } else if (kind === "checkout lease") {
           db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ?").run(
             "replacement-owner",
-            WORKTREE_CREATE_LEASE_SCOPE,
+            WORKTREE_MUTATION_LEASE_SCOPE,
           );
         } else {
           current = false;
@@ -458,6 +448,14 @@ describe("managed worktree registry worker reads", () => {
     expect(
       await readLiveRegistryWorktreeByOwner(context, "manual", older.ownerId!),
     ).toBeUndefined();
+    for (const [boundId, expected] of [
+      [older.id, older],
+      [removed.id, newer],
+      ["missing", newer],
+      [undefined, newer],
+    ] as const) {
+      expect(await readSessionWorktreeBinding(context, boundId, older.ownerId!)).toEqual(expected);
+    }
     sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;

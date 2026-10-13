@@ -1,9 +1,5 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -16,25 +12,27 @@ import {
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
-  setSessionReactionInDatabase,
-} from "./session-reaction-store.kernel.js";
-import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js";
+} from "./session-reaction-errors.js";
 import type {
   SessionReactionWrite,
   SetSessionReactionParams,
   StoredMessageReactionSummary,
 } from "./session-reaction-store.types.js";
-import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import { projectionLane } from "./session-transcript-worker-resources.js";
+import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
 export { SessionReactionLimitError, SessionReactionMessageMissingError };
 export type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
@@ -59,6 +57,26 @@ export async function setSessionReactionAsync(
   params: SetSessionReactionParams & { assertCurrent?: () => void },
 ): Promise<SessionReactionWrite> {
   const { assertCurrent = () => undefined, ...reaction } = params;
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const outcome = await memory.actor.storage!.mutate(
+      { type: "session.reaction.set", input: { params: reaction } },
+      {
+        assertCurrent: () => {
+          assertCurrent();
+          memory.authority.assertCurrent();
+        },
+        authorize: (stage, facts, publication) =>
+          memory.authority.authorize(stage, facts, publication),
+      },
+    );
+    if (outcome.kind === "committed") {
+      return outcome.value;
+    }
+    const error = new Error(outcome.error.message);
+    error.name = outcome.error.name;
+    return restoreReactionError(error);
+  }
   assertCurrent();
   const input = structuredClone(reaction);
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
@@ -111,6 +129,7 @@ export async function setSessionReactionAsync(
     // Process-held databases cannot be reopened in a worker; retain their sole native owner.
     const resolved = resolveSqliteScope({ ...scope, env });
     const options = toDatabaseOptions(resolved);
+    const { setSessionReactionInDatabase } = await import("./session-reaction-store.kernel.js");
     return runOpenClawAgentWriteAdmission(
       options,
       () => {
@@ -125,90 +144,83 @@ export async function setSessionReactionAsync(
     );
   }
   const candidates = captureSessionStoreReadCandidates(storePath);
-  const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
   try {
-    return await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-      const request = { agentId: logical.agentId, storePath, env };
-      let selected = await discovery.readStoreTarget({
-        ...request,
-        registeredDatabases: { status: "deferred" },
-      });
-      let assertRegistryCurrent: (() => void) | undefined;
-      if (selected.kind === "session-target-registry-required") {
-        const registry = await registryRead.read();
-        assertRegistryCurrent = registry.assertCurrent;
-        registry.assertCurrent();
-        discovery.assertCurrent();
-        assertCurrent();
-        selected = await discovery.readStoreTarget({
-          ...request,
-          registeredDatabases:
-            registry.result.status === "available"
-              ? registry.result.entries
-              : { status: "unavailable" },
-        });
-      }
-      if (selected.kind !== "session-store-target") {
-        throw new Error("Reaction store could not resolve its database owner");
-      }
-      // Promotion invalidates the registry memo; the retained physical owner governs the write.
-      assertRegistryCurrent?.();
-      const sourcePath = selected.sourcePath;
-      const options = { ...selected.database, env };
-      const execution = captureOpenClawAgentDatabaseExecution(options);
-      const assertHeld = () => {
-        execution.assertCurrent();
-        discovery.assertCurrent();
-        assertSessionStoreReadCandidate(sourcePath, candidates);
-        assertCurrent();
-      };
-      try {
-        assertHeld();
-        const result = await runOpenClawAgentWorkerWrite(options, () =>
-          execution.runExisting(
-            {
-              assertCurrent: assertHeld,
-              createAdmission(binding) {
-                return () => ({
-                  nativeLocations: binding.nativeLocations,
-                  admission: createSqliteWorkerOperationAdmission((admissionRequest, grant) => {
-                    binding.authorize(admissionRequest);
-                    assertHeld();
-                    if (!grant()) {
-                      throw new Error("Reaction authority expired");
-                    }
-                  }, binding.attachment),
-                });
-              },
-            },
-            (worker) =>
-              worker.execute({
-                type: "session.reaction.set",
-                input: { sessionKey: logical.sessionKey, params: input },
-              }),
-          ),
-        );
-        if (!result) {
-          throw new SessionWorkStartInvalidatedError("session changed before reaction mutation");
+    return await withSessionStoreTarget(
+      { agentId: logical.agentId, storePath, env, candidates },
+      async (selected, owner) => {
+        const options = { ...selected.database, env };
+        const execution = captureOpenClawAgentDatabaseExecution(options);
+        const assertHeld = () => {
+          execution.assertCurrent();
+          owner.assertCurrent();
+        };
+        try {
+          assertHeld();
+          const result = await runOpenClawAgentWorkerWrite(options, () =>
+            execution.runExisting(
+              createSessionWorkerExecutionSource(assertHeld, "Reaction authority expired"),
+              (worker) =>
+                worker.execute({
+                  type: "session.reaction.set",
+                  input: { sessionKey: logical.sessionKey, params: input },
+                }),
+            ),
+          );
+          if (!result) {
+            throw new SessionWorkStartInvalidatedError("session changed before reaction mutation");
+          }
+          return result;
+        } finally {
+          await execution.release();
         }
-        return result;
-      } finally {
-        await execution.release();
-      }
-    });
+      },
+      assertCurrent,
+    );
   } catch (error) {
     return restoreReactionError(error);
   }
 }
 
-export function listSessionReactions(
-  scope: SessionAccessScope,
+export async function listSessionReactions(
+  scope: SessionCollaborationScope,
   params: { sessionId: string },
-): Record<string, StoredMessageReactionSummary[]> {
-  const resolved = resolveSqliteScope(scope);
-  return listSessionReactionsInDatabase(
-    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
-    resolved.sessionKey,
-    params,
+): Promise<Record<string, StoredMessageReactionSummary[]>> {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.read(
+      { type: "session.reactions.read", input: params },
+      memory.authority,
+    );
+  }
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return incognito.actor.sessions.sideData(incognito.authority, {
+      type: "session.reactions.read",
+      input: {
+        sessionKey: resolveSqliteSessionKey(scope.sessionKey, incognito.actor.agentId),
+        ...params,
+      },
+    });
+  }
+  const storePath = resolveSessionStorePathForScope(scope);
+  const logical = resolveSqliteScope({ ...scope, storePath: undefined });
+  if (isIncognitoOpenClawAgentSqlitePath(storePath, toDatabaseOptions(logical))) {
+    // The native incognito owner remains until its separate actor cutover.
+    const database = getOpenIncognitoAgentDatabase(logical.agentId, storePath);
+    if (!database) {
+      return {};
+    }
+    const { listSessionReactionsInDatabase } = await import("./session-reaction-store.read.js");
+    return listSessionReactionsInDatabase(database, logical.sessionKey, params);
+  }
+  return withSessionStoreReaderInWorker(
+    { ...scope, storePath },
+    ({ reader, logicalAgentId, database }) =>
+      reader.readReactions({
+        sessionKey: resolveSqliteSessionKey(scope.sessionKey, logicalAgentId),
+        sessionId: params.sessionId,
+        env: database.env,
+      }),
+    { dataOnly: true, lane: projectionLane },
   );
 }

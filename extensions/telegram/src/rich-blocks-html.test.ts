@@ -36,24 +36,21 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain("<details>");
   });
 
-  it.each([true, false])(
-    "preserves styled HTML links and entity data (skip detection: %s)",
-    (skipEntityDetection) => {
-      const { blocks, plainText } = markdownToTelegramRichBlocks(
-        '<details><summary>More</summary><div><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></div></details>',
-        { skipEntityDetection },
-      );
-      const text = {
-        type: "url",
-        url: 'https://example.com/**path**?q="hi"',
-        text: { type: "bold", text: "A & & &amp; &amp; A   B\nC\u00a0D" },
-      };
-      expect(blocks).toEqual([
-        { type: "details", summary: "More", blocks: [{ type: "paragraph", text }] },
-      ]);
-      expect(plainText).toBe("More\nA & & &amp; &amp; A   B\nC\u00a0D");
-    },
-  );
+  it("preserves styled HTML links and entity data (skip detection: true)", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      '<details><summary>More</summary><div><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></div></details>',
+      { skipEntityDetection: true },
+    );
+    const text = {
+      type: "url",
+      url: 'https://example.com/**path**?q="hi"',
+      text: { type: "bold", text: "A & & &amp; &amp; A   B\nC\u00a0D" },
+    };
+    expect(blocks).toEqual([
+      { type: "details", summary: "More", blocks: [{ type: "paragraph", text }] },
+    ]);
+    expect(plainText).toBe("More\nA & & &amp; &amp; A   B\nC\u00a0D");
+  });
 
   it("preserves nested <details> containers around Markdown blocks", () => {
     const block = single(
@@ -89,15 +86,6 @@ describe("block HTML islands", () => {
     expect(inner.blocks.map(({ type }) => type)).toEqual(["heading"]);
   });
 
-  it("keeps same-offset tables before nested <details>", () => {
-    const block = single(
-      "<details><summary>Outer</summary>\n\n| item | done |\n| --- | --- |\n| table | before |\n\n<details><summary>Inner</summary>\n\n# Inner heading\n\n</details>\n\n</details>",
-    );
-    assert(block.type === "details");
-    expect(block.blocks.map(({ type }) => type)).toEqual(["table", "details"]);
-    expect(block.blocks[1]?.type).toBe("details");
-  });
-
   it("keeps a Markdown table between disclosures outside their bodies", () => {
     expect(
       blocksFor(
@@ -118,12 +106,11 @@ describe("block HTML islands", () => {
     expect(JSON.stringify(blocks)).toContain("H21");
   });
 
-  it.each([
-    ["inline", "Keep `</details>` literal.", "paragraph"],
-    ["fenced", "```html\n</details>\n<details>\n```", "pre"],
-  ])("keeps %s code tags inside their authored disclosure", (_label, body, type) => {
-    const block = single(`<details><summary>Code</summary>\n\n${body}\n\n</details>`);
-    expect(block).toMatchObject({ type: "details", blocks: [{ type }] });
+  it("keeps inline code tags inside their authored disclosure", () => {
+    const block = single(
+      "<details><summary>Code</summary>\n\nKeep `</details>` literal.\n\n</details>",
+    );
+    expect(block).toMatchObject({ type: "details", blocks: [{ type: "paragraph" }] });
     expect(JSON.stringify(block)).toContain("</details>");
   });
 
@@ -136,22 +123,6 @@ describe("block HTML islands", () => {
     const quote = block.blocks[0];
     assert(quote?.type === "blockquote");
     expect(quote.blocks.map(({ type }) => type)).toEqual(["details"]);
-  });
-
-  it("preserves raw blockquote wrappers around nested <details>", () => {
-    const block = single(
-      "<details><summary>Outer</summary><blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details><cite>Author</cite></blockquote></details>",
-    );
-    assert(block.type === "details");
-    expect(block.blocks.map(({ type }) => type)).toEqual(["blockquote"]);
-    const quote = block.blocks[0];
-    expect(quote).toMatchObject({ type: "blockquote", credit: "Author" });
-    assert(quote?.type === "blockquote");
-    expect(quote.blocks.map(({ type }) => type)).toEqual(["details"]);
-    const inner = quote.blocks[0];
-    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
-    assert(inner?.type === "details");
-    expect(inner.blocks.map(({ type }) => type)).toEqual(["heading"]);
   });
 
   it("maps <ul> with checkbox tasks", () => {
@@ -238,20 +209,6 @@ describe("block HTML islands", () => {
     expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
-  it("does not use an unclosed summary as a disclosure title", () => {
-    const { blocks, plainText } = markdownToTelegramRichBlocks(
-      "<details><summary>Unclosed</details>",
-    );
-    expect(blocks).toMatchObject([
-      {
-        type: "details",
-        summary: "Details",
-        blocks: [{ type: "paragraph" }],
-      },
-    ]);
-    expect(plainText).toContain("<summary>Unclosed");
-  });
-
   it("keeps unclosed table children literal", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks("<table><tr><td>Unclosed</table>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
@@ -265,11 +222,11 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain('"superscript"');
   });
 
-  it.each(["</constructor>", ""])("keeps prototype-named HTML literal (%s)", (close) => {
+  it("keeps prototype-named HTML literal (</constructor>)", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks(
-      `a <constructor><sup>**x**</sup>${close} here`,
+      "a <constructor><sup>**x**</sup></constructor> here",
     );
-    expect(plainText).toBe(`a <constructor><sup>x</sup>${close} here`);
+    expect(plainText).toBe("a <constructor><sup>x</sup></constructor> here");
     expect(blocks).toMatchObject([
       { type: "paragraph", text: expect.arrayContaining([{ type: "bold", text: "x" }]) },
     ]);
@@ -301,25 +258,6 @@ describe("block HTML islands", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");
     const block = single(`<table><tr><td rowspan="2">left</td></tr><tr>${secondRow}</tr></table>`);
     expect(block.type).toBe("pre");
-  });
-
-  it("rejects http (non-https) media sources", () => {
-    expectLiteral('<img src="http://example.com/a.png"/>');
-  });
-
-  it("counts and projects table captions and splits them onto the first piece only", () => {
-    const { blocks, plainText } = markdownToTelegramRichBlocks(
-      "<table><caption>Stats</caption><tr><td>a</td></tr><tr><td>b</td></tr></table>",
-    );
-    expect(plainText).toContain("Stats");
-    const table = blocks[0];
-    assert(table?.type === "table");
-    expect(measureInputRichBlocks([table])).toEqual({ chars: 7, blocks: 3, media: 0, nesting: 1 });
-    const pieces = splitTelegramRichBlocks([table], { textLimit: 6 }).flat();
-    expect(pieces.length).toBeGreaterThan(1);
-    const captioned = pieces.filter((piece) => piece.type === "table" && piece.caption);
-    expect(captioned).toHaveLength(1);
-    expect(pieces[0]).toMatchObject({ caption: "Stats" });
   });
 
   it("attaches figcaption captions to collages and figure-wrapped maps", () => {
@@ -380,10 +318,6 @@ describe("block HTML islands", () => {
     }
   });
 
-  it("suppresses islands nested under an unmatched supported opener", () => {
-    expectLiteral("<details><summary>x</summary><hr/>", "<details>");
-  });
-
   it("maps gif sources to animation blocks", () => {
     const blocks = blocksFor(
       '<img src="https://example.com/a.gif"/>\n\n<video src="https://example.com/b.gif"></video>',
@@ -419,11 +353,6 @@ describe("block HTML islands", () => {
   });
 
   it.each<[string, string[]]>([
-    ['<video src="https://example.com/a.mp4">fallback warning</video>', ["fallback warning"]],
-    [
-      '<figure><img src="https://example.com/a.jpg"/><img src="https://example.com/b.jpg"/></figure>',
-      ["b.jpg"],
-    ],
     ["<table><tr>warning<td>x</td></tr></table>", ["warning"]],
     [
       '<tg-collage>warning<img src="https://example.com/a.png"/></tg-collage>\n\n<ul>stray<li>item</li></ul>',

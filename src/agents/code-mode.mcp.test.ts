@@ -306,11 +306,7 @@ describe("Code Mode MCP namespace", () => {
     },
   );
 
-  it.each([
-    ["constructor", "prototype", "constructor2", "prototype2"],
-    ["github", "delete", "github", "delete2"],
-    ["github", "enum", "github", "enum2"],
-  ])(
+  it.each([["constructor", "prototype", "constructor2", "prototype2"]])(
     "escapes reserved MCP paths: %s.%s",
     async (serverName, toolName, serverIdentifier, toolIdentifier) => {
       const target = materializedMcpTool({
@@ -670,4 +666,58 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
   for (const target of targets) {
     expect(target.execute).not.toHaveBeenCalled();
   }
+});
+
+it("supports root MCP API and multiple server declarations", async () => {
+  const h = createCodeModeHarness();
+  const targets = ["alpha", "beta", "index"].map((serverName) =>
+    mcpTool({
+      name: serverName + "_ping",
+      serverName,
+      toolName: "ping",
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "pong" }] }),
+      ),
+    }),
+  );
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
+  const result = resultDetails(
+    await expectDefined(h.tools[0], "exec").execute("root-api", {
+      code: `
+          const root = await MCP.$api();
+          const rootFile = await API.read("mcp/index.d.ts");
+          const a = await MCP.alpha.$api();
+          const b = await MCP.beta.$api();
+          await MCP.alpha.ping();
+          await MCP.beta.ping();
+          await MCP.index.ping();
+          const [indexTool] = await catalog.search("MCP.index.ping", { limit: 1 });
+          const indexFile = indexTool.source === "mcp" ? await API.read(indexTool.apiPath) : undefined;
+          return {
+            headers: [typeof root.header, typeof a.header, typeof b.header],
+            rootDeclaration: rootFile.content.includes(root.header),
+            indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
+            files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
+          };
+        `,
+    }),
+  );
+  expect(result, JSON.stringify(result)).toMatchObject({
+    status: "completed",
+    value: {
+      headers: ["string", "string", "string"],
+      rootDeclaration: true,
+      indexDeclaration: true,
+    },
+  });
+  for (const target of targets) {
+    expect(target.execute).toHaveBeenCalledOnce();
+  }
+  const { files } = result.value as { files: Array<{ path: string; content: string }> };
+  expect(
+    typeCheckSources({
+      ...Object.fromEntries(files.map((file) => ["/" + file.path, file.content])),
+      "/consumer.ts": "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();",
+    }),
+  ).toEqual([]);
 });

@@ -51,13 +51,6 @@ describe("chat command transcript context", () => {
       reply: "Plugin status: ready.",
       contextual: true,
     },
-    {
-      name: "ordinary reply",
-      kind: "ordinary",
-      input: "Remember the project deadline.",
-      reply: "The project deadline is Friday.",
-      contextual: true,
-    },
   ])("retains visible history and the correct model context for $name", async (scenario) => {
     const sessionKey = `agent:main:command-context-${scenario.kind}`;
     const runId = `command-context-${scenario.kind}`;

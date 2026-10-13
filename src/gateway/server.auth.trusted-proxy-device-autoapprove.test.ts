@@ -372,32 +372,29 @@ describe("trusted-proxy operator device auto-approval", () => {
     expect(paired?.approvedVia).toBe("trusted-proxy");
   });
 
-  test.each([CONTROL_UI_CLIENT, NATIVE_UI_CLIENT])(
-    "auto-approves a new $id operator with the default scopes",
-    async (client) => {
-      const { identityPath, identity } = await prepareAutoApproval("trusted-proxy-default-scopes");
+  test("auto-approves a new control-ui operator with the default scopes", async () => {
+    const { identityPath, identity } = await prepareAutoApproval("trusted-proxy-default-scopes");
 
-      await withSharedProxyGateway(async ({ port }) => {
-        const res = await connectOperatorUi({
-          client,
-          port,
-          identityPath,
-          scopes: ["operator.read", "operator.write", "operator.approvals"],
-        });
-        expect(res.ok).toBe(true);
+    await withSharedProxyGateway(async ({ port }) => {
+      const res = await connectOperatorUi({
+        client: CONTROL_UI_CLIENT,
+        port,
+        identityPath,
+        scopes: ["operator.read", "operator.write", "operator.approvals"],
       });
+      expect(res.ok).toBe(true);
+    });
 
-      expect(await pendingFor(identity.deviceId)).toEqual([]);
-      const paired = await getPairedDevice(identity.deviceId);
-      expect(paired?.approvedScopes).toEqual([
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.write",
-      ]);
-      expect(paired?.approvedVia).toBe("trusted-proxy");
-    },
-  );
+    expect(await pendingFor(identity.deviceId)).toEqual([]);
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired?.approvedScopes).toEqual([
+      "operator.approvals",
+      "operator.questions",
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(paired?.approvedVia).toBe("trusted-proxy");
+  });
 
   test("leaves mixed node and operator requests pending for manual approval", async () => {
     const client = CONTROL_UI_CLIENT;

@@ -3,6 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import type { SessionProviderReview } from "../config/sessions/provider-review.types.js";
 import {
@@ -15,7 +16,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import {
   captureAgentRunProviderReview,
   readAgentRunProviderReview,
@@ -30,6 +31,7 @@ import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.j
 
 it("keeps embedded completion pending until its incognito pause fences the next admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const runId = "incognito-deferred-review";
     const target = {
       agentId: "main",
@@ -47,7 +49,6 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       lifecycleRunId: runId,
       updatedAt: 1_000,
       startedAt: 1_000,
-      status: "running" as const,
     };
     writeSessionEntry(database, target.sessionKey, entry);
     appendTranscriptMessageSync(
@@ -105,7 +106,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         },
       });
       // This is the production capture path, with no CLI-specific context binding.
-      const captured = captureAgentRunTerminalWriteContext(runId);
+      const captured = captureAgentRunTerminalPersistence(runId).writeContext;
       if (!captured) {
         throw new Error("Embedded terminal persistence was not retained");
       }
@@ -166,6 +167,7 @@ it("keeps embedded completion pending until its incognito pause fences the next 
 
 it("records an incognito pause in its existing terminal entry write and fences stale facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       env,
@@ -206,7 +208,6 @@ it("records an incognito pause in its existing terminal entry write and fences s
         lifecycleRunId: variant === "writer" ? "replacement-writer" : runId,
         updatedAt: 1_000,
         startedAt: 1_000,
-        status: "running" as const,
         ...(variant === "newer-review"
           ? { providerReview: { ...review, id: "newer-review" } }
           : {}),
@@ -284,9 +285,9 @@ it("records an incognito pause in its existing terminal entry write and fences s
           });
           if (variant === "revoked") {
             await expect(persistence).rejects.toThrow("Source authority expired");
-            expect(readExactSessionEntryRow(database, target.sessionKey)?.entry).toMatchObject({
-              status: "running",
-            });
+            expect(
+              readExactSessionEntryRow(database, target.sessionKey)?.entry.status,
+            ).toBeUndefined();
           } else {
             await persistence;
           }

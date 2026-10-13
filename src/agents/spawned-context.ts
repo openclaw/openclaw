@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { DelegatedToolPolicyContext } from "./delegated-tool-policy.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -19,7 +20,7 @@ export type SpawnedRunMetadata = {
   workspaceDir?: string | null;
 };
 
-export type SpawnedToolContext = {
+export type SpawnedToolContext = DelegatedToolPolicyContext & {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -30,10 +31,6 @@ export type SpawnedToolContext = {
   /** Effective parent-turn model; saved preferences may describe a later turn. */
   requesterModel?: ModelRef;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
-  /** Restrictive requester policy originated at trusted sender/channel ingress. */
-  inheritedToolPolicySource?: "sender";
 };
 
 type NormalizedSpawnedRunMetadata = {

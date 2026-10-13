@@ -4,14 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
+import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
+import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
+import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -260,7 +265,16 @@ it.each(["forced cleanup", "stale admission"])(
 
 it("does not certify a failed checkpoint or native close", () => {
   const owner = openOwner();
-  vi.spyOn(owner.database.walMaintenance, "close").mockReturnValueOnce(false);
+  const checkpointFailure = new Error("synthetic checkpoint failed");
+  const prepare = vi.spyOn(owner.database.db, "prepare").mockImplementationOnce(() => {
+    throw checkpointFailure;
+  });
+  expect(owner.database.walMaintenance.checkpoint()).toBe(false);
+  expect(owner.database.walMaintenance.health).toMatchObject({
+    state: "error",
+    error: checkpointFailure.message,
+  });
+  prepare.mockRestore();
   closeOpenClawAgentDatabaseByPath(owner.database.path);
   expect(owner.record()).toBeUndefined();
 
@@ -275,6 +289,83 @@ it("does not certify a failed checkpoint or native close", () => {
   closeOpenClawAgentDatabaseByPath(reopened.path);
   expect(owner.record()).toBeUndefined();
 });
+
+it.each(["idle-peer", "settled", "pinned", "checkpoint-error"] as const)(
+  "certifies only an empty WAL after the final native close (%s)",
+  (outcome) => {
+    const owner = openOwner();
+    closeOpenClawAgentDatabaseByPath(owner.database.path);
+    const db = openNodeSqliteDatabase(owner.database.path);
+    registerOpenClawAgentDatabaseIdentity(db);
+    const database = {
+      ...owner.database,
+      db,
+      walMaintenance: configureSqliteConnectionPragmas(db, {
+        databasePath: owner.database.path,
+        busyTimeoutMs: 5_000,
+        autoCheckpointPages: 0,
+      }),
+    };
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: database.agentId,
+      path: database.path,
+      env: owner.env,
+    });
+    const close = createAgentDatabaseHandleCloser({
+      leases: new Map([[database.path, { leaseId, env: owner.env }]]),
+      failures: new Map(),
+      idleTimers: new WeakMap(),
+    });
+    using reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+    if (outcome !== "idle-peer") {
+      reader.exec("BEGIN");
+    }
+    reader.prepare("SELECT state_key FROM auth_profile_state").all();
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('shutdown-handoff', '{}', 1)");
+    let incompleteCheckpoint = false;
+    const stopObserving = onSqliteWalCheckpoint((checkpoint) => {
+      if (
+        checkpoint.databasePath === fs.realpathSync(database.path) &&
+        checkpoint.health.state === "blocked"
+      ) {
+        incompleteCheckpoint = true;
+        if (outcome === "settled") {
+          reader.close();
+        }
+      }
+    });
+    if (outcome === "checkpoint-error") {
+      reader.close();
+      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+        throw new Error("synthetic close checkpoint failed");
+      });
+    }
+    try {
+      close(database);
+    } finally {
+      stopObserving();
+      if (db.isOpen) {
+        db.close();
+      }
+    }
+    if (outcome === "checkpoint-error") {
+      expect(owner.record()).toBeUndefined();
+    } else {
+      expect(incompleteCheckpoint).toBe(outcome !== "idle-peer");
+      const walBytes = fs.statSync(`${database.path}-wal`, { throwIfNoEntry: false })?.size ?? 0;
+      if (outcome === "pinned") {
+        expect(walBytes).toBeGreaterThan(0);
+        expect(owner.record()?.clean_close).toBe(0);
+      } else {
+        expect(walBytes).toBe(0);
+        expect(owner.record()?.clean_close).toBe(1);
+        if (outcome === "idle-peer") {
+          expect(reader.isOpen).toBe(true);
+        }
+      }
+    }
+  },
+);
 
 it.each(["before", "after"] as const)(
   "keeps verification dirty when a same-process read lease is claimed %s writer admission",
@@ -304,6 +395,34 @@ it.each(["before", "after"] as const)(
     expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
   },
 );
+
+it("preserves dirty proof without quarantine SQL when a healthy peer closes before checkpoint", () => {
+  const owner = openOwner();
+  const peerLease = claimOpenClawAgentDatabaseLease({
+    agentId: "integrity-lease",
+    path: owner.database.path,
+    env: owner.env,
+  });
+  expect(owner.record()?.clean_close).toBe(0);
+  const quarantineSql: string[] = [];
+  const observer = observeHostDataSql((sql, database) => {
+    if (
+      database?.location() === resolveQuarantineStorePath(owner.env) ||
+      /\b(?:quarantined_databases|agent_integrity_verifications)\b/i.test(sql)
+    ) {
+      quarantineSql.push(sql);
+    }
+  });
+  try {
+    releaseOpenClawAgentDatabaseLease(peerLease, { env: owner.env }, "uncheckpointed");
+    expect(quarantineSql).toEqual([]);
+  } finally {
+    observer.restore();
+  }
+  expect(owner.record()?.clean_close).toBe(0);
+  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  expect(owner.record()?.clean_close).toBe(1);
+});
 
 it.each(["closing", "unregistering", "reopening shared state before closing"])(
   "does not recreate deletion history when %s an external store after shared state is lost",
@@ -447,7 +566,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
   },
 );
 
-it.each(["quarantine", "terminal latch", "healthy"] as const)(
+it.each(["quarantine", "schema-version latch"] as const)(
   "gates fresh read-only admission on %s and permits a repaired generation",
   (condition) => {
     const owner = openOwner();
@@ -466,9 +585,9 @@ it.each(["quarantine", "terminal latch", "healthy"] as const)(
       ).toBe(true);
     }
     closeOpenClawAgentDatabasesForTest();
-    const latchError = new Error("synthetic terminal latch");
-    latchError.name = "SqliteIntegrityError";
-    if (condition === "terminal latch") {
+    const latchError = new Error("synthetic schema-version latch");
+    latchError.name = "SqliteSchemaVersionError";
+    if (condition === "schema-version latch") {
       expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
       expect(
         readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),

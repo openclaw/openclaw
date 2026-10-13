@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar outbox attention badges", () => {
   it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
@@ -82,11 +83,18 @@ describe("AppSidebar outbox attention badges", () => {
     };
     await sidebar.updateComplete;
 
-    const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "roster";
+    await settleRoster(sidebar);
+    const badges = sidebar.querySelectorAll(
+      '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--attention',
+    );
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent).toContain("3");
     expect(
-      sidebar.querySelector('.nav-item--home .session-row-badge--draft[aria-label="Unsent draft"]'),
+      sidebar.querySelector(
+        '[data-agent-group="main"] .sidebar-agent-roster__header .session-row-badge--draft[aria-label="Unsent draft"]',
+      ),
     ).not.toBeNull();
   });
 });

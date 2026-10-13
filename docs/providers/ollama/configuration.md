@@ -23,7 +23,8 @@ sidebarTitle: "Configuration"
 
   <Tab title="Explicit (manual models)">
     Use explicit config for hosted cloud setup, a non-default host/port, forced
-    context windows, or fully manual model lists:
+    context windows, or per-model settings. Hosted `https://ollama.com` uses only
+    the listed models; a self-hosted endpoint also lists its other installed models:
 
     ```json5
     {
@@ -53,7 +54,8 @@ sidebarTitle: "Configuration"
   </Tab>
 
   <Tab title="Custom base URL">
-    This example uses a nonempty manual model list, so it skips discovery:
+    The listed model keeps these settings; other models installed on that host are
+    still discovered:
 
     ```json5
     {

@@ -1,9 +1,30 @@
 // Tests executable behavior for the legacy package entrypoint.
 import { existsSync } from "node:fs";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
 import { completePendingPackageLifecycle } from "./infra/package-lifecycle.js";
+import { withMockedPlatform } from "./test-utils/vitest-spies.js";
+
+const compileCache = vi.hoisted(() => ({
+  enable: vi.fn<typeof import("node:module").enableCompileCache>(),
+  directory: vi.fn<() => string | undefined>(),
+  respawn: vi.fn<typeof import("../node-runtime-recovery.mjs").runRespawnedChild>(async () => true),
+}));
+vi.mock("../node-runtime-recovery.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-runtime-recovery.mjs")>()),
+  runRespawnedChild: compileCache.respawn,
+}));
+vi.mock("node:module", async (importOriginal) => {
+  const { mockNodeBuiltinModule } = await import("./plugin-sdk/test-helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
+    enableCompileCache: compileCache.enable,
+    getCompileCacheDir: compileCache.directory,
+  });
+});
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
@@ -18,14 +39,6 @@ const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
 vi.mock("./cli/one-shot-exit.js", () => ({
   runCliWithExitFinalization: vi.fn(),
 }));
-vi.mock("./cli/failure-output.js", () => {
-  lifecycleImports.failureOutput();
-  return {
-    formatCliFailureLines: vi.fn(() => []),
-    formatCliJsonFailure: vi.fn(),
-    isExpectedCliError: vi.fn(() => false),
-  };
-});
 vi.mock("./entry.version-fast-path.js", () => ({
   tryHandleRootVersionFastPath: vi.fn(() => false),
 }));
@@ -60,14 +73,29 @@ const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
 
 describe("legacy package executable entrypoint", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
+    // Module resets retain mock factories; each entry case needs a fresh import witness.
+    vi.doMock("./cli/failure-output.js", () => {
+      lifecycleImports.failureOutput();
+      return {
+        formatCliFailureLines: vi.fn(() => []),
+        formatCliJsonFailure: vi.fn(),
+        isExpectedCliError: vi.fn(() => false),
+      };
+    });
     vi.mocked(isMainModule).mockReturnValue(true);
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(false);
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(completePendingPackageLifecycle).mockResolvedValue(true);
     lifecycleImports.failureOutput.mockClear();
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", undefined);
+    vi.stubEnv("NODE_COMPILE_CACHE", undefined);
+    vi.stubEnv("OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED", undefined);
+    compileCache.directory.mockReturnValue(undefined);
+    const { constants } = await import("node:module");
+    compileCache.enable.mockReturnValue({ status: constants.compileCacheStatus.ALREADY_ENABLED });
     process.argv = ["node", "dist/index.js", "status"];
   });
 
@@ -76,20 +104,54 @@ describe("legacy package executable entrypoint", () => {
     process.exitCode = originalExitCode;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.doUnmock("./cli/failure-output.js");
   });
 
   it.each([
-    { mode: "version", args: ["--version"], main: true, handled: true, loadsFailure: false },
-    { mode: "CLI", args: ["status"], main: true, handled: false, loadsFailure: true },
-    { mode: "library", args: ["status"], main: false, handled: false, loadsFailure: false },
+    {
+      mode: "version",
+      args: ["--version"],
+      main: true,
+      handled: true,
+      loadsFailure: false,
+      caches: false,
+    },
+    {
+      mode: "CLI",
+      args: ["status"],
+      main: true,
+      handled: false,
+      loadsFailure: true,
+      caches: false,
+    },
+    {
+      mode: "Gateway",
+      args: ["gateway", "run"],
+      main: true,
+      handled: false,
+      loadsFailure: true,
+      caches: true,
+    },
+    {
+      mode: "library",
+      args: ["status"],
+      main: false,
+      handled: false,
+      loadsFailure: false,
+      caches: false,
+    },
   ])(
     "loads only the modules needed for $mode",
-    async ({ mode, args, main, handled, loadsFailure }) => {
+    async ({ mode, args, main, handled, loadsFailure, caches }) => {
       process.argv = ["node", "dist/index.js", ...args];
       vi.mocked(isMainModule).mockReturnValue(main);
       vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
       const entry = await import("./index.js?legacy-entry-mode" as "./index.js");
       expect(lifecycleImports.failureOutput).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
+      expect(compileCache.enable).toHaveBeenCalledTimes(caches ? 1 : 0);
+      if (caches) {
+        expect(compileCache.enable).toHaveBeenCalledBefore(lifecycleImports.failureOutput);
+      }
       if (mode === "library") {
         expect(typeof entry.loadConfig).toBe("function");
       }
@@ -102,6 +164,88 @@ describe("legacy package executable entrypoint", () => {
       }
     },
   );
+
+  it("continues startup with one diagnostic when the compile cache is unavailable", async () => {
+    process.argv = ["node", "dist/index.js", "gateway", "run"];
+    const { constants } = await import("node:module");
+    compileCache.enable.mockReturnValue({ status: constants.compileCacheStatus.FAILED });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await import("./index.js?unwritable-compile-cache" as "./index.js");
+    vi.resetModules();
+    await import("./index.js?unwritable-compile-cache-again" as "./index.js");
+    expect(runCliWithExitFinalization).toHaveBeenCalledTimes(2);
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(
+      "[openclaw] Compile cache unavailable; continuing without it.\n",
+    );
+  });
+
+  it("honors explicit compile-cache disabling", async () => {
+    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
+    await import("./index.js?disabled-compile-cache" as "./index.js");
+    expect(compileCache.enable).not.toHaveBeenCalled();
+    expect(runCliWithExitFinalization).toHaveBeenCalledOnce();
+  });
+
+  it("scopes an inherited cache before starting the direct CLI", async () => {
+    const base = path.resolve("inherited-node-cache");
+    vi.stubEnv("NODE_COMPILE_CACHE", base);
+    compileCache.directory.mockReturnValue(path.join(base, "node-version-leaf"));
+    await import("./index.js?inherited-compile-cache" as "./index.js");
+    expect(compileCache.respawn).toHaveBeenCalledOnce();
+    const [command, args, env] = expectDefined(
+      compileCache.respawn.mock.calls[0],
+      "cache respawn call",
+    );
+    expect(command).toBe(process.execPath);
+    expect(args).toEqual([...process.execArgv, expect.stringMatching(/[\\/]index\.ts$/), "status"]);
+    expect(env.NODE_COMPILE_CACHE).toContain(path.join(base, "openclaw"));
+    expect(env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED).toBe("1");
+    expect(compileCache.enable).not.toHaveBeenCalled();
+    expect(runCliWithExitFinalization).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["webhooks", "gmail", "run"],
+    ["hooks", "relay"],
+  ])("keeps foreground %s in-process with an inherited cache", async (...command) => {
+    const base = path.resolve("inherited-node-cache");
+    vi.stubEnv("NODE_COMPILE_CACHE", base);
+    compileCache.directory.mockReturnValue(path.join(base, "node-version-leaf"));
+    process.argv = ["node", "dist/index.js", ...command];
+    await withMockedPlatform("linux", async () => {
+      await import("./index.js?foreground-cache" as "./index.js");
+    });
+    expect(compileCache.respawn).not.toHaveBeenCalled();
+    expect(compileCache.enable).toHaveBeenCalledOnce();
+    expect(runCliWithExitFinalization).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(!process.execve)("keeps the Gateway PID when scoping an inherited cache", async () => {
+    const replacement = new Error("execve boundary");
+    const execve = vi.spyOn(process, "execve").mockImplementation(() => {
+      throw replacement;
+    });
+    const base = path.resolve("inherited-node-cache");
+    vi.stubEnv("NODE_COMPILE_CACHE", base);
+    compileCache.directory.mockReturnValue(path.join(base, "node-version-leaf"));
+    process.argv = ["node", "dist/index.js", "gateway", "run"];
+    await expect(import("./index.js?gateway-cache-pid" as "./index.js")).rejects.toBe(replacement);
+    expect(execve).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        process.execPath,
+        ...process.execArgv,
+        expect.stringMatching(/[\\/]index\.ts$/),
+        "gateway",
+        "run",
+      ],
+      expect.objectContaining({
+        NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+      }),
+    );
+    expect(compileCache.respawn).not.toHaveBeenCalled();
+    expect(runCliWithExitFinalization).not.toHaveBeenCalled();
+  });
 
   it.each([
     { args: ["status"], fails: false },

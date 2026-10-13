@@ -410,12 +410,6 @@ public struct OpenClawChatStreamFallback: Codable, Hashable, Sendable {
         self.runId = runId
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case source
-        case itemId
-        case runId
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.source = try? container.decode(String.self, forKey: .source)
@@ -861,6 +855,12 @@ public struct OpenClawAgentActivityItem: Codable, Hashable, Sendable {
 
     var isVisible: Bool {
         self.hideFromChannelProgress != true && self.suppressChannelProgress != true
+    }
+
+    /// The Gateway's title, unless it is the fallback for a call whose outcome it never saw: that one
+    /// names only the raw tool ("Mcp Openclaw Exec — outcome unknown") and says less than the call itself.
+    var preparedTitle: String? {
+        self.phase == "end" && self.status == nil ? nil : self.title
     }
 }
 

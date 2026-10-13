@@ -1,4 +1,3 @@
-/** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -57,9 +56,6 @@ export function mergeSecretsRuntimeEnv(
   return merged;
 }
 
-/**
- * Collects default and named agent directories that may contain auth profile stores.
- */
 export function collectCandidateAgentDirs(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
@@ -73,9 +69,6 @@ export function collectCandidateAgentDirs(
   return [...dirs];
 }
 
-/**
- * Combines explicit refresh agent dirs with config-derived dirs for runtime refresh.
- */
 export function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
@@ -87,9 +80,6 @@ export function resolveRefreshAgentDirs(
   return uniqueStrings([...context.explicitAgentDirs, ...configDerived]);
 }
 
-/**
- * Creates empty web-tool metadata for snapshots that do not need secret resolution.
- */
 export function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   return {
     search: {
@@ -149,7 +139,6 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
-/** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;

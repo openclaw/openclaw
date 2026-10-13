@@ -19,12 +19,17 @@ import {
 } from "../../../channels/thread-bindings-policy.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  expectedCurrentSessionBinding,
+  type CurrentSessionBindingExpectation,
+} from "../../../infra/outbound/session-binding-native-selection.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import type { SessionBindingBindInput } from "../../../infra/outbound/session-binding.types.js";
 import type { ReplyPayload } from "../../types.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
@@ -143,8 +148,9 @@ export async function bindSpawnedAcpSession(params: {
   });
   const labelNoun =
     placement === "child" || (threadId && conversationId === threadId) ? "thread" : "conversation";
+  let existingBinding: SessionBindingRecord | null | undefined;
   if (placement === "current") {
-    const existingBinding = bindingService.resolveByConversation(conversationRef);
+    existingBinding = await bindingService.resolveByConversationAsync(conversationRef);
     const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       return { ok: false, error: `Only ${boundBy} can rebind this ${labelNoun}.` };
@@ -159,11 +165,13 @@ export async function bindSpawnedAcpSession(params: {
       channel: policy.channel,
       accountId: policy.accountId,
     };
-    const binding = await bindingService.bind({
+    const bindingInput: SessionBindingBindInput & CurrentSessionBindingExpectation = {
+      [expectedCurrentSessionBinding]: existingBinding,
       targetSessionKey: params.sessionKey,
       targetKind: "session",
       conversation: conversationRef,
       placement,
+      assertCurrent: commandParams.command.assertOwnerCurrent,
       metadata: {
         threadName: resolveThreadBindingThreadName({ agentId: params.agentId, label }),
         agentId: params.agentId,
@@ -181,7 +189,8 @@ export async function bindSpawnedAcpSession(params: {
           }),
         }),
       },
-    });
+    };
+    const binding = await bindingService.bind(bindingInput);
     return { ok: true, bound: { binding, placement, labelNoun } };
   } catch (error) {
     return {

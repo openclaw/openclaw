@@ -1123,6 +1123,9 @@ const child = Object.assign(new EventEmitter(), {
   stdin: null, stdout: null, stderr: null,
   kill() { throw new Error("must signal the owned group"); },
 });
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
+});
 Date.now = () => now;
 process.kill = (pid, signal) => {
   assert.equal(pid, -child.pid);
@@ -1669,6 +1672,9 @@ const child = Object.assign(new EventEmitter(), {
   pid: 12345, exitCode: null, signalCode: null,
   stdin: null, stdout: outputs[0], stderr: outputs[1],
   kill() { throw new Error("must signal the owned group"); },
+});
+Object.defineProperty(child, "stdio", {
+  get: () => [child.stdin, child.stdout, child.stderr, null],
 });
 cp.spawn = () => child;
 process.kill = (pid, signal) => {
@@ -2474,6 +2480,27 @@ child.once("message", () => ${typeof exit === "string" ? `process.kill(process.p
           expect(stderr).toBe("descendant stderr drained\n");
           expect(child?.stdout?.closed).toBe(true);
           expect(child?.stderr?.closed).toBe(true);
+        } else if (output !== "ignore") {
+          // Open descendant output keeps the original command timeout active
+          // while the group drains; its cancellation must precede forced cleanup.
+          const timeout = {
+            code: "ETIMEDOUT",
+            message: "Managed command timed out after 1000ms",
+          };
+          expect
+            .soft(outcome)
+            .toMatchObject(
+              runner === "preparation"
+                ? { message: "lingering-prep timed out after 1000ms", cause: timeout }
+                : timeout,
+            );
+          expect(fs.readFileSync(receivedSignalPath, "utf8")).toBe("SIGTERM");
+          if (runner === "managed") {
+            expect(stdout).toBe("descendant stdout drained\n");
+            expect(stderr).toBe("descendant stderr drained\n");
+            expect(child?.stdout?.closed).toBe(true);
+            expect(child?.stderr?.closed).toBe(true);
+          }
         } else {
           expect.soft(outcome).toMatchObject({
             code: "EPROCESSGROUP_CLEANUP_FAILED",

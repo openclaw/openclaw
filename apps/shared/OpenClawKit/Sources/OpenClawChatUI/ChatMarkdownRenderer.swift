@@ -638,25 +638,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

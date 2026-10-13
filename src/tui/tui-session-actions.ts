@@ -184,15 +184,20 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const updateAgentFromSessionKey = (key: string) => {
+  const adoptSessionKey = (key: string | undefined) => {
+    if (!key || key === state.currentSessionKey) {
+      return false;
+    }
     const parsed = parseAgentSessionKey(key);
-    if (!parsed) {
-      return;
+    if (parsed) {
+      const agentId = normalizeAgentId(parsed.agentId);
+      if (agentId !== state.currentAgentId) {
+        state.currentAgentId = agentId;
+      }
     }
-    const next = normalizeAgentId(parsed.agentId);
-    if (next !== state.currentAgentId) {
-      state.currentAgentId = next;
-    }
+    state.currentSessionKey = key;
+    updateHeader();
+    return true;
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
@@ -324,11 +329,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry && (!entry.key || !matchesTuiSessionMetadata(state, entry))) {
         return;
       }
-      if (entry?.key && entry.key !== state.currentSessionKey) {
-        updateAgentFromSessionKey(entry.key);
-        state.currentSessionKey = entry.key;
-        updateHeader();
-      }
+      adoptSessionKey(entry?.key);
       state.currentSessionId = typeof entry?.sessionId === "string" ? entry.sessionId : null;
       applySessionInfo({
         entry,
@@ -353,11 +354,7 @@ export function createSessionActions(context: SessionActionContext) {
     if (!result?.entry || !matchesTuiSessionMetadata(state, result)) {
       return;
     }
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const resolved = result.resolved;
     const entry = resolved
       ? {
@@ -388,11 +385,7 @@ export function createSessionActions(context: SessionActionContext) {
       type: "sessionReset",
       scope: readTuiSessionProjectionScope(state),
     });
-    if (result.key && result.key !== state.currentSessionKey) {
-      updateAgentFromSessionKey(result.key);
-      state.currentSessionKey = result.key;
-      updateHeader();
-    }
+    adoptSessionKey(result.key);
     const sessionId = result.entry.sessionId;
     state.currentSessionId = typeof sessionId === "string" ? sessionId : null;
     applySessionInfoFromPatch(result);
@@ -445,12 +438,9 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const sessionInfo = record.sessionInfo;
       const historyKey = sessionInfo?.key ?? read.legacyHistoryKey;
-      if (historyKey && historyKey !== state.currentSessionKey) {
-        updateAgentFromSessionKey(historyKey);
-        state.currentSessionKey = historyKey;
+      if (adoptSessionKey(historyKey)) {
         selection.sessionKey = state.currentSessionKey;
         selection.agentId = state.currentAgentId;
-        updateHeader();
       }
       const historySessionInfo =
         sessionInfo && sessionInfo.thinkingLevel === undefined && record.thinkingLevel !== undefined

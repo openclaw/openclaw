@@ -77,6 +77,7 @@ function proof(supported: boolean): NodeWorkerSupervisorNodeProof {
       capacity: { total: 1, available: 1 },
       environmentSession: 1,
       capturedExecPolicy: true,
+      promptContext: 1,
       ...(supported ? { nativeInference: 1 as const } : {}),
     },
     commands: ["system.run"],
@@ -122,13 +123,9 @@ export function registerNodeLaunchAdapterNativeInferenceSuite() {
         await expect(launch).resolves.toEqual(completed);
         expect(invoke).toHaveBeenCalledOnce();
       } else {
-        await expect(launch).rejects.toMatchObject({
-          name: "NodeRunnerUpdateRequiredError",
-          code: "node_runner_update_required",
-          message: expect.stringMatching(
-            /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
-          ),
-        });
+        await expect(launch).rejects.toThrow(
+          /Worker-local inference is not configured.*models\.providers.*usable credential.*restart the node host/su,
+        );
         expect(invoke).not.toHaveBeenCalled();
       }
     },

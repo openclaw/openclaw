@@ -1276,7 +1276,7 @@ jobs:
           import { execFileSync } from "node:child_process";
           import { appendFileSync, readFileSync } from "node:fs";
           import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
-          import { parseUpgradeSurvivorScenarios } from "./scripts/lib/upgrade-survivor-policy.mjs";
+          import { isPackageRecoveryScenario, parseUpgradeSurvivorScenarios } from "./scripts/lib/upgrade-survivor-policy.mjs";
 
           const candidate = parseReleaseVersion(process.env.CANDIDATE_VERSION);
           const workflow = parseReleaseVersion(JSON.parse(readFileSync("package.json", "utf8")).version);
@@ -1292,6 +1292,7 @@ jobs:
             compareReleaseVersions(candidate.baseVersion, workflow.baseVersion) >= 0;
           let supportsOperatorScenario = false;
           let supportsSiblingScenario = false;
+          let supportsPackageRecovery = false;
           if (currentLine) {
             const sha = process.env.CANDIDATE_SOURCE_SHA;
             assert(/^[a-f0-9]{40}$/u.test(sha || ""), "Candidate source SHA is required.");
@@ -1303,6 +1304,7 @@ jobs:
               "Candidate survivor directory metadata was invalid.");
             supportsOperatorScenario = names.includes("legacy-operator-state.mjs");
             supportsSiblingScenario = names.includes("custom-plugin-siblings.mjs");
+            supportsPackageRecovery = names.includes("package-activation-recovery.mjs");
           }
           const frozenBaselines = process.env.QUALIFICATION_BASELINES_JSON ?
             JSON.parse(process.env.QUALIFICATION_BASELINES_JSON).upgradeSurvivorBaselines.join(" ") : "";
@@ -1316,6 +1318,7 @@ jobs:
           const scenarios = (soak
             ? parseUpgradeSurvivorScenarios("reported-issues")
             : ["base", "legacy-operator-state", "custom-plugin-siblings"])
+            .filter((scenario) => !isPackageRecoveryScenario(scenario) || supportsPackageRecovery)
             .filter((scenario) => scenario !== "legacy-operator-state" || legacyOperator)
             .filter((scenario) => scenario !== "custom-plugin-siblings" || supportsSiblingScenario)
             .join(" ");

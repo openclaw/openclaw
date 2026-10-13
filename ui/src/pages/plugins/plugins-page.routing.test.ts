@@ -1,17 +1,18 @@
-/* @vitest-environment jsdom */
-
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryDetailResult,
   PluginListResult,
 } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createClient,
   createContext,
@@ -24,6 +25,7 @@ import {
   createRuntimeConfigHarness,
   mountPage,
   resetPluginsPageTestState,
+  settlePlugins,
 } from "./plugins-page.test-support.ts";
 
 const SETTINGS_URL = "/settings/plugins/workboard?view=settings";
@@ -102,9 +104,7 @@ async function mountRoute(
 }
 
 async function settlePage(page: { updateComplete: Promise<boolean> }) {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await settlePlugins();
   await page.updateComplete;
 }
 
@@ -112,7 +112,13 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 
-afterEach(resetPluginsPageTestState);
+afterEach(() => {
+  resetPluginsPageTestState();
+  for (const capability of capabilities) {
+    capability.dispose();
+  }
+  capabilities.clear();
+});
 
 it("a chat install link opens uninstalled plugin details without installing", async () => {
   const detail = discoveryDetail({
@@ -140,13 +146,13 @@ it("a chat install link opens uninstalled plugin details without installing", as
     inventory,
     "/plugins/ch_d2hhdHNhcHA?action=install",
   );
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(context.replace).toHaveBeenCalledWith("plugins", {
       pathname: "/plugins/ch_d2hhdHNhcHA",
       search: "",
     }),
   );
-  await vi.waitFor(() => expect(page.querySelector("h1")).not.toBeNull());
+  await waitForSolid(() => expect(page.querySelector("h1")).not.toBeNull());
   expect(page.querySelector<HTMLButtonElement>(".plugin-catalog-detail__install")?.disabled).toBe(
     false,
   );
@@ -184,7 +190,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   };
   const runtimeConfig = createRuntimeConfigHarness(refresh, configState, () => client);
   const { page } = await mountRoute(harness, result, SETTINGS_URL, runtimeConfig);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
   );
   const retry = [...page.querySelectorAll<HTMLElement>(".plugin-editor .callout")]
@@ -217,7 +223,7 @@ it("commits the focused numeric field before Escape dismisses settings", async (
   );
   const { page, context } = await mountRoute(harness, result, SETTINGS_URL, runtimeConfig);
   const selector = 'input[aria-label="Refresh interval (minutes)"]';
-  await vi.waitFor(() => expect(page.querySelector(selector)).not.toBeNull());
+  await waitForSolid(() => expect(page.querySelector(selector)).not.toBeNull());
   const input = page.querySelector<HTMLInputElement>(selector)!;
   input.focus();
   input.value = "30";
@@ -284,8 +290,8 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
     "/settings/plugins/workboard#configuration",
     runtimeConfig,
   );
-  await vi.waitFor(() => expect(catalogs).toBe(1));
-  await vi.waitFor(() =>
+  await waitForSolid(() => expect(catalogs).toBe(1));
+  await waitForSolid(() =>
     expect(page.querySelector('.plugin-editor input[aria-label="Greeting"]')).not.toBeNull(),
   );
   const input = page.querySelector<HTMLInputElement>(
@@ -306,7 +312,7 @@ it("keeps the autosaved inspection when an older optional catalog completes", as
   runtimeConfig.notify();
   configState.configAutoSaveStatus = "saved";
   runtimeConfig.notify();
-  await vi.waitFor(() => expect(catalogs).toBe(2));
+  await waitForSolid(() => expect(catalogs).toBe(2));
   page.routeData = createPluginsRouteData(
     harness.gateway,
     result,
@@ -343,11 +349,11 @@ it("reports when a listed install becomes unavailable", async () => {
     "plugins.catalog.get": () => current,
   });
   const { page } = await mountRoute(harness, createResult(), "/plugins");
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(page.querySelector('[aria-label="Install Calendar"]')).not.toBeNull(),
   );
   page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')!.click();
-  await vi.waitFor(() => expect(page.textContent).toContain("Plugin availability changed"));
+  await waitForSolid(() => expect(page.textContent).toContain("Plugin availability changed"));
   expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
   expect(page.querySelector<HTMLButtonElement>('[aria-label="Install Calendar"]')?.disabled).toBe(
     false,
@@ -380,18 +386,18 @@ it("keeps the latest Install request while an older catalog detail is pending", 
   });
   const { page } = await mountRoute(harness, createResult(), "/plugins");
   try {
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
     );
     page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
     page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
       ).toHaveLength(2),
     );
     betaRead.resolve(beta!);
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith(
         "plugins.install",
         {
@@ -462,9 +468,13 @@ it.each(["disabled", "needs-setup"] as const)(
     harness.emit(client, true, {
       hello: gatewayHelloForMethods(["plugins.inspect", "plugins.setEnabled", "tools.catalog"]),
     });
-    const { page } = await mountRoute(harness, result, "/settings/plugins/workboard");
+    const { page, context } = await mountRoute(
+      harness,
+      result,
+      "/settings/plugins/workboard?from=plugins",
+    );
 
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(
         [...page.querySelectorAll(".plugin-capability__static strong")].map((row) =>
           row.textContent?.trim(),
@@ -500,7 +510,7 @@ it.each(["disabled", "needs-setup"] as const)(
     );
 
     catalogPending.resolve(catalog);
-    await vi.waitFor(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
+    await waitForSolid(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
     expect(page.querySelector(".plugin-metadata__categories .chip")?.textContent).toBe("tools");
     expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
     tools.resolve({
@@ -526,8 +536,17 @@ it.each(["disabled", "needs-setup"] as const)(
         },
       ],
     });
-    await vi.waitFor(() => expect(page.textContent).toContain("Full board search description"));
+    await waitForSolid(() => expect(page.textContent).toContain("Full board search description"));
     expect(page.textContent).toContain("board_create");
+    if (state === "disabled") {
+      const breadcrumb = page.querySelector<HTMLAnchorElement>(
+        ".plugins-settings-breadcrumb__parent",
+      );
+      expect(breadcrumb?.textContent).toBe("Plugins");
+      expect(breadcrumb?.getAttribute("href")).toBe("/plugins");
+      breadcrumb?.click();
+      expect(context.navigate).toHaveBeenCalledWith("plugins", { pathname: "/plugins" });
+    }
   },
 );
 
@@ -548,9 +567,9 @@ it("uses a late local inventory while catalog metadata is pending", async () => 
     },
   });
   const { page } = await mountRoute(harness, null, `/plugins/${plugin.catalogId}`);
-  await vi.waitFor(() => expect(catalogs).toBe(1));
+  await waitForSolid(() => expect(catalogs).toBe(1));
   local.resolve(result);
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: plugin.id }),
   );
   expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
@@ -560,4 +579,96 @@ it("uses a late local inventory while catalog metadata is pending", async () => 
   await settlePage(page);
   expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
   expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
+});
+
+const hello = gatewayHelloForMethods(["config.get", "config.schema", "plugins.list"]);
+const capabilities = new Set<ReturnType<typeof createRuntimeConfigCapability>>();
+
+async function mountAdvanced(options: { connected: boolean; schema?: () => Promise<unknown> }) {
+  const inventory = createResult();
+  const { client, request } = createClient(async (method) => {
+    switch (method) {
+      case "config.get":
+        return configMocks["config.get"];
+      case "config.schema":
+        return options.schema ? options.schema() : configMocks["config.schema"];
+      case "plugins.list":
+        return inventory;
+      default:
+        throw new Error(`Unexpected method: ${method}`);
+    }
+  });
+  const gateway = createGateway(client, options.connected);
+  gateway.emit(client, options.connected, { hello });
+  const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
+  capabilities.add(runtimeConfig);
+  const schemaLoads = vi.spyOn(runtimeConfig, "ensureSchemaLoaded");
+  const { page } = await mountPage(
+    { ...createContext(gateway.gateway), runtimeConfig },
+    createPluginsRouteData(
+      gateway.gateway,
+      options.connected ? inventory : null,
+      createPluginsRouteLocation("/settings/plugins?tab=advanced"),
+    ),
+  );
+  return {
+    page,
+    request,
+    runtimeConfig,
+    connect: () => gateway.emit(client, true, { hello }),
+    async settle() {
+      await runtimeConfig.ensureLoaded();
+      await Promise.all(schemaLoads.mock.results.map((result) => result.value));
+      await page.updateComplete;
+    },
+  };
+}
+
+function expectAdvancedFields(page: HTMLElement) {
+  const advanced = page.querySelector("#plugin-settings-advanced");
+  expect(advanced?.textContent).toContain("Plugin system enabled");
+  expect(advanced?.textContent).toContain("Allowed plugin IDs");
+  expect(advanced?.textContent).toContain("Blocked plugin IDs");
+  expect(advanced?.textContent).not.toContain("Plugin settings schema is unavailable");
+}
+
+it("renders global plugin settings when the Gateway connects after the page mounts", async () => {
+  const harness = await mountAdvanced({ connected: false });
+  await harness.settle();
+  expect(harness.request).not.toHaveBeenCalledWith("config.schema", {});
+
+  harness.connect();
+  await harness.settle();
+
+  expectAdvancedFields(harness.page);
+  expect(harness.request.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(
+    1,
+  );
+});
+
+it("reloads the missing schema after a failed schema read", async () => {
+  const firstSchema = deferred<(typeof configMocks)["config.schema"]>();
+  let attempts = 0;
+  const harness = await mountAdvanced({
+    connected: true,
+    schema: () =>
+      ++attempts === 1 ? firstSchema.promise : Promise.resolve(configMocks["config.schema"]),
+  });
+  await harness.runtimeConfig.ensureLoaded();
+  firstSchema.reject(new Error("Schema temporarily unavailable"));
+  await harness.settle();
+  expect(harness.page.querySelector('[role="alert"]')?.textContent).toContain(
+    "Schema temporarily unavailable",
+  );
+
+  const reload = harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]');
+  expect(reload).not.toBeNull();
+  const reloads = vi.spyOn(harness.runtimeConfig, "discardDraft");
+  reload?.click();
+  await Promise.all(reloads.mock.results.map((result) => result.value));
+  await harness.settle();
+
+  expectAdvancedFields(harness.page);
+  expect(attempts).toBe(2);
+  expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });

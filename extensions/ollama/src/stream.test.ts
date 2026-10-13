@@ -195,6 +195,128 @@ describe("createOllamaStreamFn thinking events", () => {
     return events;
   }
 
+  it.each([
+    [0, 0, 0],
+    [1_250_000, 2_500_000, 3.75],
+  ])("retains final processing timing (%i ns + %i ns)", async (prompt, evalDuration, expected) => {
+    const events = await streamOllamaEvents([
+      {
+        ...makeOllamaResponse({ content: "ok" }),
+        done: false,
+        prompt_eval_duration: 50_000_000,
+        eval_duration: 60_000_000,
+      },
+      {
+        ...makeOllamaResponse({}),
+        prompt_eval_duration: prompt,
+        eval_duration: evalDuration,
+        load_duration: 900_000_000,
+      },
+    ]);
+    expect(events.find((event) => event.type === "done")).toMatchObject({
+      message: {
+        diagnostics: [
+          {
+            type: "provider_timing",
+            timestamp: expect.any(Number),
+            details: { processingMs: expected },
+          },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    {},
+    { prompt_eval_duration: 1 },
+    { eval_duration: 1 },
+    { prompt_eval_duration: -1, eval_duration: 1 },
+    { prompt_eval_duration: "1", eval_duration: 1 },
+    { prompt_eval_duration: Number.MAX_VALUE, eval_duration: Number.MAX_VALUE },
+  ])("omits missing, partial, or invalid final processing timing: %j", async (timing) => {
+    const events = await streamOllamaEvents([
+      {
+        ...makeOllamaResponse({ content: "ok" }),
+        done: false,
+        prompt_eval_duration: 1_000_000,
+        eval_duration: 2_000_000,
+      },
+      { ...makeOllamaResponse({}), ...timing },
+    ]);
+    const terminal = events.find((event) => event.type === "done");
+    expect(terminal).toBeDefined();
+    expect(terminal).toMatchObject({ message: { content: [{ type: "text", text: "ok" }] } });
+    expect(terminal).not.toHaveProperty("message.diagnostics");
+  });
+
+  it.each([undefined, "Private reasoning"])(
+    "keeps native tool narration unsigned with reasoning %s",
+    async (thinking) => {
+      const path = "README.md";
+      const events = await streamOllamaEvents(
+        [
+          { ...makeOllamaResponse({ content: "Let me ", thinking }), done: false },
+          { ...makeOllamaResponse({ content: "read README.md." }), done: false },
+          makeOllamaResponse({
+            tool_calls: [{ function: { name: "read", arguments: { path } } }],
+          }),
+        ],
+        {},
+        {
+          messages: [{ role: "user", content: "Read README.md." }],
+          tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+        } as never,
+      );
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: unknown };
+      };
+      expect(
+        events
+          .filter((event) => event.type === "text_delta")
+          .map((event) => event.delta)
+          .join(""),
+      ).toBe("Let me read README.md.");
+      expect(events.find((event) => event.type === "toolcall_delta")).toMatchObject({
+        partial: {
+          content: expect.arrayContaining([
+            expect.objectContaining({ partialJson: JSON.stringify({ path }) }),
+          ]),
+        },
+      });
+      expect(done.message?.content).toEqual([
+        ...(thinking ? [{ type: "thinking", thinking: "Private reasoning" }] : []),
+        { type: "text", text: "Let me read README.md." },
+        { type: "toolCall", id: expect.any(String), name: "read", arguments: { path } },
+      ]);
+    },
+  );
+
+  it.each(["stop", "length"])(
+    "keeps text before reasoning deliverable at a %s terminal",
+    async (done_reason) => {
+      const events = await streamOllamaEvents([
+        { ...makeOllamaResponse({ content: "Visible answer" }), done: false },
+        makeOllamaResponse({ thinking: "Late reasoning", done_reason }),
+      ]);
+      expect(events.find((event) => event.type === "done")).toMatchObject({
+        reason: done_reason,
+        message: {
+          stopReason: done_reason,
+          content: [
+            { type: "thinking", thinking: "Late reasoning" },
+            { type: "text", text: "Visible answer" },
+          ],
+        },
+      });
+      const done = events.find((event) => event.type === "done") as {
+        message?: { content?: Array<{ type: string; textSignature?: string }> };
+      };
+      expect(
+        done.message?.content?.find((block) => block.type === "text")?.textSignature,
+      ).toBeUndefined();
+    },
+  );
+
   it("emits thinking_start, thinking_delta, and thinking_end events for thinking content", async () => {
     const thinkingChunks = [
       {

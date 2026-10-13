@@ -29,9 +29,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin,
 }));
 
+// mock-isolation: Synthetic credential discovery uses an empty profile store, never host credentials.
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
-  ensureAuthProfileStoreWithoutExternalProfiles: () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async () => ({ version: 1, profiles: {} }),
 }));
 
 vi.mock("./agent-auth-discovery-core.js", () => ({
@@ -61,7 +62,7 @@ describe("agent model discovery synthetic auth", () => {
 
   it("mirrors plugin-owned synthetic cli auth into credential discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      const { credentials } = resolveAgentDiscoveryAuthFacts(agentDir, { readOnly: true });
+      const { credentials } = await resolveAgentDiscoveryAuthFacts(agentDir, { readOnly: true });
 
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledTimes(1);
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith();

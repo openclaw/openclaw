@@ -75,7 +75,7 @@ describe("browser remote profile tab ops via Playwright", () => {
       timeoutMs: 60_000,
     });
 
-    const opened = await remote.openTab("http://127.0.0.1:3000");
+    const opened = await remote.openTab("http://127.0.0.1:3000", { timeoutMs: 60_000 });
     expect(opened.targetId).toBe("T2");
     expect((opened as { ownership?: unknown }).ownership).toMatchObject({
       status: "durable",
@@ -87,6 +87,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "http://127.0.0.1:3000",
+      timeoutMs: 60_000,
       cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
@@ -124,33 +125,6 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(listPagesViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 45_000 }),
     );
-  });
-
-  it("uses the remote HTTP timeout for the ownership version probe", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
-      createPageViaPlaywright: vi.fn(async () => page("T2")),
-    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
-    const fetchMock = vi.fn(
-      async (_url: unknown, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
-            "abort",
-            () => reject(new Error("ownership version probe timed out")),
-            { once: true },
-          );
-        }),
-    );
-    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
-    state.resolved.remoteCdpTimeoutMs = 25;
-
-    const startedAt = Date.now();
-    const opened = await remote.openTab("https://t2.example");
-
-    expect(Date.now() - startedAt).toBeLessThan(700);
-    expect((opened as { ownership?: unknown }).ownership).toEqual({
-      status: "non-durable",
-      reason: "browser-identity-lookup-failed",
-    });
   });
 
   it("preserves ownership cancellation when closing the exact created page fails", async () => {

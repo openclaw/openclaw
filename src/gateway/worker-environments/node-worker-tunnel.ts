@@ -47,6 +47,7 @@ import { drainNodeWorkerWorkspace } from "./node-worker-workspace-drain.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import {
   joinWorkerTunnelStops,
@@ -62,6 +63,7 @@ import { workerWorkspaceCommandSucceeded } from "./workspace-sync-helpers.js";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
+const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
 export type NodeWorkerWorkspaceBindingResolver = (binding: {
@@ -271,7 +273,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         const code = result.error?.code ?? "UNAVAILABLE";
         if (code === NODE_WORKSPACE_TRANSFER_ERROR_CODE) {
           throw new NodeWorkerWorkspaceTransferError(
-            result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+            boundedWorkerError(
+              result.error?.message ?? "workspace-transfer-failed: transfer did not complete",
+              WORKSPACE_DIAGNOSTIC_MAX_CHARS,
+            ),
           );
         }
         if (
@@ -282,8 +287,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           continue;
         }
         throw new Error(
-          result.error?.message && code === "INVALID_REQUEST"
-            ? `node workspace command failed (${code}): ${result.error.message}`
+          result.error?.message
+            ? `node workspace command failed (${code}): ${boundedWorkerError(result.error.message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`
             : `node workspace command failed (${code})`,
         );
       }
@@ -375,16 +380,19 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
         }
-        const plan = request.plan;
-        const claim = request.turnClaim;
-        const isDispatchAuthorized = () =>
-          isEnvironmentOwner(entry) &&
-          claim.owner.kind === "worker" &&
-          claim.owner.environmentId === entry.environmentId &&
-          claim.owner.ownerEpoch === entry.ownerEpoch &&
-          claim.sessionId === plan.admission.sessionId &&
-          claim.runId === plan.assignment.runId &&
-          options.validateWorkerTurn(claim);
+        const { plan, turnClaim: claim } = request;
+        const isDispatchAuthorized = Object.assign(() => {
+          request.assertCurrent?.();
+          return (
+            isEnvironmentOwner(entry) &&
+            claim.owner.kind === "worker" &&
+            claim.owner.environmentId === entry.environmentId &&
+            claim.owner.ownerEpoch === entry.ownerEpoch &&
+            claim.sessionId === plan.admission.sessionId &&
+            claim.runId === plan.assignment.runId &&
+            options.validateWorkerTurn(claim)
+          );
+        }, request.assertCurrent);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
           input: buildLaunchInput(plan, claim),
@@ -702,35 +710,38 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     },
     stop,
     async stopAll(): Promise<void> {
-      const live = new Set([
-        ...entries.keys(),
-        ...[...retiredEntries].map((entry) => entry.environmentId),
-      ]);
-      const stopped = await Promise.allSettled([
+      const live = new Set(
+        [...entries.values(), ...retiredEntries].map((entry) => entry.environmentId),
+      );
+      const tunnelStops = joinWorkerTunnelStops([
         ...[...live].map((environmentId) => stop(environmentId)),
-        // A revoked inventory reports its failure without stranding live tunnels.
-        (async () =>
-          joinWorkerTunnelStops(
-            options
-              .listEnvironments()
-              .filter((record) => record.nodeDeviceId && !live.has(record.environmentId))
-              .map((record) => stop(record.environmentId)),
-          ))(),
+        // Retained owners drain above even after their inventory retires.
+        (async () => {
+          try {
+            // Return without awaiting so teardown failures stay outside this lookup catch.
+            return joinWorkerTunnelStops(
+              options
+                .listEnvironments()
+                .filter((record) => record.nodeDeviceId && !live.has(record.environmentId))
+                .map((record) => stop(record.environmentId)),
+            );
+          } catch (error) {
+            if (!(error instanceof WorkerEnvironmentInventoryClosedError)) {
+              throw error;
+            }
+          }
+        })(),
       ]);
       // Shared transfer state outlives every tunnel, even when a sibling's cleanup fails.
-      stopped.push(...(await Promise.allSettled([options.workspaceTransfer.closeAll()])));
-      const failure = stopped.find((result) => result.status === "rejected");
-      if (failure) {
-        throw failure.reason;
-      }
+      const closeTransfers = () => options.workspaceTransfer.closeAll();
+      await joinWorkerTunnelStops([tunnelStops, tunnelStops.then(closeTransfers, closeTransfers)]);
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);
-      return entry && !entry.abortController.signal.aborted
-        ? entry.handle
-          ? "connected"
-          : "connecting"
-        : "stopped";
+      if (!entry || entry.abortController.signal.aborted) {
+        return "stopped";
+      }
+      return entry.handle ? "connected" : "connecting";
     },
   };
 }

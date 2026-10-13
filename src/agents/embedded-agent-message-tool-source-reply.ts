@@ -6,6 +6,7 @@ import {
   pluginEnvelopeHas,
   readEmbeddedMessageDeliveryFact,
 } from "./embedded-agent-message-delivery.js";
+import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import {
   isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
@@ -34,7 +35,7 @@ function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
 function isMessageToolSourceReplyActionName(action: unknown): boolean {
   return (
     isMessageToolSendActionName(action) ||
-    ["reply", "thread-reply", "poll"].includes(normalizeStatus(action) ?? "")
+    ["reply", "thread-reply", "poll"].includes(normalizeMessageDeliveryStatus(action) ?? "")
   );
 }
 
@@ -43,16 +44,12 @@ export function readMessageToolSourceReplyText(args: unknown): string | undefine
   if (!isMessageToolSourceReplyActionName(record.action)) {
     return undefined;
   }
-  if (normalizeStatus(record.action) === "poll") {
+  if (normalizeMessageDeliveryStatus(record.action) === "poll") {
     return readStringValue(record.pollQuestion) ?? readStringValue(record.poll_question);
   }
   return ["content", "message", "text", "body"]
     .map((key) => readStringValue(record[key]))
     .find((value) => value !== undefined);
-}
-
-function normalizeStatus(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
 export function isDeliveredMessagingToolResult(params: {
@@ -80,23 +77,17 @@ export function isDeliveredMessagingToolResult(params: {
   if (!isPluginNativeMessagingTool(normalizedToolName)) {
     return false;
   }
-  const action = normalizeStatus(args.action);
+  const action = normalizeMessageDeliveryStatus(args.action);
   const results = [params.result, params.hookResult];
-  if (
-    results.some((result) => pluginEnvelopeHas(result, "dryRun")) ||
-    (params.requirePluginDeliveryId &&
-      !results.some((result) => pluginEnvelopeHas(result, "deliveryId")))
-  ) {
+  const hasSignal = (signal: Parameters<typeof pluginEnvelopeHas>[1]) =>
+    results.some((result) => pluginEnvelopeHas(result, signal));
+  if (hasSignal("dryRun") || (params.requirePluginDeliveryId && !hasSignal("deliveryId"))) {
     return false;
   }
-  if (results.some((result) => pluginEnvelopeHas(result, "partial"))) {
+  if (hasSignal("partial")) {
     return true;
   }
-  if (
-    action &&
-    isMessageToolConversationCreateActionName(action) &&
-    results.some((result) => pluginEnvelopeHas(result, "conversation"))
-  ) {
+  if (action && isMessageToolConversationCreateActionName(action) && hasSignal("conversation")) {
     return true;
   }
   if (action === "broadcast" && results.some(pluginBroadcastHasDelivery)) {
@@ -108,18 +99,16 @@ export function isDeliveredMessagingToolResult(params: {
   ) {
     return false;
   }
-  const nonDelivery = results.some((result) => pluginEnvelopeHas(result, "nonDelivery"));
-  const noOp = results.some((result) => pluginEnvelopeHas(result, "noOp"));
-  if (
+  const nonDelivery = hasSignal("nonDelivery");
+  const noOp = hasSignal("noOp");
+  return (
     !nonDelivery &&
     !noOp &&
-    isMessagingToolDeliveryAction(normalizedToolName, args) &&
-    action !== "broadcast" &&
-    results.some((result) => pluginEnvelopeHas(result, "ok"))
-  ) {
-    return true;
-  }
-  return !nonDelivery && !noOp && results.some((result) => pluginEnvelopeHas(result, "delivery"));
+    ((isMessagingToolDeliveryAction(normalizedToolName, args) &&
+      action !== "broadcast" &&
+      hasSignal("ok")) ||
+      hasSignal("delivery"))
+  );
 }
 
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {

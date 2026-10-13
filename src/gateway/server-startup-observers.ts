@@ -18,23 +18,33 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 );
 
 /** Mark predecessors before channels admit work, independently of plugin registration. */
-export async function markGatewayStartupMainSessionOrphans(params: {
-  cfg: OpenClawConfig;
-  startupCheckedStorePaths: Set<string>;
-  startupTrace?: GatewayStartupTrace;
-  log: { warn: (message: string) => void };
-}): Promise<void> {
+export async function markGatewayStartupMainSessionOrphans(
+  params: {
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    isRestartRecoverySuppressed: () => boolean;
+    scheduler: { signal: AbortSignal };
+    startupTrace?: GatewayStartupTrace;
+    log: { warn: (message: string) => void };
+  },
+  startupCheckedStorePaths: Set<string>,
+): Promise<void> {
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       const { markStartupOrphanedMainSessionsForRecovery } = await measureStartup(
         params.startupTrace,
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
+      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
         markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.cfg,
-          startupCheckedStorePaths: params.startupCheckedStorePaths,
+          cfg: params.gatewayPluginConfigAtStart,
+          startupCheckedStorePaths,
         }),
       );
     } catch (err) {
@@ -82,6 +92,11 @@ export async function runGatewayStartupObservers(params: {
   try {
     await runWithGatewayIndependentRootWorkAdmission(
       async () => {
+        const context = params.resolveGatewayContext();
+        if (context && !params.signal.aborted && !params.isClosing?.()) {
+          const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
+          await resumeAgentDeletions(context, params.signal);
+        }
         await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
           // Restored wakes start their admission budget at dispatch. Join reader startup
           // first, including maintenance that shares compute with foreground admission.

@@ -233,6 +233,7 @@ describe("Cloud worker pool", () => {
       .mockResolvedValueOnce(inventory([preparedWorker("Recovered app")]));
     const fixture = mountPool(readInventory);
     const pool = await enterPool(fixture);
+    const group = pool.querySelectorAll(".settings-section")[1];
     button(pool, "Refresh").click();
     await vi.advanceTimersByTimeAsync(0);
     expect(pool.textContent).toContain("App");
@@ -246,6 +247,7 @@ describe("Cloud worker pool", () => {
     button(pool, "Refresh").click();
     await vi.advanceTimersByTimeAsync(0);
     expect(pool.textContent).toContain("Recovered app");
+    expect(pool.querySelectorAll(".settings-section")[1]).toBe(group);
     expect(pool.querySelector('[role="alert"]')).toBeNull();
     expect(readInventory).toHaveBeenCalledTimes(3);
   });

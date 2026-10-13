@@ -1,23 +1,23 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../../packages/gateway-client/src/timeouts.js";
 import {
   ErrorCodes,
   errorShape,
-  missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
-import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  bindGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -27,13 +27,17 @@ import { resolveSessionCreateCatalogSelectionError } from "../session-create-mod
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  resolveSessionCreateAgentId,
+} from "../session-request-agent.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "../session-utils-store-worker.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
-  validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
@@ -54,15 +58,25 @@ import {
   prepareSessionRepositoryWorkspace,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
+  validateSessionWorktreeSelection,
 } from "./session-create-project.js";
 import {
+  assertRequiredWorkerSessionCreateCurrent,
+  prepareRequiredWorkerCreatedSession,
+  prepareRequiredWorkerSessionCreate,
+  requiredWorkerWorkspaceReuseError,
+} from "./session-create-required-worker.js";
+import {
   prepareSessionCreateFilesystemRoot,
+  prepareSessionCreateRequestedCwd,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
 import {
+  reportCreatedVisibleSpawn,
   resolveSessionCreateSpawnContext,
   validateSessionCreateSpawnRequest,
 } from "./session-create-spawn.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -71,7 +85,6 @@ import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { prepareSessionModelAccountAccess } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
-import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": idempotentSessionCreate(async (options) => {
@@ -99,6 +112,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = structuredClone(params);
+    const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
+    if (requiredWorker.error) {
+      respond(false, undefined, requiredWorker.error);
+      return;
+    }
+    const { requiredProfile, automaticEmptyWorkspace } = requiredWorker;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const getCurrentConfig = context.getRuntimeConfig;
     const requestingOperatorProfileId = client?.authenticatedUserProfile?.profileId;
@@ -149,12 +168,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    // Both uncommitted selections must remain authorized after awaited preparation.
-    const commitGuard = () => {
+    const assertSessionCreateCurrent = bindGatewayDeviceRevocation(() => {
       requestAuthority.assertCurrent();
+      assertRequiredWorkerSessionCreateCurrent(getCurrentConfig(), requiredProfile, p);
       authority.commitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
+    }, hasCurrentClientAuthority);
+    // Account selection is connection-bound until committed. Placement then consumes
+    // that committed session under its retained request and session authority.
+    const commitGuard = () => {
+      assertSessionCreateCurrent();
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
     };
@@ -178,11 +202,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitlyRequestedKey = normalizeOptionalString(p.key);
-    const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
-      cfg,
-      explicitlyRequestedKey ?? (p.agentId === undefined ? "main" : undefined),
-      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
-    );
+    const explicitlyRequestedAgent = resolveSessionCreateAgentId(cfg, {
+      key: explicitlyRequestedKey,
+      agentId: p.agentId,
+      parentSessionKey,
+    });
     if (!explicitlyRequestedAgent.ok) {
       respond(false, undefined, explicitlyRequestedAgent.error);
       return;
@@ -243,7 +267,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
       // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(explicitlyRequestedAgent.agentId);
-      const normalized = normalizeChatSendRequest({
+      const normalization = normalizeChatSendRequest({
         params: {
           sessionKey,
           message: message ?? "",
@@ -252,11 +276,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         },
         client,
       });
+      const normalized = normalization instanceof Promise ? await normalization : normalization;
       if (!normalized.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
         return;
       }
-      const eligible = context.mentionInbox?.validateRecipients(
+      const eligible = await context.mentionInbox?.validateRecipientsAsync(
         client,
         {
           agentId: explicitlyRequestedAgent.agentId,
@@ -292,53 +317,45 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, projectPreparationError);
       return;
     }
-    // Agent tools expand `~` before RPC; the Gateway contract stays absolute-only.
-    // Remote nodes may use Windows paths; local cwd must match the Gateway host.
-    const cwdIsAbsolute =
-      !requestedCwd ||
-      (requestedExecNode
-        ? path.isAbsolute(requestedCwd) || path.win32.isAbsolute(requestedCwd)
-        : path.isAbsolute(requestedCwd));
-    if (!cwdIsAbsolute) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "sessions.create cwd must be absolute"),
-      );
-      return;
-    }
     const clientScopes = Array.isArray(client?.connect?.scopes) ? [...client.connect.scopes] : [];
-    if (p.permissionMode === "full" && client !== null && !clientScopes.includes(ADMIN_SCOPE)) {
-      respond(
-        false,
-        undefined,
-        missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
-      );
+    const preparedCwd = await prepareSessionCreateRequestedCwd({
+      cfg,
+      requestedCwd,
+      requestedExecNode,
+      permissionMode: p.permissionMode,
+      clientPresent: client !== null,
+      clientScopes,
+    });
+    if (!preparedCwd.ok) {
+      respond(false, undefined, preparedCwd.error);
       return;
     }
-    if (requestedCwd && !requestedExecNode && !clientScopes.includes(ADMIN_SCOPE)) {
-      const containment = await resolveWorkspacePathContainment(requestedCwd, cfg);
-      if (!containment) {
-        respond(
-          false,
-          undefined,
-          missingScopeErrorShape({
-            missingScope: ADMIN_SCOPE,
-            requiredScopes: [ADMIN_SCOPE],
-          }),
-        );
-        return;
-      }
-      requestedCwd = containment.path;
-    }
+    requestedCwd = preparedCwd.value;
     const worktreeBaseRef = normalizeOptionalString(p.worktreeBaseRef);
     const requestedWorktreeName = normalizeOptionalString(p.worktreeName);
     const explicitSessionLabel = normalizeOptionalString(p.label);
     const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
+    if (!authority.ensureActive()) {
+      return;
+    }
     const existingTargetEntry = explicitlyRequestedKey
-      ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
+      ? (
+          await loadGatewaySessionEntryReadOnlyInWorker({
+            cfg,
+            key: explicitlyRequestedKey,
+            agentId: titleAgentId,
+          })
+        ).entry
       : undefined;
+    const workspaceReuseError = requiredWorkerWorkspaceReuseError(
+      automaticEmptyWorkspace,
+      existingTargetEntry,
+    );
+    if (workspaceReuseError) {
+      respond(false, undefined, workspaceReuseError);
+      return;
+    }
     if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
       respond(
         false,
@@ -363,6 +380,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
+      // Mention validation and later creation must use the same real child target.
       sessionKey ??= buildDashboardSessionKey(sessionAgentId);
     }
     let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
@@ -411,8 +429,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           respond(false, undefined, parentRequestedAgent.error);
           return;
         }
-        const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
+        const parent = await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: parentSessionKey,
           agentId: parentRequestedAgent.agentId,
+          assertActive: commitGuard,
         });
         const parentAgentId = parentRequestedAgent.agentId;
         if (
@@ -455,7 +476,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
           useRequestedTitleSelection: Boolean(requestedModel && !personalModelSelection),
-          runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+          runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
           signal,
           commitGuard,
           onTitleError: (error) =>
@@ -475,23 +496,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     let publicRead = false;
     let runPayload: Record<string, unknown> | undefined;
-    let initialTurnSourceAccepted = false;
+    let sessionSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
-    if (!authority.ensureActive()) {
-      return;
-    }
-    let catalogDeadline: number | undefined;
-    const catalogUnavailable = new Error(
-      "The model catalog is still loading. The session was not created; retry shortly.",
-    );
-    const stopCatalogWait = (): never => {
-      throw catalogUnavailable;
-    };
+    const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -523,6 +535,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
+      ...(p.communication !== undefined ? { communication: p.communication } : {}),
       prepareLifecycle,
       onLifecycleCleanupError: (error) =>
         sessionLog.warn(
@@ -556,24 +569,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalogSnapshot: async () => {
         const captured = await operatorCapture.preparation;
-        const waitSignal = AbortSignal.any(
-          [signal, client?.connectionSignal, captured?.authority.signal].filter(
-            (value): value is AbortSignal => value !== undefined,
-          ),
-        );
-        if (waitSignal.aborted) {
-          stopCatalogWait();
-        }
-        // Leave response headroom below the Node Gateway client's 30-second request budget.
-        catalogDeadline ??= performance.now() + (DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS * 2) / 3;
-        return raceWithTimeout(
+        return catalogWait.run(
           () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
-          Math.max(0, catalogDeadline - performance.now()),
-          stopCatalogWait,
-          { signal: waitSignal, onAbort: stopCatalogWait },
+          captured?.authority.signal,
         );
       },
       commitGuard,
+      bindSharingCreation: (operation) =>
+        sessionMutationAuthorization?.bindCreation?.(p, operation),
+      followSharingRegistration: sessionMutationAuthorization?.followRegistration,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
           entry.category === normalizeOptionalString(p.category) ? entry.category : undefined,
@@ -587,16 +591,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionKey: committed.key,
           storePath: committed.storePath,
           sessionId: committed.entry.sessionId,
+          entry: committed.entry,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
-        if (hasInitialTurn && requestAuthority.family === "worker") {
-          initialTurnSourceAccepted = acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+        if ((hasInitialTurn || requiredProfile) && requestAuthority.family === "worker") {
+          sessionSourceAccepted = acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
         }
       },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
           return;
         }
+        await prepareRequiredWorkerCreatedSession({
+          requiredProfile,
+          pendingWorktree: Boolean(preparedWorktree?.pendingWorktree),
+          requestedProjectGitUrl,
+          prepare: context.workerPlacementDispatchService?.withRequiredSession,
+          session,
+          assertCurrent: assertSessionCreateCurrent,
+          retainDispatch: sessionMutationAuthorization?.retain,
+          signal,
+        });
+        await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);
         if (!hasInitialTurn) {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
@@ -605,7 +621,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           options,
           {
             ...options,
-            client: initialTurnSourceAccepted ? captureAgentTurnPrincipal(client) : client,
+            client: sessionSourceAccepted ? captureAgentTurnPrincipal(client) : client,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,
@@ -626,16 +642,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        await handleDirectExternalChatSend(sendOptions);
+        // The initial child turn must acquire its own writer, not the spawning parent's.
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          handleDirectExternalChatSend(sendOptions),
+        );
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
-      if (error === catalogUnavailable) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, catalogUnavailable.message, { retryable: true }),
-        );
+      if (error === catalogWait.unavailable) {
+        respond(false, undefined, catalogWait.unavailable.error);
         return undefined;
       }
       if (error instanceof ModelAccountConnectAuthorityError) {
@@ -685,16 +700,14 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
     diagnostics?.mark("handlerExit");
-    emitSessionsChanged(context, {
-      sessionKey: created.key,
-      agentId: created.agentId,
-      reason: created.resetExisting ? "new" : "create",
-    });
-    if (runStarted) {
+    for (const reason of [
+      created.resetExisting ? "new" : "create",
+      ...(runStarted ? ["send"] : []),
+    ]) {
       emitSessionsChanged(context, {
         sessionKey: created.key,
         agentId: created.agentId,
-        reason: "send",
+        reason,
       });
     }
   }),

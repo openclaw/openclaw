@@ -12,7 +12,10 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
 import { collectStateDatabasePaths } from "../../infra/update-candidate-state.js";
@@ -25,11 +28,13 @@ import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
   DoctorMaintenanceRefusalError,
+  PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   UpdateDoctorError,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
@@ -79,8 +84,6 @@ import {
 } from "./update-command-service-env.js";
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
-type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
-
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   return await withUpdateEnv(
     {
@@ -94,7 +97,7 @@ export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Pr
 }
 
 export async function runUpdateFinalizationDoctorInFreshProcess(params: {
-  phase: UpdateDoctorPhase;
+  phase: "pre-plugin" | "post-plugin";
   root: string;
   runId?: string;
   opts?: UpdateCommandOptions;
@@ -145,6 +148,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   let warning: PluginUpdateWarning | undefined;
   let failure: { error: unknown } | undefined;
+  const sectionTiming = createUpdateDoctorSectionTiming();
+  let doctorStep: UpdateStepResult | undefined;
+  let doctorStartedAt: number | undefined;
   assertCurrent();
   try {
     const commandOptions: CommandOptions = {
@@ -192,10 +198,28 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           assertCurrent,
         )));
     assertCurrent();
+    // The capability check above stays untraced; only the Doctor reports its sections.
+    const doctorOptions: CommandOptions = {
+      ...commandOptions,
+      env: { ...commandOptions.env, ...sectionTiming.env },
+    };
+    const doctorArgv =
+      doctorConfigWrites && executorFence && runId
+        ? [...workerCommand, "--doctor"]
+        : [params.nodeRunner ?? resolveNodeRunner(), ...args];
+    doctorStartedAt = Date.now();
+    doctorStep = {
+      name: `${params.phase} doctor`,
+      command: doctorArgv.join(" "),
+      cwd: params.root,
+      durationMs: 0,
+      exitCode: null,
+    };
+    let child: Awaited<ReturnType<typeof runUpdateDoctorProcess>>;
     if (doctorConfigWrites && executorFence && runId) {
       const snapshot = await readUpdateConfigSnapshot(resolveConfigPath());
       assertCurrent();
-      const child = await withUpdateDoctorChild(
+      child = await withUpdateDoctorChild(
         {
           root: params.root,
           context: {
@@ -220,31 +244,38 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
               : {}),
           },
         },
-        (runCommand) => runCommand([...workerCommand, "--doctor"], commandOptions),
+        (runCommand) => sectionTiming.wrap(runCommand)(doctorArgv, doctorOptions),
       );
-      result = child;
-      assertUpdateDoctorChildSucceeded(child);
-      assertCurrent();
     } else {
       // A valid legacy target contract retains its shipped CLI Doctor. This is
       // capability selection, never recovery from missing or refused authority.
-      const child = await runUpdateDoctorProcess(
-        {
-          root: params.root,
-          runId: runId ?? params.runId ?? "",
-          onProcessSettlement: (step) => {
-            processSettlement = step;
+      child = await sectionTiming.wrap((argv, options) =>
+        runUpdateDoctorProcess(
+          {
+            root: params.root,
+            runId: runId ?? params.runId ?? "",
+            onProcessSettlement: (step) => {
+              processSettlement = step;
+            },
           },
-        },
-        [params.nodeRunner ?? resolveNodeRunner(), ...args],
-        commandOptions,
-      );
-      result = child;
-      assertUpdateDoctorChildSucceeded(child);
-      assertCurrent();
+          argv,
+          options,
+        ),
+      )(doctorArgv, doctorOptions);
     }
+    result = child;
+    doctorStep.exitCode = child.code;
+    assertUpdateDoctorChildSucceeded(child);
+    assertCurrent();
   } catch (error) {
     failure = { error };
+    if (doctorStep && isRecord(error) && typeof error.exitCode === "number") {
+      doctorStep.exitCode = error.exitCode;
+    }
+  } finally {
+    if (doctorStep && doctorStartedAt !== undefined) {
+      doctorStep.durationMs = Date.now() - doctorStartedAt;
+    }
   }
   const commandFailure = failure;
   if (failure) {
@@ -276,7 +307,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         refuseAuthority(error);
       }
       if (isRecord(error)) {
-        result = error;
+        result = {
+          ...error,
+          ...(typeof error.stderr === "string"
+            ? { stderr: sectionTiming.stripTrace(error.stderr) }
+            : {}),
+        };
       }
       // The existing result channel identifies a settled deferred repair. Plugin
       // convergence still owns that repair; other exits retain their failure.
@@ -289,6 +325,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
           cause: error.cause,
         }) &&
         doctorResult?.status === "advisory";
+      if (deferred && doctorStep) {
+        doctorStep.advisory = PACKAGE_POST_INSTALL_DOCTOR_ADVISORY;
+      }
       if (!deferred) {
         const exitCode =
           isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
@@ -359,6 +398,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           };
+          if (doctorStep) {
+            doctorStep.advisory = { kind: "recoverable-maintenance", message: warning.message };
+          }
         } else {
           throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
         }
@@ -388,6 +430,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     }
     if (processSettlement) {
       params.onDoctorStep?.(processSettlement);
+    }
+    // Missing reports must replace earlier selector facts, including from older Doctors.
+    if (doctorStep) {
+      sectionTiming.annotate(doctorStep);
+      doctorStep.deferredInspectionCheckIds = doctorResult?.deferredInspectionCheckIds ?? null;
+      params.onDoctorStep?.(doctorStep);
     }
     if (params.databaseBackup) {
       const step: UpdateStepResult = {
@@ -423,9 +471,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   if (failure) {
     throw failure.error;
   }
-  if (warning) {
-    return warning;
-  }
+  return warning;
 }
 
 async function validatePostPluginConfigInFreshProcess(params: {
@@ -561,6 +607,26 @@ export async function completePostCorePluginUpdate(
             status: "warning",
             reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
             warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
+        const pending = await readDeferredPluginMigrationsAsync();
+        assertCurrent();
+        if (pending.length > 0) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            warnings: [
+              ...(pluginUpdate.warnings ?? []),
+              ...pending.map((migration) => ({
+                pluginId: migration.pluginId,
+                reason: "doctor-advisory",
+                // This is the final outcome, so do not tell operators to wait for this update.
+                message: formatDeferredPluginMigration(migration, {}),
+                guidance: [
+                  `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                ],
+              })),
+            ],
           };
         }
       }

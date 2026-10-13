@@ -9,6 +9,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import { parseGitPluginSpec } from "./git-install.js";
 import { resolveDefaultNpmSpec } from "./install-channel-specs.js";
 import {
@@ -186,6 +187,7 @@ export function resolvePluginInstallSourcePlan(params: {
   const npmSpec = explicitNpm ?? params.raw;
   const bundledPlan = resolveBundledInstallPlanBeforeNpm({
     rawSpec: params.raw,
+    pin: params.pin,
     findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
   });
   if (bundledPlan) {
@@ -335,6 +337,16 @@ export function resolveManagedPluginInstallRequest(
           `official plugin catalog entry is not installable: ${request.pluginId}`,
         );
       }
+      const bundled =
+        !request.version && !request.pin
+          ? findBundledPluginSource({ lookup: { kind: "pluginId", value: pluginId } })
+          : undefined;
+      if (
+        bundled &&
+        isBundledPluginInsideDevSourceRoot({ rootDir: bundled.localPath, env: process.env })
+      ) {
+        return { source: "bundled", rawSpec: install.npmSpec ?? pluginId, bundledSource: bundled };
+      }
       const installSources = resolveOfficialInstallSources(entry, request.version);
       const primary = installSources[0];
       if (!primary) {
@@ -400,6 +412,9 @@ export function resolveManagedPluginInstallRequest(
       return {
         source: "clawhub",
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
+        ...(!request.version && !request.expectedIntegrity
+          ? { recordSpec: `clawhub:${packageName}` }
+          : {}),
         mode,
         ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,

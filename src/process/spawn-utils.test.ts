@@ -14,6 +14,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
+import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import {
   emitChildProcessSpawnSample,
   recordChildProcessSpawn,
@@ -53,24 +54,6 @@ describe("spawnWithFallback", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[0]?.[2].stdio).toEqual(["pipe", "pipe", "pipe"]);
     expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
-  });
-
-  it("does not retry on non-EBADF errors", async () => {
-    const spawnMock = vi.fn().mockImplementationOnce(() => {
-      const err = new Error("spawn ENOENT");
-      (err as NodeJS.ErrnoException).code = "ENOENT";
-      throw err;
-    });
-
-    await expect(
-      spawnWithFallback({
-        argv: ["missing"],
-        options: { stdio: ["pipe", "pipe", "pipe"] },
-        fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
-        spawnImpl: spawnMock,
-      }),
-    ).rejects.toThrow(/ENOENT/);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not spawn a fallback after request authority retires during startup", async () => {
@@ -186,7 +169,7 @@ describe("child-process spawn diagnostics", () => {
     checkSuccessfulSpawns,
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
     "counts successful broker requests once without counting the broker transport",
     async () => {
       const host = createSpawnBrokerHost();

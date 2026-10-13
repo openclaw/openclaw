@@ -142,7 +142,6 @@ describe("buildChannelInboundEventContext", () => {
         spaceId: "workspace",
         threadId: "thread-1",
         avatar: "/media/inbound/conversation-avatar.png",
-        link: { url: "https://chat.example.test/threads/thread-1", label: "Test Thread" },
       },
       route: {
         agentId: "main",
@@ -254,7 +253,6 @@ describe("buildChannelInboundEventContext", () => {
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
-      ConversationLink: { url: "https://chat.example.test/threads/thread-1", label: "Test Thread" },
       GroupSubject: "Room One",
       GroupSpace: "workspace",
       GroupSystemPrompt: "group prompt",

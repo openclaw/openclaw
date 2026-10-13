@@ -154,6 +154,7 @@ describe("transcript prepend anchor", () => {
       canFollowEnd: () => true,
       isProgrammaticScroll: () => false,
       cancelScroll: () => anchor.clear(),
+      onLayoutCorrection: vi.fn(),
       requestUpdate: vi.fn(),
       onOffset: vi.fn(() => false),
       onReaderScroll: vi.fn(),

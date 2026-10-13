@@ -8,6 +8,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  findInstalledPackageRoot,
+  inspectCronBackups,
+  readDatabase,
+  recordProcessExitSnapshot,
+} from "./observations.mjs";
 
 const fixtureName = "cron-owner-fixture.json";
 const prefix = "owner-proof-";
@@ -68,15 +74,6 @@ function paths() {
   };
 }
 
-function readDatabase(databasePath, run) {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
-}
-
 function inspectRows(databasePath, storePath) {
   return readDatabase(databasePath, (db) =>
     db
@@ -88,25 +85,11 @@ function inspectRows(databasePath, storePath) {
   );
 }
 
-function inspectBackups(databasePath) {
-  return fs
-    .readdirSync(path.dirname(databasePath))
-    .filter(
-      (name) =>
-        name.startsWith(`${path.basename(databasePath)}.doctor-cron-`) && name.endsWith(".bak"),
-    )
-    .toSorted()
-    .map((name) => ({
-      name,
-      sha256: hash(fs.readFileSync(path.join(path.dirname(databasePath), name))),
-    }));
-}
-
 function snapshot(fixture) {
   const config = readJson(fixture.configPath);
   return {
     rows: inspectRows(fixture.databasePath, fixture.storePath),
-    backups: inspectBackups(fixture.databasePath),
+    backups: inspectCronBackups(fixture.databasePath),
     historicalMarker: config.agents?.entries?.ops?.default === true,
     legacySourceSha256: fs.existsSync(fixture.storePath)
       ? hash(fs.readFileSync(fixture.storePath))
@@ -116,22 +99,21 @@ function snapshot(fixture) {
 
 function installedProcessIdentity(entrypoint) {
   const file = fs.realpathSync(entrypoint);
-  for (let root = path.dirname(file), depth = 0; depth < 4; root = path.dirname(root), depth++) {
+  const root = findInstalledPackageRoot(path.dirname(file), 4);
+  if (root) {
     const manifestPath = path.join(root, "package.json");
-    if (fs.existsSync(manifestPath) && readJson(manifestPath).name === "openclaw") {
-      const manifest = fs.readFileSync(manifestPath);
-      const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
-      const info = JSON.parse(build);
-      assert.equal(info.version, JSON.parse(manifest).version);
-      return {
-        version: info.version,
-        commit: info.commit,
-        manifestSha256: hash(manifest),
-        buildInfoSha256: hash(build),
-        entrypoint: path.relative(root, file),
-        entrypointSha256: hash(fs.readFileSync(file)),
-      };
-    }
+    const manifest = fs.readFileSync(manifestPath);
+    const build = fs.readFileSync(path.join(root, "dist/build-info.json"));
+    const info = JSON.parse(build);
+    assert.equal(info.version, JSON.parse(manifest).version);
+    return {
+      version: info.version,
+      commit: info.commit,
+      manifestSha256: hash(manifest),
+      buildInfoSha256: hash(build),
+      entrypoint: path.relative(root, file),
+      entrypointSha256: hash(fs.readFileSync(file)),
+    };
   }
   throw new Error("Observed CLI is outside an OpenClaw package");
 }
@@ -167,15 +149,7 @@ function observeProcess() {
     receipt.observationError = String(error);
   }
   const file = path.join(artifacts, `cron-owner-${role}-${process.pid}.json`);
-  writeJson(file, receipt);
-  process.once("exit", (exitCode) => {
-    try {
-      receipt.after = snapshot(fixture);
-    } catch (error) {
-      receipt.observationError = String(error);
-    }
-    writeJson(file, { ...receipt, exitCode });
-  });
+  recordProcessExitSnapshot(file, receipt, () => snapshot(fixture));
 }
 
 function gateway(artifacts, name, method, params) {
@@ -490,19 +464,15 @@ function assertUpdated(p, observations, packageRoot) {
   assert(doctor, "Installed updater's candidate Doctor did not perform the owner repair");
   assert.deepEqual(updater.before, fixture.before, "Specimen changed before the installed update");
   assert.equal(doctor.before.legacySourceSha256, fixture.legacySha256);
+  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
+    job_id,
+    agent_id,
+    job_json,
+    state_json,
+  });
   assert.deepEqual(
-    doctor.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
-    fixture.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
+    doctor.before.rows.map(persistedFields),
+    fixture.before.rows.map(persistedFields),
     "Jobs were repaired before candidate Doctor received them",
   );
   for (const receipt of [updater, doctor]) {
@@ -564,12 +534,6 @@ function assertUpdated(p, observations, packageRoot) {
   );
   assert.equal(beforeImport.length, 1, "Missing unique pre-import snapshot");
   assert.equal(beforeOwnership.length, 1, "Missing unique pre-ownership snapshot");
-  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
-    job_id,
-    agent_id,
-    job_json,
-    state_json,
-  });
   assert.deepEqual(
     beforeImport[0].rows.map(persistedFields),
     fixture.before.rows.map(persistedFields),
@@ -699,19 +663,14 @@ function assertRuntime(p) {
   assert.deepEqual(
     receipts.map((row) => Object.assign({}, row)),
     [
-      {
-        job_id: `${prefix}explicit`,
-        agent_id: "research",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}explicit`).runId,
-      },
-      {
-        job_id: `${prefix}historical`,
-        agent_id: "ops",
-        status: "ok",
-        request_run_id: runs.find((run) => run.jobId === `${prefix}historical`).runId,
-      },
-    ],
+      ["explicit", "research"],
+      ["historical", "ops"],
+    ].map(([name, agentId]) => ({
+      job_id: `${prefix}${name}`,
+      agent_id: agentId,
+      status: "ok",
+      request_run_id: runs.find((run) => run.jobId === `${prefix}${name}`).runId,
+    })),
   );
   const proofPath = path.join(p.artifacts, "cron-owner-proof.json");
   const proof = {

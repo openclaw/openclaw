@@ -39,6 +39,7 @@ import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
 import {
   acpSessionRowMatchesEntry,
   buildAcpDatabaseSessionKey,
+  deleteAcpSessionMetaRows,
   getAcpSessionKysely,
   parseAcpDatabaseSessionKey,
   selectAcpSessionRow,
@@ -50,6 +51,7 @@ import { legacyAcpSessionKeyCandidates } from "./session-meta-migration-keys.js"
 import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
+import { bindAcpSessionIdentity } from "./session-meta-write.kernel.js";
 
 type DoctorAcpScope = { config: OpenClawConfig; env: NodeJS.ProcessEnv; pluginId: string };
 
@@ -214,7 +216,7 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
           (!acpSessionRowMatchesEntry(destination, binding) ||
             !sameAcpSessionPayload(destination, source))
         ) {
-          throw new Error("canonical ACP metadata conflicts with its raw alias");
+          throw new Error("stored ACP metadata conflicts with its raw alias");
         }
         const consumed = matching.filter((row) => sameAcpSessionPayload(row, source));
         result.found += consumed.length;
@@ -276,15 +278,9 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
               if (!destination) {
                 upsertAcpSessionMetaRow(shared.db, { ...source, session_key: destinationKey });
               }
-              executeSqliteQuerySync(
+              deleteAcpSessionMetaRows(
                 shared.db,
-                getAcpSessionKysely(shared.db)
-                  .deleteFrom("acp_sessions")
-                  .where(
-                    "session_key",
-                    "in",
-                    consumed.map((row) => row.session_key),
-                  ),
+                consumed.map((row) => row.session_key),
               );
               sessionChanges.emit(
                 { agentId: owner.agentId, sessionKey: owner.storeSessionKey },
@@ -377,7 +373,7 @@ export async function inspectAcpSessionClaimsForDoctor(
             !target?.agentId ||
             buildAcpDatabaseSessionKey(target.storeSessionKey, target.agentId) !== row.session_key
           ) {
-            throw new Error("ACP metadata key is not canonical");
+            throw new Error("ACP metadata key is not in the expected format");
           }
           const claimTarget = { agentId: target.agentId, sessionKey: target.storeSessionKey };
           const binding = readClaimBinding(scope, claimTarget);
@@ -412,7 +408,8 @@ export function updateAcpSessionIdentityForDoctor(
 ): void {
   authority.assertCurrent();
   const { claim } = input;
-  if (claim.meta.backend !== scope.pluginId || !claim.meta.identity) {
+  const identity = claim.meta.identity;
+  if (claim.meta.backend !== scope.pluginId || !identity) {
     throw new Error("ACP identity repair requires a matching backend claim and existing identity");
   }
   const key = buildAcpDatabaseSessionKey(claim.sessionKey, claim.agentId);
@@ -439,19 +436,14 @@ export function updateAcpSessionIdentityForDoctor(
             "ACP ownership or metadata changed during Doctor repair; source retained",
           );
         }
-        executeSqliteQuerySync(
-          database.db,
-          getAcpSessionKysely(database.db)
-            .updateTable("acp_sessions")
-            .set({
-              runtime_session_name: input.runtimeSessionName,
-              identity_json: JSON.stringify({
-                ...claim.meta.identity,
-                acpxRecordId: input.acpxRecordId,
-              }),
-            })
-            .where("session_key", "=", key),
-        );
+        upsertAcpSessionMetaRow(database.db, {
+          ...row,
+          runtime_session_name: input.runtimeSessionName,
+          ...bindAcpSessionIdentity({
+            ...identity,
+            acpxRecordId: input.acpxRecordId,
+          }),
+        });
         sessionChanges.emit({ agentId: claim.agentId, sessionKey: claim.sessionKey }, database.db);
       },
       { env: scope.env },

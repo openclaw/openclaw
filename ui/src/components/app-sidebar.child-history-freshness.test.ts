@@ -50,11 +50,13 @@ describe("sidebar routed-lineage freshness", () => {
       expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({
         kind: "error",
         reason: child.lastRunError,
+        sourceSessionKey: child.key,
         childLabel: child.label,
       });
       expect(sidebar.findSidebarHovercardRowByKey(child.key)?.attention).toEqual({
         kind: "error",
         reason: child.lastRunError,
+        sourceSessionKey: child.key,
       });
     } finally {
       provider.remove();

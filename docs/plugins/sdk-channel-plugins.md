@@ -39,6 +39,11 @@ shared `message` tool. Your plugin owns:
   channel: its current channel, or the only configured channel. A `message`
   tool send to another channel does not get that channel's rules, and external
   ACP agents do not receive it. Keep all formatting rules in this one hook.
+- **Message guidance** - `agentPrompt.messageToolHints` supplies account-scoped
+  instructions. Set `agentPrompt.customInlineButtonHint: true` when the channel
+  owns inline-button guidance; core then omits its generic callback example and
+  capability-configuration hint. Return no button instructions when the account
+  has buttons disabled. The flag defaults to `false`.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -51,42 +56,6 @@ the typed action in a transport-private authenticated callback envelope. Keep
 approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
-
-## Return to the source conversation
-
-Channel plugins can supply `conversation.link` when building an inbound event
-with `buildChannelInboundEventContext`:
-
-```typescript
-conversation: {
-  ...conversation,
-  link: {
-    url: "https://chat.example.com/conversations/example-thread",
-    label: "Example Thread",
-  },
-}
-```
-
-The channel owns the destination URL and plain-text label. Discord supplies the
-actual created or existing thread URL. Slack uses its documented
-[`app_redirect` channel link](https://docs.slack.dev/interactivity/deep-linking/)
-to open the containing channel or direct conversation; it does not request a
-message permalink while preparing an inbound reply.
-
-The host retains the first valid HTTP(S) link on the logical session, preserves
-it across resets, and carries it to explicitly spawned or forked child sessions.
-Later delivery-route changes do not replace it. Upgrades do not backfill
-existing entries: an existing session receives a link only when a later inbound
-event supplies one. There is no historical-message scan or store migration.
-This metadata does not render any UI by itself. A channel's browser plugin
-registers a `session-header` accessory to display its link. Discord and Slack
-use the shared `createSessionHeaderLink` helper from
-`openclaw/plugin-sdk/control-ui` for the standard appearance and direct
-navigation, with no preview or dropdown.
-The helper receives the current session snapshot through the accessory's props;
-it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plugins#contribute-and-replace-views)
-for registration. Other plugin accessories, including their custom HTML, CSS,
-and JavaScript, keep their existing contract.
 
 ## Opted-in public child sessions
 
@@ -105,7 +74,17 @@ forked, retargeted, and descendant sessions do not qualify. The intent cannot
 be serialized for future turns or transport fallback. This does not grant
 creator/admin authority or change Team collaboration permissions. Consumers
 of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
-a canonical URL alone is not proof of anonymous access.
+a normalized URL alone is not proof of anonymous access.
+
+The host awaits `onVisibleWorkSessions(sessions, creation)` for fresh visible
+children before their first turn starts, so a channel can persist session-scoped
+origin context before prompt assembly. The optional second argument supplies
+`creation.createdSessionKey` even when there is no public Gateway origin or the
+Control UI is disabled; in that case `sessions` is empty. Existing one-argument
+consumers still receive only usable URL descriptors. The callback may receive the
+same child again when the parent turn settles; make writes idempotent by child
+session key. Only immediate children of that turn are reported. Return a Promise
+when initialization must finish before the child runs.
 
 ## Walkthrough
 
@@ -196,12 +175,18 @@ a canonical URL alone is not proof of anonymous access.
     accounts. Return `enabled`, `configured`, and applicable credential status
     fields without requiring secret resolution. Its result is not a resolved
     account: operational hooks such as checks and account status builders receive
-    `config.resolveAccount` results instead.
+    `config.resolveAccountAsync` or `config.resolveAccount` results instead.
     Diagnostics expose only status-safe fields from the inspection result.
     Include the same account enablement and configuration decisions used by the
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Ordinary `channels.status` reads combine this metadata with the lifecycle's
+    recorded account status. Publish changing health and provider details through
+    `setStatus`; account snapshot and channel summary hooks run only for explicit
+    live checks on this RPC. All live hooks share a per-channel deadline. They
+    should also honor their supplied timeout because timing out the RPC cannot
+    cancel an already-running plugin operation.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.
@@ -209,11 +194,15 @@ a canonical URL alone is not proof of anonymous access.
     Operational account reads can be asynchronous. Define
     `config.resolveAccountAsync(cfg, accountId)` when account resolution reads
     durable credentials, and `config.hasConfiguredStateAsync({ cfg, env })` for
-    the matching operational configured-state check. These optional callbacks
-    return a Promise of the same result as their synchronous counterparts.
-    Core awaits them when present; a rejection stays an error and never retries
-    the synchronous callback. Keep synchronous counterparts for older hosts and
-    external consumers of the existing contract.
+    the matching operational configured-state check. Use
+    `config.describeAccountAsync(account, cfg)` for state-backed account summaries,
+    `config.resolveAllowFromAsync({ cfg, accountId })` for stored allowlists, and
+    `security.resolveDmPolicyAsync({ cfg, accountId, account })` for stored DM policy.
+    These optional callbacks return a Promise of the same result as their
+    synchronous counterparts. Core awaits the async hook whenever it is present;
+    neither a rejection nor an empty result retries the synchronous hook. Keep
+    synchronous signatures for older hosts and external consumers, and forward
+    async hooks through any adapter that wraps the channel.
 
     Prepare current credentials for each operation, and revalidate live authority
     after awaited preparation before any side effect. Account objects and registry
@@ -327,7 +316,7 @@ a canonical URL alone is not proof of anonymous access.
     });
     ```
 
-    For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+    For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
@@ -390,6 +379,10 @@ a canonical URL alone is not proof of anonymous access.
       Send contexts also include `replyToIdSource` (`implicit` or `explicit`)
       when a native reply target was resolved, so payload helpers can preserve
       explicit reply tags without consuming an implicit single-use reply slot.
+      The optional `sessionKey` identifies the host-resolved session that produced
+      the send, including core-routed and durable sends. It is the source session,
+      not a session inferred from the delivery target or its policy. It does not
+      identify whether the current turn came from a user or an internal event.
 
       For payload planning, `openclaw/plugin-sdk/channel-outbound` exports
       `createOutboundPayloadPlan(payloads, context)` for raw reply text, including
@@ -412,6 +405,10 @@ a canonical URL alone is not proof of anonymous access.
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
+      `hasReplyPayloadFinalDeliveryCapture(payload)` from the same subpath identifies
+      replies whose confirmed delivery the shared dispatcher will record. Channel
+      adapters must skip their own transcript mirror for those replies, including
+      fallback sends, while still reporting the delivery outcome normally.
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -429,6 +426,16 @@ a canonical URL alone is not proof of anonymous access.
       Entries can also carry `sourceUrls` for references staged by the host. When recording
       delivered media, request entries for only the URLs confirmed accepted by the transport;
       source aliases for removed or unsent media are not delivery evidence.
+
+      A block with `ReplyPayload.textMode: "delta"` carries a disjoint text chunk.
+      Preview adapters append it within the current answer lane; omitted `textMode`
+      means a replacement snapshot. Never infer this from matching prefixes.
+      Finals always replace, and durable sends/transcripts use the payload's own
+      `text`, not an accumulated preview. A text-rewriting delivery modifier clears
+      delta mode so its replacement remains authoritative. When appending a chunk
+      to an existing preview, use `stripReplyPayloadResponsePrefix(payload, text)`
+      to remove only the response prefix recorded by normalization; retain the
+      decorated text for the first chunk and for independent durable sends.
 
       Streaming delivery can carry one `OutboundPayloadPlan` through the optional
       `onPreparedBlockReply(plan, context)`, dispatcher `sendPreparedReply(kind, plan)`,
@@ -604,6 +611,28 @@ a canonical URL alone is not proof of anonymous access.
       (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
+    Direct-message adapters can use `dispatchInboundDirectDm` from
+    `openclaw/plugin-sdk/channel-inbound`. Its optional synchronous
+    `assertAuthority: () => void` callback carries the channel owner's live
+    sender and lifecycle checks through asynchronous preparation. Capture the
+    selected account, peer identity, and policy before yielding; the callback
+    must check their current authority, not just compare a saved token. On
+    current hosts, it runs before session recording,
+    at metadata transaction and commit admission, and before agent dispatch.
+    Throw to refuse the pending effect. The callback is transient authority;
+    never serialize it or replace it with `inboundAccessAuthorized: true`.
+
+    The same callback is available on channel turn plans and prepared turns.
+    Direct session-recording callers can pass `assertAuthority`; the metadata
+    owner receives it as `assertCommitAllowed` and uses its existing writer
+    admission. Metadata failures keep their existing best-effort reporting,
+    while the subsequent dispatch check still refuses revoked authority.
+    Older hosts may ignore these additive fields: their presence is not
+    capability negotiation. The checks after host preparation and at metadata
+    commit require a host that implements this contract. Plugins must also
+    check live authority at effects they initiate directly, such as notices
+    and provider requests.
+
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call
@@ -713,7 +742,7 @@ remains supported for older plugins and hosts, with no removal version scheduled
 Keep its return type strictly `boolean`: older hosts treat a returned promise as
 truthy rather than awaiting it. Hosts predating the async companion ignore the new
 field and use only the synchronous callback. An async-only alias therefore cannot
-prove equivalence on those hosts; exact canonical target matching still works.
+prove equivalence on those hosts; exact normalized target matching still works.
 
 Verified official installed plugins can delegate supported conversation, metadata, and attachment
 reads to provider-owned access checks. Channel-origin requests need server-owned
@@ -943,7 +972,7 @@ the plugin does not grant additional authority to an existing job.
 </CardGroup>
 
 <Note>
-Some bundled helper seams still exist for bundled-plugin maintenance and
+Some bundled helper interfaces still exist for bundled-plugin maintenance and
 compatibility. They are not the recommended pattern for new channel plugins;
 prefer the generic channel/setup/reply/runtime subpaths from the common SDK
 surface unless you are maintaining that bundled plugin family directly.

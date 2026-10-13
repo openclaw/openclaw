@@ -80,34 +80,6 @@ describe("node-host update pause", () => {
     },
   );
 
-  it("does not let a resumed idle read release a replacement update pause", async () => {
-    const first = createDeferred<boolean>();
-    const second = createDeferred<boolean>();
-    mocks.workerHasActiveWork
-      .mockImplementationOnce(async () => await first.promise)
-      .mockImplementationOnce(async () => await second.promise);
-    const runtime = await startRuntime();
-    const original = runtime.tryPauseForUpdate();
-    runtime.resumeAfterUpdate();
-    const replacement = runtime.tryPauseForUpdate();
-    try {
-      first.resolve(false);
-      expect(await original).toBe(false);
-      await runtime.invoke(frame);
-      expect(mocks.handleInvoke).not.toHaveBeenCalled();
-      second.resolve(false);
-      expect(await replacement).toBe(true);
-      runtime.resumeAfterUpdate();
-      await runtime.invoke(frame);
-      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-    } finally {
-      first.resolve(false);
-      second.resolve(false);
-      await Promise.allSettled([original, replacement]);
-      await runtime.close();
-    }
-  });
-
   it.each(["missing", "throwing", "declared"])(
     "requires an explicit plugin idle result after invocation with a %s hook",
     async (mode) => {

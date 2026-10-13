@@ -345,6 +345,11 @@ describe("normalizeCronJobCreate", () => {
       },
       expected: { kind: "on-exit", command: "make build", cwd: "/repo" },
     },
+    {
+      label: "on-exit escaped trailing space",
+      input: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
+      expected: { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" },
+    },
   ])("canonicalizes $label schedules on create and patch", ({ input, expected }) => {
     const created = createMain({ schedule: input });
     const patch = normalizePatch({ schedule: input });

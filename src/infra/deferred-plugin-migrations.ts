@@ -103,19 +103,24 @@ export function withDeferredPluginConfigRollback(
   }
 }
 
-/** Exclude only this write's admitted repairs; persisted rows remain pending until publication. */
-export function readConfigWritePendingMigrations(
+/** Ordinary writes consume canonical config; only migration owners supply pending facts. */
+export async function readConfigWritePendingMigrations(
   configPath: string,
   env?: NodeJS.ProcessEnv,
-): readonly DeferredPluginMigration[] {
-  const pending = readDeferredPluginMigrations({ env });
+  preparedPending?: readonly DeferredPluginMigration[],
+): Promise<readonly DeferredPluginMigration[] | undefined> {
   const completion = configMigrationCompletion.getStore();
-  if (!completion || completion.configPath !== configPath || completion.published) {
-    return pending;
+  if (!completion || completion.configPath !== configPath) {
+    return preparedPending;
   }
   completion.assertCurrent();
-  assertPendingGeneration(pending, completion.expectedPending);
-  return pending.filter((entry) => !completion.resolvedPluginIds.includes(entry.pluginId));
+  if (completion.published) {
+    return await readDeferredPluginMigrationsAsync({ env });
+  }
+  // Publication asserts this generation inside its write transaction; reading it here only repeats that.
+  return completion.expectedPending.filter(
+    (entry) => !completion.resolvedPluginIds.includes(entry.pluginId),
+  );
 }
 
 export class DeferredPluginMigrationConflictError extends Error {
@@ -223,7 +228,7 @@ export async function prepareDeferredPluginMigrationRuntime(): Promise<void> {
   ]);
 }
 
-/** Keep asynchronous config inspection off the main thread without creating state. */
+/** Keep Doctor and update inspection off the main thread without creating state. */
 export async function readDeferredPluginMigrationsAsync(
   options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
 ): Promise<readonly DeferredPluginMigration[]> {
@@ -237,9 +242,6 @@ export async function readDeferredPluginMigrationsAsync(
     : withArtifactPreservingStateReads(read));
   if (!reply) {
     return [];
-  }
-  if (!reply.ok || reply.type !== "plugins.deferredMigrations.read") {
-    throw new Error("Unexpected deferred plugin migration read reply");
   }
   return reply.pending;
 }
@@ -259,7 +261,7 @@ export function readDeferredPluginMigrationCompletions(
           .selectFrom("migration_runs")
           .select(["id", "finished_at"])
           .where("id", "like", `${RUN_PREFIX}%`)
-          .where("status", "=", "completed"),
+          .where("status", "in", ["completed", "superseded"]),
       ).rows.flatMap(({ id, finished_at }) =>
         finished_at === null
           ? []
@@ -299,7 +301,7 @@ export function withDeferredPluginMigrationsCurrent<T>(
   params: {
     env?: NodeJS.ProcessEnv;
     configPath?: string;
-    expectedPending: readonly DeferredPluginMigration[];
+    expectedPending?: readonly DeferredPluginMigration[];
     onConflict?: (pending: readonly DeferredPluginMigration[]) => T;
   },
   publish: () => T,
@@ -308,6 +310,9 @@ export function withDeferredPluginMigrationsCurrent<T>(
   const completion =
     scope && scope.configPath === params.configPath && !scope.published ? scope : undefined;
   const expectedPending = completion?.expectedPending ?? params.expectedPending;
+  if (expectedPending === undefined) {
+    return publish();
+  }
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
   if (expectedPending.length === 0 && !existing) {
@@ -410,6 +415,11 @@ export type DeferredPluginMigrationRecordInput = {
   env?: NodeJS.ProcessEnv;
   pending: readonly DeferredPluginMigration[];
   resolvedPluginIds?: readonly string[];
+  settlements?: readonly {
+    pluginId: string;
+    status: "completed" | "superseded";
+    reason: string;
+  }[];
   expectedPending?: readonly DeferredPluginMigration[];
 };
 
@@ -453,18 +463,25 @@ export function recordDeferredPluginMigrationsInTransaction(
     });
     deferred.push(pending);
   }
-  for (const pluginId of new Set(params.resolvedPluginIds)) {
+  const settlements = new Map(params.settlements?.map((entry) => [entry.pluginId, entry]));
+  for (const pluginId of new Set([...(params.resolvedPluginIds ?? []), ...settlements.keys()])) {
     const runId = `${RUN_PREFIX}${pluginId}`;
     const previous = rows.get(runId);
     if (pendingById.has(pluginId) || !previous) {
       continue;
     }
+    const settlement = settlements.get(pluginId);
     recordLegacyMigrationRun(db, {
       runId,
       startedAt: now,
       finishedAt: now,
-      status: "completed",
-      reportJson: previous.report_json,
+      status: settlement?.status ?? "completed",
+      reportJson: settlement
+        ? JSON.stringify({
+            ...deferredPluginMigrationSchema.parse(JSON.parse(previous.report_json)),
+            reason: settlement.reason,
+          })
+        : previous.report_json,
       upsert: true,
     });
     resolved.push(pluginId);
@@ -479,12 +496,17 @@ export function recordDeferredPluginMigrationsInTransaction(
 export async function recordDeferredPluginMigrations(
   params: DeferredPluginMigrationRecordInput,
 ): Promise<readonly DeferredPluginMigration[] | undefined> {
-  if (params.pending.length === 0 && !params.resolvedPluginIds?.length) {
+  if (
+    params.pending.length === 0 &&
+    !params.resolvedPluginIds?.length &&
+    !params.settlements?.length
+  ) {
     return undefined;
   }
   const input = structuredClone({
     pending: params.pending,
     resolvedPluginIds: params.resolvedPluginIds,
+    settlements: params.settlements,
     expectedPending: params.expectedPending,
   });
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
@@ -525,10 +547,15 @@ export async function recordDeferredPluginMigrations(
       });
     }
     for (const pluginId of transitions.resolved) {
-      log.info(`Deferred state migration completed for plugin "${pluginId}".`, {
-        pluginId,
-        status: "completed",
-      });
+      const settlement = params.settlements?.find((entry) => entry.pluginId === pluginId);
+      log.info(
+        `Deferred state migration ${settlement ? "settled" : "completed"} for plugin "${pluginId}".`,
+        {
+          pluginId,
+          status: settlement?.status ?? "completed",
+          ...(settlement ? { reason: settlement.reason } : {}),
+        },
+      );
     }
     return transitions.pending;
   });

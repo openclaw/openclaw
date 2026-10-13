@@ -6,11 +6,11 @@ import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChatType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { resolveSlackSenderAuthentication } from "../ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "../message-handler/prepare-routing.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
-import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackAgentEvents(params: {
   ctx: SlackMonitorContext;
@@ -32,7 +32,7 @@ export function registerSlackAgentEvents(params: {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
-    const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+    const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
     if (eventScope === null) {
       return;
     }
@@ -108,7 +108,7 @@ export function registerSlackAgentEvents(params: {
     if (runtimeContext.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
-    const eventScope = resolveSlackListenerEventScope({
+    const eventScope = resolveSlackMonitorEventScope({
       ctx: runtimeContext,
       body,
       context,
@@ -142,29 +142,29 @@ export function registerSlackAgentEvents(params: {
         chatType: resolveSlackChatType(auth.channelType),
         eventScope,
       });
-      const updated = await getSlackRuntime().agent.session.patchSessionEntry({
-        agentId: routing.route.agentId,
-        storePath: resolveStorePath(runtimeContext.cfg.session?.store, {
+      try {
+        const updated = await getSlackRuntime().agent.session.prepareSessionEntryPatch({
           agentId: routing.route.agentId,
-        }),
-        sessionKey: routing.sessionKey,
-        preserveActivity: true,
-        assertCommitAllowed: () => {
-          if (!routing.isCurrentSession()) {
-            throw new Error("Slack conversation owner changed before the title update");
-          }
-        },
-        update: () => ({ displayName: event.title }),
-      });
-      if (!updated) {
-        throw new Error("Slack conversation session disappeared before the title update");
+          storePath: resolveStorePath(runtimeContext.cfg.session?.store, {
+            agentId: routing.route.agentId,
+          }),
+          sessionKey: routing.sessionKey,
+          preserveActivity: true,
+          authority: { kind: "source", source: routing.sessionSource },
+          prepare: () => ({ displayName: event.title }),
+        });
+        if (!updated) {
+          throw new Error("Slack conversation session disappeared before the title update");
+        }
+        runtimeContext.recordSlackSessionTitle({
+          channelId: event.channel,
+          threadTs: event.thread_ts,
+          title: event.title,
+          eventScope,
+        });
+      } finally {
+        routing.release();
       }
-      runtimeContext.recordSlackSessionTitle({
-        channelId: event.channel,
-        threadTs: event.thread_ts,
-        title: event.title,
-        eventScope,
-      });
     } catch (error) {
       runtimeContext.runtime.error?.(
         `slack session title update failed: ${formatErrorMessage(error)}`,

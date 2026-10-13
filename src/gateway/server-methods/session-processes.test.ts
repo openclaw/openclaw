@@ -2,8 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { addSession } from "../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -42,8 +45,11 @@ it.each([
   "projects and enforces process controls for $role with $scopes (own=$own)",
   async ({ role, scopes, own, allowed }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      ensureUserProfileRoleSchema({});
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("write", "process-owner");
       const viewer = roleClient(role, "process-viewer");
       viewer.connect.scopes = scopes;
@@ -104,6 +110,7 @@ it.each([
 
 it("discards a remote process response after the request authority closes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const key = "agent:main:process-remote";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },

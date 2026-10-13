@@ -1,5 +1,4 @@
 import { sql } from "kysely";
-import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -13,6 +12,10 @@ import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import {
+  resolvePendingInputHistoryLimit,
+  selectPendingInputHistoryPage,
+} from "./session-pending-input-value.js";
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
 export function readPendingInputHistoryInDatabase(
@@ -46,7 +49,10 @@ export function readPendingInputHistoryInDatabase(
             base.select(db.fn.count<number>("input_id").as("total")),
           )?.total ?? 0)
         : undefined;
-    const limit = Math.max(1, Math.min(20, Math.trunc(query.limit ?? 20)));
+    if (total === 0) {
+      return { rows: [], total };
+    }
+    const limit = resolvePendingInputHistoryLimit(query.limit);
     let page = base.orderBy("seq", "desc").limit(limit + 1);
     if (query.before !== undefined) {
       page = page.where("seq", "<", query.before);
@@ -67,18 +73,7 @@ export function readPendingInputHistoryInDatabase(
         sql<number>`OCTET_LENGTH(message_json)`.as("serialized_bytes"),
       ]),
     ).rows;
-    const selected: number[] = [];
-    let bytes = 0;
-    for (const row of metadata) {
-      if (selected.length === limit || bytes + row.serialized_bytes > MAX_PAYLOAD_BYTES) {
-        break;
-      }
-      selected.push(row.seq);
-      bytes += row.serialized_bytes;
-    }
-    if (metadata.length && !selected.length) {
-      throw new Error("Stored pending input exceeds the Gateway payload limit");
-    }
+    const { selected, nextBefore } = selectPendingInputHistoryPage(metadata, limit);
     const rows = selected.length
       ? executeSqliteQuerySync(
           database.db,
@@ -89,7 +84,7 @@ export function readPendingInputHistoryInDatabase(
       rows,
       total,
       currentSessionId: metadata[0]?.current_session_id ?? undefined,
-      nextBefore: selected.length < metadata.length ? selected.at(-1) : undefined,
+      nextBefore,
     };
   });
 }

@@ -1,6 +1,10 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
 import type { PluginRecord } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -13,6 +17,89 @@ function createOwnedInstance(origin: PluginRecord["origin"] = "bundled") {
 }
 
 describe("admitted plugin values", () => {
+  it.each(["ordinary", "consumer"] as const)(
+    "retains an adopted registry through idle and pending %s iteration, then releases it",
+    async (custody) => {
+      class StreamRegistry {
+        readonly fixtureLabel = "StreamRegistry";
+      }
+      const instance = createOwnedInstance();
+      const record = instance.owner!.record;
+      const consumer = custody === "consumer" ? instance.retainConsumer() : undefined;
+      const resume = createDeferredCore();
+      const observed: Array<string | undefined> = [];
+      const first = Object.freeze({ done: false, value: "first" });
+      const second = Object.freeze({ done: false, value: "second" });
+      const terminal = Object.freeze({ done: true, value: "closed" });
+      const observe = () => {
+        observed.push(
+          getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
+        );
+      };
+      class Stream {
+        calls = 0;
+        [Symbol.asyncIterator]() {
+          return this;
+        }
+        async next() {
+          observe();
+          if (++this.calls === 1) {
+            return first;
+          }
+          await resume.promise;
+          observe();
+          return second;
+        }
+        async return() {
+          observe();
+          return terminal;
+        }
+      }
+      const successor = createEmptyPluginRegistry();
+      successor.plugins.push(record);
+      successor.coreGatewayMethodNames.push("successor");
+      const iterator = (() => {
+        const selected = Object.assign(new StreamRegistry(), createEmptyPluginRegistry());
+        selected.plugins.push(record);
+        selected.coreGatewayMethodNames.push("selected");
+        adoptPluginRegistryRecords(selected);
+        const wrapped = (consumer ?? instance).wrap(new Stream());
+        const admitted = wrapped[Symbol.asyncIterator]();
+        adoptPluginRegistryRecords(successor);
+        return admitted;
+      })();
+      let pending: ReturnType<typeof iterator.next> | undefined;
+      try {
+        await setImmediate();
+        expect(queryObjects(StreamRegistry)).toBe(1);
+        expect(instance.ordinaryCallCount).toBe(custody === "consumer" ? 0 : 1);
+        expect(await iterator.next()).toBe(first);
+        pending = iterator.next();
+        await setImmediate();
+        expect(queryObjects(StreamRegistry)).toBe(1);
+        resume.resolve();
+        expect(await pending).toBe(second);
+        await setImmediate();
+        expect(queryObjects(StreamRegistry)).toBe(1);
+        expect(await iterator.return()).toBe(terminal);
+        await setImmediate();
+        expect(queryObjects(StreamRegistry)).toBe(0);
+        expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
+        expect(
+          (consumer ?? instance).run(
+            () => getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.coreGatewayMethodNames[0],
+          ),
+        ).toBe("successor");
+      } finally {
+        resume.resolve();
+        await pending?.catch(() => {});
+        await iterator.return().catch(() => {});
+        consumer?.release();
+        await instance.dispose();
+      }
+    },
+  );
+
   it.each(
     (["bundled", "global", "workspace"] as const).flatMap((origin) =>
       (["hook", "async tool"] as const).map((kind) => ({ origin, kind })),

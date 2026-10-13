@@ -22,7 +22,6 @@ export async function startVisibleCloudSession(params: {
   assertActive: () => void;
   signal?: AbortSignal;
 }) {
-  let taskSubmitted = false;
   let acceptedRunId: string | undefined;
   const taskRunId = "visible-cloud-spawn:" + params.sessionId;
   let placement: SessionsDispatchResult["placement"] | undefined;
@@ -59,7 +58,6 @@ export async function startVisibleCloudSession(params: {
         placement = dispatched.placement;
         // The initiating admission is excluded from its own placement barrier;
         // external replacement/reclaim cannot race this child's first task.
-        taskSubmitted = true;
         let admissionOpen = true;
         try {
           const response = await params.launchAgent(
@@ -97,7 +95,7 @@ export async function startVisibleCloudSession(params: {
     // Admission is closed before exact-run cleanup, so even a timed-out launch
     // cannot commit later after an authoritative abort miss. Preserve the
     // session/lease for placement recovery; never leave an unregistered run active.
-    if (taskSubmitted) {
+    if (placement) {
       await params.terminateRun(acceptedRunId ?? taskRunId);
     }
     return {
@@ -105,7 +103,7 @@ export async function startVisibleCloudSession(params: {
       ...(acceptedRunId ? { runId: acceptedRunId } : {}),
       runError: error instanceof Error ? error.message : String(error),
       ...(placement ? { placement } : {}),
-      initialTaskStatus: taskSubmitted ? ("unknown" as const) : ("not-sent" as const),
+      initialTaskStatus: placement ? ("unknown" as const) : ("not-sent" as const),
     };
   }
 }

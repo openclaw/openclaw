@@ -196,7 +196,7 @@ describe("worker session placement activation", () => {
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     environments = await createWorkerEnvironmentStore({ database, now: () => nowMs });
     nowMs = 7_000;
-    store.adoptActive({
+    await store.adoptActive({
       sessionId: SESSION.sessionId,
       ...owner,
       expectedGeneration: active.generation,
@@ -218,7 +218,7 @@ describe("worker session placement activation", () => {
       recoveryError: "workspace recovery failed",
     });
     nowMs = 8_000;
-    store.retireSessionPlacement({
+    await store.retireSessionPlacementAsync({
       sessionId: SESSION.sessionId,
       expectedState: "failed",
       expectedGeneration: failed.generation,

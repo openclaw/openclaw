@@ -1,9 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import {
-  bindMessageInjectionAdmission,
-  MessageInjectionAcceptedUnconfirmedError,
-} from "../../auto-reply/reply/message-injection-authority.js";
+import { bindMessageInjectionAdmission } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -22,7 +19,6 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedTesting,
 } from "../embedded-agent-runner/runs.test-support.js";
-import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
 import {
   createAssistant,
   createTestSession,
@@ -42,7 +38,7 @@ afterEach(() => {
 
 it.each(
   (["registry", "embedded"] as const).flatMap((surface) =>
-    (["none", "error", "unconfirmed", "question-unconfirmed"] as const).map((observer) => ({
+    (["none", "error"] as const).map((observer) => ({
       surface,
       observer,
     })),
@@ -92,12 +88,6 @@ it.each(
           }
         },
         onQueueSettled: () => {
-          if (observer === "unconfirmed") {
-            throw new MessageInjectionAcceptedUnconfirmedError();
-          }
-          if (observer === "question-unconfirmed") {
-            throw new QuestionAnswerUnconfirmedError(new Error("question receipt unavailable"));
-          }
           if (observer === "error") {
             throw new Error("settlement observer failed");
           }
@@ -127,11 +117,8 @@ it.each(
       expect(session.getSteeringMessages()).toEqual([]);
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      const unconfirmed = observer === "unconfirmed" || observer === "question-unconfirmed";
       expect(result).toMatchObject(
-        surface === "registry"
-          ? { status: unconfirmed ? "indeterminate" : "rejected" }
-          : { queued: unconfirmed },
+        surface === "registry" ? { status: "rejected" } : { queued: false },
       );
     } finally {
       if (!terminated) {

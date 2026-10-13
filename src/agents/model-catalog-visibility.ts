@@ -10,7 +10,11 @@ import type {
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import { compareModelCatalogEntries, orderModelCatalogForPicker } from "./model-catalog-order.js";
+import {
+  compareModelCatalogEntries,
+  createModelPickerRecommendationRank,
+  orderModelCatalogForPicker,
+} from "./model-catalog-order.js";
 import type {
   ModelCatalogRoutePolicy,
   ModelCatalogRouteProjection,
@@ -238,16 +242,21 @@ export async function prepareLogicalVisibleModelCatalog(
       return orderModelCatalogForPicker(
         dedupeByKey(projected, publicationKeyOf),
         params.selectedModel ?? params.retainedModel,
+        createModelPickerRecommendationRank(params.cfg),
       );
     };
     if (params.view === "all") {
       return publish(projectEntries(params.catalog));
     }
+    // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
       ? sortModelCatalogEntries(
           dedupeModelCatalogEntries([
             ...configuredCatalog,
-            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
+            ...params.catalog.filter(
+              (entry) =>
+                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+            ),
           ]),
         )
       : [];

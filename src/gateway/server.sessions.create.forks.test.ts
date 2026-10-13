@@ -59,7 +59,6 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
         providerOverride: "anthropic",
         modelOverride: "parent-model",
         modelOverrideSource: "user",
-        conversationLink: { url: "https://chat.example.test/main", label: "Main Conversation" },
       },
     },
   });
@@ -83,7 +82,6 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     loadSessionEntry({ sessionKey: "agent:main:main", storePath }),
     "grouping parent session",
   );
-  expect(child.conversationLink).toBeUndefined();
   const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
   const cfg = getRuntimeConfig();
   const reply = await createModelSelectionState({
@@ -151,13 +149,11 @@ test("sessions.create forks the parent transcript into the new session", async (
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
-  const conversationLink = { url: "https://chat.example.test/thread/fork", label: "Source Thread" };
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
-        conversationLink,
         sessionFile: parent.sessionFile,
         projectId: "qa-writer",
         spawnedCwd: projectRoot,
@@ -265,13 +261,9 @@ test("sessions.create forks the parent transcript into the new session", async (
     sessions?: Array<{
       key: string;
       forkedFromParent?: boolean;
-      conversationLink?: typeof conversationLink;
     }>;
   }>("sessions.list", {});
   expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.conversationLink).toEqual(
-    conversationLink,
-  );
   testState.sessionConfig = undefined;
 });
 
@@ -289,7 +281,16 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
   });
 }
 
-test.each([
+test.each<{
+  name: string;
+  model: string;
+  provider: string;
+  tokens: number;
+  window?: number;
+  limit?: string;
+  nativeCatalog?: "missing" | "unknown";
+  configuredTokens?: number;
+}>([
   {
     name: "provider-scoped fallback",
     model: "unresolved-model",
@@ -322,9 +323,36 @@ test.each([
     window: 200_000,
     limit: "300000/200000 tokens",
   },
+  {
+    name: "missing native capacity beside API inventory",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "missing",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "unknown native capacity beside warm API capacity",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    limit: "150000/100000 tokens",
+  },
+  {
+    name: "authored capacity for a native runtime",
+    model: "gpt-native",
+    provider: "openai",
+    tokens: 150_000,
+    window: 1_000_000,
+    nativeCatalog: "unknown",
+    configuredTokens: 200_000,
+  },
 ])(
   "sessions.create enforces fork capacity: $name",
-  async ({ model, provider, tokens, window, limit }) => {
+  async ({ model, provider, tokens, window, limit, nativeCatalog, configuredTokens }) => {
     const { dir } = await createSessionStoreDir();
     testState.sessionConfig = { scope: "per-sender" };
     resetContextWindowCacheForTest();
@@ -360,16 +388,34 @@ test.each([
         },
       ];
     }
-    const inherited = !window || model === "gpt-large";
+    if (nativeCatalog) {
+      replaceDiscoveredContextTokenCache(
+        await prepareDiscoveredContextTokenCache({
+          modelCatalog: { entries: agentDiscoveryMock.models },
+        }),
+      );
+      if (nativeCatalog === "unknown") {
+        agentDiscoveryMock.models.push({
+          id: model,
+          name: model,
+          provider,
+          nativeRuntime: "codex",
+        });
+      }
+    }
+    const inherited = !window || model === "gpt-large" || Boolean(nativeCatalog);
     await seedSizedForkParent(dir, {
       totalTokens: tokens,
       ...(inherited ? { providerOverride: provider, modelOverride: model } : {}),
+      ...(nativeCatalog ? { agentRuntimeOverride: "codex" } : {}),
       ...(!window ? { modelOverrideSource: "user" } : {}),
     });
     const cfg = {
       ...getRuntimeConfig(),
       models: {
-        providers: { openai: { models: [{ id: model, contextTokens: 1_000_000 }] } },
+        providers: {
+          openai: { models: [{ id: model, contextTokens: configuredTokens ?? 1_000_000 }] },
+        },
       },
     };
     const created = await directSessionReq(
@@ -381,7 +427,7 @@ test.each([
         ...(!inherited ? { model: `${provider}/${model}` } : {}),
         ...(selectable ? { contextWindow: "200k" } : {}),
       },
-      selectable ? { context: { getRuntimeConfig: () => cfg } } : undefined,
+      selectable || configuredTokens ? { context: { getRuntimeConfig: () => cfg } } : undefined,
     );
     expect(created.ok, JSON.stringify(created.error)).toBe(limit === undefined);
     if (limit) {

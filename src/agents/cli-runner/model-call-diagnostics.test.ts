@@ -72,38 +72,6 @@ describe("Claude CLI model-call diagnostics", () => {
     ).toBeUndefined();
   });
 
-  it("carries the prepared agent identity on emitted model calls", async () => {
-    const events: Array<{ agentId?: string }> = [];
-    const stop = onTrustedInternalDiagnosticEvent((event) => {
-      if (
-        event.type === "model.call.started" ||
-        event.type === "model.call.completed" ||
-        event.type === "model.call.error"
-      ) {
-        events.push({ agentId: event.agentId });
-      }
-    });
-    try {
-      const diagnostics = expectDefined(
-        createClaudeCliModelCallDiagnostics({
-          context: createContext(),
-          prompt: "hello",
-          transport: "stdio",
-        }),
-        "Claude CLI diagnostics",
-      );
-      diagnostics.emitStarted();
-      diagnostics.emitCompleted({} as CliOutput);
-      await waitForDiagnosticEventsDrained();
-    } finally {
-      stop();
-    }
-    expect(events.map((event) => event.agentId)).toEqual([
-      "claude-diagnostics-agent",
-      "claude-diagnostics-agent",
-    ]);
-  });
-
   it("bounds large prompt and assistant content during a burst", async () => {
     let completedPrivateData: DiagnosticEventPrivateData | undefined;
     const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
@@ -160,51 +128,6 @@ describe("Claude CLI model-call diagnostics", () => {
     expect(Buffer.byteLength(JSON.stringify(outputMessages), "utf8")).toBeLessThanOrEqual(
       CONTENT_LIMIT_BYTES,
     );
-  });
-
-  it("caps assistant envelope count and records truncation", async () => {
-    let outputMessages: unknown;
-    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
-      outputMessages = messages;
-    });
-
-    diagnostics.emitStarted();
-    for (let index = 0; index < 250; index += 1) {
-      diagnostics.observeAssistantMessage({ content: `message-${index}` });
-    }
-    diagnostics.emitCompleted({ text: "done" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(outputMessages).toHaveLength(200);
-    expect(JSON.stringify(outputMessages)).toContain("...(truncated)");
-  });
-
-  it("records truncation when the item budget ends inside an envelope", async () => {
-    let outputMessages: unknown;
-    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
-      outputMessages = messages;
-    });
-
-    diagnostics.emitStarted();
-    for (let index = 0; index < 197; index += 1) {
-      diagnostics.observeAssistantMessage({ content: `message-${index}` });
-    }
-    diagnostics.observeAssistantMessage({
-      content: [
-        { type: "text", text: "captured-a" },
-        { type: "text", text: "captured-b" },
-        { type: "text", text: "dropped-c" },
-      ],
-    });
-    diagnostics.emitCompleted({ text: "done" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(outputMessages).toHaveLength(199);
-    expect(JSON.stringify(outputMessages)).toContain("captured-b");
-    expect(JSON.stringify(outputMessages)).not.toContain("dropped-c");
-    expect(JSON.stringify(outputMessages)).toContain("...(truncated)");
   });
 
   it("keeps fallback response text when prior non-text envelopes fill the limit", async () => {

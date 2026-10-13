@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  createRootFileCopyBatchSync,
+  type RootFileCopyBatchSync,
+} from "@openclaw/fs-safe/advanced";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
+import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
 import { copyPluginSourceFile } from "./plugin-source-file.js";
 import {
   readPluginSourceDirectory,
-  pluginSourceInputIdentity,
+  type PluginCapturedSourceFact,
 } from "./plugin-source-verification.js";
 
 export function createPluginSourceLinkCapture() {
@@ -41,6 +46,8 @@ export function createPluginGenerationFileCapture({
   deferExternalLinks,
   nativeAdmission,
   receipt,
+  retained,
+  sourceFacts,
   onPackageMetadata,
 }: {
   boundary: string;
@@ -50,19 +57,18 @@ export function createPluginGenerationFileCapture({
   capturedPaths: Map<string, string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
-  sourceCapture: Pick<
-    ReturnType<typeof createPluginSourceCapture>,
-    "inputs" | "pendingInputs" | "additions"
-  >;
+  sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
   sourceLinks: ReturnType<typeof createPluginSourceLinkCapture>;
   deferExternalLinks: boolean;
   nativeAdmission: ReturnType<typeof createPluginNativeAdmission>;
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
+  retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
+  sourceFacts?: Map<string, PluginCapturedSourceFact>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
-  const { inputs, pendingInputs, additions } = sourceCapture;
+  const { additions } = sourceCapture;
   const ancestors = new Set<string>();
-  const copy = (source: string, target: string) => {
+  const copy = (source: string, target: string, copyFile: RootFileCopyBatchSync["copyFile"]) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
       return;
@@ -82,26 +88,6 @@ export function createPluginGenerationFileCapture({
     }
     const stat = fs.statSync(real, { bigint: true });
     const captured = capturedPaths.get(real);
-    const recordContent = (
-      contentHash: string,
-      sizeBytes = 0,
-      native = false,
-      identity = pluginSourceInputIdentity(stat),
-      admittedBoundary = inputBoundary,
-    ) => {
-      if (!captured) {
-        // Filesystem ticks can hide edits; aliases retain their first captured content facts.
-        inputs.set(real, {
-          identity,
-          contentHash,
-          sizeBytes,
-          directory: stat.isDirectory(),
-          boundary: admittedBoundary,
-          ...(native ? { native: true } : {}),
-        });
-        pendingInputs.add(real);
-      }
-    };
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
     // SDK companion loaders receive copied paths; those exact aliases retain this owner.
@@ -119,9 +105,7 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      const { names, contentHash } = readPluginSourceDirectory(real);
-      recordContent(contentHash);
-      for (const name of names) {
+      for (const name of readPluginSourceDirectory(real)) {
         if (
           !(
             deferExternalLinks &&
@@ -129,7 +113,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name));
+          copy(path.join(source, name), path.join(target, name), copyFile);
         }
       }
       ancestors.delete(real);
@@ -141,18 +125,25 @@ export function createPluginGenerationFileCapture({
       // Register before copying or admission can fail: known aliases must remain
       // rejected by the acquisition owner even when the first attempt is incomplete.
       additions.add(target);
+      const retainedFile = retained?.files.get(path.relative(directory, target));
+      const retainedReference = retained?.source.native?.references.has(target);
+      if (retainedReference) {
+        // The fork owns this validated reference; the new lease must admit its own native owner.
+        fs.unlinkSync(target);
+      }
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
-      let copiedContent: ReturnType<typeof copyPluginSourceFile>;
-      if (native) {
-        nativeAdmission.reconcileSourceInputs(inputs);
-      } else if (captured) {
-        // A second filename for a prefetched entry retains its first bytes and source identity.
-        fs.copyFileSync(captured, target, fs.constants.COPYFILE_FICLONE);
-      } else {
-        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
-          hashCopiedContent: true,
-        });
-        fs.chmodSync(target, 0o600 | Number(stat.mode & 0o100n));
+      let copiedContent: PluginCapturedSourceFact | undefined;
+      if (!native && retainedFile && !retainedReference) {
+        // The receipt verifies the private copy against these retained content facts.
+        copiedContent = retainedFile;
+      } else if (!native) {
+        // A second filename for a prefetched entry retains its first bytes.
+        copiedContent = copyPluginSourceFile(
+          captured ?? real,
+          captured ? directory : inputBoundary,
+          target,
+          { hashCopiedContent: true, copyFile, ...(captured ? { preserveSourceMode: true } : {}) },
+        );
       }
       receipt.file({
         target: native?.path ?? target,
@@ -162,13 +153,7 @@ export function createPluginGenerationFileCapture({
         prepared: native?.content ?? copiedContent,
         onContent: (content) => {
           native?.record(content);
-          recordContent(
-            content.contentHash,
-            content.sizeBytes,
-            native !== undefined,
-            native?.sourceIdentity,
-            native?.sourceBoundary ?? inputBoundary,
-          );
+          sourceFacts?.set(path.relative(directory, target), content);
         },
       });
       if (path.basename(target) === "package.json") {
@@ -178,5 +163,8 @@ export function createPluginGenerationFileCapture({
       throw new Error(`Plugin build input is not a regular file: ${source}`);
     }
   };
-  return copy;
+  return (source: string, target: string) => {
+    using batch = createRootFileCopyBatchSync();
+    return copy(source, target, batch.copyFile.bind(batch));
+  };
 }

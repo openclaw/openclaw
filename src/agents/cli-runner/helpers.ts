@@ -19,7 +19,6 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
@@ -39,16 +38,11 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 
-const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
-}
-
-export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
-  return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
 export function resolveCliRunQueueKey(params: {
@@ -101,6 +95,8 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
+  customInlineButtonHint?: boolean;
+  messageToolHints?: string[];
   ownerNumbers?: string[];
   docsPath?: string;
   sourcePath?: string;
@@ -120,7 +116,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
+  const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
@@ -140,6 +136,7 @@ export function buildCliAgentSystemPrompt(params: {
       channel: params.runtimeChannel,
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
+      customInlineButtonHint: params.customInlineButtonHint,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -163,11 +160,10 @@ export function buildCliAgentSystemPrompt(params: {
       surface: "cli_backend",
     }),
     runtimeInfo,
+    messageToolHints: params.messageToolHints,
     toolNames: params.tools.map((tool) => tool.name),
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
-    userTimezone,
-    userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -190,20 +186,14 @@ export function resolveSystemPromptUsage(params: {
   systemPrompt?: string;
 }): string | null {
   const systemPrompt = params.systemPrompt?.trim();
-  if (!systemPrompt) {
-    return null;
-  }
   const when = params.backend.systemPromptWhen ?? "first";
-  if (when === "never") {
-    return null;
-  }
-  if (when === "first" && !params.isNewSession) {
-    return null;
-  }
   if (
-    !params.backend.systemPromptArg?.trim() &&
-    !params.backend.systemPromptFileArg?.trim() &&
-    !params.backend.systemPromptFileConfigKey?.trim()
+    !systemPrompt ||
+    when === "never" ||
+    (when === "first" && !params.isNewSession) ||
+    (!params.backend.systemPromptArg?.trim() &&
+      !params.backend.systemPromptFileArg?.trim() &&
+      !params.backend.systemPromptFileConfigKey?.trim())
   ) {
     return null;
   }

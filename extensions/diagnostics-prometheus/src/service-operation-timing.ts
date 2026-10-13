@@ -24,10 +24,69 @@ const CHAT_SEND_PHASE =
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" | "diagnostic.phase.completed" }>,
+  evt: Extract<
+    DiagnosticEventPayload,
+    {
+      type:
+        | "gateway.rpc"
+        | "diagnostic.phase.completed"
+        | "gateway.http.cancelled"
+        | "secret.egress"
+        | "tool.catalog"
+        | "diagnostic.gc"
+        | "gateway.event_loop.sample";
+    }
+  >,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "secret.egress":
+      store.counter(
+        "openclaw_secret_egress_requests_total",
+        "Secret egress proxy requests by outcome and credential substitution.",
+        { outcome: evt.outcome, substituted: String(evt.substituted) },
+      );
+      return;
+    case "tool.catalog": {
+      const labels = { source: evt.source, mode: evt.mode };
+      store.counter("openclaw_tool_catalog_total", "Tool catalogs prepared.", labels);
+      store.counter(
+        "openclaw_tool_catalog_tools_total",
+        "Tools cataloged during preparation.",
+        labels,
+        evt.toolCount,
+      );
+      return;
+    }
+    case "gateway.http.cancelled":
+      store.counter(
+        "openclaw_gateway_http_cancelled_total",
+        "Gateway HTTP requests cancelled before completion.",
+        { source: evt.source },
+      );
+      return;
+    case "diagnostic.gc":
+      store.histogram(
+        "openclaw_gc_duration_seconds",
+        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
+        {},
+        seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
     case "diagnostic.phase.completed": {
       if (!metadata.trusted) {
         return;
@@ -39,10 +98,10 @@ export function recordOperationTimingEvent(
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
       if (sendPhase) {
         const stage = evt.details?.stage;
-        if (stage === "request" || stage === "startup") {
+        if (stage === "request" || stage === "startup" || stage === "steer" || stage === "queued") {
           store.histogram(
             "openclaw_chat_send_phase_seconds",
-            "Elapsed chat.send owner phases before acknowledgement and during run startup.",
+            "Elapsed chat.send owner phases before acknowledgement, during startup, or awaiting steering and queued follow-up delivery.",
             { phase: sendPhase, stage },
             seconds(evt.durationMs),
           );

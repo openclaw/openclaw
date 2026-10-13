@@ -301,12 +301,7 @@ export async function diagnoseChromeCdp(
     lookup?: CdpEndpointPin["lookup"],
     version?: ChromeVersion,
   ): Promise<ChromeCdpDiagnostic> => {
-    const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs, lookup, signal).catch(
-      (error: unknown) => {
-        signal?.throwIfAborted();
-        throw error;
-      },
-    );
+    const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs, lookup, signal);
     signal?.throwIfAborted();
     return health.ok
       ? {

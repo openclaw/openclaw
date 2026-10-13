@@ -16,7 +16,7 @@ import {
   authorizeOperatorScopesForRequiredScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
-import type { GatewayMethodRegistry } from "../methods/registry.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -29,7 +29,7 @@ export function authorizeGatewayMethod(
   method: string,
   client: GatewayRequestOptions["client"],
   params: unknown,
-  methodRegistry: GatewayMethodRegistry,
+  methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
 ): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
   // Pre-connect and health requests are allowed through; role/scope checks require the

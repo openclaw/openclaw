@@ -1,6 +1,3 @@
-/**
- * Doctor contract hooks for Codex plugin config and state migrations.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -61,7 +58,6 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
   );
 }
 
-/** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config"],

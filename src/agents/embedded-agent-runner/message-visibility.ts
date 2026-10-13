@@ -5,6 +5,7 @@ import {
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
@@ -83,15 +84,11 @@ export function hasVisibleAgentPayload(
       }
       const record = payload as ReplyPayload & { visible?: unknown };
       if (
-        options.requireTerminalContent &&
-        (record.visible === false || !isReplyPayloadTerminalContent(record))
+        (options.requireTerminalContent &&
+          (record.visible === false || !isReplyPayloadTerminalContent(record))) ||
+        (options.includeErrorPayloads === false && record.isError === true) ||
+        (options.includeReasoningPayloads === false && record.isReasoning === true)
       ) {
-        return false;
-      }
-      if (options.includeErrorPayloads === false && record.isError === true) {
-        return false;
-      }
-      if (options.includeReasoningPayloads === false && record.isReasoning === true) {
         return false;
       }
       const visibleText =
@@ -100,6 +97,7 @@ export function hasVisibleAgentPayload(
           !isSilentAgentReplyText(record.text, "payload"));
       return Boolean(
         visibleText ||
+        hasReplyPayloadSpeechContent(record) ||
         hasNonEmptyString(record.mediaUrl) ||
         hasNonEmptyStringArray(record.mediaUrls) ||
         hasVisibleAttachmentReference(record.attachments) ||

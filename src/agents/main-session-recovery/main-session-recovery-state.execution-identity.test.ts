@@ -28,7 +28,7 @@ function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
     updatedAt: 100,
-    status: "running",
+    status: "interrupted",
     abortedLastRun: true,
     mainRestartRecovery: recoveryState(),
     ...overrides,
@@ -279,6 +279,7 @@ describe("main session recovery execution identity state", () => {
 
   it("rejects a delayed bind from an older cycle that reused the public run id", () => {
     const entry = interruptedEntry({
+      status: undefined,
       abortedLastRun: false,
       lifecycleRunId: "recovery-1",
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],

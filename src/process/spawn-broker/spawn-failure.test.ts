@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,7 +36,7 @@ async function runValidCommand(host: SpawnBrokerHost): Promise<void> {
 describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
   "spawn broker failed launch cleanup",
   () => {
-    it.skipIf(Boolean(process.versions.bun))(
+    it.skipIf(!supportsSpawnBrokerCommandTransport())(
       "releases native descriptors after missing executable and cwd failures",
       async () => {
         const host = createSpawnBrokerHost();
@@ -66,7 +67,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
     );
 
     it
-      .skipIf(process.platform !== "linux" || Boolean(process.versions.bun))
+      .skipIf(process.platform !== "linux" || !supportsSpawnBrokerCommandTransport())
       .each(["raw", "execa"] as const)(
       "preserves EMFILE and the broker after a streamless %s spawn failure",
       async (transport) => {

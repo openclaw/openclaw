@@ -1,43 +1,14 @@
-import fs from "node:fs/promises";
 import process from "node:process";
-import { readFileRangeAsync } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  isExternalUserText,
-  type SessionCatalogContinueProviderResult,
-  type SessionUpstreamActivity,
-  type SessionUpstreamProbe,
+import type {
+  SessionCatalogContinueProviderResult,
+  SessionUpstreamActivity,
+  SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
+import { readSessionCatalogJsonlActivity } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { piMessageText, readPiSessionFileBaseline } from "./pi-session-store.js";
-
-const MAX_PI_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-
-function parseCompletePiRows(tail: Buffer): {
-  entries: Record<string, unknown>[];
-  classifiedBytes: number;
-} {
-  const entries: Record<string, unknown>[] = [];
-  let lineStart = 0;
-  let classifiedBytes = 0;
-  for (let index = 0; index < tail.length; index += 1) {
-    if (tail[index] !== 0x0a) {
-      continue;
-    }
-    const line = tail.subarray(lineStart, index).toString("utf8").trim();
-    if (line) {
-      const value = safeParseJson<unknown>(line);
-      if (!isRecord(value)) {
-        break;
-      }
-      entries.push(value);
-    }
-    classifiedBytes = index + 1;
-    lineStart = index + 1;
-  }
-  return { entries, classifiedBytes };
-}
 
 function readFilePath(probe: SessionUpstreamProbe): string | undefined {
   return isRecord(probe.upstreamRef) && typeof probe.upstreamRef.filePath === "string"
@@ -88,60 +59,26 @@ async function checkPiSessionUpstreamActivity(
   if (!filePath || markerOffset === undefined) {
     return undefined;
   }
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    handle = await fs.open(filePath, "r");
-  } catch (error) {
-    return isRecord(error) && error.code === "ENOENT"
-      ? { kind: "missing", sessionKey: probe.sessionKey }
-      : undefined;
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      return { kind: "missing", sessionKey: probe.sessionKey };
-    }
-    if (stat.size <= markerOffset) {
-      return undefined;
-    }
-    const readLength = Math.min(stat.size - markerOffset, MAX_PI_UPSTREAM_SCAN_BYTES);
-    const tail = await readFileRangeAsync(handle, markerOffset, readLength);
-    const { entries, classifiedBytes } = parseCompletePiRows(tail);
-    if (classifiedBytes === 0) {
-      // Never advance past an invalid, partial, or over-cap JSONL row.
-      return undefined;
-    }
-    let humanTurns = 0;
-    let occurredAt: number | undefined;
-    for (const entry of entries) {
+  return readSessionCatalogJsonlActivity({
+    probe,
+    filePath,
+    offset: markerOffset,
+    classifyLine(line) {
+      const entry = safeParseJson<unknown>(line);
+      if (!isRecord(entry)) {
+        return false;
+      }
       if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") {
-        continue;
+        return undefined;
       }
-      const text = piMessageText(entry.message.content);
-      if (!isExternalUserText(probe, text)) {
-        continue;
-      }
-      humanTurns += 1;
-      occurredAt = Math.max(
-        occurredAt ?? 0,
-        parseDateFirstTimestampMs(entry.message.timestamp) ??
-          parseDateFirstTimestampMs(entry.timestamp) ??
-          stat.mtimeMs,
-      );
-    }
-    const nextOffset = markerOffset + classifiedBytes;
-    return {
-      kind: "activity",
-      sessionKey: probe.sessionKey,
-      humanTurns,
-      nextMarker: { offset: nextOffset },
-      ...(humanTurns > 0
-        ? { occurredAt: occurredAt ?? stat.mtimeMs, dedupeId: String(nextOffset) }
-        : {}),
-    };
-  } finally {
-    await handle.close();
-  }
+      return {
+        userText: piMessageText(entry.message.content),
+        occurredAt:
+          parseDateFirstTimestampMs(entry.message.timestamp) ??
+          parseDateFirstTimestampMs(entry.timestamp),
+      };
+    },
+  });
 }
 
 export async function checkPiUpstreamActivity(

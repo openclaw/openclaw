@@ -131,14 +131,14 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     messageBody.openclawDelivery = rawDeliveryFacts;
   }
 
+  const scope = {
+    storePath: params.storePath,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  };
   try {
     if (params.abortMeta?.producerSettled) {
-      const scope = {
-        storePath: params.storePath,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-      };
       const result = await appendAbortedSessionTranscriptPartial(scope, {
         runId: params.abortMeta.runId,
         message: messageBody,
@@ -159,40 +159,32 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         message: projectAssistantDisplayContent(append.message),
       };
     }
-    const turn = await persistSessionTranscriptTurn(
-      {
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        sessionId: params.sessionId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-      },
-      {
-        expectedSessionId: params.expectedSessionId,
-        expectedLifecycleRevision: params.expectedLifecycleRevision,
-        updateMode: "inline",
-        onMessageCommitted: params.onMessageCommitted,
-        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
-        touchSessionEntry: true,
-        ...(params.config ? { config: params.config } : {}),
-        messages: [
-          {
-            message: messageBody,
-            idempotencyLookup: "scan-assistant",
-            ...(params.abortMeta
-              ? {
-                  predicate: {
-                    kind: "latest-assistant-differs" as const,
-                    runId: params.abortMeta.runId,
-                    text: params.message.trim(),
-                  },
-                }
-              : {}),
-            now,
-            useRawWhenLinear: true,
-          },
-        ],
-      },
-    );
+    const turn = await persistSessionTranscriptTurn(scope, {
+      expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      updateMode: "inline",
+      onMessageCommitted: params.onMessageCommitted,
+      ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
+      touchSessionEntry: true,
+      ...(params.config ? { config: params.config } : {}),
+      messages: [
+        {
+          message: messageBody,
+          idempotencyLookup: "scan-assistant",
+          ...(params.abortMeta
+            ? {
+                predicate: {
+                  kind: "latest-assistant-differs" as const,
+                  runId: params.abortMeta.runId,
+                  text: params.message.trim(),
+                },
+              }
+            : {}),
+          now,
+          useRawWhenLinear: true,
+        },
+      ],
+    });
     if (turn.rejectedReason) {
       return { ok: false, error: turn.rejectedReason };
     }

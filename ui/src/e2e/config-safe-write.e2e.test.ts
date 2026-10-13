@@ -181,7 +181,7 @@ suite.define(() => {
           });
           await expect.poll(() => executor.inputValue()).toBe("node");
           expect(await executorRow.textContent()).toContain("not a security sandbox");
-          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+          expect(await enabled.isChecked()).toBe(true);
           await capture(page, "code-mode-node-default.png", executor);
 
           await gateway.deferNext("config.patch");
@@ -199,7 +199,7 @@ suite.define(() => {
           await expect.poll(() => executor.isDisabled()).toBe(false);
           expect((await page.reload())?.status()).toBe(200);
           await expect.poll(() => executor.inputValue()).toBe("quickjs");
-          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+          expect(await enabled.isChecked()).toBe(true);
           await capture(page, "code-mode-quickjs-reloaded.png", executor);
 
           const priorPatches = (await gateway.getRequests("config.patch")).length;
@@ -222,7 +222,7 @@ suite.define(() => {
           await expect.poll(() => executor.isDisabled()).toBe(false);
           expect((await page.reload())?.status()).toBe(200);
           await expect.poll(() => executor.inputValue()).toBe("node");
-          expect(await enabled.getAttribute("aria-checked")).toBe("true");
+          expect(await enabled.isChecked()).toBe(true);
         },
       );
     },
@@ -469,7 +469,7 @@ suite.define(() => {
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.locator("wa-switch").click();
+        await codeModeSwitch.click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
         expect(patchParams.sessionKey).toBe("agent:main:main");

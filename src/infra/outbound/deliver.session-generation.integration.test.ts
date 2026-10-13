@@ -8,7 +8,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,

@@ -3,7 +3,10 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -13,8 +16,10 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
@@ -54,6 +59,91 @@ vi.mock("../../runtime-plan/build.js", () => ({
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
+  "settles attribution before a writable sandbox setup (%s)",
+  async (outcome) => {
+    await withOpenClawTestState({ label: "baseline-sandbox" }, async (state) => {
+      const config = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: outcome === "unsandboxed" ? ("off" as const) : ("all" as const),
+              backend: "baseline-fixture",
+              workspaceAccess: "rw" as const,
+              browser: { enabled: false },
+            },
+          },
+        },
+      };
+      const entered = createDeferred();
+      const baseline = createDeferred();
+      const setupFile = path.join(state.workspaceDir, "setup.txt");
+      const factory = vi.fn(async () => {
+        await fs.writeFile(setupFile, "sandbox setup");
+        return {
+          id: "baseline-fixture",
+          runtimeId: "baseline-fixture",
+          runtimeLabel: "Baseline fixture",
+          workdir: "/workspace",
+          buildExecSpec: async () => {
+            throw new Error("unexpected exec");
+          },
+          runShellCommand: async () => {
+            throw new Error("unexpected shell");
+          },
+        };
+      });
+      const restoreBackend = registerSandboxBackend("baseline-fixture", factory);
+      const admission = prepareSystemAgentRunAdmission(config, "baseline", "main", "test");
+      const pending = workspaceSandbox.resolveAttemptWorkspaceSandbox({
+        config,
+        agentId: "main",
+        sessionId: "baseline",
+        sessionKey: "agent:main:baseline",
+        workspaceDir: state.workspaceDir,
+        admittedRunContext: await admission.admit("embedded"),
+        awaitSessionDiffBaseline: () => {
+          entered.resolve();
+          return baseline.promise;
+        },
+      });
+      void pending.catch(() => {});
+      try {
+        if (outcome === "unsandboxed") {
+          await awaitGateBeforeSettlement(pending, entered.promise, "Unsandboxed setup waited");
+          expect(factory).not.toHaveBeenCalled();
+          return;
+        }
+        await awaitGateBeforeSettlement(entered.promise, pending, "Sandbox bypassed attribution");
+        expect(factory).not.toHaveBeenCalled();
+        await expect(fs.stat(setupFile)).rejects.toMatchObject({ code: "ENOENT" });
+        if (outcome === "failed") {
+          const failure = new Error("capture failed");
+          baseline.reject(failure);
+          await expect(pending).rejects.toBe(failure);
+        } else {
+          if (outcome === "revoked") {
+            admission.close();
+          }
+          baseline.resolve();
+          if (outcome === "revoked") {
+            await expect(pending).rejects.toThrow("admitted run authority is no longer active");
+          } else {
+            await pending;
+            expect(await fs.readFile(setupFile, "utf8")).toBe("sandbox setup");
+          }
+        }
+        expect(factory).toHaveBeenCalledTimes(outcome === "settled" ? 1 : 0);
+      } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
+        admission.close();
+        restoreBackend();
+      }
+    });
+  },
+);
+
 type DispatchCase = {
   agentId: string;
   sandboxSessionKey?: string;
@@ -64,15 +154,25 @@ type DispatchCase = {
   realManagedWorkspace?: boolean;
   hostMedia?: "allowed" | "outside";
   retirePlacement?: boolean;
+  configuredContextEngine?: boolean;
+  diffBaseline?: "settled" | "failed" | "revoked";
 };
 
 const dispatchCases: DispatchCase[] = [
+  ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
+    agentId: "work",
+    sandboxSessionKey: "global",
+    remoteSkills: false,
+    skillCatalog: "none" as const,
+    diffBaseline,
+  })),
   {
     agentId: "main",
     sandboxSessionKey: undefined,
     remoteSkills: false,
     skillCatalog: "host" as const,
     oneShotCliRun: undefined,
+    configuredContextEngine: true,
   },
   {
     agentId: "work",
@@ -89,13 +189,6 @@ const dispatchCases: DispatchCase[] = [
     oneShotCliRun: false,
   },
   {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: true,
-  },
-  {
     agentId: "work",
     sandboxSessionKey: undefined,
     remoteSkills: false,
@@ -106,20 +199,12 @@ const dispatchCases: DispatchCase[] = [
   {
     agentId: "work",
     sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-  },
-  ...[false, true].map((remoteSkills) => ({
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills,
+    remoteSkills: false,
     skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
-  })),
+  },
   {
     agentId: "main",
     sandboxSessionKey: undefined,
@@ -141,7 +226,7 @@ const dispatchCases: DispatchCase[] = [
 ];
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline",
   async ({
     agentId,
     sandboxSessionKey,
@@ -152,12 +237,38 @@ it.each(dispatchCases)(
     realManagedWorkspace,
     hostMedia,
     retirePlacement,
+    configuredContextEngine,
+    diffBaseline,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
       "Co-authored-by: ada <20+ada@users.noreply.github.com>";
     vi.mocked(resolveSessionGitCoauthorPrompt).mockResolvedValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
+      const config = {
+        agents: {
+          ownership: "explicit" as const,
+          entries: {
+            main: {},
+            work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
+          },
+          defaults: {
+            skipBootstrap: true,
+            sandbox: {
+              mode: "off" as const,
+              backend: realManagedWorkspace ? "docker" : "owner-fixture",
+              scope: "agent" as const,
+              workspaceAccess:
+                diffBaseline || skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
+              workspaceRoot: state.path("sandbox"),
+              prune: { idleHours: 0, maxAgeDays: 0 },
+              browser: { enabled: false },
+            },
+          },
+        },
+        session: { scope: "global" as const },
+      };
+      setRuntimeConfigSnapshot(config);
       let workspaceDir = retirePlacement
         ? state.path("workspace-after-retirement")
         : state.workspaceDir;
@@ -227,31 +338,13 @@ it.each(dispatchCases)(
           "---\nname: demo\ndescription: Demo skill\n---\n\n# Demo\n",
         );
       }
-      const config = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: {
-            main: {},
-            work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
-          },
-          defaults: {
-            skipBootstrap: true,
-            sandbox: {
-              mode: "off" as const,
-              backend: realManagedWorkspace ? "docker" : "owner-fixture",
-              scope: "agent" as const,
-              workspaceAccess: skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
-              workspaceRoot: state.path("sandbox"),
-              prune: { idleHours: 0, maxAgeDays: 0 },
-              browser: { enabled: false },
-            },
-          },
-        },
-        session: { scope: "global" as const },
-      };
       const provisioned: string[] = [];
+      const setupFile = path.join(workspaceDir, "sandbox-setup.txt");
       const localBackend = vi.fn<SandboxBackendFactory>(async ({ scopeKey }) => {
         provisioned.push(scopeKey);
+        if (diffBaseline) {
+          await fs.writeFile(setupFile, "setup");
+        }
         if (realManagedWorkspace) {
           throw new Error("LOCAL_DOCKER_UNAVAILABLE");
         }
@@ -304,6 +397,7 @@ it.each(dispatchCases)(
         label: "Owner fixture",
         supports: () => ({ supported: true }),
         conversationToolPolicySupport: "exact",
+        contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.capabilities,
         runAttempt,
       });
       const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
@@ -315,7 +409,15 @@ it.each(dispatchCases)(
               bundledSkillsDir: state.path("missing-bundled-skills"),
               managedSkillsDir: state.path("missing-managed-skills"),
             });
+      const baselineEntered = createDeferred();
+      const baseline = createDeferred();
       const params = {
+        awaitSessionDiffBaseline: diffBaseline
+          ? () => {
+              baselineEntered.resolve();
+              return baseline.promise;
+            }
+          : undefined,
         admittedRunContext,
         agentId,
         config,
@@ -346,7 +448,6 @@ it.each(dispatchCases)(
           ? {
               media: [{ path: imagePath, contentType: "image/png", kind: "image" as const }],
               requireWorkspaceOnly: true as const,
-              requireWritableSandbox: true as const,
             }
           : {}),
         timeoutMs: 5_000,
@@ -366,7 +467,14 @@ it.each(dispatchCases)(
         setParams: () => {},
       });
       const authProfileStore = { version: 1, profiles: {} };
+      const contextEngine = createContextEngine({
+        info: {
+          id: configuredContextEngine ? "selected-context" : "legacy",
+          name: "Fixture context",
+        },
+      });
       const input = {
+        contextEngine,
         runInput: {
           runParams: params,
           provider: "fixture",
@@ -390,6 +498,8 @@ it.each(dispatchCases)(
           },
         },
         preparedRuntime: {
+          provider: "fixture",
+          modelId: "fixture-model",
           requestedModelId: "fixture-model",
           nativeModelOwned: true,
           attemptAuthProfileStore: authProfileStore,
@@ -423,8 +533,6 @@ it.each(dispatchCases)(
           suppressNextUserMessagePersistence: false,
         },
         terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
-        provider: "fixture",
-        modelId: "fixture-model",
         replayState: { replayInvalid: false, hadPotentialSideEffects: false },
         startupStagesEmitted: false,
         bootstrapPromptWarningSignaturesSeen: [],
@@ -502,6 +610,7 @@ it.each(dispatchCases)(
               .mockImplementation(async (request) => ({
                 ...(await prepareSessionPlacementSandbox(request)),
                 workspace: {
+                  [Symbol.dispose]: () => projectedSandbox[Symbol.dispose]?.(),
                   effectiveCwd: projection,
                   effectiveWorkspace: projection,
                   resolvedWorkspace: workspaceDir,
@@ -515,9 +624,43 @@ it.each(dispatchCases)(
                 },
               }))
           : undefined;
+      const pending = prepareAndDispatchEmbeddedRunAttempt(input);
+      void pending.catch(() => {});
       try {
+        if (diffBaseline) {
+          await awaitGateBeforeSettlement(
+            baselineEntered.promise,
+            pending,
+            "Sandbox setup bypassed workspace attribution",
+          );
+          expect(resolvePlacementSandbox).not.toHaveBeenCalled();
+          expect(localBackend).not.toHaveBeenCalled();
+          expect(runAttempt).not.toHaveBeenCalled();
+          expect(existsSync(setupFile)).toBe(false);
+          if (diffBaseline === "failed") {
+            const failure = new Error("workspace attribution failed");
+            baseline.reject(failure);
+            await expect(pending).rejects.toBe(failure);
+          } else {
+            if (diffBaseline === "revoked") {
+              admission.close();
+            }
+            baseline.resolve();
+            if (diffBaseline === "revoked") {
+              await expect(pending).rejects.toThrow();
+            }
+          }
+          if (diffBaseline !== "settled") {
+            expect(resolvePlacementSandbox).not.toHaveBeenCalled();
+            expect(localBackend).not.toHaveBeenCalled();
+            expect(runAttempt).not.toHaveBeenCalled();
+            return;
+          }
+          await pending;
+          expect(await fs.readFile(setupFile, "utf8")).toBe("setup");
+        }
         if (retirePlacement) {
-          await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toThrow(
+          await expect(pending).rejects.toThrow(
             "Sandbox preparation requires an active admitted run",
           );
           expect(resolvePlacementSandbox).toHaveBeenCalledOnce();
@@ -527,7 +670,7 @@ it.each(dispatchCases)(
           return;
         }
         if (realManagedWorkspace && realWorktree) {
-          const outcome = await prepareAndDispatchEmbeddedRunAttempt(input).then(
+          const outcome = await pending.then(
             (result) => ({ result, error: undefined }),
             (error: unknown) => ({ result: undefined, error }),
           );
@@ -570,14 +713,24 @@ it.each(dispatchCases)(
             sessionRoot: workspaceDir,
             sandbox: remoteSandbox,
           });
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
+          expect(dispatched?.explicitSkillSelections).toEqual([
+            { name: "demo", path: "/remote/inbound/0/SKILL.md" },
+            { name: "native", path: "node://worker/skills/native/SKILL.md" },
+          ]);
+          expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
           if (hostMedia === "allowed") {
             expect(runAttempt.mock.calls[0]?.[0].images).toMatchObject([{ mimeType: "image/png" }]);
           }
           return;
         }
-        const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+        const { dispatchedAttempt: result } = await pending;
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
+        expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBe(
+          configuredContextEngine ? contextEngine : undefined,
+        );
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             agentId,
@@ -605,20 +758,6 @@ it.each(dispatchCases)(
             sandbox: projectedSandbox,
           });
           expect(params.workspaceDir).toBe(workspaceDir);
-        } else if (remoteSkills) {
-          const dispatched = runAttempt.mock.calls[0]?.[0];
-          expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
-          expect(dispatched?.explicitSkillSelections).toEqual([
-            { name: "demo", path: "/remote/inbound/0/SKILL.md" },
-            { name: "native", path: "node://worker/skills/native/SKILL.md" },
-          ]);
-          expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
-          expect(sandbox).toEqual(remoteSandbox);
-          expect(dispatched?.workspaceDir).toBe(workspaceDir);
-          if (managedWorkspace) {
-            expect(dispatched?.cwd).toBe(workspaceDir);
-            expect(dispatched?.sessionRoot).toBe(workspaceDir);
-          }
         } else if (skillCatalog === "sandbox") {
           const dispatched = runAttempt.mock.calls[0]?.[0];
           const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
@@ -635,12 +774,18 @@ it.each(dispatchCases)(
           expect(provisioned).toHaveLength(1);
           expect(provisioned[0]).toMatch(/^agent:work:workspace:/);
           expect(sandbox?.runtimeId).toBe(provisioned[0]);
-          expect(sandbox?.workspaceDir.startsWith(state.path("sandbox"))).toBe(true);
+          if (diffBaseline) {
+            expect(sandbox?.workspaceDir).toBe(workspaceDir);
+          } else {
+            expect(sandbox?.workspaceDir.startsWith(state.path("sandbox"))).toBe(true);
+          }
         } else {
           expect(provisioned).toEqual([]);
           expect(sandbox).toBeNull();
         }
       } finally {
+        baseline.resolve();
+        await pending.catch(() => undefined);
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();
         restorePlacement();

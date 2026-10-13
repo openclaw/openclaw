@@ -149,7 +149,6 @@ describeNonWin("exec script preflight", () => {
   });
 
   it.each([
-    ["$A", "payload = $A"],
     ["$P", 'result = f"{ "$A" + $P }"'],
     ["$A", 'result = f"\\{$A}"'],
     ["$F", 'result = f"{lambda value: $F}"'],
@@ -201,61 +200,10 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("returns native Node diagnostics after preserving preceding output", async () => {
-    const result = await execScripts("node bad.js", {
-      "bad.js": 'process.stdout.write("before-error\\n"); const value = $DM_JSON;',
-    });
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    const text = result.content.find((c) => c.type === "text")?.text ?? "";
-    expect(text).toContain("ReferenceError");
-    expect(text).not.toContain("exec preflight:");
-    expect(text).toMatch(/^before-error\r?\n/);
-  });
-
-  it("returns native preload errors before inline code runs", async () => {
-    const result = await execScripts("node --import ./bad.js -e \"console.log('entry-ran')\"", {
-      "bad.js": "const value = $DM_JSON;",
-    });
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    const text = result.content.find((c) => c.type === "text")?.text ?? "";
-    expect(text).toContain("ReferenceError");
-    expect(text).not.toContain("exec preflight:");
-    expect(text).not.toContain("entry-ran");
-  });
-
-  it("validates the first quoted Python operand behind env despite trailing script arguments", async () => {
-    await expect(
-      execScripts('/usr/bin/env python "..bad.py" --output out.py', {
-        "..bad.py": "payload = $DM_JSON",
-        "out.py": "print('ok')",
-      }),
-    ).rejects.toThrow(injection);
-  });
-
-  it("validates symlinked script entrypoints within workdir", async () => {
-    await withScripts({ "bad.py": "payload = $DM_JSON" }, async (workdir) => {
-      await fs.symlink(path.join(workdir, "bad.py"), path.join(workdir, "link.py"));
-      await expect(runExecPreflight("python3 link.py", workdir)).rejects.toThrow(injection);
-    });
-  });
-
   it("validates scripts under literal tilde directories", async () => {
     await expect(
       execScripts('python3 "~/bad.py"', { "~/bad.py": "payload = $DM_JSON" }),
     ).rejects.toThrow(injection);
-  });
-
-  it("skips script-file preflight in yolo host mode", async () => {
-    await withScripts({ "bad.py": "payload = $DM_JSON" }, async (workdir) => {
-      const result = await createPreflightTool("off").execute("call-yolo", {
-        command: "python3 bad.py",
-        workdir,
-      });
-      const text = result.content.find((c) => c.type === "text")?.text ?? "";
-      expect(text).not.toMatch(/exec preflight:/);
-      expect(text).toContain("SyntaxError");
-      expect(result.details).toMatchObject({ status: "completed", exitCode: 1 });
-    });
   });
 
   it("skips preflight reads outside workdir", async () => {

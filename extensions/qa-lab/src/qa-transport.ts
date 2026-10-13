@@ -93,7 +93,7 @@ export async function waitForQaTransportAccountReady(
     [
       `timed out after ${timeoutMs}ms waiting for ${params.channel} ready`,
       `last status: ${lastAccountStatus}`,
-      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
+      ...(lastProbeError ? [`last check error: ${lastProbeError}`] : []),
     ].join("; "),
   );
 }

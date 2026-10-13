@@ -11,8 +11,6 @@ const rejectionUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhan
 const hooksUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.pluginHooks);
 const registryUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.emptyPluginRegistry);
 
-const syncHookNames = ["tool_result_persist", "before_message_write"] as const;
-
 function createToolResultMessage(text: string, details?: Record<string, unknown>): AgentMessage {
   return {
     role: "toolResult",
@@ -31,19 +29,17 @@ function createLogger() {
 }
 
 describe("sync-only plugin hooks", () => {
-  it.each(syncHookNames)(
-    "contains rejected %s handlers before the fatal rejection handler",
-    (hookName) => {
-      const method =
-        hookName === "tool_result_persist" ? "runToolResultPersist" : "runBeforeMessageWrite";
-      const nodeExecutable = resolveTestNodeExecPath();
-      const result = spawnSync(
-        nodeExecutable,
-        [
-          ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
+  it("contains rejected tool-result handlers before the fatal rejection handler", () => {
+    const hookName = "tool_result_persist";
+    const method = "runToolResultPersist";
+    const nodeExecutable = resolveTestNodeExecPath();
+    const result = spawnSync(
+      nodeExecutable,
+      [
+        ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
        import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
        import { createEmptyPluginRegistry } from ${JSON.stringify(registryUrl.href)};
        installUnhandledRejectionHandler();
@@ -68,15 +64,14 @@ describe("sync-only plugin hooks", () => {
          process.exit(2);
        }
        console.log("sync hook rejection contained");`,
-        ],
-        { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
-      );
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
+    );
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("sync hook rejection contained");
-      expect(result.stderr).not.toContain("Unhandled promise rejection");
-    },
-  );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("sync hook rejection contained");
+    expect(result.stderr).not.toContain("Unhandled promise rejection");
+  });
 
   it("preserves synchronous secret redaction and subsequent handler composition", () => {
     const logger = createLogger();

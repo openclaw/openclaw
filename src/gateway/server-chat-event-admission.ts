@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
-import { isMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { inspectMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  type AgentEventPayload,
+  type AgentEventRuntimePayload,
+} from "../infra/agent-events.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import type { ChatRunEntry } from "./server-chat-state.js";
@@ -60,7 +64,11 @@ export function createAgentEventAdmission({
     }
     assertCurrent();
     return {
-      suppress: isMainSessionRecoveryLifecycleEvent({ entry: loaded?.entry, event }),
+      suppress: inspectMainSessionRecoveryLifecycleEvent({
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+        entry: loaded?.entry,
+        event,
+      }).suppress,
       assertCurrent,
     };
   };

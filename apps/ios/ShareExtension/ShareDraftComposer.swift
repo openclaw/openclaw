@@ -12,16 +12,9 @@ enum ShareDraftComposer {
     ]
 
     static func compose(from payload: SharedContentPayload) -> String {
-        var fragments: [String] = []
-        let title = self.sanitize(payload.title)
-        let text = self.sanitize(payload.text)
-        let url = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if let title { fragments.append(title) }
-        if let text { fragments.append(text) }
-        if !url.isEmpty { fragments.append(url) }
-
-        return fragments.joined(separator: "\n\n")
+        [self.sanitize(payload.title), self.sanitize(payload.text), payload.url?.absoluteString.trimmedNonEmpty]
+            .compactMap(\.self)
+            .joined(separator: "\n\n")
     }
 
     private static func sanitize(_ raw: String?) -> String? {

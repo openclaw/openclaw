@@ -128,6 +128,7 @@ describe("subagent registry persistence resume", () => {
           runId,
           requesterTurnRunId: "run-requester",
           childSessionKey,
+          childSessionIdentity: { sessionId: `sess-pending-${label}-delivery` },
           task: "deliver before waking requester",
           createdAt: 100,
           endedReason: "subagent-complete",
@@ -587,6 +588,7 @@ describe("subagent registry persistence resume", () => {
           requesterTurnRunId: "run-requester",
           requesterTurnYielded: true,
           childSessionKey: "agent:main:subagent:hydrated-yield",
+          childSessionIdentity: { sessionId: "sess-hydrated-yield" },
           task: "wake only after lifecycle activation",
           createdAt: endedAt - 1_000,
           endedReason: "subagent-complete",
@@ -597,6 +599,10 @@ describe("subagent registry persistence resume", () => {
         const queuedCollector = createSubagentRunRecord({
           runId: "run-hydrated-collector",
           childSessionKey: "agent:main:subagent:hydrated-collector",
+          childSessionIdentity: {
+            sessionId: "sess-hydrated-collector",
+            lifecycleRevision: "revision-hydrated-collector",
+          },
           task: "clean only after lifecycle activation",
           createdAt: endedAt - 500,
           collect: true,
@@ -614,6 +620,7 @@ describe("subagent registry persistence resume", () => {
         const runningRun = createSubagentRunRecord({
           runId: "run-hydrated-running",
           childSessionKey: "agent:main:subagent:hydrated-running",
+          childSessionIdentity: { sessionId: "sess-hydrated-running" },
           task: "wait through the activated instance",
           createdAt: endedAt,
           execution: { status: "running", startedAt: endedAt },
@@ -657,6 +664,7 @@ describe("subagent registry persistence resume", () => {
         };
         let firstLifecycleOpen = true;
         const gatewayContext = {
+          localEmbedded: true,
           chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
           recoveryRuntime,
           resolveGatewayContext: vi.fn(),
@@ -682,6 +690,8 @@ describe("subagent registry persistence resume", () => {
           expect.objectContaining({ method: "agent.wait" }),
         );
 
+        // Activation's collector publications must settle before the manual sweep captures them.
+        await settleSubagentRegistryPersistenceWork(() => settleOwnedWork?.(true));
         const sweptWake = createDeferredCore<boolean>();
         wakeRequester.mockImplementationOnce(() => {
           sweptWake.resolve(false);
@@ -711,6 +721,7 @@ describe("subagent registry persistence resume", () => {
           waitForAgent: vi.fn(async () => ({ status: "pending" })),
         };
         const replacementGateway = {
+          localEmbedded: true,
           chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
           recoveryRuntime: replacementRuntime,
           resolveGatewayContext: () => replacementGateway as never,
@@ -857,6 +868,7 @@ describe("subagent registry persistence resume", () => {
             rearmGeneration: 7,
           };
           predecessor.childSessionKey = "agent:main:subagent:old-child";
+          predecessor.childSessionIdentity = { sessionId: "sess-run-old-child-continued" };
           predecessor.taskRunId = "task-old-child";
           predecessor.requesterSettleWake = structuredClone(run.requesterSettleWake);
           nonannouncing.push({
@@ -875,6 +887,7 @@ describe("subagent registry persistence resume", () => {
             runId: `run-nonannouncing-${collect}`,
             taskRunId: `run-nonannouncing-${collect}`,
             childSessionKey: `agent:main:subagent:nonannouncing-${collect}`,
+            childSessionIdentity: { sessionId: `sess-run-nonannouncing-${collect}` },
             expectsCompletionMessage: false,
             requesterTurnYielded: undefined,
             requesterSettleWake: undefined,

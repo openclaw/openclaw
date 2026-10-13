@@ -1,4 +1,3 @@
-// Qa Lab Matrix module implements topology behavior.
 export type MatrixQaParticipantRole = "driver" | "observer" | "sut";
 
 type MatrixQaRoomKind = "dm" | "group";

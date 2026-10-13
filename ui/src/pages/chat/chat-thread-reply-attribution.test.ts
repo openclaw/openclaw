@@ -319,6 +319,48 @@ describe("reply attribution grouping", () => {
       ],
       shared: true,
     },
+    {
+      case: "one observed sender with reordered identity fields",
+      people: [],
+      senders: [
+        {
+          senderId: "alice",
+          senderIdentity: {
+            type: "observation",
+            pluginId: "slack",
+            accountId: "work",
+            senderKind: "human",
+            id: "alice",
+          },
+        },
+        {
+          senderId: "alice",
+          senderIdentity: {
+            id: "alice",
+            senderKind: "human",
+            accountId: "work",
+            pluginId: "slack",
+            type: "observation",
+          },
+        },
+      ],
+      shared: undefined,
+    },
+    {
+      case: "same observed sender id in different accounts",
+      people: [],
+      senders: ["work", "personal"].map((accountId) => ({
+        senderId: "alice",
+        senderIdentity: {
+          type: "observation",
+          pluginId: "slack",
+          accountId,
+          senderKind: "human",
+          id: "alice",
+        },
+      })),
+      shared: true,
+    },
   ])("counts people by stable sender id: $case", ({ people, senders, shared }) => {
     const groups = messageGroups({
       replyPeople: people,

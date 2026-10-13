@@ -109,56 +109,82 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     },
   );
 
-  it.each([
-    { failure: "body", recovers: true },
-    { failure: "body", recovers: false },
-    { failure: "JSON", recovers: true },
-    { failure: "JSON", recovers: false },
-  ])(
-    "bounds retries for $failure failures (recovers: $recovers)",
-    async ({ failure, recovers }) => {
-      let fetchCalls = 0;
-      let cancelCalls = 0;
-      const waits: number[] = [];
-      const packument = { versions: { "2026.7.1-beta.3": {} } };
-      const result = fetchNpmRegistryPackumentWithRetry({
-        packageName: "@openclaw/meta-provider",
-        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+  it.each([true, false])("bounds retries for body failures (recovers: %s)", async (recovers) => {
+    let fetchCalls = 0;
+    let cancelCalls = 0;
+    const waits: number[] = [];
+    const packument = { versions: { "2026.7.1-beta.3": {} } };
+    const result = fetchNpmRegistryPackumentWithRetry({
+      packageName: "@openclaw/meta-provider",
+      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        if (recovers && fetchCalls > 1) {
+          return registryResponse({ body: JSON.stringify(packument) });
+        }
+        return registryResponse({
+          bodyError: recovers
+            ? new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } })
+            : new DOMException("timed out", "AbortError"),
+          cancel: () => {
+            cancelCalls += 1;
+          },
+        });
+      },
+      sleep: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      createSignal: () => new AbortController().signal,
+    });
+    if (recovers) {
+      await expect(result).resolves.toEqual({ status: 200, ok: true, packument });
+    } else {
+      await expect(result).rejects.toThrow(
+        "npm publication-route probe (https://registry.npmjs.org/%40openclaw%2Fmeta-provider) did not return a stable response",
+      );
+    }
+    expect(fetchCalls).toBe(recovers ? 2 : 3);
+    expect(cancelCalls).toBe(recovers ? 1 : 3);
+    expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
+  });
+
+  it("rejects completed invalid JSON without retry or recoverable publication deferral", async () => {
+    let requests = 0;
+    await expect(
+      fetchNpmRegistryPackumentWithRetry({
+        packageName: "@openclaw/demo",
+        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fdemo",
         fetchImpl: async () => {
-          fetchCalls += 1;
-          if (recovers && fetchCalls > 1) {
-            return registryResponse({ body: JSON.stringify(packument) });
-          }
-          return registryResponse({
-            ...(failure === "JSON"
-              ? { body: "{" }
-              : {
-                  bodyError: recovers
-                    ? new TypeError("terminated")
-                    : new DOMException("timed out", "AbortError"),
-                }),
-            cancel: () => {
-              cancelCalls += 1;
-            },
-          });
+          requests += 1;
+          return new Response("{");
         },
-        sleep: async (delayMs) => {
-          waits.push(delayMs);
+        sleep: async () => {
+          throw new Error("invalid content must not retry");
         },
-        createSignal: () => new AbortController().signal,
-      });
-      if (recovers) {
-        await expect(result).resolves.toEqual({ status: 200, ok: true, packument });
-      } else {
-        await expect(result).rejects.toThrow(
-          failure === "JSON"
-            ? "npm publication-route probe returned invalid JSON"
-            : "npm publication-route probe did not return a stable response",
-        );
-      }
-      expect(fetchCalls).toBe(recovers ? 2 : 3);
-      expect(cancelCalls).toBe(recovers ? 1 : 3);
-      expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
+      }),
+    ).rejects.toThrow("returned invalid JSON");
+    expect(requests).toBe(1);
+  });
+
+  it.each(["CERT_HAS_EXPIRED", "ERR_INVALID_URL"])(
+    "does not retry permanent fetch TypeError %s",
+    async (code) => {
+      let requests = 0;
+      const error = new TypeError("fetch failed", { cause: { code } });
+      await expect(
+        fetchNpmRegistryPackumentWithRetry({
+          packageName: "fixture",
+          packageUrl: "https://registry.npmjs.org/fixture",
+          fetchImpl: async () => {
+            requests += 1;
+            throw error;
+          },
+          sleep: async () => {
+            throw new Error("permanent failure must not retry");
+          },
+        }),
+      ).rejects.toBe(error);
+      expect(requests).toBe(1);
     },
   );
 
@@ -195,7 +221,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   const packageUrl = "https://registry.npmjs.org/@openclaw/fixture/-/fixture.tgz";
   const bytes = Buffer.from("qualified package bytes");
 
-  it.each([503, 429, "interrupted-body"] as const)(
+  it.each([503, 429, "connection", "interrupted-body"] as const)(
     "recovers %s using only the original tarball URL",
     async (failure) => {
       const requests: string[] = [];
@@ -210,6 +236,9 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
           if (requests.length !== 1) {
             return new Response(bytes);
           }
+          if (failure === "connection") {
+            throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+          }
           if (failure === "interrupted-body") {
             let firstChunk = true;
             return new Response(
@@ -219,7 +248,9 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
                     firstChunk = false;
                     controller.enqueue(bytes.subarray(0, 3));
                   } else {
-                    controller.error(new TypeError("terminated"));
+                    controller.error(
+                      new TypeError("terminated", { cause: { code: "UND_ERR_SOCKET" } }),
+                    );
                   }
                 },
               }),

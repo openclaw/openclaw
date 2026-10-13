@@ -1,4 +1,3 @@
-// Skills inventory assembly and session-scoped response authorization.
 import {
   ErrorCodes,
   errorShape,
@@ -6,9 +5,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
-import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
+import { ensureSkillsWatcher, refreshSkillsDiscovery } from "../../skills/runtime/refresh.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
@@ -27,7 +26,7 @@ export async function buildRemoteAwareWorkspaceSkillStatus(
   await prepareRemoteSkillConnections();
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
-  const nodeSkills = resolveNodeExecEligibility({
+  const nodeSkills = await resolveNodeExecEligibilityAsync({
     cfg: resolved.cfg,
     agentId: resolved.agentId,
   });
@@ -72,11 +71,14 @@ export const handleSkillsStatus: GatewayRequestHandler = async ({
       changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),
     },
     async (entry) => {
-      ensureSkillsWatcher({
+      await ensureSkillsWatcher({
         workspaceDir: resolved.workspaceDir,
         config: resolved.cfg,
         agentId: resolved.agentId,
       });
+      if (params.refresh === true) {
+        await refreshSkillsDiscovery({ config: resolved.cfg });
+      }
       const { report } = await buildRemoteAwareWorkspaceSkillStatus(
         resolved,
         entry?.skillLibrarySelections,

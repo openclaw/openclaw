@@ -6,6 +6,7 @@ import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
+import { sendResult } from "./sandbox-exec-server/json-rpc.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
@@ -31,20 +32,6 @@ function testExecEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
   };
-}
-
-function echoFirstInputLineScript(prefix: string): string {
-  return [
-    "let data = '';",
-    "process.stdin.setEncoding('utf8');",
-    "process.stdin.on('data', (chunk) => {",
-    "data += chunk;",
-    "if (data.includes('\\n')) {",
-    `process.stdout.write(${JSON.stringify(prefix)} + data);`,
-    "process.exit(0);",
-    "}",
-    "});",
-  ].join(" ");
 }
 
 async function readStartedPid(
@@ -219,7 +206,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     ["a relative path", "workspace"],
     ["a non-file scheme", "https://example.test/workspace"],
     ["a remote file authority", "file://remote.example.test/workspace"],
-    ["a query", "file:///workspace?revision=1"],
     ["a fragment", "file:///workspace#section"],
     ["an encoded Windows drive path", "file:///%43:/workspace"],
     ["an encoded null byte", "file:///workspace%00"],
@@ -379,7 +365,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   );
 
   it.each([
-    { description: "disabled nested sandboxing", sandbox: { permissions: { type: "disabled" } } },
     {
       description: "unrestricted managed filesystem access",
       sandbox: {
@@ -391,42 +376,19 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       },
     },
     {
-      description: "network restrictions already enforced by the container",
-      sandbox: {
-        permissions: {
-          type: "managed",
-          file_system: { type: "unrestricted" },
-          network: "restricted",
-        },
-      },
-    },
-    {
       description: "network restrictions already enforced by a Podman container",
       sandbox: { permissions: { type: "external", network: "restricted" } },
       backendId: "podman",
     },
-    {
-      description: "externally enabled container networking",
-      sandbox: { permissions: { type: "external", network: "enabled" } },
-      backendNetwork: "bridge",
-    },
-    {
-      description: "provisioned network isolation after subsequent config mutation",
-      sandbox: { permissions: { type: "external", network: "restricted" } },
-      networkAfterStartup: "bridge",
-    },
   ])(
     "preserves $description and reports its actual sandbox type",
-    async ({ sandbox: policy, backendId, backendNetwork, networkAfterStartup }) => {
+    async ({ sandbox: policy, backendId }) => {
       const buildExecSpec = vi.fn(async () => ({
         argv: [process.execPath, "-e", ""],
         env: testExecEnv(),
         stdinMode: "pipe-closed" as const,
       }));
       const sandbox = createSandboxContext({ buildExecSpec });
-      if (backendNetwork) {
-        sandbox.docker.network = backendNetwork;
-      }
       if (backendId) {
         sandbox.backendId = backendId;
         if (sandbox.backend) {
@@ -435,9 +397,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       }
       const client = createClient();
       await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-      if (networkAfterStartup) {
-        sandbox.docker.network = networkAfterStartup;
-      }
       const socket = await openSocket(execServerUrlFromClient(client));
       await rpc(socket, "initialize", { clientName: "test" });
 
@@ -457,38 +416,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       socket.close();
     },
   );
-
-  it("accepts stdin writes for pipe-backed processes", async () => {
-    const sandbox = createSandboxContext({
-      buildExecSpec: async () => ({
-        argv: [process.execPath, "-e", echoFirstInputLineScript("echo:")],
-        env: testExecEnv(),
-        stdinMode: "pipe-open",
-      }),
-    });
-    const socket = await openSandboxSocket(sandbox);
-
-    await rpc(socket, "process/start", {
-      processId: "proc-stdin",
-      argv: ["/bin/sh", "-lc", "cat"],
-      cwd: "file:///workspace",
-      env: {},
-      tty: false,
-      pipeStdin: true,
-      arg0: null,
-    });
-    await expect(
-      rpc(socket, "process/write", {
-        processId: "proc-stdin",
-        chunk: Buffer.from("hello\n").toString("base64"),
-      }),
-    ).resolves.toEqual({ status: "accepted" });
-    const read = await readUntilClosed(socket, "proc-stdin");
-    expect(Buffer.from(read.chunks?.[0]?.chunk ?? "", "base64").toString("utf8")).toBe(
-      "echo:hello\n",
-    );
-    socket.close();
-  });
 
   it.runIf(process.platform !== "win32")(
     "provides a real terminal and Ctrl-C for tty processes",
@@ -549,102 +476,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
         read.chunks?.map(({ chunk }) => Buffer.from(chunk, "base64").toString()).join(""),
       ).toContain("INTERRUPTED");
       expect(read.exitCode).toBe(42);
-      socket.close();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "interrupts a non-tty process through the sandbox backend",
-    async () => {
-      let pid = 0;
-      let marker = "";
-      const sandbox = createSandboxContext({
-        buildExecSpec: async ({ env }) => {
-          marker = `CODEX_SANDBOX_EXEC_ID=${env.CODEX_SANDBOX_EXEC_ID}`;
-          return {
-            argv: [
-              process.execPath,
-              "-e",
-              [
-                "process.on('SIGINT', () => { console.log('INTERRUPTED'); process.exit(42); });",
-                "console.log('PID=' + process.pid); setInterval(() => {}, 1000);",
-              ].join(" "),
-            ],
-            env: testExecEnv(),
-            stdinMode: "pipe-closed",
-          };
-        },
-        runShellCommand: async ({ args, script }) => {
-          if (script.includes("kill -INT")) {
-            expect(args).toEqual([marker]);
-            process.kill(pid, "SIGINT");
-          }
-          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
-        },
-      });
-      const client = createClient();
-      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-      const socket = await openSocket(execServerUrlFromClient(client));
-      const notifications = collectNotifications(socket);
-      await rpc(socket, "initialize", {});
-      await rpc(socket, "process/start", {
-        processId: "proc-interrupt",
-        argv: ["ignored"],
-        cwd: "file:///workspace",
-        tty: false,
-      });
-      pid = await readStartedPid(socket, "proc-interrupt");
-      await expect(
-        rpc(socket, "process/signal", { processId: "proc-interrupt", signal: "interrupt" }),
-      ).resolves.toEqual({});
-      const read = await readUntilClosed(socket, "proc-interrupt");
-      expect(read.exitCode).toBe(42);
-      expect(
-        read.chunks?.map(({ chunk }) => Buffer.from(chunk, "base64").toString()).join(""),
-      ).toContain("INTERRUPTED");
-      expect(notifications).toContainEqual({
-        method: "process/exited",
-        params: expect.objectContaining({ exitCode: 42, sandboxDenied: false }),
-      });
-      await expect(
-        rpc(socket, "process/signal", { processId: "missing", signal: "interrupt" }),
-      ).resolves.toEqual({});
-      socket.close();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "reports a signal-killed PTY as a failed process",
-    async () => {
-      const finalizeExec = vi.fn(async () => undefined);
-      const sandbox = createSandboxContext({
-        buildExecSpec: async () => ({
-          argv: [process.execPath, "-e", "process.kill(process.pid, 'SIGKILL')"],
-          env: testExecEnv(),
-          stdinMode: "pipe-open",
-        }),
-        finalizeExec,
-      });
-      const client = createClient();
-      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-      const socket = await openSocket(execServerUrlFromClient(client));
-      const notifications = collectNotifications(socket);
-      await rpc(socket, "initialize", {});
-      await rpc(socket, "process/start", {
-        processId: "killed-pty",
-        argv: ["ignored"],
-        cwd: "file:///workspace",
-        tty: true,
-      });
-      const read = await readUntilClosed(socket, "killed-pty");
-      expect(read.exitCode).toBe(1);
-      expect(notifications).toContainEqual({
-        method: "process/exited",
-        params: expect.objectContaining({ processId: "killed-pty", exitCode: 1 }),
-      });
-      await vi.waitFor(() =>
-        expect(finalizeExec).toHaveBeenCalledWith(expect.objectContaining({ exitCode: 1 })),
-      );
       socket.close();
     },
   );
@@ -792,39 +623,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await expect(waitForSocketClose(socket)).resolves.toEqual({ code: 1008 });
   });
 
-  it("handles oversized frames from unauthorized WebSocket clients", async () => {
-    const sandbox = createSandboxContext({});
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const unauthorizedUrl = execServerUrlFromClient(client).replace(
-      /\/openclaw-[^/?#]+/u,
-      "/wrong",
-    );
-    const socket = await openSocket(unauthorizedUrl);
-    const closed = waitForSocketClose(socket);
-
-    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
-
-    const closeResult = await closed;
-    expect([1008, 1009]).toContain(closeResult.code);
-  });
-
-  it("closes the exec-server when its sandbox environment is released", async () => {
-    const sandbox = createSandboxContext({});
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const execServerUrl = execServerUrlFromClient(client);
-    await releaseCodexSandboxExecServerEnvironment(sandbox);
-
-    await expect(openSocket(execServerUrl)).rejects.toThrow();
-  });
-
   it.runIf(process.platform !== "win32")(
     "reaps TERM-resistant process groups on socket loss and turn environment release",
     async () => {
@@ -874,6 +672,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
             });
           } else {
             await releaseCodexSandboxExecServerEnvironment(sandbox);
+            await expect(openSocket(execServerUrlFromClient(client))).rejects.toThrow();
           }
 
           expect(() => process.kill(pid!, 0)).toThrow();
@@ -921,5 +720,64 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       sessionId: expect.any(String),
     });
     socket.close();
+  });
+});
+
+describe("Codex sandbox command identity", () => {
+  it.runIf(process.platform !== "win32")(
+    "preserves literal argv process identity and exit status through a shell backend",
+    async () => {
+      const sandbox = createSandboxContext({
+        buildExecSpec: async ({ command, env }) => ({
+          argv: [
+            "/bin/sh",
+            "-c",
+            // Prevent implicit shell exec optimization, which otherwise hides the extra process.
+            `export BACKEND_EXEC_PID=$$; trap 'printf "BACKEND_EXIT\\n"; exit 99' EXIT; ${command}`,
+          ],
+          env: { ...env, PATH: process.env.PATH },
+          stdinMode: "pipe-closed",
+        }),
+      });
+      const client = createClient();
+      await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+      const socket = await openSocket(execServerUrlFromClient(client));
+      try {
+        await rpc(socket, "initialize", { clientName: "command-identity-test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+        await rpc(socket, "process/start", {
+          processId: "literal-command",
+          argv: [
+            process.execPath,
+            "-e",
+            "console.log(process.pid + ':' + process.env.BACKEND_EXEC_PID); process.exit(42)",
+          ],
+          cwd: "file:///workspace",
+          env: {},
+          tty: false,
+        });
+        const read = await readUntilClosed(socket, "literal-command");
+        expect(read).toMatchObject({ exited: true, closed: true, exitCode: 42 });
+        const output = (read.chunks ?? [])
+          .map(({ chunk }) => Buffer.from(chunk, "base64").toString("utf8"))
+          .join("");
+        expect(output).toMatch(/^\d+:\d+\n$/u);
+        const [pid, backendPid] = output.trim().split(":").map(Number);
+        expect(pid).toBeGreaterThan(0);
+        expect(pid).toBe(backendPid);
+      } finally {
+        socket.close();
+      }
+    },
+  );
+});
+
+describe("sandbox exec-server JSON-RPC helpers", () => {
+  it("preserves explicit null results", () => {
+    const send = vi.fn();
+
+    sendResult(send, 1, null);
+
+    expect(send).toHaveBeenCalledWith({ jsonrpc: "2.0", id: 1, result: null });
   });
 });

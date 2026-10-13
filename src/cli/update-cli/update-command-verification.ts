@@ -1,4 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -16,6 +17,7 @@ import {
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -211,9 +213,20 @@ export async function verifyUpdatedGateway(
     ...params,
     assertCurrent,
   });
-  if (launchAgentRecovery?.attempted) {
+  const channelWarnings = [
+    ...(health.channelProbeTimeouts ?? []),
+    ...(health.channelRuntimeWarnings ?? []),
+  ].map(({ id, error }) =>
+    redactSupportDiagnosticLine(
+      `Channel health warning (${id}: ${error}). Run openclaw health --json to inspect it.`,
+      { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
+    ),
+  );
+  if (launchAgentRecovery && launchAgentRecovery.status !== "not-needed") {
     defaultRuntime.error(
-      launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
+      launchAgentRecovery.status === "recovered"
+        ? launchAgentRecovery.message
+        : launchAgentRecovery.detail,
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
@@ -254,6 +267,9 @@ export async function verifyUpdatedGateway(
       durationMs: endedAtMs - startedAtMs,
       exitCode: failureFacts ? 1 : warning && params.purpose === "recovery" ? null : 0,
       ...(failureFacts ? { failureFacts } : {}),
+      ...(channelWarnings.length
+        ? { warnings: [...(warning ? [warning] : []), ...channelWarnings] }
+        : {}),
       ...(warning
         ? {
             termination: "timeout" as const,
@@ -306,17 +322,19 @@ export async function verifyUpdatedGateway(
             : "Gateway: restarted and verified.",
         ),
       );
-      for (const warning of pluginWarnings) {
-        defaultRuntime.log(theme.warn(warning.message));
+      for (const warning of [...pluginWarnings.map((entry) => entry.message), ...channelWarnings]) {
+        defaultRuntime.log(theme.warn(warning));
       }
     }
     return {
       ok: true,
       score: 7,
       summary:
-        pluginWarnings.length > 0
-          ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
-          : "Gateway service, version, plugins, channels, and readiness verified.",
+        channelWarnings.length > 0
+          ? "Gateway service, version, and readiness verified; channel warnings need attention."
+          : pluginWarnings.length > 0
+            ? "Gateway service, version, channels, and readiness verified; plugin failures need a retry."
+            : "Gateway service, version, plugins, channels, and readiness verified.",
       ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
@@ -347,9 +365,9 @@ export async function verifyUpdatedGateway(
       ? ["Gateway responded, but the managed service did not report running after restart."]
       : []),
     ...renderRestartDiagnostics(health),
-    ...(launchAgentRecovery?.attempted
+    ...(launchAgentRecovery && launchAgentRecovery.status !== "not-needed"
       ? [
-          launchAgentRecovery.recovered
+          launchAgentRecovery.status === "recovered"
             ? `LaunchAgent recovery: ${launchAgentRecovery.message}`
             : `LaunchAgent recovery failed: ${launchAgentRecovery.detail}`,
         ]
@@ -412,7 +430,7 @@ export async function verifyUpdatedGateway(
       code: health.waitOutcome ?? "restart-unhealthy",
       message:
         health.probeError ??
-        `Gateway did not settle${health.startupPhase ? `; startup phase: ${health.startupPhase}` : "."}`,
+        `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,
     });
   }
   recordVerificationStep(

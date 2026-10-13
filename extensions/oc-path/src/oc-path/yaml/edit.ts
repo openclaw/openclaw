@@ -1,4 +1,3 @@
-// OC Path module implements edit behavior.
 import { Document, isMap, isSeq, LineCounter, parseDocument, type Node } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import { formatOcPath } from "../oc-path.js";

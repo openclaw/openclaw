@@ -561,24 +561,19 @@ internal fun ChatManagedImage(
         color = ClawTheme.colors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        Text(
-          nativeString("Image unavailable · Tap to retry"),
-          modifier = Modifier.padding(12.dp),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+        ChatImageStatus(nativeString("Image unavailable · Tap to retry"))
       }
     }
 
     else -> {
-      Text(
-        nativeString("Loading image…"),
-        modifier = Modifier.padding(12.dp),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+      ChatImageStatus(nativeString("Loading image…"))
     }
   }
+}
+
+@Composable
+private fun ChatImageStatus(text: String) {
+  Text(text, modifier = Modifier.padding(12.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
 }
 
 @Composable

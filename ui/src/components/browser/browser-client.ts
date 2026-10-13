@@ -157,26 +157,23 @@ export function bindBrowserRequestClient(
         throw new DOMException("Browser request scope ended", "AbortError");
       }
       const envelope = asRecord(params);
-      if (dashboard?.sessionScoped) {
-        // Scoped routes bind their browser target on the server. Never forward a
-        // panel's cached profile or tab selection into that authority boundary.
-        const scopedParams = {
-          method: envelope?.method,
-          path: envelope?.path,
-          ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
-          ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
-          ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
-          sessionKey: dashboard.sessionKey,
-          ...(dashboard.agentId ? { agentId: dashboard.agentId } : {}),
-          dashboard: { name: dashboard.name, instanceId: dashboard.instanceId },
-        };
-        return options
-          ? await client.request<T>("browser.dashboard.request", scopedParams, options)
-          : await client.request<T>("browser.dashboard.request", scopedParams);
-      }
+      const scopedDashboard = dashboard?.sessionScoped ? dashboard : undefined;
       const session = !dashboard && method === BROWSER_REQUEST_METHOD ? tabScope?.() : undefined;
-      const routedParams =
-        route || dashboard || session
+      // Scoped routes bind their browser target on the server. Never forward a
+      // panel's cached profile or tab selection into that authority boundary.
+      const requestMethod = scopedDashboard ? "browser.dashboard.request" : method;
+      const routedParams = scopedDashboard
+        ? {
+            method: envelope?.method,
+            path: envelope?.path,
+            ...(envelope?.timeoutMs !== undefined ? { timeoutMs: envelope.timeoutMs } : {}),
+            ...(envelope?.query ? { query: withoutBrowserTarget(envelope.query) } : {}),
+            ...(envelope?.body ? { body: withoutBrowserTarget(envelope.body) } : {}),
+            sessionKey: scopedDashboard.sessionKey,
+            ...(scopedDashboard.agentId ? { agentId: scopedDashboard.agentId } : {}),
+            dashboard: { name: scopedDashboard.name, instanceId: scopedDashboard.instanceId },
+          }
+        : route || dashboard || session
           ? {
               ...envelope,
               ...(route
@@ -200,8 +197,8 @@ export function bindBrowserRequestClient(
             }
           : params;
       return options
-        ? await client.request<T>(method, routedParams, options)
-        : await client.request<T>(method, routedParams);
+        ? await client.request<T>(requestMethod, routedParams, options)
+        : await client.request<T>(requestMethod, routedParams);
     },
   };
 }

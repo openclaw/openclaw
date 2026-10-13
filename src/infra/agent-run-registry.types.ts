@@ -15,6 +15,8 @@ export type AgentRunContext = {
   providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */
   completionSource?: "reply-dispatch";
+  /** Retained background work cannot add automatic delivery to a private run. */
+  sessionEventDelivery?: false;
   sessionKey?: string;
   /** Resolved agent owner, including for unscoped session keys. */
   agentId?: string;

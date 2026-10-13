@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -18,6 +19,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -101,6 +104,7 @@ async function createOwnRunFixture() {
     visibility: "shared",
     createdActor: { type: "human", source: "profile", id: profile.id },
   };
+  setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(sessionScope, entry);
   const browser = questionPeer(profile, "original-browser");
   const sourceController = new AbortController();
@@ -386,8 +390,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      vi.spyOn(historyLane.pool, "run").mockImplementation((...args) => {
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -547,8 +551,14 @@ describe("own-run question admission", () => {
         const entered = createDeferred();
         const release = createDeferred();
         const failure = new Error("Transient question worker read failure");
-        const run = historyLane.pool.run.bind(historyLane.pool);
-        const spy = vi.spyOn(historyLane.pool, "run").mockImplementationOnce(async (...args) => {
+        // The injected failure must exercise the worker instead of a warm entry receipt.
+        sessionChanges.invalidate({
+          ...sessionScope,
+          storePath: resolveOpenClawAgentSqlitePath(sessionScope),
+          factsInvalidated: true,
+        });
+        const run = projectionLane.pool.run.bind(projectionLane.pool);
+        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
           if (cause === "transient worker failure") {
             throw failure;
           }
@@ -586,6 +596,7 @@ describe("own-run question admission", () => {
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           }
+          expect(spy).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await result;

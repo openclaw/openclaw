@@ -1,22 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { resolveSessionWorkerPlacementPatchError } from "../server-methods/sessions-shared.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareSessionWorkerPlacementPatchValidation } from "../server-methods/sessions-shared.js";
 import {
   projectWorkerPlacementAgentRuntime,
   resolveDefaultWorkerPlacementExecutionMode,
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
-  resolveWorkerPlacementSessionRuntimeCapabilities,
+  resolveWorkerPlacementSessionRuntimeAsync,
 } from "./placement-session-runtime.js";
+
+async function preparePatchError(
+  params: Parameters<typeof prepareSessionWorkerPlacementPatchValidation>[0],
+) {
+  const prepared = await prepareSessionWorkerPlacementPatchValidation(params);
+  try {
+    return prepared.validate();
+  } finally {
+    prepared.release();
+  }
+}
 
 const originalPluginRegistry = getActivePluginRegistry();
 
@@ -28,20 +43,12 @@ describe("worker placement runtime capabilities", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
     if (originalPluginRegistry) {
       setActivePluginRegistry(originalPluginRegistry, "placement-runtime-test-restore", "default");
       return;
     }
     resetPluginRuntimeStateForTest();
-  });
-
-  it("fails closed when residual auto policy lacks model and session context", () => {
-    expect(projectWorkerPlacementAgentRuntime({ id: "auto", source: "model" })).toEqual({
-      id: "auto",
-      cloudPlacementSupported: false,
-      devicePlacementSupported: false,
-      source: "model",
-    });
   });
 
   it("derives presence preparation mode from the default session runtime owner", () => {
@@ -80,9 +87,11 @@ describe("worker placement runtime capabilities", () => {
       agentId: "main",
       sessionKey: "agent:main:dashboard:browser-created-codex",
     };
-    expect(resolveWorkerPlacementSessionRuntimeCapabilities(session).executionMode).toBe(
-      "remote-exec",
-    );
+    expect(
+      resolveWorkerPlacementCapabilities(
+        resolveWorkerPlacementSessionRuntime({ ...session, readSourceEntry: () => undefined }),
+      ).executionMode,
+    ).toBe("remote-exec");
     expect(resolveDefaultWorkerPlacementExecutionMode({ cfg, agentId: "main" })).toBe(
       "remote-exec",
     );
@@ -135,8 +144,60 @@ describe("worker placement runtime capabilities", () => {
         },
         agentId: "main",
         sessionKey: "agent:main:placement-runtime",
+        readSourceEntry: () => undefined,
       }),
     ).toBe(expected);
+  });
+
+  it("reads inherited runtime selection off-thread and observes a committed parent update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const parent = { agentId: "main", sessionKey: "agent:main:parent-runtime" };
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      const input = {
+        cfg: {},
+        agentId: "main",
+        sessionKey: "agent:main:child-runtime",
+        entry: { sessionId: "child-runtime", updatedAt: 1, parentSessionKey: parent.sessionKey },
+      };
+      const observed = observeHostDataSql();
+      try {
+        expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("codex");
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
+      }
+      await upsertSessionEntryCore(parent, {
+        sessionId: "parent-runtime",
+        updatedAt: 2,
+        providerOverride: "anthropic",
+        modelOverride: "claude-test",
+      });
+      expect(await resolveWorkerPlacementSessionRuntimeAsync(input)).toBe("openclaw");
+    });
+  });
+
+  it("does not let a persisted runtime override bypass required worker inference", () => {
+    expect(
+      resolveWorkerPlacementSessionRuntime({
+        cfg: { cloudWorkers: { requiredProfile: "dedicated-native" } },
+        entry: {
+          sessionId: "required-placement-runtime",
+          updatedAt: 0,
+          providerOverride: "openai",
+          modelOverride: "gpt-test",
+          agentRuntimeOverride: "codex",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:required-placement-runtime",
+        readSourceEntry: () => undefined,
+      }),
+    ).toBe("openclaw");
   });
 
   it.each([
@@ -239,7 +300,7 @@ describe("worker placement runtime capabilities", () => {
   });
 });
 
-describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
+describe("worker placement runtime capability projection", () => {
   beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     setActivePluginRegistry(createEmptyPluginRegistry(), "placement-runtime-test", "default");
@@ -247,59 +308,12 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
     if (originalPluginRegistry) {
       setActivePluginRegistry(originalPluginRegistry, "placement-runtime-test-restore", "default");
       return;
     }
     resetPluginRuntimeStateForTest();
-  });
-
-  it("returns worker-turn for a model with an explicit openclaw runtime policy", () => {
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.example/v1",
-              models: [],
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      },
-      entry: {
-        sessionId: "s1",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-test",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s1",
-    });
-    expect(caps.executionMode).toBe("worker-turn");
-    expect(caps.devicePlacement).toBeDefined();
-  });
-
-  it("uses openclaw fallback capabilities for an undetermined (auto) runtime", () => {
-    // A provider with no configured runtime policy, no registered harness, and no
-    // CLI backend registration resolves to "auto" in projection mode. Canonical
-    // execution falls back to the built-in openclaw harness (selection.ts
-    // auto_openclaw), so the capabilities mirror that — the guard must not
-    // falsely reject a model whose execution will use the placement-capable
-    // built-in runtime. (A CLI-backed provider is covered separately below.)
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s2",
-        updatedAt: 0,
-        providerOverride: "embedded-auto-provider",
-        modelOverride: "embedded-auto-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s2",
-    });
-    expect(caps.executionMode).toBe("worker-turn");
-    expect(caps.devicePlacement).toBeDefined();
   });
 
   it("rejects a CLI-backed provider whose dispatch runs as a local process", () => {
@@ -318,17 +332,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s-cli",
-        updatedAt: 0,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-fable-5-1",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-cli",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s-cli",
+          updatedAt: 0,
+          providerOverride: "claude-cli",
+          modelOverride: "claude-fable-5-1",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-cli",
+      }),
+    );
     expect(caps.executionMode).toBeUndefined();
     expect(caps.devicePlacement).toBeUndefined();
   });
@@ -347,18 +364,21 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s-override",
-        updatedAt: 0,
-        providerOverride: "claude-cli",
-        modelOverride: "opus-4.7",
-        agentRuntimeOverride: "openclaw",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-override",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s-override",
+          updatedAt: 0,
+          providerOverride: "claude-cli",
+          modelOverride: "opus-4.7",
+          agentRuntimeOverride: "openclaw",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-override",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
   });
 
@@ -375,26 +395,29 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:claude-cli", "anthropic:api"] },
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          auth: {
+            order: { anthropic: ["anthropic:claude-cli", "anthropic:api"] },
+            profiles: {
+              "anthropic:api": { provider: "anthropic", mode: "api_key" },
+              "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+            },
           },
         },
-      },
-      entry: {
-        sessionId: "s-auth-direct",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "opus-4.7",
-        authProfileOverride: "anthropic:api",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-auth-direct",
-    });
+        entry: {
+          sessionId: "s-auth-direct",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "opus-4.7",
+          authProfileOverride: "anthropic:api",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-auth-direct",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
   });
 
@@ -411,26 +434,29 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
         source: "test",
       });
     }
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        auth: {
-          order: { anthropic: ["anthropic:api"] },
-          profiles: {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          auth: {
+            order: { anthropic: ["anthropic:api"] },
+            profiles: {
+              "anthropic:api": { provider: "anthropic", mode: "api_key" },
+              "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+            },
           },
         },
-      },
-      entry: {
-        sessionId: "s-auth-cli",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "opus-4.7",
-        authProfileOverride: "anthropic:claude-cli",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s-auth-cli",
-    });
+        entry: {
+          sessionId: "s-auth-cli",
+          updatedAt: 0,
+          providerOverride: "anthropic",
+          modelOverride: "opus-4.7",
+          authProfileOverride: "anthropic:claude-cli",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s-auth-cli",
+      }),
+    );
     expect(caps.executionMode).toBeUndefined();
   });
 
@@ -451,27 +477,30 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {
-        models: {
-          providers: {
-            "device-harness": {
-              baseUrl: "https://device-harness.example/v1",
-              models: [],
-              agentRuntime: { id: "device-harness" },
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {
+          models: {
+            providers: {
+              "device-harness": {
+                baseUrl: "https://device-harness.example/v1",
+                models: [],
+                agentRuntime: { id: "device-harness" },
+              },
             },
           },
         },
-      },
-      entry: {
-        sessionId: "s3",
-        updatedAt: 0,
-        providerOverride: "device-harness",
-        modelOverride: "model-x",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s3",
-    });
+        entry: {
+          sessionId: "s3",
+          updatedAt: 0,
+          providerOverride: "device-harness",
+          modelOverride: "model-x",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s3",
+      }),
+    );
     expect(caps.executionMode).toBe("remote-exec");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: ["runtime.exec-server.v1"],
@@ -500,17 +529,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s4",
-        updatedAt: 0,
-        providerOverride: "auto-provider",
-        modelOverride: "auto-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s4",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s4",
+          updatedAt: 0,
+          providerOverride: "auto-provider",
+          modelOverride: "auto-model",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s4",
+      }),
+    );
     expect(caps.executionMode).toBe("remote-exec");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: ["runtime.exec-server.v1"],
@@ -539,17 +571,20 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
       },
     });
 
-    const caps = resolveWorkerPlacementSessionRuntimeCapabilities({
-      cfg: {},
-      entry: {
-        sessionId: "s5",
-        updatedAt: 0,
-        providerOverride: "unsupported-provider",
-        modelOverride: "unsupported-model",
-      },
-      agentId: "main",
-      sessionKey: "agent:main:s5",
-    });
+    const caps = resolveWorkerPlacementCapabilities(
+      resolveWorkerPlacementSessionRuntime({
+        readSourceEntry: () => undefined,
+        cfg: {},
+        entry: {
+          sessionId: "s5",
+          updatedAt: 0,
+          providerOverride: "unsupported-provider",
+          modelOverride: "unsupported-model",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:s5",
+      }),
+    );
     expect(caps.executionMode).toBe("worker-turn");
     expect(caps.devicePlacement).toEqual({
       requiredNodeCommands: [],
@@ -557,7 +592,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     });
   });
 
-  it("sessions.patch boundary: rejects an incompatible model change for an active worker-turn placement", () => {
+  it("sessions.patch boundary: rejects an incompatible model change for an active worker-turn placement", async () => {
     // An active worker-turn placement must reject a model whose effective
     // runtime is a CLI harness with no cloud placement support. The harness
     // claims the provider via autoSelection so resolveAutoAgentHarnessId
@@ -595,9 +630,13 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     const context = {
       workerSessionPlacementService: {
         getMany: () => new Map([[sessionId, placement]]),
+        prepareSessionPlacement: async () => ({
+          current: () => placement,
+          release() {},
+        }),
       },
     };
-    const error = resolveSessionWorkerPlacementPatchError({
+    const error = await preparePatchError({
       agentId: "main",
       cfg: {} as never,
       context: context as never,
@@ -615,64 +654,7 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     expect(error).toContain("cannot select a runtime without cloud placement support");
   });
 
-  it("sessions.patch boundary: allows a compatible model change for an active worker-turn placement", () => {
-    // A model whose runtime supports worker-turn placement must pass the
-    // guard without error.
-    const sessionId = "s7";
-    const placement = {
-      sessionId,
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    const context = {
-      workerSessionPlacementService: {
-        getMany: () => new Map([[sessionId, placement]]),
-      },
-    };
-    const error = resolveSessionWorkerPlacementPatchError({
-      agentId: "main",
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.example/v1",
-              models: [],
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-      } as never,
-      context: context as never,
-      entry: {
-        sessionId,
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-test",
-      } as never,
-      key: "agent:main:s7",
-      patch: { key: "agent:main:s7", model: "anthropic/claude-test" } as never,
-      sessionKey: "agent:main:s7",
-      validateModelRuntime: true,
-    });
-    expect(error).toBeUndefined();
-  });
-
-  it("sessions.patch boundary: allows an unclaimed auto model with openclaw fallback for an active worker-turn placement", () => {
+  it("sessions.patch boundary: allows an unclaimed auto model with openclaw fallback for an active worker-turn placement", async () => {
     // An "auto" model with no registered supporting harness falls back to the
     // built-in openclaw runtime, which supports worker-turn placement. The
     // guard must not reject it — this is the compatibility regression fixed
@@ -701,9 +683,13 @@ describe("resolveWorkerPlacementSessionRuntimeCapabilities", () => {
     const context = {
       workerSessionPlacementService: {
         getMany: () => new Map([[sessionId, placement]]),
+        prepareSessionPlacement: async () => ({
+          current: () => placement,
+          release() {},
+        }),
       },
     };
-    const error = resolveSessionWorkerPlacementPatchError({
+    const error = await preparePatchError({
       agentId: "main",
       cfg: {} as never,
       context: context as never,

@@ -157,6 +157,9 @@ export function registerAgentRunContext(
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
+  if (context.sessionEventDelivery === false) {
+    existing.sessionEventDelivery = false;
+  }
   for (const key of [
     "isControlUiVisible",
     "projectSessionActive",
@@ -285,7 +288,7 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
-  const wasLive = hasLiveAgentRunContext(runId);
+  const wasLive = hasAgentRunContextExecutionOwner(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
   if (!wasLive) {
@@ -314,7 +317,7 @@ export function retainQueuedAgentRunContext(
       if (outcome === "admitted") {
         context.lastActiveAt = Date.now();
       }
-      if (!hasLiveAgentRunContext(runId)) {
+      if (!hasAgentRunContextExecutionOwner(runId)) {
         bumpAgentRunIndexVersion(context);
       }
     }
@@ -586,6 +589,10 @@ export function hasLiveAgentRunContext(runId: string): boolean {
     context?.lifecycleGeneration === state.lifecycleGeneration &&
     (hasAgentRunContextExecutionOwner(runId) || context.projectSessionActive === true)
   );
+}
+
+export function listLiveAgentRunIds(): string[] {
+  return [...getAgentRunRegistryState().contexts.keys()].filter(hasLiveAgentRunContext);
 }
 
 export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {

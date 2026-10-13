@@ -16,6 +16,8 @@ export class TeamReportsRunner {
     // Long network collection owns one ordered worker, not a shared CPU permit.
     this.pool = new WorkerTaskPool<ReportWorkerInput, Record<string, SourceStatus>>({
       workerUrl,
+      workerClass: "writer",
+      // Published plugin supports older hosts that only understand numeric sizing.
       maxWorkers: 1,
       maxPendingTasks: 1,
     });

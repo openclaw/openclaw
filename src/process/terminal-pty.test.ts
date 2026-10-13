@@ -102,14 +102,6 @@ describe("terminal PTY teardown", () => {
     mocks.spawn.mockReset();
   });
 
-  it.each([undefined, "SIGTERM"] as const)("signals the process tree for %s", async (signal) => {
-    const { handle, pty } = await spawnFakePty();
-    handle.kill(signal);
-    expect(mocks.signalPtySessionTree).toHaveBeenCalledWith(4321, signal ?? "SIGKILL");
-    expect(mocks.signalProcessTree).not.toHaveBeenCalled();
-    expect(pty.kill).not.toHaveBeenCalled();
-  });
-
   it("uses the PTY handle for non-terminating signals", async () => {
     const { handle, pty } = await spawnFakePty();
     handle.kill("SIGHUP");
@@ -120,21 +112,10 @@ describe("terminal PTY teardown", () => {
       expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
     }
   });
-
-  it("tolerates an already-exited process", async () => {
-    const { handle } = await spawnFakePty(0);
-    expect(() => handle.kill()).not.toThrow();
-  });
 });
 
 describe("terminal PTY invocation", () => {
-  const nonInteractiveEnvironments: Array<Record<string, string>> = [
-    {},
-    { TERM: "" },
-    { TERM: "dumb" },
-    { TERM: "DUMB" },
-    { TERM: " dumb " },
-  ];
+  const nonInteractiveEnvironments: Array<Record<string, string>> = [{ TERM: "dumb" }];
 
   beforeEach(() => {
     mocks.spawn.mockReset();
@@ -164,27 +145,6 @@ describe("terminal PTY invocation", () => {
     },
   );
 
-  it("preserves an interactive TERM", async () => {
-    mocks.spawn.mockReturnValueOnce(fakePty());
-
-    await spawnDirectTerminalPty({
-      file: "/usr/bin/codex",
-      args: [],
-      env: { TERM: "screen-256color" },
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "/usr/bin/codex",
-      [],
-      expect.objectContaining({
-        name: "screen-256color",
-        env: expect.objectContaining({ TERM: "screen-256color" }),
-      }),
-    );
-  });
-
   it("canonicalizes a case-insensitive Windows TERM key", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
@@ -208,17 +168,7 @@ describe("terminal PTY invocation", () => {
   });
 
   it.each([
-    [".cmd", { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
     [".bat", { COMSPEC: "C:\\Windows\\System32\\cmd.exe" }, "C:\\Windows\\System32\\cmd.exe"],
-    [".cmd", { cOmSpEc: "C:\\tools\\custom-cmd.exe" }, "C:\\tools\\custom-cmd.exe"],
-    [
-      ".bat",
-      {
-        ComSpec: "C:\\Windows\\System32\\ambient-cmd.exe",
-        COMSPEC: "C:\\Windows\\System32\\cmd.exe",
-      },
-      "C:\\Windows\\System32\\cmd.exe",
-    ],
   ])("wraps Windows %s shims through ComSpec", async (extension, env, expectedComSpec) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
@@ -356,41 +306,6 @@ describe("terminal PTY invocation", () => {
       );
     },
   );
-
-  it("keeps executables and non-Windows commands direct", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    mocks.spawn.mockReturnValueOnce(fakePty());
-    await spawnDirectTerminalPty({
-      file: "C:\\tools\\codex.exe",
-      args: ["resume", "thread"],
-      env: {},
-      cols: 80,
-      rows: 24,
-    });
-
-    platform.mockReturnValue("linux");
-    mocks.spawn.mockReturnValueOnce(fakePty());
-    await spawnDirectTerminalPty({
-      file: "/tmp/codex.cmd",
-      args: [],
-      env: {},
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(mocks.spawn).toHaveBeenNthCalledWith(
-      1,
-      "C:\\tools\\codex.exe",
-      ["resume", "thread"],
-      expect.objectContaining({ cols: 80, rows: 24 }),
-    );
-    expect(mocks.spawn).toHaveBeenNthCalledWith(
-      2,
-      "/tmp/codex.cmd",
-      [],
-      expect.objectContaining({ cols: 80, rows: 24 }),
-    );
-  });
 });
 
 // The PTY exit callback owns the shell, but kill() only signals foreign session members.

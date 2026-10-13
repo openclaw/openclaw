@@ -58,7 +58,7 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId.trim());
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
   const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
@@ -213,7 +213,7 @@ export async function configureWithEnvToken(
   dmPolicy: ChannelSetupDmPolicy,
   accountId: string = resolveSetupAccountId(cfg),
 ): Promise<{ cfg: OpenClawConfig } | null> {
-  const resolvedAccountId = resolveSetupAccountId(cfg, accountId.trim());
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
   if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
     return null;
   }

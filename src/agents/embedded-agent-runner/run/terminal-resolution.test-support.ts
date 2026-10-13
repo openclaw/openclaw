@@ -9,7 +9,8 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
-export type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0];
+export type TerminalInput = Parameters<typeof resolveEmbeddedRunTerminal>[0] &
+  Partial<Parameters<typeof resolveEmbeddedRunTerminal>[0]["prepared"]>;
 type TerminalInputOverrides = Omit<
   Partial<TerminalInput>,
   "runParams" | "retryState" | "sessionPromptState"
@@ -103,10 +104,21 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     traceAttempts: [],
     thinkLevel: "off",
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-  } satisfies Omit<TerminalInput, "retryState">;
+  } satisfies Omit<TerminalInput, "retryState" | "prepared">;
   return {
     ...base,
     ...overrides,
+    prepared: {
+      payloads: [],
+      replyDeliveryState: "missing",
+      timedOutDuringPrompt: false,
+      hasSuccessfulFinalAssistantAfterPromptTimeout: false,
+      hasPartialAssistantTextAfterPromptTimeout: false,
+      terminalToolFailure: undefined,
+      ...base,
+      ...overrides,
+      ...overrides.prepared,
+    },
     runParams,
     sessionPromptState: { ...base.sessionPromptState, ...overrides.sessionPromptState },
     retryState: { ...createEmbeddedRunTerminalRetryState(), ...overrides.retryState },

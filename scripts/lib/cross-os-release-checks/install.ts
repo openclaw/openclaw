@@ -157,11 +157,7 @@ export function packageHasScript(packageRoot: string, scriptName: string) {
   }
 }
 
-export function normalizeWindowsInstalledCliPath(cliPath: string) {
-  return normalizeWindowsCommandShimPath(cliPath);
-}
-
-function normalizeWindowsCommandShimPath(commandPath: string) {
+export function normalizeWindowsInstalledCliPath(commandPath: string) {
   if (typeof commandPath !== "string") {
     return commandPath;
   }

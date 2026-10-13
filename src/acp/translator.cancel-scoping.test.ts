@@ -3,7 +3,7 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   createAcpConnection,
@@ -145,7 +145,9 @@ describe("acp translator cancel and run scoping", () => {
     await expect(replacement).resolves.toEqual({ stopReason: "cancelled" });
   });
 
-  it("closes an admitted prompt when shutdown interrupts its blocked final snapshot", async () => {
+  it("closes an admitted prompt when shutdown interrupts its blocked final snapshot", async ({
+    signal,
+  }) => {
     const harness = createHarness({ accepted: true });
     const pending = await start(harness);
     const started = createDeferred();
@@ -159,10 +161,9 @@ describe("acp translator cancel and run scoping", () => {
     });
     const terminalEvent = harness.agent.handleGatewayEvent(chat(pending.runId));
     await started.promise;
-    const settled = vi.fn();
-    const shutdown = harness.agent.shutdown().then(settled);
+    const shutdown = harness.agent.shutdown();
     try {
-      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+      await withinTest(shutdown, signal);
       await expect(pending.promptPromise).resolves.toEqual({ stopReason: "cancelled" });
     } finally {
       snapshot.resolve({ sessions: [] });
@@ -277,36 +278,6 @@ describe("acp translator cancel and run scoping", () => {
     await finish(harness, pending);
   });
 
-  it("projects gateway thinking blocks into hidden ACP thought chunks", async () => {
-    const harness = createHarness();
-    const pending = await start(harness);
-    harness.sessionUpdateSpy.mockClear();
-    await harness.agent.handleGatewayEvent(
-      chat(pending.runId, {
-        state: "delta",
-        message: {
-          content: [
-            { type: "thinking", thinking: "Internal loop about NO_REPLY" },
-            { type: "text", text: "Final visible reply" },
-          ],
-        },
-      }),
-    );
-    for (const [index, sessionUpdate, text] of [
-      [1, "agent_thought_chunk", "Internal loop about NO_REPLY"],
-      [2, "agent_message_chunk", "Final visible reply"],
-    ] as const) {
-      expect(harness.sessionUpdateSpy).toHaveBeenNthCalledWith(
-        index,
-        expect.objectContaining({
-          sessionId: SESSION_ID,
-          update: { sessionUpdate, content: { type: "text", text } },
-        }),
-      );
-    }
-    await finish(harness, pending, 2);
-  });
-
   it("drops stale text from a final snapshot after replacement during thought delivery", async () => {
     const harness = createHarness();
     const first = await start(harness);
@@ -327,6 +298,13 @@ describe("acp translator cancel and run scoping", () => {
       }),
     );
     await started.promise;
+    expect(harness.sessionUpdateSpy).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "old hidden thought" },
+      },
+    });
     const replacement = await start(harness);
     released.resolve();
     await staleSnapshot;

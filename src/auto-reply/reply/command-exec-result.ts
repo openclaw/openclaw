@@ -22,9 +22,7 @@ export function formatCommandExecResult(
   const details = result.details;
   if (details?.status === "approval-pending") {
     const decisions = details.allowedDecisions?.join(", ") || "allow-once, deny";
-    return formatCommandExecText(
-      `Exec approval pending (${details.approvalSlug}). Allowed decisions: ${decisions}.`,
-    );
+    return `Exec approval pending (${details.approvalSlug}). Allowed decisions: ${decisions}.`;
   }
   if (details?.status === "running") {
     return formatCommandExecText(`${runningLabel} is running (exec session ${details.sessionId}).`);

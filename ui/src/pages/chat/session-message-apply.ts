@@ -13,17 +13,9 @@ import {
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import {
-  latestPersistedSteerBoundary,
-  latestStreamBoundaryRunId,
-  persistedSteerTargetRunId,
-  rolloverChatStream,
-} from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { maybeResetToolStreamRun } from "./stream-reconciliation.ts";
-import {
-  prunePersistedAssistantStreamSegments,
-  reconcilePersistedAssistantStream,
-} from "./stream-segment-pruning.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -157,26 +149,16 @@ export function applySessionMessagePayload(
       state.chatStreamStartedAt = null;
       maybeResetToolStreamRun(state, assistantOwnerRunId);
     }
-    reconcilePersistedAssistantStream(state);
   }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;
-  const persistedSteerBoundary = steerTargetRunId
-    ? latestPersistedSteerBoundary(projection.messages, steerTargetRunId)
-    : null;
   if (
     incoming.role === "user" &&
     (runActive === true || (runActive === undefined && currentRunId === steerTargetRunId)) &&
     incoming.runId &&
     steerTargetRunId &&
-    (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId) &&
-    persistedSteerBoundary?.runId === incoming.runId &&
-    latestStreamBoundaryRunId(state) !== incoming.runId
+    (!currentRunId || currentRunId === steerTargetRunId || currentRunId === incoming.runId)
   ) {
     state.chatRunId = steerTargetRunId;
-    rolloverChatStream(state, {
-      runId: steerTargetRunId,
-      boundaryRunId: incoming.runId,
-    });
   }
 }

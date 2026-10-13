@@ -252,6 +252,7 @@ async function buildActivity(
 export async function sendMSTeamsMessages(
   params: {
     replyStyle: MSTeamsReplyStyle;
+    accountId?: string | null;
     app: MSTeamsApp;
     conversationRef: StoredConversationReference;
     context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
@@ -380,6 +381,7 @@ export async function sendMSTeamsMessages(
     const isChannel = params.conversationRef.conversation?.conversationType === "channel";
     const sendFn = (activity: MSTeamsActivityLike) =>
       sendMSTeamsActivityWithReference(params.app, baseRef, activity, {
+        accountId: params.accountId,
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         onPlatformSendDispatch: params.onPlatformSendDispatch,
         threadActivityId: isChannel ? threadActivityId : undefined,

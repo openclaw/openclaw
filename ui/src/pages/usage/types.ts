@@ -57,7 +57,12 @@ type UsageDataState = {
   error: string | null;
   sessions: UsageSessionEntry[];
   creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
-  sessionsLimitReached: boolean; // True if 1000 session cap was hit
+  overview?: SessionsUsageResult["overview"];
+  sessionPage?: Pick<
+    NonNullable<SessionsUsageResult["overview"]>,
+    "offset" | "limit" | "total" | "unfilteredSessionCount" | "tableTotals" | "tableSessionCount"
+  >;
+  selectedSession?: UsageSessionEntry | null;
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
@@ -115,12 +120,11 @@ type UsageDetailState = {
 
 type UsageCallbacks = {
   filters: {
-    onStartDateChange: (date: string) => void;
-    onEndDateChange: (date: string) => void;
-    onScopeChange: (scope: "instance" | "family") => void;
-    onCreatorChange: (creatorKey: string | null) => void;
+    onDatesChange: (dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) => void;
+    onScopeChange: (
+      scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
+    ) => void;
     onRefresh: () => void;
-    onTimeZoneChange: (zone: "local" | "utc") => void;
     onToggleHeaderPinned: () => void;
     onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => void;
     onSelectHour: (hour: number, shiftKey: boolean) => void;
@@ -133,21 +137,15 @@ type UsageCallbacks = {
     onClearQuery: () => void;
   };
   display: {
-    onExportJson: (data: UsageJsonExport) => void;
-    onChartModeChange: (mode: "tokens" | "cost") => void;
-    onDailyChartModeChange: (mode: "total" | "by-type") => void;
-    onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
-    onSessionSortDirChange: (dir: "asc" | "desc") => void;
-    onSessionsTabChange: (tab: "all" | "recent") => void;
+    onExportJson: () => void;
+    onExportCsv: (format: "sessions-csv" | "daily-csv") => void;
+    onPageChange: (offset: number) => void;
+    onChange: (display: Partial<UsageDisplayState>) => void;
   };
   details: {
     onToggleContextExpanded: () => void;
     onToggleSessionLogsExpanded: () => void;
-    onLogFilterRolesChange: (next: SessionLogRole[]) => void;
-    onLogFilterToolsChange: (next: string[]) => void;
-    onLogFilterHasToolsChange: (next: boolean) => void;
-    onLogFilterQueryChange: (next: string) => void;
-    onLogFilterClear: () => void;
+    onLogFiltersChange: (filters: Partial<UsageDetailState["logFilters"]>) => void;
     onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void;
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;

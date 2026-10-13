@@ -23,21 +23,15 @@ async function loadPluginsRouteData(
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const client = gatewaySnapshot.client;
-  if (gatewaySnapshot.phase !== "connected" || !client) {
-    return { gateway, gatewaySnapshot, result: null, error: null, location };
+  const data: PluginsRouteData = { gateway, gatewaySnapshot, result: null, error: null, location };
+  if (gatewaySnapshot.phase === "connected" && client) {
+    try {
+      data.result = await loadPluginCatalog(client);
+    } catch (error) {
+      data.error = formatUiError(error);
+    }
   }
-  try {
-    const result = await loadPluginCatalog(client);
-    return { gateway, gatewaySnapshot, result, error: null, location };
-  } catch (error) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      result: null,
-      error: formatUiError(error),
-      location,
-    };
-  }
+  return data;
 }
 
 type PluginsSurface = "discovery" | "settings";
@@ -64,7 +58,7 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return loadPluginsRouteData(context, options);
     },
     component: () =>
-      import("./plugins-page.ts").then(() => ({
+      import("./plugins-page.tsx").then(() => ({
         header: true,
         render: (data: PluginsRouteData | undefined) =>
           html`<openclaw-plugins-page

@@ -173,7 +173,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
-    const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
+    const { retainEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
       await import("./session-prompt-state.js");
     const actualTruncation = await vi.importActual<typeof import("./tool-result-truncation.js")>(
       "./tool-result-truncation.js",
@@ -220,7 +220,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       await manager.appendMessageAsync(settledExecAssistant);
       await manager.appendMessageAsync(toolResult);
       const messages = manager.buildSessionContext().messages;
-      const projection = getEmbeddedSessionPromptState(attempt.sessionId).toolResults;
+      using promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
+      const projection = promptStateLease.state.toolResults;
       const projected = actualTruncation
         .truncateOversizedToolResultsInMessages(messages, 200_000, maxChars, undefined, projection)
         .messages.find((message) => message.role === "toolResult");
@@ -258,7 +259,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         // Recovery must restore this successor's durable projection, not depend
         // on retained process memory or borrow the original session's 8k cap.
         clearEmbeddedSessionPromptStates([successorId]);
-        expect(getEmbeddedSessionPromptState(successorId).toolResults.replacements.size).toBe(0);
+        using restarted = retainEmbeddedSessionPromptState(successorId);
+        expect(restarted.state.toolResults.replacements.size).toBe(0);
         return session.makeAttemptResult({
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,

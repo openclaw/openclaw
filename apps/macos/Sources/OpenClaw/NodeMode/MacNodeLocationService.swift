@@ -43,11 +43,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            if let latest = locations.last {
-                self.completeLocationRequests(with: .success(latest))
-            } else {
-                self.completeLocationRequests(with: .failure(Error.unavailable))
-            }
+            self.completeLocationRequests(with: locations.last.map { .success($0) } ?? .failure(Error.unavailable))
         }
     }
 

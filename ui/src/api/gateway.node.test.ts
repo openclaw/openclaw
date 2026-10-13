@@ -7,6 +7,8 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
+import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -35,6 +37,7 @@ import {
 import type { GatewayBrowserClientOptions, GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
+const validateConnectParams = lazyCompile(ConnectParamsSchema);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -600,16 +603,46 @@ describe("GatewayBrowserClient", () => {
     );
   });
 
-  it("signs a fallback connect with browser time when no challenge arrives", async () => {
+  it("waits for a delayed challenge before sending valid signed connect parameters", async () => {
     useNodeFakeTimers();
     const client = createClient({ token: "shared-auth-token" });
 
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    await vi.advanceTimersByTimeAsync(750);
+    await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(parseLatestConnectFrame(ws).params?.device?.signedAt).toBe(Date.now());
+    expect(ws.sent).toEqual([]);
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "delayed-challenge", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ws.sent).toHaveLength(1);
+    const connectFrame = parseLatestConnectFrame(ws);
+    expect(validateConnectParams(connectFrame.params)).toBe(true);
+    expect(connectFrame.params.device).toMatchObject({
+      nonce: "delayed-challenge",
+      signedAt: 1_800_000_000_000,
+    });
+  });
+
+  it("closes without sending connect parameters when no challenge arrives", async () => {
+    useNodeFakeTimers();
+    const client = createClient({ token: "shared-auth-token" });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(29_999);
+
+    expect(ws.lastClose).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ws.sent).toEqual([]);
+    expect(ws.lastClose).toEqual({ code: 4008, reason: "connect challenge timeout" });
   });
 
   it.each([0, -1])("enforces the UTF-8 payload limit with %d bytes remaining", async (delta) => {

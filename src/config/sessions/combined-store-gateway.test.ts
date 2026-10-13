@@ -10,6 +10,7 @@ import {
 import { resolveSessionStoreKey } from "../../gateway/session-store-key.js";
 import { listProjectedSessions } from "../../gateway/session-utils-list.js";
 import { createGatewaySessionEntryReader } from "../../gateway/session-utils-store-lineage.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   inspectAgentDatabaseAdmission,
@@ -23,6 +24,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import * as sessionAccessor from "./session-accessor.js";
@@ -203,6 +205,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       },
       session: { scope: "global", store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const sessionKey of ["global", "unknown", "agent:worker:task"]) {
       replaceSessionEntrySync(
@@ -215,7 +218,7 @@ it("projects shared rows under their logical owner while retaining the physical 
       );
     }
     await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: "global", sessionId: "session-global" },
+      { agentId: "ops", storePath, sessionKey: "global", sessionId: "session-global" },
       {
         messages: [{ message: { role: "user", content: "Shared physical global preview" } }],
         touchSessionEntry: false,
@@ -477,7 +480,6 @@ it.each(["global", "per-sender"] as const)(
       const child = {
         sessionId: "child",
         updatedAt: 2,
-        status: "running" as const,
         parentSessionKey: parent,
         spawnedBy: parent,
       };
@@ -494,6 +496,12 @@ it.each(["global", "per-sender"] as const)(
           },
         );
       replaceSessionEntrySync({ agentId: "alpha", sessionKey: key }, child);
+      registerAgentRunContext("combined-parent-live", {
+        agentId: "alpha",
+        sessionKey: key,
+        sessionId: child.sessionId,
+        projectSessionActive: true,
+      });
       writeParent(alias, "qwen3:8b");
       writeParent(parent, "qwen3:32b");
       expect(resolveSessionStoreKey({ cfg, sessionKey: parent })).toBe(alias);
@@ -572,6 +580,7 @@ it.each(["global", "per-sender"] as const)(
           await check("qwen3:32b", true);
         });
       } finally {
+        clearAgentRunContext("combined-parent-live");
         release();
       }
     });
@@ -713,7 +722,6 @@ it.for(["main", "unknown", "global"])(
           {
             sessionId: `child-${name}`,
             updatedAt: Date.now(),
-            status: "running",
             parentSessionId,
             parentSessionKey,
             spawnedBy: parentSessionKey,

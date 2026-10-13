@@ -138,9 +138,7 @@ export function createRuntimeConfigCapability(gateway: RuntimeConfigGateway) {
     },
     refreshConnectionState,
     canCallConfigMethod,
-    cancelAppliedRefresh: appliedRefresh.cancel,
-    reconcileAppliedRefresh: appliedRefresh.reconcile,
-    disposeAppliedRefresh: appliedRefresh.dispose,
+    appliedRefresh,
     isDisposed: () => disposed,
   });
 

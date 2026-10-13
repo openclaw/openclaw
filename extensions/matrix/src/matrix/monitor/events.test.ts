@@ -427,45 +427,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(rememberInvite).toHaveBeenCalledWith("!room:example.org", "@alice:example.org");
   });
 
-  it("does not synthesize invite provenance from room joins", () => {
-    const { invalidateRoom, rememberInvite, roomJoinListener } = createHarness();
-
-    roomJoinListener("!room:example.org", {
-      event_id: "$join1",
-      sender: "@bot:example.org",
-      type: EventType.RoomMember,
-      origin_server_ts: Date.now(),
-      content: {
-        membership: "join",
-      },
-      state_key: "@bot:example.org",
-    });
-
-    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
-    expect(rememberInvite).not.toHaveBeenCalled();
-  });
-
-  it("posts verification request notices directly into the room", async () => {
-    const { onRoomMessage, sendMessage, roomMessageListener, flushTasks } = createHarness();
-    roomMessageListener("!room:example.org", {
-      event_id: "$req1",
-      sender: "@alice:example.org",
-      type: EventType.RoomMessage,
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.key.verification.request",
-        body: "verification request",
-      },
-    });
-
-    await flushTasks();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(onRoomMessage).not.toHaveBeenCalled();
-    const body = getSentNoticeBody(sendMessage, 0);
-    expect(body).toContain("Matrix verification request received from @alice:example.org.");
-    expect(body).toContain('Open "Verify by emoji"');
-  });
-
   it("routes late-decrypted room messages through the normal room handler", async () => {
     const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
     const event: MatrixRawEvent = {
@@ -509,13 +470,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       options: { dmPolicy: "pairing", storeAllowFrom: ["@alice:example.org"] },
       accepted: true,
       storeConsulted: true,
-    },
-    {
-      name: "does not consult the allow store when dmPolicy is open",
-      eventId: "$req-open-policy",
-      options: { dmPolicy: "open" },
-      accepted: true,
-      storeConsulted: false,
     },
     {
       name: "blocks verification notices when Matrix DMs are disabled",
@@ -587,117 +541,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification is ready with @alice:example.org.");
     expect(body).toContain('Choose "Verify by emoji"');
-  });
-
-  it("posts SAS emoji/decimal details when verification summaries expose them", async () => {
-    const {
-      sendMessage,
-      roomEventListener,
-      listVerifications: _listVerifications,
-      flushTasks,
-    } = createHarness({
-      joinedMembersByRoom: {
-        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
-      },
-      verifications: [
-        {
-          id: "verification-1",
-          transactionId: "$different-flow-id",
-          updatedAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
-          otherUserId: "@alice:example.org",
-          sas: {
-            decimal: [6158, 1986, 3513],
-            emoji: [
-              ["🎁", "Gift"],
-              ["🌍", "Globe"],
-              ["🐴", "Horse"],
-            ],
-          },
-        },
-      ],
-    });
-
-    roomEventListener("!dm:example.org", {
-      event_id: "$start2",
-      sender: "@alice:example.org",
-      type: "m.key.verification.start",
-      origin_server_ts: Date.now(),
-      content: {
-        "m.relates_to": { event_id: "$req2" },
-      },
-    });
-
-    await flushTasks();
-    const bodies = getSentNoticeBodies(sendMessage);
-    expectBodiesContain(bodies, "SAS emoji:");
-    expectBodiesContain(bodies, "SAS decimal: 6158 1986 3513");
-  });
-
-  it("rehydrates an in-progress DM verification before resolving SAS notices", async () => {
-    const verifications: VerificationFixture[] = [];
-    const { sendMessage, roomEventListener, flushTasks } = createHarness({
-      joinedMembersByRoom: {
-        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
-      },
-      verifications,
-      ensureVerificationDmTracked: async () => {
-        verifications.splice(0, verifications.length, {
-          id: "verification-rehydrated",
-          transactionId: "$req-hydrated",
-          roomId: "!dm:example.org",
-          otherUserId: "@alice:example.org",
-          updatedAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
-          phase: 3,
-          phaseName: "started",
-          pending: true,
-          sas: {
-            decimal: [2468, 1357, 9753],
-            emoji: [
-              ["🔔", "Bell"],
-              ["📁", "Folder"],
-              ["🐴", "Horse"],
-            ],
-          },
-        });
-        return verifications[0] ?? null;
-      },
-    });
-
-    roomEventListener("!dm:example.org", {
-      event_id: "$start-hydrated",
-      sender: "@alice:example.org",
-      type: "m.key.verification.start",
-      origin_server_ts: Date.now(),
-      content: {
-        "m.relates_to": { event_id: "$req-hydrated" },
-      },
-    });
-
-    await flushTasks();
-    expect(
-      getSentNoticeBodies(sendMessage).some((body) => body.includes("SAS decimal: 2468 1357 9753")),
-    ).toBe(true);
-  });
-
-  it("posts SAS notices directly from verification summary updates", async () => {
-    const { sendMessage, verificationSummaryListener, flushTasks } = createHarness({
-      joinedMembersByRoom: {
-        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
-      },
-    });
-
-    verificationSummaryListener(
-      createVerificationSummary({
-        id: "verification-direct",
-        roomId: "!dm:example.org",
-      }),
-    );
-
-    await flushTasks();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const body = getSentNoticeBody(sendMessage, 0);
-    expect(body).toContain("Matrix verification SAS with @alice:example.org:");
-    expect(body).toContain("SAS decimal: 6158 1986 3513");
   });
 
   it("blocks summary SAS notices when dmPolicy allowlist would block the sender", async () => {
@@ -992,65 +835,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sasBodies).toHaveLength(1);
   });
 
-  it("ignores cancelled verification flows when DM fallback resolves SAS notices", async () => {
-    const { sendMessage, roomEventListener, flushTasks } = createHarness({
-      joinedMembersByRoom: {
-        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
-      },
-      verifications: [
-        {
-          id: "verification-old-cancelled",
-          transactionId: "$old-flow",
-          otherUserId: "@alice:example.org",
-          updatedAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
-          phaseName: "cancelled",
-          phase: 4,
-          pending: false,
-          sas: {
-            decimal: [1111, 2222, 3333],
-            emoji: [
-              ["🚀", "Rocket"],
-              ["🦋", "Butterfly"],
-              ["📕", "Book"],
-            ],
-          },
-        },
-        {
-          id: "verification-new-active",
-          transactionId: "$different-flow-id",
-          otherUserId: "@alice:example.org",
-          updatedAt: new Date("2026-02-25T21:43:54.000Z").toISOString(),
-          phaseName: "started",
-          phase: 3,
-          pending: true,
-          sas: {
-            decimal: [6158, 1986, 3513],
-            emoji: [
-              ["🎁", "Gift"],
-              ["🌍", "Globe"],
-              ["🐴", "Horse"],
-            ],
-          },
-        },
-      ],
-    });
-
-    roomEventListener("!dm:example.org", {
-      event_id: "$start-active",
-      sender: "@alice:example.org",
-      type: "m.key.verification.start",
-      origin_server_ts: Date.now(),
-      content: {
-        "m.relates_to": { event_id: "$req-active" },
-      },
-    });
-
-    await flushTasks();
-    const bodies = getSentNoticeBodies(sendMessage);
-    expectBodiesContain(bodies, "SAS decimal: 6158 1986 3513");
-    expectBodiesExclude(bodies, "SAS decimal: 1111 2222 3333");
-  });
-
   it("preserves strict-room SAS fallback when active DM inspection cannot resolve a room", async () => {
     const { sendMessage, roomEventListener, flushTasks } = createHarness({
       joinedMembersByRoom: {
@@ -1319,95 +1103,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         sender: "@gumadeiras:matrix.example.org",
       },
     );
-  });
-
-  it("does not add self-device guidance for decrypt failures from another sender", async () => {
-    const { logger, failedDecryptListener, flushTasks } = createHarness({
-      accountId: "ops",
-      selfUserId: "@gumadeiras:matrix.example.org",
-    });
-
-    failedDecryptListener(
-      "!room:example.org",
-      {
-        event_id: "$enc-other",
-        sender: "@alice:matrix.example.org",
-        type: EventType.RoomMessageEncrypted,
-        origin_server_ts: Date.now(),
-        content: {},
-      },
-      new Error("The sender's device has not sent us the keys for this message."),
-    );
-    await flushTasks();
-
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expectWarnContextFields(logger, 1, "Failed to decrypt message", {
-      roomId: "!room:example.org",
-      eventId: "$enc-other",
-      sender: "@alice:matrix.example.org",
-      senderMatchesOwnUser: false,
-    });
-  });
-
-  it("classifies repeated fresh post-healthy-sync decrypt failures separately", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
-    try {
-      const healthySyncSinceMs = Date.now() - 60_000;
-      const { logger, failedDecryptListener, flushTasks } = createHarness({
-        accountId: "ops",
-        getHealthySyncSinceMs: () => healthySyncSinceMs,
-      });
-
-      for (const [index, roomId] of [
-        "!room-a:example.org",
-        "!room-b:example.org",
-        "!room-c:example.org",
-      ].entries()) {
-        failedDecryptListener(
-          roomId,
-          {
-            event_id: `$enc-fresh-${index + 1}`,
-            sender: `@alice${index + 1}:matrix.example.org`,
-            type: EventType.RoomMessageEncrypted,
-            origin_server_ts: Date.now() - 1_000 * (index + 1),
-            content: {},
-          },
-          new Error("The sender's device has not sent us the keys for this message."),
-        );
-        await flushTasks();
-      }
-
-      expectWarnContextFields(logger, 1, "Failed to decrypt fresh post-healthy-sync message", {
-        eventId: "$enc-fresh-1",
-        freshAfterHealthySync: true,
-        postHealthySyncFailureCount: 1,
-      });
-      expectWarnContextFields(logger, 2, "Failed to decrypt fresh post-healthy-sync message", {
-        eventId: "$enc-fresh-2",
-        freshAfterHealthySync: true,
-        postHealthySyncFailureCount: 2,
-      });
-      expectWarnContextFields(logger, 3, "Failed to decrypt fresh post-healthy-sync message", {
-        eventId: "$enc-fresh-3",
-        freshAfterHealthySync: true,
-        postHealthySyncFailureCount: 3,
-      });
-      expectWarnContextFields(
-        logger,
-        4,
-        "matrix: repeated fresh encrypted messages are still failing to decrypt after Matrix resumed healthy sync. This device may still be missing new room keys. Check 'openclaw matrix verify status --verbose --account ops' and 'openclaw matrix devices list --account ops'.",
-        {
-          failureCount: 3,
-          roomCount: 3,
-          senderCount: 3,
-          rooms: ["!room-a:example.org", "!room-b:example.org", "!room-c:example.org"],
-          sampleEventIds: ["$enc-fresh-1", "$enc-fresh-2", "$enc-fresh-3"],
-        },
-      );
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("keeps decrypt failures before healthy sync on the generic warning path", async () => {

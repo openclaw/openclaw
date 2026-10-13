@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
@@ -58,6 +57,7 @@ export async function completeReplyAgentRun(input: {
     storePath,
   } = context;
   const { autoCompactionCount, runResult, verboseEnabled } = accounting;
+  const { completion } = context;
   const { completedSourceReplyDelivery, guardedReplyPayloads, responseUsageLine } = prepared;
   let { activeSessionEntry } = prepared;
 
@@ -199,16 +199,13 @@ export async function completeReplyAgentRun(input: {
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
       normalizePendingFinalRecoveryPayloads(finalPayloads),
     );
-    const pendingText = sourceReplyPolicy.suppressDelivery
-      ? ""
-      : (recoverablePendingFinalText ?? "");
-    let resolvedPendingText = pendingText;
+    let pendingText = sourceReplyPolicy.suppressDelivery ? "" : (recoverablePendingFinalText ?? "");
     if (isHeartbeat) {
       const stripped = stripHeartbeatToken(pendingText, {
         mode: "heartbeat",
         maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
       });
-      resolvedPendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
+      pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
@@ -250,29 +247,18 @@ export async function completeReplyAgentRun(input: {
       });
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
-      const persistedPendingFinalDelivery = await patchSessionEntryCore(
-        { agentId: followupRun.run.agentId, storePath, sessionKey },
-        (entry) =>
-          entry.sessionId === expectedSessionId
-            ? {
-                pendingFinalDelivery: {
-                  ...(resolvedPendingText && commandOwnerReference === undefined
-                    ? { kind: "replayable" as const, text: resolvedPendingText }
-                    : { kind: "transport-only" as const }),
-                  intentId: pendingFinalDeliveryIntentId,
-                  deliveries: pendingFinalDeliveries,
-                  context: pendingFinalDeliveryContext,
-                  createdAt: Date.now(),
-                },
-                updatedAt: Date.now(),
-              }
-            : null,
-        {
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          workerGuard: {},
-        },
-      );
+      if (!completion) {
+        throw new Error("Pending final delivery has no admitted completion actor");
+      }
+      const persistedPendingFinalDelivery = await completion.complete({
+        ...(pendingText && commandOwnerReference === undefined
+          ? { kind: "replayable" as const, text: pendingText }
+          : { kind: "transport-only" as const }),
+        intentId: pendingFinalDeliveryIntentId,
+        deliveries: pendingFinalDeliveries,
+        context: pendingFinalDeliveryContext,
+        createdAt: Date.now(),
+      });
       if (
         persistedPendingFinalDelivery?.sessionId !== expectedSessionId ||
         persistedPendingFinalDelivery.pendingFinalDelivery?.intentId !==
@@ -280,8 +266,10 @@ export async function completeReplyAgentRun(input: {
       ) {
         throw new Error("pending final delivery session changed or was deleted");
       }
+      activeSessionEntry = persistedPendingFinalDelivery;
     }
   }
+  activeSessionEntry = (await completion?.complete()) ?? activeSessionEntry;
   const result = returnWithQueuedFollowupDrain(
     finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
   );

@@ -373,12 +373,7 @@ function isInternalContext(context?: DeliveryContext): boolean {
 }
 
 function hasExternalTarget(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    context.channel !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(context.channel) &&
-    context.to,
-  );
+  return Boolean(context?.channel && !isInternalContext(context) && context.to);
 }
 
 function mergeExternalOverInternal(

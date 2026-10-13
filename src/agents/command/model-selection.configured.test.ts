@@ -2,7 +2,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { resolveSessionTranscriptFile } from "../../config/sessions/transcript-file-resolve.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,14 +12,21 @@ import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfiles from "../auth-profiles/store-runtime.js";
 import * as harnessRuntime from "../harness/runtime-plugin.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
+import { loadProviderScopedThinkingCatalog } from "../model-catalog.runtime.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import * as sessionPersistence from "./attempt-execution.shared.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
-import * as runtimeLoaders from "./runtime-loaders.js";
 
 vi.mock("../model-catalog.js", { spy: true });
+vi.mock("../model-catalog.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../model-catalog.runtime.js")>();
+  return {
+    ...actual,
+    loadProviderScopedThinkingCatalog: vi.fn().mockResolvedValue([]),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:subagent:configured-selection";
@@ -63,9 +69,6 @@ function automaticEntry(model = "child"): SessionEntry {
 
 beforeEach(() => {
   vi.spyOn(harnessRuntime, "ensureSelectedAgentHarnessPlugin").mockResolvedValue(undefined);
-  vi.spyOn(runtimeLoaders, "loadTranscriptResolveRuntime").mockResolvedValue({
-    resolveSessionTranscriptFile,
-  });
   // Only the persistence boundary is substituted; the selector decides every patch.
   vi.spyOn(sessionPersistence, "persistAgentSession").mockImplementation(async (params) => {
     const saved = structuredClone(params.entry);
@@ -168,6 +171,46 @@ function createRestrictedFixture() {
 }
 
 describe("command selection with configured model facts", () => {
+  it.each([
+    { previous: null, observed: "max", configured: undefined, supported: true },
+    { previous: "max", observed: null, configured: undefined, supported: false },
+    { previous: null, observed: "max", configured: null, supported: false },
+    { previous: "max", observed: null, configured: "max", supported: true },
+    { previous: "max", observed: undefined, configured: undefined, supported: true },
+  ])(
+    "uses observed max support ($supported) over stale catalog facts",
+    async ({ previous, observed, configured, supported }) => {
+      const fixture = createFixture();
+      fixture.custom.models.forEach((model) => {
+        model.reasoning = true;
+        if (model.id === "child" && configured !== undefined) {
+          model.thinkingLevelMap = { max: configured };
+        }
+      });
+      fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+      const stale = {
+        ...catalogEntry("custom", "child"),
+        reasoning: true,
+        thinkingLevelMap: { max: previous },
+      };
+      fixture.inventory.mockReturnValue([stale]);
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue(
+        observed === undefined ? [] : [{ ...stale, thinkingLevelMap: { max: observed } }],
+      );
+      const selection = fixture.select({
+        configuredThinkingCatalog: [stale],
+        requestedThinkLevel: "max",
+        thinkOnce: "max",
+        isSubagentLane: false,
+      });
+      if (supported) {
+        await expect(selection).resolves.toMatchObject({ provider: "custom", model: "child" });
+      } else {
+        await expect(selection).rejects.toThrow('Thinking level "max" is not supported');
+      }
+    },
+  );
+
   it.each(["fallback", "automatic"] as const)(
     "constrains stored %s selection without probing a role-denied primary",
     async (source) => {
@@ -204,7 +247,7 @@ describe("command selection with configured model facts", () => {
       authProfileOverride: "other:shared",
       authProfileOverrideSource: "user",
     };
-    vi.spyOn(authProfiles, "ensureAuthProfileStore").mockReturnValue({
+    vi.spyOn(authProfiles, "ensureAuthProfileStoreAsync").mockResolvedValue({
       version: 1,
       profiles: {
         "other:shared": { type: "api_key", provider: "other", key: "synthetic-model-policy-key" },
@@ -481,7 +524,7 @@ describe("command selection with configured model facts", () => {
   );
 });
 
-describe("command selection with real transcript routing", () => {
+describe("command selection with session routing", () => {
   it.each([
     [sessionKey, true, false, "store"],
     [sessionKey, true, false, "explicit"],
@@ -490,7 +533,7 @@ describe("command selection with real transcript routing", () => {
     [undefined, true, true, "fallback"],
     ["", true, true, "fallback"],
   ] as const)(
-    "routes key=%j, store=%s, suppressed=%s through the real resolver",
+    "routes key=%j, store=%s, suppressed=%s",
     async (key, withStore, suppressVisibleSessionEffects, route) => {
       const fixture = createFixture();
       fixture.defaults.modelPolicy = { allow: ["custom/*"] };
@@ -506,10 +549,6 @@ describe("command selection with real transcript routing", () => {
       const explicitEntry: SessionEntry | undefined =
         route === "explicit" ? { sessionId: "explicit-session", updatedAt: 1 } : undefined;
       const storePath = path.join(fixture.cfg.agents!.entries!.main!.workspace!, "sessions.json");
-      const resolver = vi.fn(resolveSessionTranscriptFile);
-      vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockResolvedValue({
-        resolveSessionTranscriptFile: resolver,
-      });
 
       const selected = await fixture.select({
         opts: { message: "Resolve transcript routing", threadId: 42 },
@@ -530,41 +569,38 @@ describe("command selection with real transcript routing", () => {
       if (route === "explicit") {
         expect(fixture.entry()).toBe(storedEntry);
       }
-      expect(resolver).toHaveBeenCalledTimes(1);
-      const forwarded = expectDefined(resolver.mock.calls[0], "transcript resolution call")[0];
-      expect(forwarded).toMatchObject({
-        sessionKey: key === undefined ? sessionId : key,
-      });
-      expect(forwarded.sessionEntry).toBe(explicitEntry);
-      expect(forwarded.sessionStore).toBe(
-        route === "store" || route === "explicit" ? store : undefined,
-      );
       expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
     },
   );
 
-  it("rechecks operator authority after loading transcript routing", async () => {
+  it("rechecks operator authority after loading the thinking catalog", async () => {
     const fixture = createFixture();
+    fixture.custom.models.forEach((model) => {
+      model.reasoning = true;
+    });
     const lifetime = new AbortController();
-    const denied = new Error("operator authority ended during transcript loading");
+    const denied = new Error("operator authority ended during thinking catalog loading");
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "transcript-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {},
       signal: lifetime.signal,
     });
-    const resolver = vi.fn(resolveSessionTranscriptFile);
-    vi.mocked(runtimeLoaders.loadTranscriptResolveRuntime).mockImplementation(async () => {
-      lifetime.abort(denied);
-      return { resolveSessionTranscriptFile: resolver };
-    });
+    vi.mocked(loadProviderScopedThinkingCatalog)
+      .mockClear()
+      .mockImplementation(async () => {
+        lifetime.abort(denied);
+        return [];
+      });
 
     await expect(
-      fixture.select({ opts: { message: "Resolve transcript routing", operatorAuthority } }),
+      fixture.select({
+        opts: { message: "Select thinking level", operatorAuthority },
+        requestedThinkLevel: "low",
+      }),
     ).rejects.toBe(denied);
 
-    expect(runtimeLoaders.loadTranscriptResolveRuntime).toHaveBeenCalledTimes(1);
-    expect(resolver).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(1);
     expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
   });
 });

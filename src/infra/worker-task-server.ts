@@ -11,9 +11,17 @@ import {
   decodeAgentDatabaseReaderRequest,
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
+import {
+  installSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "./sqlite-database-admission.js";
+import {
+  bindSqliteDatabaseAdmissionUpstream,
+  exchangeSqliteDatabaseAdmissions,
+} from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
-import { WORKER_TASK_PORT_MESSAGE } from "./worker-task-transport.js";
+import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-transport.js";
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
@@ -26,7 +34,7 @@ type WorkerTaskHandler<Output> = (
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
   handler: WorkerTaskHandler<Output>,
-  options: { transferList?: (value: Output) => Transferable[] } = {},
+  options: { transferList?: (value: Output) => Transferable[]; retireOnError?: boolean } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
@@ -38,27 +46,48 @@ export function serveOwnedWorkerTasks<Output>(
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
+    /** Unknown native state cannot publish a reusable task failure before isolate exit. */
+    retireOnError?: boolean;
   } = {},
 ): void {
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
-  let memorySamplesStarted = false;
-  serveRuntimeWorkerTasks<Output, [string, string][]>(
-    handler,
+  let databaseAdmissionPort: MessagePort | undefined;
+  let closeMemorySamples: (() => void) | undefined;
+  const runWithDatabaseAdmission = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    const port = databaseAdmissionPort;
+    if (!port) {
+      return operation();
+    }
+    let active = true;
+    try {
+      return await withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+        if (!active) {
+          throw new Error("SQLite admission facts outlived their worker task");
+        }
+        return exchangeSqliteDatabaseAdmissions(port, admissions, location, create);
+      }, operation);
+    } finally {
+      active = false;
+    }
+  };
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
+    (input, channel, control) => runWithDatabaseAdmission(() => handler(input, channel, control)),
     {
       ...options,
-      closeResource: async (key) => {
-        const request = decodeAgentDatabaseReaderRequest(key);
-        if (!request && !options.closeResource) {
-          throw new Error("Worker does not own retained resources");
-        }
-        if (request) {
-          await applyAgentDatabaseReaderRequest(request);
-        }
-        if (!request || request.kind === "close") {
-          await options.closeResource?.(key);
-        }
-      },
+      closeResource: (key) =>
+        runWithDatabaseAdmission(async () => {
+          const request = decodeAgentDatabaseReaderRequest(key);
+          if (!request && !options.closeResource) {
+            throw new Error("Worker does not own retained resources");
+          }
+          if (request) {
+            await applyAgentDatabaseReaderRequest(request);
+          }
+          if (!request || request.kind === "close") {
+            await options.closeResource?.(key);
+          }
+        }),
     },
     {
       selectStartupPort(message) {
@@ -80,14 +109,29 @@ export function serveOwnedWorkerTasks<Output>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !memorySamplesStarted) {
-          memorySamplesStarted = true;
-          serveWorkerMemorySamples(memoryPort);
+        if (sampleMemory && !closeMemorySamples) {
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
         }
         cancelWorkerIdleGc();
       },
-      installTaskContext: installDeletedAgentDatabaseFences,
+      installTaskContext(context) {
+        installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
+        installSqliteDatabaseAdmissions(context.databaseAdmissions);
+        if (context.databaseAdmissionPort) {
+          bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
+        }
+        databaseAdmissionPort ??= context.databaseAdmissionPort;
+      },
       onIdle: scheduleWorkerIdleGc,
+      onRetire() {
+        cancelWorkerIdleGc();
+        try {
+          closeMemorySamples?.();
+        } finally {
+          // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
+          databaseAdmissionPort?.close();
+        }
+      },
     },
   );
 }

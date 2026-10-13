@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { PluginPreviewController } from "./skill-preview.ts";
+import { PluginPreviewController } from "./skill-preview.tsx";
 
 afterEach(() => vi.restoreAllMocks());
 

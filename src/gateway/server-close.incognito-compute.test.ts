@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoTranscriptOperations } from "../config/sessions/session-incognito-transcript-contract.js";
 import {
   startSessionTranscriptIndexReconcile,
@@ -15,9 +16,11 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { createSqliteTrajectoryRuntimeSink } from "../trajectory/runtime-store-writer.js";
+import { createTrajectoryEvent } from "../trajectory/runtime-store.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
-it("settles accepted actor reconciliation and usage publication across the real close prelude", async ({
+it("settles accepted actor reconciliation, usage and trajectory across the real close prelude", async ({
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("incognito-compute-close");
@@ -85,6 +88,32 @@ it("settles accepted actor reconciliation and usage publication across the real 
       sessionFiles: [sessionFile],
       incognito: binding,
     };
+    const trajectory = await withIncognitoSessionActor(
+      actor,
+      () =>
+        createSqliteTrajectoryRuntimeSink({
+          env: fixture.state.env,
+          sessionId: target.sessionId,
+          sessionTarget: { ...target, agentId: actor.agentId, storePath: actor.path },
+          maxRuntimeFileBytes: 1024 * 1024,
+        }),
+      kernel.scheduler.signal,
+    );
+    assert(trajectory);
+    const trajectoryReady = createDeferredCore();
+    const trajectoryMaintenanceReplies: unknown[] = [];
+    const append = actor.sessions.sideData;
+    vi.spyOn(actor.sessions, "sideData").mockImplementation((...args) =>
+      append(...args).then(async (value) => {
+        if (args[1].type === "session.trajectory.append") {
+          trajectoryReady.resolve();
+          await release.promise;
+        } else if (args[1].type === "session.trajectory.retention.delete") {
+          trajectoryMaintenanceReplies.push(value);
+        }
+        return value;
+      }),
+    );
     const projectionReady = createDeferredCore();
     const usageReady = createDeferredCore();
     const joining = createDeferredCore();
@@ -139,16 +168,25 @@ it("settles accepted actor reconciliation and usage publication across the real 
             startSessionTranscriptIndexReconcile(database, binding);
             const reconciling = waitForSessionTranscriptIndexReconcile(database, binding);
             const refreshing = refreshCostUsageCacheForAgent(refresh);
-            const accepted = Promise.all([reconciling, refreshing]);
+            const event = createTrajectoryEvent({
+              type: "accepted-before-close",
+              sessionId: target.sessionId,
+            });
+            trajectory.write(event, JSON.stringify(event));
+            const accepted = Promise.all([reconciling, refreshing, trajectory.flush()]);
             void accepted.catch((error: unknown) => {
               projectionReady.reject(error);
               usageReady.reject(error);
+              trajectoryReady.reject(error);
             });
             await prelude.promise;
             expect(() => startSessionTranscriptIndexReconcile(database, binding)).toThrow();
             await expect(refreshCostUsageCacheForAgent(refresh)).rejects.toThrow();
             await release.promise;
             expect((await accepted)[1]).toBe("refreshed");
+            expect(trajectoryMaintenanceReplies.at(-1)).toMatchObject({ complete: true });
+            expect(trajectory.describeFlushState()).toBeUndefined();
+            await trajectory.flush();
             await expect(
               actor.sessions.history(authority, {
                 type: "session.history.recent",
@@ -190,7 +228,10 @@ it("settles accepted actor reconciliation and usage publication across the real 
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
-    await withinTest(Promise.all([projectionReady.promise, usageReady.promise]), signal);
+    await withinTest(
+      Promise.all([projectionReady.promise, usageReady.promise, trajectoryReady.promise]),
+      signal,
+    );
     expect(sql.queries).toEqual([]);
     sql.restore();
     sql = undefined;

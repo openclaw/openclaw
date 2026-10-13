@@ -13,6 +13,7 @@ import {
   withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -20,7 +21,7 @@ import {
   clearAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { runReplyAgent } from "./agent-runner.runtime.js";
+import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { baseParams, createInboundTurn, createSessionTurn } from "./get-reply-run.test-support.js";
 
@@ -70,6 +71,8 @@ export function registerPendingRequesterAuthorityCases({
         { kind: "external", channel: "discord" },
         { source: "channel-owner", isCurrent: () => true },
       )!;
+      const params = baseParams();
+      setRuntimeConfigSnapshot(params.cfg);
       try {
         await runWithCronCreatorAuthorityCapability(scope, () =>
           withGatewayToolCallerIdentity(
@@ -104,7 +107,6 @@ export function registerPendingRequesterAuthorityCases({
           kind === "inter-session"
             ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
             : undefined;
-        const params = baseParams();
         params.command.senderIsOwner = kind === "fresh-owner";
         await runPrepared({
           ...params,
@@ -159,6 +161,7 @@ export function registerPendingRequesterAuthorityCases({
         revokeRequesterCronAuthority(sessionKey);
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRunId);
+        clearRuntimeConfigSnapshot();
       }
     },
   );

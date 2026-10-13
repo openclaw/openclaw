@@ -20,7 +20,8 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import "../../plugins/control-ui-view.runtime.ts";
+import "../../plugins/control-ui-view.solid.tsx";
+import "../../plugins/control-ui-contributions.solid.tsx";
 
 class PluginQuestionChatHost extends LitElement {
   props = createChatProps();

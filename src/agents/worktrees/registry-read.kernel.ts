@@ -12,7 +12,7 @@ import type {
 } from "./types.js";
 
 type WorktreeRow = Selectable<OpenClawStateKyselyDatabase["worktrees"]>;
-export const WORKTREE_RECORD_COLUMNS = [
+const WORKTREE_RECORD_COLUMNS = [
   "id",
   "repo_fingerprint",
   "repo_root",

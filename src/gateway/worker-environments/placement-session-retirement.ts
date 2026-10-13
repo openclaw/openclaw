@@ -9,7 +9,10 @@ export type PlacementSessionEvidenceResolver = (
 ) => Promise<PlacementSessionEvidence>;
 
 type PlacementSessionRetirementDeps = {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "list" | "retireSessionPlacement">;
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    "getAsync" | "listAsync" | "retireSessionPlacementAsync"
+  >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
     environmentId: string,
@@ -18,11 +21,15 @@ type PlacementSessionRetirementDeps = {
   createSessionEvidenceResolver: (
     placements: readonly WorkerSessionPlacementRecord[],
   ) => Promise<PlacementSessionEvidenceResolver>;
+  reportChanges: (
+    operation: () => Promise<void>,
+    before: readonly WorkerSessionPlacementRecord[],
+  ) => Promise<void>;
   warn: (message: string) => void;
 };
 
 export function createPlacementSessionRetirement(deps: PlacementSessionRetirementDeps) {
-  const retireCurrent = (placement: WorkerSessionPlacementRecord): boolean => {
+  const retireCurrent = async (placement: WorkerSessionPlacementRecord): Promise<boolean> => {
     if (placement.turnClaim) {
       return false;
     }
@@ -41,7 +48,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     if (placement.state === "provisioning") {
       return false;
     }
-    deps.placements.retireSessionPlacement({
+    await deps.placements.retireSessionPlacementAsync({
       sessionId: placement.sessionId,
       expectedState: placement.state,
       expectedGeneration: placement.generation,
@@ -63,12 +70,12 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return;
     }
 
-    let current = deps.placements.get(placement.sessionId);
+    let current = await deps.placements.getAsync(placement.sessionId);
     if (!current) {
       return;
     }
     try {
-      if (retireCurrent(current)) {
+      if (await retireCurrent(current)) {
         return;
       }
     } catch {
@@ -92,29 +99,35 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return;
     }
 
-    current = deps.placements.get(placement.sessionId);
+    current = await deps.placements.getAsync(placement.sessionId);
     if (!current) {
       return;
     }
     try {
-      retireCurrent(current);
+      await retireCurrent(current);
     } catch {
       // A concurrent placement transition owns the next reconciliation pass.
     }
   };
 
   const reconcile = async (): Promise<void> => {
-    const placements = deps.placements.list();
-    const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
-    for (const placement of placements) {
-      try {
-        await reconcilePlacement(placement, resolveSessionEvidence);
-      } catch (error) {
-        deps.warn(
-          `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
-        );
-      }
+    const placements = await deps.placements.listAsync();
+    if (placements.length === 0) {
+      return;
     }
+    // The retirement scan already supplies the complete before-snapshot for reporting.
+    await deps.reportChanges(async () => {
+      const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+      for (const placement of placements) {
+        try {
+          await reconcilePlacement(placement, resolveSessionEvidence);
+        } catch (error) {
+          deps.warn(
+            `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
+          );
+        }
+      }
+    }, placements);
   };
 
   return { reconcile };

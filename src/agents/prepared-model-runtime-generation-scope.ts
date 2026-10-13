@@ -5,6 +5,7 @@ import {
 } from "../model-catalog/remote-overlay.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
+  PreparedModelRuntimeLease,
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
@@ -23,6 +24,27 @@ const PREPARED_MODEL_RUNTIME_PLUGIN_GENERATION_SCOPE_KEY: unique symbol = Symbol
 const preparedModelRuntimePluginGenerationScope = resolveGlobalSingleton<
   AsyncLocalStorage<PreparedModelRuntimeGenerationScope | undefined>
 >(PREPARED_MODEL_RUNTIME_PLUGIN_GENERATION_SCOPE_KEY, () => new AsyncLocalStorage());
+
+/** Borrow authority closes before the retained generation begins asynchronous disposal. */
+export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease) {
+  let open = true;
+  let disposal: Promise<void> | undefined;
+  return {
+    ...lease,
+    [Symbol.asyncDispose]() {
+      open = false;
+      return (disposal ??= lease[Symbol.asyncDispose]());
+    },
+    run<T>(run: () => T): T {
+      if (!open) {
+        throw new Error("Captured reply runtime lease is closed");
+      }
+      return withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
+        open ? lease.snapshot : undefined,
+      );
+    },
+  };
+}
 
 /** Keeps the exact admitted generation available to nested embedded agent runs. */
 export function withPreparedModelRuntimePluginGenerationScope<T>(

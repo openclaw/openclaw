@@ -105,7 +105,11 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat loading performance with a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
-    const owner = await createOpenClawTestInstance({ name: "chat-loading-performance" });
+    const owner = await createOpenClawTestInstance({
+      name: "chat-loading-performance",
+      // Avatar updates wait for the config-reload owner's application receipt.
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
+    });
     instance = owner;
     try {
       const workspace = owner.state.path("workspace");
@@ -179,7 +183,8 @@ suite.define(() => {
     const cliJson = async (args: string[]): Promise<Record<string, unknown>> => {
       const result = await owner.cli(["--no-color", ...args]);
       if (result.code !== 0) {
-        const diagnostic = result.stderr
+        const diagnostic = [result.stderr, result.stdout]
+          .join("\n")
           .replaceAll(owner.gatewayToken, "[redacted fixture token]")
           .replaceAll(owner.hookToken, "[redacted fixture token]");
         throw new Error(
@@ -381,17 +386,6 @@ suite.define(() => {
             ) {
               return;
             }
-            if (
-              ![
-                "chat.startup",
-                "chat.history",
-                "sessions.resolve",
-                "agents.list",
-                "agent.identity.get",
-              ].includes(frame.method)
-            ) {
-              return;
-            }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
               requestId: frame.id,
@@ -466,7 +460,6 @@ suite.define(() => {
         startedAt = Date.now();
         measuring = true;
         await page.reload();
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const selectedCommitted = waitForStartupCommit(selectedKey, selectedPane);
         const homeCommitted = waitForStartupCommit(
@@ -572,11 +565,11 @@ suite.define(() => {
               selectedPane.evaluate((element) => {
                 const pane = element as HTMLElement & {
                   loadingOlder: boolean;
-                  historyIntentConsumed: boolean;
+                  historyIntentTimer: number | null;
                 };
                 return {
                   loadingOlder: pane.loadingOlder,
-                  historyIntentConsumed: pane.historyIntentConsumed,
+                  historyIntentConsumed: pane.historyIntentTimer !== null,
                 };
               }),
             )
@@ -676,7 +669,6 @@ suite.define(() => {
           startedAt = Date.now();
           // Keep the same short-link input even if navigation canonicalized the prior URL.
           await page.goto(`${url.origin}${url.pathname}`);
-          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const narrowSelectedCommitted = waitForStartupCommit(
             selectedKey,
@@ -770,8 +762,8 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
-        // #165897 deliberately bounds ordinary pages to 512 KiB; the full
-        // synthetic transcript now spans pages instead of one multi-megabyte reply.
+        // Backscroll requests use the explicit 1 MiB budget from #170481;
+        // the Gateway retains its 512 KiB default for requests without a budget.
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
         expect(olderPages.map((metric) => metric.messages)).toEqual(olderPageMessageCounts);
@@ -779,7 +771,8 @@ suite.define(() => {
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
           expect(metric.offset).toBe(nextOffset);
-          expect(metric.historyBytes).toBeLessThanOrEqual(512 * 1024);
+          expect(metric.maxBytes).toBe(1024 * 1024);
+          expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);
           // This fixture has one visible message per source row.
@@ -921,7 +914,6 @@ suite.define(() => {
             (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
           );
           await page.reload();
-          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const response = await responseReady;
           expect(response.status()).toBe(200);

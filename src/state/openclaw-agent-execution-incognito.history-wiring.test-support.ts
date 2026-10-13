@@ -6,15 +6,13 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { listSessionBranches } from "../config/sessions/session-accessor.sqlite-branch-list.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
-import type { IncognitoHistoryTarget } from "../config/sessions/session-incognito-history-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
 import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
-import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { hasSessionTranscriptMessage } from "../config/sessions/session-transcript-message-presence.js";
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
@@ -22,6 +20,7 @@ import {
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
+import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import * as cronJobNames from "../cron/store/job-name.js";
 import { readChatHistoryDelta } from "../gateway/server-methods/chat-history-delta.js";
 import {
@@ -42,20 +41,20 @@ import {
 } from "../gateway/session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../gateway/session-transcript-title-reader.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
+import {
+  registerIncognitoHistoryVisibilityTests,
+  type HistoryWiringFixture,
+} from "./openclaw-agent-execution-incognito.history-visibility.test-support.js";
+import { registerIncognitoSdkHistoryTests } from "./openclaw-agent-execution-incognito.sdk-history.test-support.js";
+import type { IncognitoActorProbe } from "./openclaw-agent-execution-incognito.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 
-type HistoryWiringFixture = {
-  readonly actor: IncognitoAgentDatabaseExecution;
-  readonly env: NodeJS.ProcessEnv;
-  authority: IncognitoSessionAuthority;
-  create(this: void, name: string): Promise<IncognitoLifecycleEntry>;
-  append(this: void, target: IncognitoLifecycleEntry, content: string): Promise<unknown>;
-  targetInput(this: void, target: IncognitoLifecycleEntry): IncognitoHistoryTarget;
-};
-
-export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixture) {
+export function registerIncognitoHistoryWiringTests(
+  fixture: HistoryWiringFixture,
+  probe: IncognitoActorProbe,
+) {
   const { authority, create, append, targetInput } = fixture;
+  registerIncognitoSdkHistoryTests(fixture);
 
   it("keeps a multi-page history read current across an unrelated session write", async () => {
     const { actor } = fixture;
@@ -223,7 +222,7 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const captured = createDeferredCore();
-    const held = actor.run(authority, async () => {
+    const held = probe.read(actor, authority, async () => {
       entered.resolve();
       await resume.promise;
     });
@@ -292,7 +291,9 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           env: undefined,
           sessionKey: "agent:foreign:dashboard:incognito-wired-history",
         }),
-      ).rejects.toThrow("another incognito actor");
+      ).rejects.toThrow(
+        "Explicit incognito database target does not match its agent and state root",
+      );
       expect(
         await loadTranscriptEvents({
           ...scope,
@@ -304,6 +305,9 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
       expect(await hasSessionTranscriptMessage(scope)).toBe(true);
       const message = events.find((event) => isRecord(event) && event.type === "message");
       assert(isRecord(message) && typeof message.id === "string");
+      expect(
+        await readRecentUserAssistantTextForSession({ ...scope, role: "assistant", limit: 2 }),
+      ).toMatchObject([{ id: message.id, role: "assistant", text: "wired history proof" }]);
       expect(await findTranscriptEvent(scope, { kind: "latest" })).toMatchObject({
         event: { id: message.id },
       });
@@ -419,7 +423,10 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         kind: "delta",
         messages: [{ message: { content: [{ text: "second wired answer" }] } }],
       });
-      expect(await readChatHistoryDelta(deltaRequest)).toEqual({ kind: "reset" });
+      expect(await readChatHistoryDelta(deltaRequest)).toMatchObject({
+        kind: "delta",
+        messages: [{ message: { content: [{ text: "second wired answer" }] } }],
+      });
       expect(await sse.refreshAsync()).toMatchObject({
         messages: [
           { content: [{ text: "wired history proof" }] },
@@ -466,6 +473,8 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
       expect(() => guarded.assertCurrent()).toThrow("visitor grant revoked");
     });
   });
+
+  registerIncognitoHistoryVisibilityTests(fixture);
 
   it("projects named cron labels before encoding actor-backed history", async () => {
     const { actor } = fixture;
@@ -548,6 +557,11 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     expect(visited).toEqual([
       { message: { role: "user", content: "after marker", timestamp: 2 }, seq: 2 },
     ]);
+    expect(
+      await withIncognitoSessionActor(actor, () =>
+        readRecentUserAssistantTextForSession({ ...target, role: "user", limit: 2 }),
+      ),
+    ).toMatchObject([{ role: "user", text: "after marker", timestamp: 2 }]);
   });
 
   it("rejects async preview transaction grants while commit grants remain synchronous", async () => {
@@ -574,8 +588,8 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
     ).rejects.toThrow("Incognito session grants must remain synchronous");
   });
 
-  it.each(["unchanged", "revoke", "abort", "write", "release"] as const)(
-    "revalidates async model context consumers after %s and joins their lifetime",
+  it.each(["unchanged", "revoke", "abort", "append", "release"] as const)(
+    "settles async model context consumers after %s and joins their lifetime",
     async (mode) => {
       const { actor, env } = fixture;
       const session = await create(`async-model-context-${mode}`);
@@ -623,25 +637,22 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
         admission.signal,
       );
       const settled =
-        mode === "unchanged"
-          ? expect(work).resolves.toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  message: expect.objectContaining({
-                    content: [{ type: "text", text: "private context before consumer" }],
-                  }),
-                }),
-              ]),
-            )
-          : mode === "write"
-            ? expect(work).rejects.toBeInstanceOf(SessionTranscriptReadFenceError)
-            : expect(work).rejects.toThrow(
-                mode === "release"
-                  ? "reference is released"
-                  : mode === "abort"
-                    ? "context admission revoked"
-                    : "context grant revoked",
-              );
+        mode === "unchanged" || mode === "append"
+          ? expect(work).resolves.toMatchObject([
+              { type: "session" },
+              {
+                message: {
+                  content: [{ type: "text", text: "private context before consumer" }],
+                },
+              },
+            ])
+          : expect(work).rejects.toThrow(
+              mode === "release"
+                ? "reference is released"
+                : mode === "abort"
+                  ? "context admission revoked"
+                  : "context grant revoked",
+            );
       let releasing: Promise<void> | undefined;
       let released = false;
       try {
@@ -654,13 +665,13 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
           revoked = true;
         } else if (mode === "abort") {
           admission.abort(new Error("context admission revoked"));
-        } else if (mode === "write") {
+        } else if (mode === "append") {
           await append(session, "context changed while consumer awaited");
         } else if (mode === "release") {
           releasing = borrowed.release().then(() => {
             released = true;
           });
-          await actor.run(authority, async () => undefined);
+          await probe.read(actor, authority);
           expect(released).toBe(false);
         }
         resume.resolve();

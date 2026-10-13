@@ -16,9 +16,6 @@ function findDiscordUrlRanges(markdown: string): Array<{ start: number; end: num
   const ranges: Array<{ start: number; end: number }> = [];
   for (const match of markdown.matchAll(DISCORD_URL_START_RE)) {
     const start = match.index;
-    if (start === undefined) {
-      continue;
-    }
     const preceding = markdown[start - 1] ?? "";
     if (/[\p{L}\p{N}]/u.test(preceding) || (preceding === "_" && markdown[start - 2] !== "_")) {
       continue;
@@ -50,21 +47,15 @@ function markdownSemanticSignature(root: PositionedMarkdownNode): string {
   const pending: Array<{ node: PositionedMarkdownNode; parentStrong: boolean; exiting?: true }> = [
     { node: root, parentStrong: false },
   ];
-  while (pending.length > 0) {
-    const event = pending.pop();
-    if (!event) {
-      continue;
-    }
+  for (let event = pending.pop(); event; event = pending.pop()) {
     if (event.exiting) {
       parts.push(")");
       continue;
     }
     const { node } = event;
     const redundantStrong = event.parentStrong && node.type === "strong";
-    const fields = Object.fromEntries(
-      Object.entries(node).filter(([key]) => key !== "children" && key !== "position"),
-    );
-    const children = node.children ?? [];
+    const { children: childNodes, position: _position, ...fields } = node;
+    const children = childNodes ?? [];
     if (!redundantStrong) {
       parts.push(`(${JSON.stringify(fields)}`);
       pending.push({ node, parentStrong: event.parentStrong, exiting: true });
@@ -98,11 +89,7 @@ function normalizeDiscordBold(markdown: string): string {
   const sourceTree = fromMarkdown(markdown) as PositionedMarkdownNode;
   const activeSpanIds: number[] = [];
   const pending: Array<{ node: PositionedMarkdownNode; exiting?: number }> = [{ node: sourceTree }];
-  while (pending.length > 0) {
-    const event = pending.pop();
-    if (!event) {
-      continue;
-    }
+  for (let event = pending.pop(); event; event = pending.pop()) {
     if (event.exiting !== undefined) {
       activeSpanIds.pop();
       continue;
@@ -198,9 +185,10 @@ function normalizeDiscordBold(markdown: string): string {
       Math.min(strongInteriorStartByEnd.get(span.end) ?? interiorStart, interiorStart),
     );
   }
-  const nativeTokenRanges = [...markdown.matchAll(DISCORD_NATIVE_TOKEN_RE)].flatMap((match) =>
-    match.index === undefined ? [] : [{ start: match.index, end: match.index + match[0].length }],
-  );
+  const nativeTokenRanges = [...markdown.matchAll(DISCORD_NATIVE_TOKEN_RE)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
   const protectedRanges = [
     ...findDiscordUrlRanges(markdown),
     ...astLinkRanges,
@@ -240,12 +228,9 @@ function normalizeDiscordBold(markdown: string): string {
   ].toSorted((left, right) => left.start - right.start);
   const editsBySpan = new Map<number, Array<(typeof edits)[number]>>();
   for (const edit of edits) {
-    const spanEdits = editsBySpan.get(edit.spanId);
-    if (spanEdits) {
-      spanEdits.push(edit);
-    } else {
-      editsBySpan.set(edit.spanId, [edit]);
-    }
+    const spanEdits = editsBySpan.get(edit.spanId) ?? [];
+    spanEdits.push(edit);
+    editsBySpan.set(edit.spanId, spanEdits);
   }
   const renderEdits = (selectedEdits: typeof edits, start = 0, end = markdown.length) => {
     let cursor = start;

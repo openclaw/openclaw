@@ -1,6 +1,7 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
@@ -56,6 +57,7 @@ export type MessageActionInput = Pick<
   | "deliveryIntentId"
   | "deliveryCompletion"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
@@ -77,6 +79,8 @@ export type MessageActionInput = Pick<
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   workspaceDir?: string;
+  /** @internal Captured creation readiness; never persisted or sent to channel adapters. */
+  workspaceReadiness?: AgentWorkspaceReadiness;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
@@ -117,11 +121,24 @@ export type MessageActionInput = Pick<
   sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** The run answers another session, so an internal sink write reaches only its transcript. */
+  sourceReplyTranscriptOnly?: boolean;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
   inboundEventKind?: InboundEventKind;
   inboundAudio?: boolean;
 };
+
+export function messageActionRequesterMediaContext(input: MessageActionInput) {
+  return {
+    workspaceMediaAccess: input.workspaceMediaAccess,
+    sessionKey: input.sessionKey,
+    requesterSenderId: input.requesterSenderId,
+    requesterSenderName: input.requesterSenderName,
+    requesterSenderUsername: input.requesterSenderUsername,
+    requesterSenderE164: input.requesterSenderE164,
+  };
+}
 
 export type MessageActionNormalization = {
   locationOmitted: true;
@@ -191,27 +208,21 @@ function resolveMessageSendOutcome(
   if (sendResult?.deliveryStatus === undefined || sendResult.deliveryStatus === "sent") {
     return { ok: true };
   }
-  switch (sendResult.deliveryStatus) {
-    case "suppressed":
-      return {
-        ok: false,
-        error: `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
-        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
-      };
-    case "failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? `${action} send failed.`,
-        ...(sendResult.sentBeforeError ? { sentBeforeError: true } : {}),
-      };
-    case "partial_failed":
-      return {
-        ok: false,
-        error: sendResult.error ?? `${action} send partially failed.`,
-        sentBeforeError: true,
-      };
+  const status = sendResult.deliveryStatus;
+  if (status === "suppressed" || status === "failed" || status === "partial_failed") {
+    return {
+      ok: false,
+      error:
+        status === "suppressed"
+          ? `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`
+          : (sendResult.error ??
+            `${action} send ${status === "failed" ? "failed" : "partially failed"}.`),
+      ...(status === "partial_failed" || sendResult.sentBeforeError
+        ? { sentBeforeError: true }
+        : {}),
+    };
   }
-  return sendResult.deliveryStatus satisfies never;
+  return status satisfies never;
 }
 
 export function resolveMessageActionOutcome(

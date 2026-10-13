@@ -59,24 +59,6 @@ export const dockPanelStyles = css`
     align-items: center;
     gap: var(--rail-header-action-gap, 2px);
   }
-  .rail-header__copy {
-    display: flex;
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--rail-header-copy-gap, 2px);
-  }
-  .rail-header__eyebrow {
-    overflow: hidden;
-    color: var(--muted, #8a919e);
-    font-size: var(--rail-header-eyebrow-size, 10px);
-    letter-spacing: var(--rail-header-eyebrow-letter-spacing, 0.04em);
-    line-height: 1;
-    text-overflow: ellipsis;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
   .rail-header__title {
     overflow: hidden;
     color: var(--text, #d7dae0);

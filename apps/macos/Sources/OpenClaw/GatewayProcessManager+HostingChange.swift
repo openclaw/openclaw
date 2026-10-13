@@ -154,8 +154,7 @@ extension GatewayProcessManager {
             change.recoveryFailure = error.localizedDescription
             if error.localizedDescription.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
                 self.desiredActive = false
-                self.status = .failed(error.localizedDescription)
-                self.lastFailureReason = error.localizedDescription
+                self.fail(error.localizedDescription)
                 self.appendLog("[gateway] \(error.localizedDescription)\n")
             }
             throw error

@@ -3,10 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -25,8 +30,10 @@ describe("managed worktree path state migrations", () => {
   });
 
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     });
   });
@@ -62,6 +69,8 @@ describe("managed worktree path state migrations", () => {
       await fs.mkdir(realStateDir, { recursive: true });
       await fs.symlink(realStateDir, linkedStateDir, "dir");
       const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: linkedStateDir };
+      const cfg = {} as OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       const service = new ManagedWorktreeService({ env });
       const live = await service.create({ repoRoot: repo, name: "live", baseRef: "HEAD" });
       const canonicalRoot = path.dirname(path.dirname(live.path));
@@ -111,7 +120,6 @@ describe("managed worktree path state migrations", () => {
         beforeCleanupOutcome.close();
       }
 
-      const cfg = {} as OpenClawConfig;
       // Doctor's read-only SELECT * follows the physical columns. Compatibility
       // validation must allow this additive column to be absent before that query.
       const detected = await detectLegacyStateMigrations({

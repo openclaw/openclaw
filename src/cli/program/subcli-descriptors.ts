@@ -114,11 +114,6 @@ const subCliCommandDescriptors = [
     hasSubcommands: true,
   },
   {
-    name: "fleet",
-    description: "Provision and manage isolated tenant cells (experimental)",
-    hasSubcommands: true,
-  },
-  {
     name: "worktrees",
     description: "Create, inspect, restore, and clean up managed worktrees",
     hasSubcommands: true,

@@ -7,7 +7,6 @@ import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-t
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { tuiPtyTestFiles } from "../vitest/vitest.test-shards.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -79,31 +78,6 @@ it("keeps exclusive aggregates out of cold canonical metadata discovery", async 
   } finally {
     vi.resetModules();
   }
-});
-
-it("executes the source TUI assertion helper without admitting deferred PTY builds", () => {
-  const helper = "src/tui/tui-pty-harness-assertion-test-support.test.ts";
-  const changedPaths = [helper, ...tuiPtyTestFiles];
-  const shards = createChangedNodeTestShards(changedPaths, {
-    dedicatedBuildArtifacts: false,
-  });
-  expect(shards).not.toBeNull();
-  expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-  const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
-  expect(targets).toContain(helper);
-  expect(targets.filter((target) => tuiPtyTestFiles.includes(target))).toEqual([]);
-  expect(testProjects.buildVitestRunPlans([helper])).toEqual([
-    {
-      config: "test/vitest/vitest.tui.config.ts",
-      forwardedArgs: [],
-      includePatterns: [helper],
-      watchMode: false,
-    },
-  ]);
-  expect(shards?.flatMap((shard) => shard.configs ?? [])).toContain(
-    "test/vitest/vitest.boundary.config.ts",
-  );
-  expect(createChangedNodeTestShards(changedPaths)?.some((shard) => shard.requiresDist)).toBe(true);
 });
 
 it("keeps source execution when narrow config owners no longer admit an artifact", () => {

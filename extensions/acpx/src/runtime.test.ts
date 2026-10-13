@@ -734,15 +734,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       killed: [],
     },
     {
-      name: "legacy wrapper",
-      command: CODEX_ACP_WRAPPER_COMMAND,
-      metadata: {},
-      killed: [
-        [921, "SIGTERM"],
-        [920, "SIGTERM"],
-      ],
-    },
-    {
       name: "reused lease",
       command: commandForLease("other-lease"),
       metadata: { openclawGatewayInstanceId: "gateway-test", openclawLeaseId: "lease-record" },

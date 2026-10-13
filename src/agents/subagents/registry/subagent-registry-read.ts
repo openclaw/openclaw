@@ -1,15 +1,21 @@
+import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
-import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
+import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
+import {
+  getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
+  getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
-  resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
@@ -23,7 +29,7 @@ import {
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSubagentRunLive } from "./subagent-run-liveness.js";
+import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
@@ -35,6 +41,19 @@ export {
   getSubagentSessionStartedAt,
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
+
+/** Resolve live owners through the existing aliases without scanning retained history. */
+export function listActiveSubagentSessionKeys(): string[] {
+  const runIds = new Set([...listLiveAgentRunIds(), ...listSwarmRunReservationIds()]);
+  const sessionKeys = new Set<string>();
+  for (const runId of getSubagentSessionReadLookup(subagentRuns).selectRunIds(runIds)) {
+    const entry = subagentRuns.get(runId);
+    if (entry && (isSubagentRunLive(entry) || isSubagentRunQueued(entry))) {
+      sessionKeys.add(entry.childSessionKey);
+    }
+  }
+  return [...sessionKeys];
+}
 
 /** Builds the session-list index without hydrating full retained registry payloads. */
 export function buildSubagentSessionListReadIndex(
@@ -50,10 +69,7 @@ export function buildSubagentSessionListReadIndex(
   return buildSubagentRunReadIndexFromRuns({
     runs,
     inMemoryRuns: sessionKeys
-      ? [...runs.keys()].flatMap((runId) => {
-          const current = subagentRuns.get(runId);
-          return current ? [current] : [];
-        })
+      ? [...runs.keys()].flatMap((runId) => subagentRuns.get(runId) ?? [])
       : subagentRuns.values(),
     now,
   });
@@ -122,10 +138,9 @@ export async function resolveRequesterForChildSession(
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null> {
-  const resolved = resolveRequesterForChildSessionFromRuns(
+  const resolved = getLatestSubagentRunForChild(
     await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
-    childSessionKey,
-    childAgentId,
+    { childSessionKey, childAgentId },
   );
   if (!resolved) {
     return null;
@@ -155,12 +170,7 @@ export function isSubagentSessionRunActive(
 ): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunByChildSessionKeyFromRuns(
-      subagentRuns,
-      childSessionKey,
-      undefined,
-      childAgentId,
-    ),
+    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
   );
 }
 
@@ -177,11 +187,9 @@ export async function getLatestSubagentRunByChildSessionKey(
   childAgentId?: string,
 ): Promise<SubagentRunRecord | null> {
   return (
-    getLatestSubagentRunByChildSessionKeyFromRuns(
+    getLatestSubagentRunForChild(
       await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
-      childSessionKey,
-      undefined,
-      childAgentId,
+      { childSessionKey, childAgentId },
     ) ?? null
   );
 }

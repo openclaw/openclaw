@@ -23,7 +23,7 @@ export const baseStatusCfg = {
   gateway: { bind: "loopback" },
 } as const;
 
-export const baseStatusUpdate = {
+const baseStatusUpdate = {
   installKind: "git",
   git: {
     branch: "main",
@@ -60,7 +60,7 @@ export const baseStatusGatewaySnapshot = {
   gatewaySelf: { host: "gateway", version: "1.2.3" },
 } as const;
 
-export const baseStatusOverviewScanFields = {
+const baseStatusOverviewScanFields = {
   cfg: baseStatusCfg,
   update: baseStatusUpdate,
   tailscaleMode: "serve",

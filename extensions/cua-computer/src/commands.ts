@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -394,6 +395,7 @@ export function createCuaComputerProvider(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
+  const generation = `cua-computer-v2:${randomUUID()}`;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
@@ -435,9 +437,7 @@ export function createCuaComputerProvider(
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: isSupportedPlatform
-          ? `cua-computer-v2:${availabilityDriver().generation}`
-          : "cua-computer-v2:unsupported",
+        generation,
       },
       actions: platformActions(platform),
       targets: ["screen", "window", "element", "browser"],

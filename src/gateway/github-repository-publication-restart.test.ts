@@ -16,11 +16,14 @@ import {
   installGitHubPublicationTestHarness,
   root,
 } from "./github-publication.test-support.js";
-import { readRepositoryGitHubPublication } from "./github-repository-publication-store.js";
+import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
+
+const readRepositoryGitHubPublication = (requestId: string) =>
+  readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -83,21 +86,22 @@ describe("repository checkpoint GitHub publication", () => {
       const retiredCoordinator = person.coordinator;
       await restartPersonalPublicationFixture(person);
       const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
-      const pending = person.coordinator.personalStatus(
+      using _ = { [Symbol.dispose]: () => preparedStatus?.release() };
+      const pending = await person.coordinator.personalStatusAsync(
         person.action,
         person.action,
         first.requestId,
         preparedStatus,
       );
-      expect(pending.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
-      expect(() =>
-        person.coordinator.personalStatus(
+      expect(pending?.confirmation?.workspaceTree).toBe(f.first.workspaceTree);
+      await expect(
+        person.coordinator.personalStatusAsync(
           { ...person.action, owner: person.otherOwner },
           person.action,
           first.requestId,
           preparedStatus,
         ),
-      ).toThrow();
+      ).rejects.toThrow();
       if (boundary === "move") {
         await patchSessionEntryCore(
           {
@@ -113,7 +117,7 @@ describe("repository checkpoint GitHub publication", () => {
         );
         expect(mocks.loadSession(SESSION_KEY).entry.repositoryWorkspaceId).toBeUndefined();
         expect(
-          person.coordinator.personalStatus(
+          await person.coordinator.personalStatusAsync(
             person.action,
             person.action,
             first.requestId,
@@ -169,7 +173,7 @@ describe("repository checkpoint GitHub publication", () => {
         requestId: first.requestId,
         generation: person.generation,
         account: personalPublicationAccount,
-        requestDigest: pending.confirmation!.requestDigest,
+        requestDigest: pending!.confirmation!.requestDigest,
       };
       if (boundary === "retired-owner") {
         const aborted = await callPersonalPublicationRpc(

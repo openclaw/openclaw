@@ -12,7 +12,9 @@ import {
 } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
 import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
@@ -21,7 +23,6 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
-  markTranscriptPromptText,
 } from "./tool-result-context-guard.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -34,7 +35,6 @@ import {
   makeGuardableAgent,
   getToolResultText,
   applyGuardToContext,
-  applyMidTurnPrecheckGuardToContext,
   expectOpenClawTruncation,
 } from "./tool-result-context-guard.test-support.js";
 
@@ -73,7 +73,7 @@ type HookOptions = Partial<
   Omit<Parameters<typeof installContextEngineLoopHook>[0], "agent" | "contextEngine">
 >;
 function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuardableAgent()) {
-  const dispose = installContextEngineLoopHook({
+  installContextEngineLoopHook({
     agent,
     contextEngine: engine,
     sessionId: "test-session",
@@ -86,25 +86,29 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
   });
   return {
     agent,
-    dispose,
     run: (messages: AgentMessage[], signal = new AbortController().signal) =>
       expectDefined(agent.transformContext, "installed hook")(messages, signal),
   };
 }
 
-function pressureCheck(
+async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
   messages: AgentMessage[],
   toolResultMaxChars?: number,
 ) {
-  return applyMidTurnPrecheckGuardToContext(agent, messages, {
-    contextWindowTokens: 200_000,
+  installToolResultContextGuard({ agent, contextWindowTokens: 200_000 });
+  const projected = await expectDefined(agent.transformContext, "installed guard")(
+    messages,
+    new AbortController().signal,
+  );
+  checkMidTurnPrecheck({
+    context: { messages: convertToLlm(projected), systemPrompt: "sys" },
     contextTokenBudget: 20_000,
     reserveTokens: 12_000,
     toolResultMaxChars,
-    systemPrompt: "sys",
-    prePromptMessageCount: 1,
+    onPrecheck: () => {},
   });
+  return projected;
 }
 
 describe("installToolResultContextGuard", () => {
@@ -199,37 +203,29 @@ describe("installToolResultContextGuard", () => {
     expect(agent.state.errorMessage).toBeUndefined();
   });
 
-  it.each([64, 8_192])(
-    "reserves or omits %i characters of metadata within the cap",
-    async (size) => {
-      const metadata = { type: "custom", value: "m".repeat(size) };
-      const hint = { type: "text", text: "Inspect src/fixture.ts before retrying." };
-      const source = castAgentMessage({
-        ...makeToolResult("blocks", ""),
-        content: [{ type: "text", text: "x".repeat(6_000) }, metadata, hint],
-        details: { privateReference: "not model context" },
-      });
-      const original = structuredClone(source);
-      const [result] = await project([source], 8_192);
-      const projected = expectDefined(result, "bounded mixed result");
-      if (projected.role !== "toolResult") {
-        throw new Error("expected a tool result");
-      }
-      expect(
-        estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
-      ).toBeLessThanOrEqual(8_192);
-      expect(source).toEqual(original);
-      expect(projected).not.toHaveProperty("details");
-      expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-      expect(getAllToolResultText(projected)).toContain(hint.text);
-      if (size === 64) {
-        expect(projected.content).toContain(metadata);
-        expect(projected.content).toContainEqual(hint);
-      } else {
-        expect(projected.content).not.toContain(metadata);
-      }
-    },
-  );
+  it("omits oversized metadata within the cap", async () => {
+    const metadata = { type: "custom", value: "m".repeat(8_192) };
+    const hint = { type: "text", text: "Inspect src/fixture.ts before retrying." };
+    const source = castAgentMessage({
+      ...makeToolResult("blocks", ""),
+      content: [{ type: "text", text: "x".repeat(6_000) }, metadata, hint],
+      details: { privateReference: "not model context" },
+    });
+    const original = structuredClone(source);
+    const [result] = await project([source], 8_192);
+    const projected = expectDefined(result, "bounded mixed result");
+    if (projected.role !== "toolResult") {
+      throw new Error("expected a tool result");
+    }
+    expect(
+      estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+    ).toBeLessThanOrEqual(8_192);
+    expect(source).toEqual(original);
+    expect(projected).not.toHaveProperty("details");
+    expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expect(getAllToolResultText(projected)).toContain(hint.text);
+    expect(projected.content).not.toContain(metadata);
+  });
 
   it("leaves aggregate pressure and private details out of per-result shaping", async () => {
     const messages = [
@@ -374,17 +370,6 @@ describe("installContextEngineLoopHook", () => {
     },
   );
 
-  it("accepts the upstream contract with no abort signal", async () => {
-    const engine = makeEngine();
-    const { agent } = hook(engine);
-    const messages = [makeUser("first"), makeToolResult("one", "result")];
-    await expect(
-      Reflect.apply(expectDefined(agent.transformContext, "hook"), agent, [messages, undefined]),
-    ).resolves.toEqual(messages);
-    expect(engine.afterTurn).toHaveBeenCalledOnce();
-    expect(engine.assemble).toHaveBeenCalledOnce();
-  });
-
   it("advances the ingest fence and checkpoints only new iterations", async () => {
     const engine = makeEngine();
     const onAfterTurnCheckpoint = vi.fn();
@@ -423,28 +408,31 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
-  it("projects transcript text for ingest and strips its marker from provider messages", async () => {
+  it("keeps original text for ingestion and replays the recorded model projection", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { getPrePromptMessageCount: () => 0 });
-    const prompt = makeUser("model-only context\n\nvisible prompt");
-    markTranscriptPromptText(prompt, "visible prompt");
+    const prompt = {
+      ...makeUser("visible prompt"),
+      __openclaw: {
+        modelPromptProjection: { version: 1, text: "model-only context\n\nvisible prompt" },
+      },
+    };
     const transformed = await run([prompt, makeToolResult("one", "result")]);
     expect(engine.afterTurn.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
       content: "visible prompt",
     });
-    expect(JSON.stringify(engine.afterTurn.mock.calls[0]?.[0].messages)).not.toContain(
-      "__openclawTranscriptPromptText",
-    );
     expect(engine.assemble.mock.calls[0]?.[0].messages[0]).toMatchObject({
       role: "user",
-      content: "model-only context\n\nvisible prompt",
+      content: "visible prompt",
     });
-    expect(transformed[0]).toMatchObject({
+    expect(normalizeMessagesForLlmBoundary(transformed)[0]).toMatchObject({
       role: "user",
       content: "model-only context\n\nvisible prompt",
     });
-    expect(JSON.stringify(transformed)).not.toContain("__openclawTranscriptPromptText");
+    expect(JSON.stringify(normalizeMessagesForLlmBoundary(transformed))).not.toContain(
+      "modelPromptProjection",
+    );
   });
 
   it("repairs orphan results from an engine returning its working array", async () => {
@@ -594,23 +582,5 @@ describe("installContextEngineLoopHook", () => {
     expect(messages).toEqual([result]);
     expect(await run(messages)).toBe(assembled);
     expect(engine.afterTurn).toHaveBeenCalledOnce();
-  });
-
-  it("runs and restores the upstream transform across hook installation", async () => {
-    const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
-    const engine = makeEngine();
-    const compacted = [makeUser("compacted")];
-    engine.assemble.mockResolvedValue({ messages: compacted, estimatedTokens: 0 });
-    const { agent, run, dispose } = hook(
-      engine,
-      { getPrePromptMessageCount: undefined },
-      makeGuardableAgent(upstream),
-    );
-    await run([makeUser("first")]);
-    expect(upstream).toHaveBeenCalledOnce();
-    expect(await run([makeUser("first"), makeUser("second")])).toBe(compacted);
-    expect(upstream).toHaveBeenCalledTimes(2);
-    dispose();
-    expect(agent.transformContext).toBe(upstream);
   });
 });

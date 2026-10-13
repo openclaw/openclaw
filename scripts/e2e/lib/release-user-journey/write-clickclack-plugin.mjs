@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Writes the external ClickClack channel fixture used by release journey E2Es.
 import fs from "node:fs";
 import path from "node:path";
 import { writeJson } from "../fixtures/common.mjs";
