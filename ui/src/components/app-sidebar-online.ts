@@ -15,8 +15,8 @@ import {
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
 import { icons } from "./icons.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
-import { renderSidebarCollapseToggle } from "./sidebar-collapse-toggle.ts";
 import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
+import "./sidebar-collapse-toggle.tsx";
 
 const onlineOrders = new WeakMap<
   AppSidebarRenderHost,
@@ -124,7 +124,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 ${icons.listFilter}
               </button>`
         }
-        ${renderSidebarCollapseToggle(host)}
+        <openclaw-sidebar-collapse-toggle
+          .onToggle=${() => host.onToggleSidebar?.()}
+        ></openclaw-sidebar-collapse-toggle>
       </div>
       ${
         collapsed

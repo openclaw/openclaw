@@ -35,8 +35,8 @@ import { personActivityLink, personActivityRouting } from "./person-activity-lin
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
-import { renderSidebarCollapseToggle } from "./sidebar-collapse-toggle.ts";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import "./sidebar-collapse-toggle.tsx";
 
 type RailPinTouchPress = {
   pointerId: number;
@@ -390,7 +390,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost) {
   >
     <div class="sidebar-pages__heading sidebar-panel-header" @mousedown=${beginNativeWindowDrag}>
       <span>${t("nav.pages")}</span>
-      ${renderSidebarCollapseToggle(host)}
+      <openclaw-sidebar-collapse-toggle
+        .onToggle=${() => host.onToggleSidebar?.()}
+      ></openclaw-sidebar-collapse-toggle>
     </div>
     <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
     ${repeat(

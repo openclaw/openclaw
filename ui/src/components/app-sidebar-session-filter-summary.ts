@@ -9,7 +9,7 @@ import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
 import { icons } from "./icons.ts";
 import { renderPicker } from "./select-picker.ts";
 import { renderSessionOwnerAvatar } from "./session-owner-chip.ts";
-import { renderSidebarCollapseToggle } from "./sidebar-collapse-toggle.ts";
+import "./sidebar-collapse-toggle.tsx";
 
 type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
 
@@ -134,7 +134,9 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
     <div class="sidebar-session-toolbar sidebar-panel-header" @mousedown=${beginNativeWindowDrag}>
       ${renderSidebarOwnerPicker(host)}
       ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      ${renderSidebarCollapseToggle(host)}
+      <openclaw-sidebar-collapse-toggle
+        .onToggle=${() => host.onToggleSidebar?.()}
+      ></openclaw-sidebar-collapse-toggle>
     </div>
   `;
 }
