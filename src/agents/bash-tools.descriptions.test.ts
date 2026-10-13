@@ -92,4 +92,52 @@ describe("tool descriptions", () => {
     expect(processTool.description).toContain("completion without auto-wake");
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
+
+  it("names only dedicated file-writing tools that survived filtering", () => {
+    const guidanceFor = (names: readonly string[]) =>
+      `File writes: prefer dedicated file-writing tools (${names.join("/")}) over shell heredocs or bash -c for multi-line content.`;
+    const fileTool = (name: string) => ({
+      name,
+      label: name,
+      description: `${name} tool`,
+      parameters: {},
+      execute: async () => ({ content: [{ type: "text" as const, text: "" }], details: undefined }),
+    });
+    const cases = [
+      { tools: [] as string[], expected: undefined },
+      { tools: ["write"], expected: ["write"] },
+      { tools: ["edit"], expected: ["edit"] },
+      { tools: ["apply_patch", "write"], expected: ["write", "apply_patch"] },
+      { tools: ["apply_patch", "edit", "write"], expected: ["write", "edit", "apply_patch"] },
+    ] as const;
+
+    for (const createTool of [createExecTool, createLazyExecTool]) {
+      for (const testCase of cases) {
+        const exec = createTool({ ...execDefaults });
+        const finalized = finalizeAgentTools({
+          tools: [exec, ...testCase.tools.map((name) => fileTool(name))],
+          hookContext: {},
+          wrapBeforeToolCallHook: false,
+        });
+        const descriptions = [
+          ...(createTool === createLazyExecTool ? [exec.description] : []),
+          expectDefined(
+            finalized.find((tool) => tool.name === "exec"),
+            "finalized exec tool",
+          ).description,
+        ];
+        for (const description of descriptions) {
+          if (!testCase.expected) {
+            expect(description).not.toContain("File writes:");
+            continue;
+          }
+          expect(description).toContain(guidanceFor(testCase.expected));
+          const named = description.match(
+            /File writes: prefer dedicated file-writing tools \(([^)]+)\)/,
+          )?.[1];
+          expect(named).toBe(testCase.expected.join("/"));
+        }
+      }
+    }
+  });
 });

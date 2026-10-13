@@ -3,6 +3,7 @@ import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
+  dedicatedFileWriteTools,
   describeExecTool,
   describeProcessTool,
   EXEC_AUTO_REVIEW_GUIDANCE,
@@ -106,6 +107,7 @@ export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAge
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   const hasProcessTool = availableTools.has("process");
   const hasSessionsSpawnTool = availableTools.has("sessions_spawn");
+  const fileWriteTools = dedicatedFileWriteTools(availableTools);
   return tools.map((tool) => {
     if (tool.name === "exec") {
       return replaceDescription(
@@ -113,6 +115,7 @@ export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAge
         describeExecTool({
           hasCronTool,
           hasProcessTool,
+          fileWriteTools,
           autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
         }),
       );
