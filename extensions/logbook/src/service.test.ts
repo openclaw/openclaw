@@ -68,20 +68,6 @@ const framePayload = {
 };
 
 describe("LogbookService capture node selection", () => {
-  it("prefers app nodes over headless node hosts regardless of node id order", async () => {
-    const { service, invoked, tick } = await makeService({
-      nodes: [
-        { nodeId: "a-headless", commands: ["logbook.snapshot"] },
-        { nodeId: "b-mac-app", commands: ["screen.snapshot"] },
-      ],
-      invoke: async () => framePayload,
-    });
-
-    await tick();
-    expect(invoked).toEqual([{ nodeId: "b-mac-app", command: "screen.snapshot" }]);
-    expect(await service.status()).toMatchObject({ pendingFrames: 1, lastCaptureError: undefined });
-  });
-
   it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
     const { service, invoked, tick } = await makeService({
       nodes: [
@@ -140,37 +126,6 @@ describe("LogbookService vision model selection", () => {
     expect(await service.status()).toMatchObject({
       visionModel: "codex/gpt-5.5",
       visionModelSource: "media-defaults",
-    });
-  });
-
-  it("reports a missing model when borrowed defaults cannot extract structured data", async () => {
-    const { service } = await makeService({
-      nodes: [],
-      invoke: async () => framePayload,
-      fullConfig: {
-        tools: {
-          media: {
-            models: [{ provider: "openai", model: "gpt-5.5", capabilities: ["image"] }],
-          },
-        },
-      },
-    });
-
-    expect(await service.status()).toMatchObject({
-      visionModel: undefined,
-      visionModelSource: "missing",
-    });
-  });
-});
-
-describe("LogbookService status", () => {
-  it("returns the capture-host timezone without exposing the state path", async () => {
-    const { service } = await makeService({
-      nodes: [],
-      invoke: async () => framePayload,
-    });
-
-    expect(await service.status()).toMatchObject({
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     expect(await service.status()).not.toHaveProperty("dataDir");

@@ -106,7 +106,7 @@ type MSTeamsMessageTarget = {
   messageId: string;
 };
 
-async function resolveGraphMessageContext(
+export async function resolveGraphMessageContext(
   params: Pick<MSTeamsMessageTarget, "cfg" | "accountId" | "to">,
   options?: { preferDelegated?: boolean },
 ) {

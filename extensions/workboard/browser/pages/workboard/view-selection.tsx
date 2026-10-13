@@ -1,6 +1,6 @@
 /** @jsxImportSource @solidjs/web */
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { Dialog, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { WorkboardErrorToast } from "../../components/toast.tsx";
@@ -29,12 +29,13 @@ import {
   matchesAgentFilter,
 } from "./agent-filter.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
+import { DraftChoices } from "./view-draft-choices.tsx";
 import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
-  PriorityIcon,
+  renderPriorityIcon,
   formatStatusLabel,
   type WorkboardProps,
 } from "./view-helpers.tsx";
@@ -459,10 +460,8 @@ function SelectionLabelsInput(props: {
       placeholder={t("workboard.bulkLabelsPlaceholder")}
       ref={bindValue}
       disabled={props.disabled}
-      onInput={(event: InputEvent) => {
-        if (event.currentTarget instanceof HTMLInputElement) {
-          props.draft.labels = event.currentTarget.value;
-        }
+      onInput={(event) => {
+        props.draft.labels = event.currentTarget.value;
       }}
     />
   );
@@ -549,49 +548,38 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             return (
               <>
                 <p>{t("workboard.bulkEditHelp")}</p>
-                <fieldset
-                  class="workboard-choice-field"
-                  aria-labelledby="workboard-bulk-priority-label"
+                <DraftChoices
+                  name="priority"
+                  radioName="bulk-priority"
+                  labelId="workboard-bulk-priority-label"
                   disabled={state().bulkSaving}
-                >
-                  <legend>
-                    <span id="workboard-bulk-priority-label">{t("workboard.fieldPriority")}</span>
-                    <button
-                      class="workboard-bulk-dialog__reset"
-                      type="button"
-                      disabled={state().bulkSaving || !edit().priority}
-                      onClick={() => {
-                        edit().priority = "";
-                        props.workboard.onRequestUpdate?.();
-                      }}
-                    >
-                      {t("workboard.bulkKeep")}
-                    </button>
-                  </legend>
-                  <div class="workboard-segments workboard-segments--priority">
-                    <For each={WORKBOARD_PRIORITIES} keyed={(priority) => priority}>
-                      {(priority) => (
-                        <label class="workboard-segment">
-                          <input
-                            type="radio"
-                            name="bulk-priority"
-                            checked={edit().priority === priority()}
-                            onChange={() => {
-                              edit().priority = priority();
-                              props.workboard.onRequestUpdate?.();
-                            }}
-                          />
-                          <span>
-                            <i aria-hidden="true">
-                              <PriorityIcon priority={priority()} />
-                            </i>
-                            {formatPriorityLabel(priority())}
-                          </span>
-                        </label>
-                      )}
-                    </For>
-                  </div>
-                </fieldset>
+                  value={edit().priority}
+                  options={WORKBOARD_PRIORITIES.map((value) => ({
+                    value,
+                    label: formatPriorityLabel(value),
+                  }))}
+                  renderIcon={renderPriorityIcon}
+                  onChange={(value) => {
+                    edit().priority = value;
+                    props.workboard.onRequestUpdate?.();
+                  }}
+                  label={
+                    <>
+                      <span id="workboard-bulk-priority-label">{t("workboard.fieldPriority")}</span>
+                      <button
+                        class="workboard-bulk-dialog__reset"
+                        type="button"
+                        disabled={state().bulkSaving || !edit().priority}
+                        onClick={() => {
+                          edit().priority = "";
+                          props.workboard.onRequestUpdate?.();
+                        }}
+                      >
+                        {t("workboard.bulkKeep")}
+                      </button>
+                    </>
+                  }
+                />
                 <div class="field">
                   <span>{t("workboard.fieldAgent")}</span>
                   <SelectPicker

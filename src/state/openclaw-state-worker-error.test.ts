@@ -22,6 +22,7 @@ import {
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -287,7 +288,11 @@ describe("shared-state worker error transport", () => {
   ])("keeps outcome-unknown explicit instead of hydrating %s", (original) => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
+    const custody = new SqliteWorkerSlotCustody().createRequest();
+    custody.activate();
+    custody.accept();
     const job: Job = {
+      custody,
       observation: { started() {}, completed() {} },
       request: {
         type: "execute",

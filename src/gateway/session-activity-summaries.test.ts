@@ -388,6 +388,31 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     }
   });
 
+  it("releases unrelated entry snapshots while recap preparation remains pending", async () => {
+    class SavedSkillSnapshot {
+      readonly prompt = "Synthetic saved skill instructions. ".repeat(4096);
+      readonly skills = [];
+    }
+    await messages(2);
+    const preparation = createDeferred<typeof prepared>();
+    const preparationStarted = createDeferred();
+    prepare.mockImplementationOnce(() => {
+      preparationStarted.resolve();
+      return withinTest(preparation.promise, testSignal);
+    });
+    try {
+      await service.ensure(target, { ...read()!, skillsSnapshot: new SavedSkillSnapshot() });
+      await withinTest(preparationStarted.promise, testSignal);
+      expect(queryObjects(SavedSkillSnapshot)).toBe(0);
+    } finally {
+      await awaitPublication(() => preparation.resolve(prepared));
+    }
+    expect(read()?.activitySummary).toMatchObject({
+      text: "Completed the requested work.",
+      coveredMessages: 2,
+    });
+  });
+
   it("uses committed resident facts for recap notifications and current-authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);

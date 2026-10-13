@@ -1,5 +1,5 @@
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
@@ -221,6 +221,7 @@ function ActionLabel(props: { action: LayoutAction }) {
 }
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
+  const [opened, setOpened] = createSignal(false);
   const model = createMemo(() => layoutModel(props));
   let menu!: WaDropdown;
   let pendingAction: (() => void) | undefined;
@@ -232,6 +233,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
         }}
         class="chat-pane__layout-menu chat-panel-layout-menu"
         placement="bottom-end"
+        onWa-show={() => setOpened(true)}
         onWa-select={(event) => {
           const action = model().allActions.find(
             (candidate) => candidate.id === event.detail.item.value,
@@ -269,17 +271,19 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
           </span>
           {t("chat.sessionHeader.layout")}
         </button>
-        <For each={model().actions} keyed={(action) => action.id}>
-          {(action) => <LayoutActionItem action={action()} />}
-        </For>
-        <Show when={model().panelActions.length > 0}>
-          <div class="session-menu__separator" role="separator" />
-          <For each={model().panelActions} keyed={(action) => action.id}>
+        <Show when={opened()}>
+          <For each={model().actions} keyed={(action) => action.id}>
             {(action) => <LayoutActionItem action={action()} />}
           </For>
+          <Show when={model().panelActions.length > 0}>
+            <div class="session-menu__separator" role="separator" />
+            <For each={model().panelActions} keyed={(action) => action.id}>
+              {(action) => <LayoutActionItem action={action()} />}
+            </For>
+          </Show>
+          <LitContent value={model().mainHeaderAction} />
+          <LitContent value={model().sideHeaderAction} />
         </Show>
-        <LitContent value={model().mainHeaderAction} />
-        <LitContent value={model().sideHeaderAction} />
       </wa-dropdown>
     </Show>
   );

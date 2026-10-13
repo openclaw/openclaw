@@ -46,6 +46,21 @@ not certify the remaining physical custody still checked by the host. Later owne
 contracts and native-to-service transport before transaction admission can bypass
 the host.
 
+The broker slice makes slot and request custody canonical shared state. Dispatch,
+queued cancellation, completion, failure and native retirement publish to the same
+retained cells before replacing current work or notifying observers. Accepted
+cancellation preserves dispatch history and receipt settlement. Native stages check
+those exact cells before requesting host admission and after consuming its grant;
+a late descriptor cannot reacquire authority through a reused numeric request ID.
+
+The service also exposes a direct native-port custody check with a bounded wait.
+Expiry atomically closes the pending decision, so a delayed service reply cannot
+grant it. Service shutdown revokes its epoch before awaiting cleanup; replacement
+uses a fresh cell. This transport remains a prerequisite exercised by worker tests:
+mixed production admission still uses the host and does not add a second service
+round trip until the remaining owners can transfer. It grants only broker custody,
+never policy authority, native COMMIT or receipt settlement.
+
 ## Current owners and required transfers
 
 Source locations below refer to commit

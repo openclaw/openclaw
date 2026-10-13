@@ -255,7 +255,6 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
     cache: { enabled: false },
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
-    withProviderUse: async <T>(_provider: unknown, run: () => Promise<T>) => await run(),
   }) as {
     embedChunksInBatches: (
       candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
