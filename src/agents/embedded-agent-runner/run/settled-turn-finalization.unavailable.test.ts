@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
-import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import {
@@ -25,14 +23,10 @@ describe("unavailable finalization through the real core backend", () => {
   const fixture = useTempSessionsFixture("settled-finalization-unavailable-");
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
 
-  beforeEach(async () => {
-    await captureRuntimeConfigAsyncReader()();
+  beforeEach(() => {
     admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "unavailable-finalizer");
   });
-  afterEach(() => {
-    admission.close();
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(() => admission.close());
 
   it("preserves a failed cron turn and its transcript when finalization is unavailable", async () => {
     const expectedText =
@@ -101,6 +95,7 @@ describe("unavailable finalization through the real core backend", () => {
         agentId: "main",
         sessionKey: target.sessionKey,
         sessionTarget: target,
+        config: {},
         authProfileStore: { version: 1, profiles: {} },
         resolvedApiKey: "synthetic-unused-host-key",
       },

@@ -183,10 +183,12 @@ appends, content rewrites, rewind, compaction, archive/restore, deletion, and un
 writes retain their session-scoped invalidation or committed actor update.
 
 Activity-summary batches also reuse the actor's complete retained linear context
-at its committed write token. The replica and worker share incremental batch
-selection, including byte limits and omitted-content handling. Incomplete or
-invalidated context uses the bounded worker reader; the replica adds no separate
-cache, stored format, retention rule, or permission grant.
+at its committed write token, including canonical model snapshots and runtime-context
+metadata. The replica and worker share transcript projection semantics and incremental
+batch selection, including byte limits and omitted-content handling. Incomplete or
+invalidated context, unsupported entries, and reset, rewind, or compaction boundaries
+use the bounded worker reader; the replica adds no separate cache, stored format,
+retention rule, or permission grant.
 
 Parent forks use the existing session-entry worker for both transcript copying
 and child-row commits. Internal fork transformations are data patches, not native

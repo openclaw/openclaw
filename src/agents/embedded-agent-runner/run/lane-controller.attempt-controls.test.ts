@@ -1,8 +1,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
-import { clearRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -39,6 +41,7 @@ async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = 
     ...overrides,
     admittedRunContext,
   };
+  setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
@@ -79,10 +82,9 @@ async function holdLane(controller: LaneController) {
   return { observed, finish: finished.resolve };
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   resetAgentEventsForTest();
   resetCommandQueueStateForTest();
-  await captureRuntimeConfigAsyncReader()();
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
 });
