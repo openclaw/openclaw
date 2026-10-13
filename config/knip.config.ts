@@ -856,6 +856,9 @@ const config = {
         // Solid plugin builds createRequire the compiler from the plugin author's package.json;
         // the host never resolves or ships it (docs/plugins/feature-plugins.md).
         "@solidjs/compiler",
+        // Canvas bundling resolves these from extensions/canvas/package.json.
+        "@solidjs/web",
+        "solid-js",
         "playwright-core",
         "partial-json",
         // The native Canvas bundle falls back without optional Markdown support.
@@ -1011,9 +1014,7 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.jsx!",

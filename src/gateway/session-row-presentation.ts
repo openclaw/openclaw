@@ -18,7 +18,7 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionFastModePresentation } from "./session-fast-mode-presentation.js";
 import {
   projectSessionParticipant,
-  projectSessionProfileInvolvement,
+  projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import type { SessionEntrySelection } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -220,7 +220,10 @@ export function prepareProjectedSessionPresentation(
     ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
       ? {
           hiddenFromInvolvingMe:
-            projectSessionProfileInvolvement(value.entry, profileId, profiles)?.hidden ?? false,
+            (rowContext.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
+              value.entry,
+              profiles,
+            ).get(profileId)?.hidden ?? false,
         }
       : {}),
     sharingRole: sharing.roleForTarget(value),
@@ -478,13 +481,7 @@ export function prepareProjectedSessionPresentation(
     },
     select(opts: SessionsListParams, select: () => SessionEntrySelection) {
       // These queries consume clock or transient run facts independently of row publications.
-      if (
-        opts.search ||
-        opts.spawnedBy ||
-        opts.activeOnly ||
-        opts.includeOwnerSessionCounts ||
-        opts.activityPulseBoundaries
-      ) {
+      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
         return select();
       }
       const view = listView(opts);
@@ -496,10 +493,11 @@ export function prepareProjectedSessionPresentation(
         view.selection = undefined;
       }
       if (!view.selection) {
-        const { entries, ...facets } = select();
+        const { entries, ownerSessionProfiles, ...facets } = select();
         Object.freeze(entries);
         view.selection = Object.freeze({
           ...freezeJsonSnapshot(structuredClone(facets)),
+          ownerSessionProfiles,
           entries,
         });
         view.selectedAt = now;

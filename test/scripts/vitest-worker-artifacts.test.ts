@@ -1515,8 +1515,10 @@ export default class {
         // invalid sentinel that could fail even if stale-artifact fallback regressed.
         const staleWorkerPath = "infra/sqlite-readonly-location.worker.js";
         const staleWorker = path.join(fixture, "dist", staleWorkerPath);
-        fs.mkdirSync(path.dirname(staleWorker), { recursive: true });
-        fs.copyFileSync(path.join(initialDirectory, "dist", staleWorkerPath), staleWorker);
+        // The old entry and its split chunks must remain an executable graph.
+        fs.cpSync(path.join(initialDirectory, "dist/infra"), path.dirname(staleWorker), {
+          recursive: true,
+        });
         // This checkout exercises source freshness, not the full runtime inventory.
         // Keep real compiler phases while avoiding repeated unrelated application builds.
         writeFixture(

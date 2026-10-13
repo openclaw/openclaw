@@ -538,7 +538,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
-  last `n` lines. This path does not create a backup archive.
+  last `n` lines. The Gateway finishes rebuilding the retained transcript's
+  indexes in its storage worker before reporting success, so the next turn does
+  not wait for background index maintenance. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.

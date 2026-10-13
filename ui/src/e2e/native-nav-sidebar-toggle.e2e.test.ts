@@ -98,7 +98,7 @@ suite.define(() => {
         swipeRequest.source,
       ),
     ).toBe(false);
-    const collapse = page.locator('[data-navigation-view][aria-pressed="true"]');
+    const collapse = page.locator(".sidebar-session-toolbar__collapse");
     await expect.poll(() => collapse.isVisible()).toBe(true);
     await collapse.click();
     const expand = page.locator(".shell-chrome-controls__nav-toggle");
@@ -269,15 +269,15 @@ suite.define(() => {
       .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New session" });
+    const search = page.locator(".sidebar-brand__search");
+    const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
-    await expect.poll(() => newThread.count()).toBe(0);
+    await expect.poll(() => newThread.isVisible()).toBe(true);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    await page.locator(".sidebar-session-toolbar__collapse").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -316,7 +316,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(5);
+    expect(centerlines).toHaveLength(2);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -363,7 +363,7 @@ suite.define(() => {
         ),
       )
       .toEqual(
-        Array.from({ length: 6 }, () => ({
+        Array.from({ length: 3 }, () => ({
           border: "0px",
           background: "rgba(0, 0, 0, 0)",
           shadow: "none",
@@ -411,7 +411,7 @@ suite.define(() => {
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.locator(".shell-chrome-controls__nav-toggle").click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .not.toContain("shell--nav-collapsed");
@@ -451,9 +451,8 @@ suite.define(() => {
       webChrome: true,
       width: testCase.width,
     });
-    const toolbar = page.locator(".macos-titlebar-controls");
     if (testCase.navCollapsed) {
-      await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await page.locator(".sidebar-session-toolbar__collapse").click();
     }
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);

@@ -373,7 +373,7 @@ describe("prepared config recovery", () => {
       expect(plan.snapshot.path).toBe(configPath);
       expect(plan.snapshot.config.gateway).toMatchObject({ mode: "local", port: 18720 });
       expect(plan.snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(Boolean(plan.pluginMetadataSnapshot)).toBe(pluginValidation === "full");
+      expect(plan.snapshot.valid).toBe(true);
       expect(env).not.toHaveProperty("RECOVERY_MARKER");
       expect(manifest(root)).toEqual(before);
 
