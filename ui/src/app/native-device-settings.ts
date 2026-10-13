@@ -90,7 +90,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
   browser: z
     .object({
       chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
-      importAvailable: z.boolean().optional(), // local mode with Chrome-family cookies available
+      importAvailable: z.boolean().optional(), // local import action; discovery waits for user intent
       cookieSync: z
         .object({
           available: z.boolean(), // remote mode with an external CLI

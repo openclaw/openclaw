@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatErrorMessage,
@@ -73,7 +74,7 @@ export async function runMemoryIndex(
       try {
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (opts.verbose) {
-          const status = manager.status();
+          const status = await readMemorySearchManagerStatus(manager);
           const label = (text: string) => muted(`${text}:`);
           const sourceLabels = (status.sources ?? []).map((source) =>
             formatSourceLabel(source, status.workspaceDir ?? ""),
@@ -103,7 +104,7 @@ export async function runMemoryIndex(
           return;
         }
         await syncMemoryWithProgress({ sync: syncFn, options: opts, elapsed: true });
-        let postIndexStatus = manager.status();
+        let postIndexStatus = await readMemorySearchManagerStatus(manager);
         const scan = await scanMemoryManagerSources(postIndexStatus);
         const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
@@ -117,7 +118,7 @@ export async function runMemoryIndex(
           typeof manager.probeVectorAvailability === "function"
         ) {
           semanticVectorAvailable = await manager.probeVectorAvailability();
-          postIndexStatus = manager.status();
+          postIndexStatus = await readMemorySearchManagerStatus(manager);
           semanticVectorAvailable =
             postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
         }
@@ -272,7 +273,7 @@ async function runMemoryPromotion(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),

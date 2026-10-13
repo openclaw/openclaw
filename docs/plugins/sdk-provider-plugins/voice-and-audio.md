@@ -428,6 +428,17 @@ Register each capability inside `register(api)` alongside your existing
     model in its result. `transcribeAudio` remains available for providers
     using host-owned API-key resolution and rotation.
 
+    Providers can implement optional `isAudioConfigured(context)` to report
+    audio readiness using their own credential and endpoint rules. It returns
+    a boolean or `Promise<boolean>`. The exported `AudioTranscriptionConfigContext`
+    includes configuration, profile selectors, model, agent/workspace directories,
+    and effective base URL, headers, and request overrides; it contains no audio.
+    Gateway Talk checks this hook before advertising or admitting file transcription.
+    Share credential preparation with transcription, but resolve credentials again
+    for the actual upload. Readiness does not authorize a later request.
+    Without this hook, context providers retain their existing readiness behavior;
+    providers using `transcribeAudio` retain host-owned credential checks.
+
     Bundled media providers can use `openProviderWebSocket(...)` from the
     private-local `openclaw/plugin-sdk/provider-http` entrypoint. Resolve
     request settings with `resolveProviderHttpRequestConfigWithOriginTrust(...)`

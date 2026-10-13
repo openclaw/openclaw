@@ -75,6 +75,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
+Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
+
 Details: [Session management](/concepts/session).
 
 ## Prompt bodies and history context

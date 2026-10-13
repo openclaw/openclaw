@@ -43,6 +43,7 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
+  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -54,6 +55,7 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
       | "acpMeta"
       | "runtimeOwnership"
       | "runtimeOwnershipDependencies"
+      | "runtimeOwnershipRetryPending"
       | "repositoryWorkspace"
       | "transcriptPreview"
     >
@@ -74,8 +76,9 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    facts.runtimeOwnershipDependencies.length > 0 ||
-    resolveSessionPinnedHarnessId(facts.entry) === undefined
+    !facts.runtimeOwnershipRetryPending &&
+    (facts.runtimeOwnershipDependencies.length > 0 ||
+      resolveSessionPinnedHarnessId(facts.entry) === undefined)
   );
 }
 

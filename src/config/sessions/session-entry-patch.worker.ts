@@ -12,6 +12,7 @@ import {
   writeSessionEntryPatchInDatabase,
 } from "./session-accessor.sqlite-entry-mutation.js";
 import {
+  normalizeLifecycleTarget,
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -79,6 +80,20 @@ export function readSessionEntryPatchSnapshot(
   selection: SessionEntryPatchSelection,
   includeWindowFacts?: true,
 ) {
+  let sessionKey: string | undefined;
+  if (selection.kind === "entry") {
+    sessionKey = selection.exact ? selection.sessionKey : selection.sessionKey.trim();
+  } else {
+    const target = normalizeLifecycleTarget(selection.target);
+    if (target.storeKeys.length === 1) {
+      sessionKey = target.canonicalKey;
+    }
+  }
+  const actor =
+    sessionKey === undefined ? undefined : prepareSessionActorEntryPatch(database, sessionKey);
+  if (actor) {
+    return [actor.snapshot()];
+  }
   return selection.kind === "target"
     ? readLifecycleTargetSnapshot(database, selection.target, { includeWindowFacts })
     : readSessionEntrySelectionSnapshot(

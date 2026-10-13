@@ -169,6 +169,7 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
       }
       const update = await resolveDevGitUpdate(status, signal);
       assertCurrent();
+      lifecycle.installStatus = { root, status, installReceipt };
       lifecycle.publicationGeneration += 1;
       const campaign = lifecycle.campaign;
       if (!update) {

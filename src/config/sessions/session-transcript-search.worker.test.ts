@@ -1,10 +1,14 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -14,6 +18,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
+import { createSessionTranscriptWorkerLanes } from "./session-transcript-read-pools.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
@@ -23,6 +28,7 @@ import {
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
 import {
+  historyClearTimeout,
   historyLane,
   projectionLane,
   withSessionHistoryWorkerReadCandidates,
@@ -303,6 +309,115 @@ it("cancels a search status callback queued behind a stuck writer at its deadlin
 describe("search reader concurrency", () => {
   const lifetime = createFixtureLifetime();
   afterEach(() => lifetime.cleanup());
+
+  it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
+    "retires surplus workers without revoking retained readers or interrupting active reads",
+    (context) =>
+      lifetime.run(() =>
+        withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          const storePath = state.statePath("surplus-history.sqlite");
+          const sessionKey = "agent:main:surplus-history";
+          const scope = { agentId: "main", storePath, env: state.env };
+          const database = { agentId: "main", path: storePath, env: state.env };
+          await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "surplus-history" }, [
+            { type: "session", id: "surplus-history", version: 3 },
+            {
+              type: "message",
+              id: "retained-needle",
+              parentId: null,
+              timestamp: 1,
+              message: { role: "assistant", content: "Retained reader needle" },
+            },
+          ]);
+          await waitForSessionTranscriptIndexReconcile(database);
+          const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+          const expected = { hits: [{ messageId: "retained-needle" }], indexing: false };
+          const entered = createDeferred();
+          const release = createDeferred();
+          const pending: Promise<unknown>[] = [];
+          const readers: ReturnType<typeof retainSessionHistoryWorkerDatabase>[] = [];
+          const workers: Worker[] = [];
+          const workerUrl = resolveRuntimeProcessEntrypointUrl("sessionTranscript");
+          const spawn = workerCpu.createCpuTrackedWorker;
+          const creation = vi
+            .spyOn(workerCpu, "createCpuTrackedWorker")
+            .mockImplementation((filename, options) => {
+              const worker = spawn(filename, options);
+              if (String(filename) === workerUrl.href) {
+                workers.push(worker);
+              }
+              return worker;
+            });
+          let lanes: ReturnType<typeof createSessionTranscriptWorkerLanes> | undefined;
+          // The pool captures its clock when constructed; no global lane is replaced.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          try {
+            lanes = createSessionTranscriptWorkerLanes();
+            const lane = lanes.historyLane;
+            const primary = retainSessionHistoryWorkerDatabase(database, lane);
+            readers.push(primary);
+            const surplus = retainSessionHistoryWorkerDatabase(database, lane);
+            readers.push(surplus);
+            const active = primary.owner.searchTranscripts(request, async (signal) => {
+              entered.resolve();
+              await release.promise;
+              return projectionWriter.readSessionTranscriptIndexStatus(database, undefined, signal);
+            });
+            pending.push(active);
+            void active.catch(() => {});
+            await withinTest(entered.promise, context.signal);
+            const read = () => {
+              const result = surplus.owner.searchTranscripts(request, (signal) =>
+                projectionWriter.readSessionTranscriptIndexStatus(database, undefined, signal),
+              );
+              pending.push(result);
+              return withinTest(result, context.signal);
+            };
+            expect(await read()).toMatchObject(expected);
+            expect(workers).toHaveLength(2);
+            const worker = workers[1]!;
+            const exited = once(worker, "exit");
+            const terminate = vi.spyOn(worker, "terminate");
+            try {
+              await vi.advanceTimersByTimeAsync(30_000);
+              expect(terminate).toHaveBeenCalledOnce();
+              await withinTest(exited, context.signal);
+              expect(lane.pool.getSnapshot()).toMatchObject({ workers: 1, activeTasks: 1 });
+              // The primary is still occupied, so this retained reader must reopen on a new worker.
+              expect(await read()).toMatchObject(expected);
+              expect(lane.pool.getSnapshot()).toMatchObject({ workers: 2, workersCreated: 3 });
+            } finally {
+              terminate.mockRestore();
+            }
+            release.resolve();
+            expect(await withinTest(active, context.signal)).toMatchObject(expected);
+          } finally {
+            release.resolve();
+            try {
+              // Closing cancels unfinished requests even when their fake deadlines have not fired.
+              const closed = await Promise.allSettled(
+                (lanes ? Object.values(lanes) : []).map(({ pool }) => pool.close()),
+              );
+              await Promise.allSettled(pending);
+              for (const reader of readers) {
+                reader.release();
+              }
+              for (const lane of lanes ? Object.values(lanes) : []) {
+                historyClearTimeout(lane.idleTimer);
+              }
+              await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+              const failures = closed.flatMap((result) =>
+                result.status === "rejected" ? [result.reason] : [],
+              );
+              expect(failures).toEqual([]);
+            } finally {
+              creation.mockRestore();
+              vi.useRealTimers();
+            }
+          }
+        }),
+      ),
+  );
 
   it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
     "searches while foreground and projection readers await index status",
