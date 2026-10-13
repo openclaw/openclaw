@@ -11,6 +11,8 @@ import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+// Load after the fixture mocks, during collection rather than the first RPC deadline.
+import "./server-methods/sessions-compact.js";
 
 vi.hoisted(() => {
   // Earlier Gateway suites may have already loaded the unmocked accessor graph.

@@ -216,7 +216,9 @@ async function send(
     throw new Error("Expected a send request");
   }
   expect(record(request.params)).toMatchObject({ sessionKey, message });
-  await expect.poll(() => observed.response(request.id)).toMatchObject({ ok: true });
+  await expect.poll(() => observed.response(request.id)).toBeDefined();
+  const response = observed.response(request.id);
+  expect(response, JSON.stringify(response)).toMatchObject({ ok: true });
   const runId = record(request.params)?.idempotencyKey;
   if (typeof runId !== "string") {
     throw new Error("Missing actual send run identity");

@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { z } from "zod";
 import { isInternalRuntimeContextCarrierText } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
@@ -269,7 +269,7 @@ async function sendAndWait(params: {
     { runId: started.runId, timeoutMs: 30_000 },
     { timeoutMs: 35_000 },
   )) as GatewayChatRun;
-  expect(terminal.status).toBe("ok");
+  expect(terminal, JSON.stringify(terminal)).toMatchObject({ status: "ok" });
 }
 
 async function readMockJson<T>(baseUrl: string, requestPath: string): Promise<T> {
@@ -743,6 +743,9 @@ describe("Gateway chat RPCs", () => {
       }
 
       const sessionKey = `agent:qa:gateway-settings-authority-${randomUUID()}`;
+      onTestFailed(() => {
+        process.stderr.write(gateway.logs().slice(-12_000) + "\n");
+      });
       await sendAndWait({ gateway, sessionKey, message: "Create the proof session." });
       await expect(
         gateway.call("sessions.patch", {

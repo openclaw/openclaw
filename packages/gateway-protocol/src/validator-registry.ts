@@ -204,6 +204,9 @@ export const validateEnvironmentsPrepareParams = compile(S.EnvironmentsPreparePa
 export const validateEnvironmentsPrepareResult = compile(S.EnvironmentsPrepareResultSchema);
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);
+export const validateEnvironmentsAdoptSuggestedProfileParams = compile(
+  S.EnvironmentsAdoptSuggestedProfileParamsSchema,
+);
 export const validateEnvironmentsStatusParams = compile(S.EnvironmentsStatusParamsSchema);
 export const validatePortalListParams = compile(S.PortalListParamsSchema);
 export const validatePortalOpenParams = compile(S.PortalOpenParamsSchema);

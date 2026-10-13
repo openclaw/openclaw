@@ -401,7 +401,12 @@ export async function runPreparedTsgoCommand(args, options) {
 }
 `,
       );
-      for (const exitCode of [0, 2, 137]) {
+      for (const [exitCode, ci] of [
+        [0, true],
+        [2, true],
+        [137, true],
+        [2, false],
+      ] as const) {
         fs.writeFileSync(path.join(root, "calls.jsonl"), "");
         const result = await lifetime.track(
           runNodeScript(
@@ -415,6 +420,8 @@ export async function runPreparedTsgoCommand(args, options) {
             ],
             {
               ...process.env,
+              CI: ci ? "true" : "false",
+              GITHUB_ACTIONS: "false",
               OPENCLAW_LOCAL_CHECK: "0",
               OPENCLAW_CI_STATIC_EVIDENCE: "1",
               FIXTURE_EXIT: String(exitCode),
@@ -432,14 +439,15 @@ export async function runPreparedTsgoCommand(args, options) {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
+        const stops = fails && (!ci || exitCode >= 128);
         expect(calls).toEqual([
           ...(_label === "mixed CI" ? ["tsconfig.scripts.json"] : []),
-          ...selected.slice(0, fails ? failureIndex + 1 : undefined).map((graph) => graph.config),
+          ...selected.slice(0, stops ? failureIndex + 1 : undefined).map((graph) => graph.config),
         ]);
         const completion = result.stdout
           .split("\n")
           .find((line) => line.startsWith("[ci-static:tsgo:completion] "));
-        if (!fails && process.platform !== "win32") {
+        if (!stops && process.platform !== "win32") {
           expect(completion).toBeDefined();
           const evidence = JSON.parse(completion!.slice("[ci-static:tsgo:completion] ".length)) as {
             planned: number;
@@ -551,7 +559,7 @@ exec ${JSON.stringify(native)} "$@"
           const prepared = resolveRuntimeWorkerUrl(entry);
           return [source, prepared.pathname.endsWith(".mts") ? source : prepared];
         }),
-        { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
+        { ...process.env, CI: "true", GITHUB_ACTIONS: "false", OPENCLAW_LOCAL_CHECK: "0" },
         [
           [
             new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
@@ -775,7 +783,7 @@ if (process.argv[2] === "boundary") {
         );
         expect(result.status, result.stderr).toBe(2);
         expect(result.stdout).toContain("leaf.test.ts(1,14): error TS2322");
-        expect(compilerEvents()).toHaveLength(mode === "evidence" ? 2 : 1);
+        expect(compilerEvents()).toHaveLength(2);
         const receipts = result.stdout
           .split("\n")
           .filter((line) => line.startsWith("[ci-static:tsgo:"));

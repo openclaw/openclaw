@@ -1,0 +1,72 @@
+.chat-run-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 4px 0 4px 16px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--warn) 55%, var(--border));
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  color: var(--text);
+}
+
+.chat-run-failure__icon {
+  display: inline-flex;
+  flex: 0 0 18px;
+  margin-top: 3px;
+  color: var(--warn);
+}
+
+.chat-run-failure__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-run-failure__content {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-run-failure__title {
+  font-weight: 600;
+}
+
+.chat-run-failure__summary,
+.chat-run-failure__details p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.chat-run-failure__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.chat-run-failure__actions:empty {
+  display: none;
+}
+
+.chat-run-failure__details {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-run-failure__details summary {
+  width: fit-content;
+  cursor: default;
+}
+
+.chat-run-failure__details pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0;
+  font-family: var(--mono);
+}

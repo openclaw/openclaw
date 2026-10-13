@@ -512,6 +512,8 @@ export type OpenClawStateReadOptions = {
   live?: true;
   /** Named committed-status readers may reopen the matching retained warm source. */
   preferIndependentWarmRead?: true;
+  /** Promise-only callers can retain their snapshot child without synchronous servicing. */
+  snapshotPreparation?: "awaited";
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;
 } & (
   | {

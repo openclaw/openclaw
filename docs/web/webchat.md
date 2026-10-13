@@ -62,6 +62,8 @@ reply-admission ticket before acknowledging, so a later send cannot overtake a
 message whose preparation is still pending.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
+Chat admission rechecks current committed session access independently of sidebar
+refreshes. Durable input custody still checks that authority at the write boundary.
 The Control UI replaces its provisional source with accepted custody, then with
 the canonical row. Accepted inputs stay below saved conversation history until
 they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
@@ -103,6 +105,8 @@ The supporting RPCs require `operator.read` and use the authenticated profile, n
 Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restarts within their retention limits. Capacity limits can still skip alerts. Restarting or reconnecting does not resend old browser notifications or restore dismissed entries. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
 Dismissing an unknown or already dismissed entry is harmless and returns the current Inbox snapshot. If an Inbox request returns an `UNAVAILABLE` error, the Control UI retries with increasing delays and respects the Gateway’s minimum retry delay. Ordinary connection updates and mention events do not bypass that backoff.
+
+Background Inbox refresh failures retry after one minute, doubling the delay up to fifteen minutes until a refresh succeeds. Session and profile updates respect the pending background retry; explicit Inbox reads can still retry immediately. The `gateway/mentions` warning records the failing phase, source, error class and code, cause, elapsed time, and next retry delay.
 
 ## Control UI agents tools panel
 

@@ -348,6 +348,46 @@ describe("gateway/node-registry", () => {
     expect(ping).not.toHaveBeenCalled();
   });
 
+  it("reports connected nodes without session hosting as ineligible, not disconnected", async () => {
+    const resolveCurrentPairingState = vi.fn(async () => ({
+      identity: "identity-a",
+      generation: "generation-a",
+    }));
+    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
+      createPrivateRegistry({
+        resolveCurrentPairingState,
+      });
+    registerNodeSession(
+      registry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      pairingA,
+    );
+    registerNodeSession(registry, makeClient("conn-unrelated", "node-unrelated"), pairingA);
+    const runtime = createDeviceWorkerRuntime({
+      getPairedDevice: async () => ({
+        deviceId: "node-1",
+        publicKey: "fixture",
+        role: "node",
+        roles: ["node"],
+        tokens: { node: { token: "fixture-token", role: "node", scopes: [], createdAtMs: 1 } },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      }),
+    });
+    runtime.bindNodeTransport(transport);
+    const availability = await runtime.resolveAvailability("node-1");
+    expect(registry.get("node-1")).toBeDefined();
+    expect(availability).toMatchObject({
+      available: false,
+      unavailableReason: "hosting-unavailable",
+    });
+    expect(deviceUnavailableText("node-1", availability)).toContain("enable session hosting");
+    expect(resolveCurrentPairingState).toHaveBeenCalledExactlyOnceWith("node-1");
+  });
+
   it("rejects a private worker command through the generic invoke surface", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
@@ -439,46 +479,6 @@ describe("gateway/node-registry", () => {
         workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       }),
     ]);
-  });
-
-  it("reports connected nodes without session hosting as ineligible, not disconnected", async () => {
-    const resolveCurrentPairingState = vi.fn(async () => ({
-      identity: "identity-a",
-      generation: "generation-a",
-    }));
-    const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
-      createPrivateRegistry({
-        resolveCurrentPairingState,
-      });
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], {
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        commands: ["system.run"],
-      }),
-      pairingA,
-    );
-    registerNodeSession(registry, makeClient("conn-unrelated", "node-unrelated"), pairingA);
-    const runtime = createDeviceWorkerRuntime({
-      getPairedDevice: async () => ({
-        deviceId: "node-1",
-        publicKey: "fixture",
-        role: "node",
-        roles: ["node"],
-        tokens: { node: { token: "fixture-token", role: "node", scopes: [], createdAtMs: 1 } },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      }),
-    });
-    runtime.bindNodeTransport(transport);
-    const availability = await runtime.resolveAvailability("node-1");
-    expect(registry.get("node-1")).toBeDefined();
-    expect(availability).toMatchObject({
-      available: false,
-      unavailableReason: "hosting-unavailable",
-    });
-    expect(deviceUnavailableText("node-1", availability)).toContain("enable session hosting");
-    expect(resolveCurrentPairingState).toHaveBeenCalledExactlyOnceWith("node-1");
   });
 
   it("separates inventory topology from availability across proof mutations", async () => {
@@ -1672,7 +1672,6 @@ describe("gateway/node-registry", () => {
 
   it.each([
     { clientId: GATEWAY_CLIENT_IDS.NODE_HOST, command: "mcp.tools.call.v1" },
-    { clientId: GATEWAY_CLIENT_IDS.MACOS_APP, command: "system.run" },
     { clientId: GATEWAY_CLIENT_IDS.IOS_APP, command: "system.run" },
   ])(
     "preserves negotiated non-streaming cancellation for $clientId $command",
@@ -2158,34 +2157,6 @@ describe("gateway/node-registry", () => {
     ).toBeNull();
     expect(registry.get("node-1")?.nodePluginTools).toEqual([]);
     expect(listConnectedNodePluginTools()).toEqual([]);
-  });
-
-  it("enriches published node tools after matching plugin descriptors load", () => {
-    const registry = createTestNodeRegistry();
-    registerNodeSession(
-      registry,
-      makeClient("conn-1", "node-1", [], { commands: ["demo.echo"] }),
-      {},
-    );
-    publishTools(registry, [
-      {
-        pluginId: "demo",
-        name: "demo_echo",
-        description: "Published description",
-        command: "demo.echo",
-      },
-    ]);
-
-    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Published description");
-
-    registerTool({
-      name: "demo_echo",
-      command: "demo.echo",
-      description: "Registered description",
-    });
-    registry.refreshRuntimePolicy();
-
-    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Registered description");
   });
 
   it("enforces node skill count and total-content caps", () => {

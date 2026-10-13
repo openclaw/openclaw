@@ -45,7 +45,7 @@ const hoisted = vi.hoisted(() => ({
   DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
-  installMessageToolOnlyTerminalHook: vi.fn(),
+  installMessageToolTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
   isSilentOverflowProneModel: vi.fn(),
@@ -88,7 +88,7 @@ vi.mock("./attempt-client-tools.js", () => ({
 }));
 vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./message-tool-terminal.js")>()),
-  installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
+  installMessageToolTerminalHook: hoisted.installMessageToolTerminalHook,
 }));
 
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
@@ -179,7 +179,7 @@ function createInput(options?: { activationError?: Error }) {
     events.push("create-session");
     return { session: activeSession };
   });
-  hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
+  hoisted.installMessageToolTerminalHook.mockImplementation(
     (input: { onDeliveredSourceReply?: () => void }) => {
       events.push("install-terminal-hook");
       onDeliveredSourceReply = input.onDeliveredSourceReply;

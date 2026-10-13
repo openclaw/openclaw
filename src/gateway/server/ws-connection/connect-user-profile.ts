@@ -198,10 +198,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   try {
     params.assertCurrent?.();
     const options = { assertCurrent: params.assertCurrent };
-    const ownerDisplayName = ownerProfileExpected ? await resolveHostAccountName() : undefined;
-    params.assertCurrent?.();
     const profile = ownerProfileExpected
-      ? await ensureCanonicalGatewayOwnerProfile(ownerDisplayName ?? null, options)
+      ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
       : params.resolveAuthenticatedGitHubIdentity
         ? await params.resolveAuthenticatedGitHubIdentity()
         : state.authResult.tailscaleIdentity

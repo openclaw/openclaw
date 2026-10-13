@@ -25,6 +25,7 @@ function mountStrip(
   callbacks: {
     onSelect?: (id: string) => void;
     onClose?: (id: string) => void | Promise<void>;
+    onNew?: () => void;
     onReorder?: (source: string, target: string, placement: "before" | "after") => void;
   } = {},
 ) {
@@ -38,7 +39,7 @@ function mountStrip(
       onSelect={callbacks.onSelect ?? vi.fn()}
       onClose={callbacks.onClose ?? vi.fn()}
       onReorder={callbacks.onReorder}
-      onNew={vi.fn()}
+      onNew={callbacks.onNew ?? vi.fn()}
       newLabel="New tab"
     />
   ));
@@ -70,12 +71,17 @@ it("keeps keyed tab nodes while publishing controlled selection and new labels",
   expect(secondNode?.getAttribute("aria-selected")).toBe("true");
   expect(view.container.querySelector<HTMLButtonElement>("#tab-second-close")?.tabIndex).toBe(0);
   expect(view.container.querySelector<HTMLButtonElement>("#tab-first-close")?.tabIndex).toBe(-1);
+  view.container.querySelector<HTMLButtonElement>("#tab-second")!.click();
+  expect(onSelect).toHaveBeenCalledOnce();
 });
 
 it("tracks empty and populated tab lists without creating an empty group", () => {
-  const view = mountStrip([]);
+  const onNew = vi.fn();
+  const view = mountStrip([], { onNew });
   expect(view.group()).toBeNull();
   expect(view.container.querySelector(".tabstrip-new")?.hasAttribute("slot")).toBe(false);
+  view.container.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+  expect(onNew).toHaveBeenCalledOnce();
   view.setTabs([first]);
   view.setActiveId(first.id);
   flush();
@@ -88,15 +94,22 @@ it("tracks empty and populated tab lists without creating an empty group", () =>
 
 it("keeps activation, keyboard repeat, and middle-click close separate", () => {
   const onActivate = vi.fn();
+  const onSelect = vi.fn();
   const onClose = vi.fn();
-  const view = mountStrip([{ ...first, onActivate }], { onClose });
-  const tab = view.container.querySelector<HTMLElement>('[role="tab"]')!;
+  const view = mountStrip([first, { ...second, onActivate }], { onClose, onSelect });
+  const tab = view.container.querySelector<HTMLElement>("#tab-second")!;
   tab.click();
-  tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", repeat: true, bubbles: true }));
+  for (const key of ["Enter", " "]) {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    tab.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    tab.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
+  }
+  tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
   tab.dispatchEvent(new MouseEvent("auxclick", { button: 1 }));
-  expect(onActivate).toHaveBeenCalledTimes(2);
-  expect(onClose).toHaveBeenCalledExactlyOnceWith(first.id);
+  expect(onActivate).toHaveBeenCalledTimes(3);
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(second.id);
+  expect(onSelect).not.toHaveBeenCalled();
 });
 
 it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (direction) => {

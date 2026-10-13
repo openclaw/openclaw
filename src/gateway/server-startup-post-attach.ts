@@ -163,7 +163,7 @@ export async function startGatewaySidecars(params: {
   const internalHookSelection =
     params.internalHookSelection ?? (await resolveInternalHookSelection(params.cfg));
   const internalHooksConfigured = internalHookSelection.configured;
-  await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
+  const internalHooks = measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
       const { prepareInternalHooks } = await import("../hooks/loader.js");
       const prepared = await prepareInternalHooks(params.cfg, params.defaultWorkspaceDir, {
@@ -211,6 +211,7 @@ export async function startGatewaySidecars(params: {
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
   // Join independent preparation even after a failure so startup cleanup retains every import.
   const prepared = await Promise.allSettled([
+    internalHooks,
     (async () => {
       // Agent RPC remains available when transports are disabled. Publish configured/static facts
       // before accepting work; live provider catalogs remain advisory.

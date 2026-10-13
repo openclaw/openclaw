@@ -25,7 +25,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceFinalizationOperation } from "./session-accessor.sqlite-reclamation.js";
-import { isSessionMember, listSessionMembers } from "./session-sharing-store.js";
+import { listSessionMembers, readSessionMembersInWorker } from "./session-sharing-store.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import type { SessionEntry } from "./types.js";
 
@@ -252,10 +252,8 @@ describe("session sharing store", () => {
       expect(listSessionMembers(scope)).toEqual([
         { identityId: "guest", addedBy: "owner", addedAt: 2 },
       ]);
-      expect(isSessionMember(scope, "guest")).toBe(true);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
       expect(listSessionMembers(missingScope)).toEqual([]);
-      expect(isSessionMember(missingScope, "guest")).toBe(false);
       expect(fs.existsSync(missingPath)).toBe(false);
     });
   });
@@ -283,7 +281,6 @@ describe("session sharing store", () => {
         { identityId: "alice", addedBy: "owner", addedAt: 3 },
         { identityId: "zoe", addedBy: "owner", addedAt: 2 },
       ]);
-      expect(isSessionMember(scope, "alice")).toBe(true);
       expect(removeSessionMember(scope, "alice", { addedBy: "owner", addedAt: 2 })).toBeNull();
       expect(listSessionMembers(scope)).toHaveLength(2);
       expect(removeSessionMember(scope, "alice")).toEqual({
@@ -373,7 +370,9 @@ describe("session sharing store", () => {
       expect(() => removeSessionMember(scope, "ok", undefined, "session-a")).toThrow(
         /session changed/,
       );
-      expect(isSessionMember(scope, "ok")).toBe(true);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([
+        expect.objectContaining({ identityId: "ok" }),
+      ]);
     });
   });
 
@@ -431,7 +430,6 @@ describe("session sharing store", () => {
       expect(
         addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
       ).toBe(true);
-      expect(isSessionMember(scope, "guest")).toBe(true);
 
       // Reusing the canonical key with a new sessionId is a fresh session; a
       // stale member must not inherit access, and the replacement must start
@@ -442,7 +440,6 @@ describe("session sharing store", () => {
         visibility: "read-only",
       });
       expect(listSessionMembers(scope)).toEqual([]);
-      expect(isSessionMember(scope, "guest")).toBe(false);
       // Replacement drops the copied restriction; absent visibility reads as
       // shared, so the fresh instance is not hidden or read-only.
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
@@ -452,7 +449,9 @@ describe("session sharing store", () => {
         addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 4 }).inserted,
       ).toBe(true);
       await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 5 });
-      expect(isSessionMember(scope, "guest")).toBe(true);
+      expect((await readSessionMembersInWorker(scope)).members).toEqual([
+        expect.objectContaining({ identityId: "guest" }),
+      ]);
     });
   });
 

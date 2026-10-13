@@ -1,11 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperationsFromLoaders,
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  projects: () =>
+    import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,
@@ -46,10 +49,8 @@ const loaders = {
     import("../sessions/session-state-events.read.worker.js").then(
       (m) => m.sessionStateReadOperations,
     ),
-  sessionUpstream: () =>
-    import("../sessions/session-upstream-links.kernel.js").then(
-      (m) => m.sessionUpstreamReadOperations,
-    ),
+  // Session-state handlers also require this kernel in the same lazy read-worker graph.
+  sessionUpstream: async () => sessionUpstreamReadOperations,
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),
   restartSentinel: () =>

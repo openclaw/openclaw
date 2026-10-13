@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
@@ -505,23 +506,26 @@ export function createGatewayWorkerPlacementRuntime(
         // Each operation reports its own failure before releasing its slot.
       }
     };
-    const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
-      const previousSessionId = mutation.previous.sessionId;
-      const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
-      if (previousSessionId && previousSessionId !== currentSessionId) {
-        const pending = operations.get("reconcile");
-        if (!pending) {
-          void reconcileActivePlacements();
-          return;
+    const uninstallSessionIdentityMutation = onSessionIdentityMutation((mutation) =>
+      // Reconciliation belongs to the Gateway, not the notifying request's cancellation scope.
+      runInDetachedAsyncContext(() => {
+        const previousSessionId = mutation.previous.sessionId;
+        const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
+        if (previousSessionId && previousSessionId !== currentSessionId) {
+          const pending = operations.get("reconcile");
+          if (!pending) {
+            void reconcileActivePlacements();
+            return;
+          }
+          // The sweep owns reporting and settlement; returning it would create an
+          // unobserved rejecting promise for this best-effort event subscriber.
+          const resume = () => {
+            void reconcileActivePlacements();
+          };
+          void pending.then(resume, resume);
         }
-        // The sweep owns reporting and settlement; returning it would create an
-        // unobserved rejecting promise for this best-effort event subscriber.
-        const resume = () => {
-          void reconcileActivePlacements();
-        };
-        void pending.then(resume, resume);
-      }
-    });
+      }),
+    );
     let stopPromise: Promise<void> | undefined;
     const sidecar: WorkerPlacementSidecar = {
       stop: () => {

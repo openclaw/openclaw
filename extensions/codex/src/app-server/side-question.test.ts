@@ -38,6 +38,7 @@ import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
+  codexHookCommand,
   readCodexAppServerBindingMock,
   isCodexAppServerNativeAuthProfileMock,
   getSharedCodexAppServerClientMock,
@@ -115,18 +116,6 @@ function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-}
-
-function codexHookCommand(config: unknown, key: string) {
-  const entries = (config as Record<string, unknown> | undefined)?.[key];
-  if (!Array.isArray(entries)) {
-    return undefined;
-  }
-  return (
-    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
-  )
-    .at(0)
-    ?.hooks?.at(0);
 }
 
 beforeAll(() => setRuntimeConfigSnapshot({}));
@@ -858,7 +847,11 @@ describe("runCodexAppServerSideQuestion", () => {
         },
       };
       const savedAppConfig = structuredClone(nativeAppConfig);
-      const client = createFakeClient({ completeTurn: rejectsReplay });
+      const turnStarted = createDeferred<void>();
+      const client = createFakeClient({
+        completeTurn: rejectsReplay,
+        onTurnStart: () => turnStarted.resolve(),
+      });
       const baseRequest = client.request.getMockImplementation()!;
       client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
         if (method === "app/installed") {
@@ -955,9 +948,12 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(methods).not.toContain("thread/fork");
         return;
       }
-      await vi.waitFor(() =>
-        expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      );
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Side question finished before starting its turn");
+        }),
+      ]);
       try {
         await handleClientRequestWhenReady(client, {
           id: "side-approval-policy",

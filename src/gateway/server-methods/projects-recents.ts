@@ -37,9 +37,10 @@ function indexPathProjects(projects: readonly ProjectRegistryRecord[]) {
 
 export async function listProjectRecents(
   store: Record<string, SessionEntry>,
-  sessionAgents: ReadonlyMap<string, string>,
+  getSessionAgentId: (key: string) => string | undefined,
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryRecord[],
+  usedSessions: Set<string>,
 ): Promise<ProjectRecent[]> {
   const candidates = Object.entries(store)
     .filter(
@@ -59,7 +60,7 @@ export async function listProjectRecents(
   for (let offset = 0; offset < candidates.length && recents.length < 8; offset += 64) {
     const batch = candidates.slice(offset, offset + 64);
     const repositoryCandidates = batch.flatMap(([sessionKey, entry]) => {
-      const agentId = sessionAgents.get(sessionKey);
+      const agentId = getSessionAgentId(sessionKey);
       return entry.repositoryWorkspaceId && agentId ? [{ agentId, sessionKey }] : [];
     });
     const repositories = new Map(
@@ -83,6 +84,7 @@ export async function listProjectRecents(
           continue;
         }
         seen.add(repository.url);
+        usedSessions.add(sessionKey);
         recents.push({
           kind: "repository",
           url: repository.url,
@@ -115,6 +117,7 @@ export async function listProjectRecents(
         continue;
       }
       seen.add(key);
+      usedSessions.add(sessionKey);
       recents.push(
         project
           ? { kind: "project", projectId: project.id, displayName: project.displayName }

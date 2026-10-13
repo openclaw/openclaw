@@ -33,6 +33,8 @@ export type ValidateConfigWithPluginsAsyncParams = Omit<
   ) => Promise<PreparedConfigValidationPluginMetadata>;
 };
 
+class PluginMetadataRequired extends Error {}
+
 export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
@@ -74,33 +76,51 @@ async function validateConfigObjectWithPluginsAsyncInternal(
     migrated: cloneConfigWithResolutionFacts(prepared.migrated),
     parsedConfig: prepared.parsedConfig,
   };
-  const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
-  const strictConfig = prepareStrictValidation
-    ? cloneConfigWithResolutionFacts(pending.parsedConfig)
-    : undefined;
-  const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
-    ? new Map()
-    : undefined;
-  const preparedParams = { ...validationParams, pluginMetadataSnapshot: metadata };
-  const result = finishConfigObjectWithPlugins(
-    pending,
-    preparedParams,
-    true,
-    metadata.installedPluginRecordIds,
-    schemaValidations,
-  );
-  if (!result.ok || !strictConfig) {
-    return result;
+  const validate = (metadata?: PreparedConfigValidationPluginMetadata) => {
+    // Defaults normalize paths in place; a suspended attempt must not alter the source facts.
+    const parsedConfig = cloneConfigWithResolutionFacts(pending.parsedConfig);
+    const strictConfig = prepareStrictValidation
+      ? cloneConfigWithResolutionFacts(parsedConfig)
+      : undefined;
+    const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
+      ? new Map()
+      : undefined;
+    const preparedParams = {
+      ...validationParams,
+      pluginMetadataSnapshot: metadata,
+      loadPluginMetadataSnapshot: () => {
+        throw new PluginMetadataRequired();
+      },
+    };
+    const result = finishConfigObjectWithPlugins(
+      { ...pending, parsedConfig },
+      preparedParams,
+      true,
+      metadata?.installedPluginRecordIds,
+      schemaValidations,
+    );
+    if (!result.ok || !strictConfig) {
+      return result;
+    }
+    const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
+      ...preparedParams,
+      applyDefaults: false,
+      pluginValidation: "full",
+      semanticValidation: "strict",
+      installedPluginRecordIds: metadata?.installedPluginRecordIds,
+      schemaValidations,
+    });
+    return { ...result, strictIssues: strict.ok ? [] : strict.issues };
+  };
+  try {
+    // The rule owner requests metadata only at the first plugin-dependent decision.
+    return validate();
+  } catch (error) {
+    if (!(error instanceof PluginMetadataRequired)) {
+      throw error;
+    }
   }
-  const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
-    ...preparedParams,
-    applyDefaults: false,
-    pluginValidation: "full",
-    semanticValidation: "strict",
-    installedPluginRecordIds: metadata.installedPluginRecordIds,
-    schemaValidations,
-  });
-  return { ...result, strictIssues: strict.ok ? [] : strict.issues };
+  return validate(await loadPluginMetadataSnapshotAsync(pending.parsedConfig));
 }
 
 export function validateConfigObjectRawWithPlugins(

@@ -1,11 +1,22 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
+import { acquireSessionInputActor } from "./session-input-actor.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
@@ -149,5 +160,42 @@ describe("selected actor storage binding", () => {
       separate.storage!.readCurrent({ type: "session.entry.read", input: {} }, authority),
     ).toMatchObject({ sessionId: "rotated" });
     await separate.release();
+  });
+});
+
+it("keeps production incognito acquisition on its native owner without creating a memory actor", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = {
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+      env,
+    };
+    const sessionKey = "agent:main:dashboard:incognito-declined";
+    const owner = runOpenClawAgentWriteTransaction((opened) => {
+      writeSessionEntry(opened, sessionKey, {
+        sessionId: "native-session",
+        updatedAt: 1,
+        incognito: true,
+      });
+      return opened;
+    }, database);
+    const actor = await acquireSessionInputActor(
+      {
+        agentId: database.agentId,
+        storePath: database.path,
+        env,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    expect(actor).toBeUndefined();
+    expect(memorySessionActorOwners.read(database)).toBeUndefined();
+    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(owner);
+    expect(readExactSessionEntryRow(owner, sessionKey)?.entry).toMatchObject({
+      sessionId: "native-session",
+      updatedAt: 1,
+      incognito: true,
+    });
+    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
   });
 });

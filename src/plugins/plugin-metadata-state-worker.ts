@@ -31,10 +31,14 @@ export async function readPluginMetadataStateRows(
   artifactPreservingReadOnly = false,
 ): Promise<PluginMetadataStateRow[]> {
   const read = async () => {
-    const result = await executeExistingOpenClawStateRead(options, {
-      type: "plugins.metadata.read",
-      input: { stateKeys: [...stateKeys] },
-    });
+    const result = await executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "plugins.metadata.read",
+        input: { stateKeys: [...stateKeys] },
+      },
+      { snapshotPreparation: "awaited" },
+    );
     if (result === undefined) {
       return [];
     }

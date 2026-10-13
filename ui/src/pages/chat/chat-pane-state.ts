@@ -6,11 +6,53 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
+import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.ts";
+
+export function createChatPaneRunRecoveryActions(
+  state: Pick<
+    ChatPageHost,
+    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+  >,
+  options: {
+    canSend: boolean;
+    canChangeModel: boolean;
+    isCurrent: () => boolean;
+    latestFailedRunId: () => string | undefined;
+    openModelPicker: () => void;
+  },
+): Pick<ChatProps, "onRetryRun" | "onChangeFailureModel"> {
+  const sessionKey = state.sessionKey;
+  const ownsFailure = (runId: string) =>
+    options.isCurrent() &&
+    state.sessionKey === sessionKey &&
+    state.connected &&
+    !state.chatRunId &&
+    !state.chatSending &&
+    options.latestFailedRunId() === runId;
+  return {
+    onRetryRun: options.canSend
+      ? (runId) => {
+          if (ownsFailure(runId)) {
+            // Continue with the existing history, rather than replaying a prompt
+            // whose tools may already have completed side effects.
+            void state.handleSendChat(t("chat.recovery.continuePrompt"));
+          }
+        }
+      : undefined,
+    onChangeFailureModel: options.canChangeModel
+      ? (runId) => {
+          if (ownsFailure(runId)) {
+            options.openModelPicker();
+          }
+        }
+      : undefined,
+  };
+}
 
 export function createChatPaneSendActions(
   state: Pick<ChatPageHost, "chatAttachments" | "chatMessage" | "handleSendChat">,
@@ -156,7 +198,7 @@ export function resolveChatPaneFollowUpMode(
 ) {
   return resolveControlUiFollowUpMode(
     state.settings.chatFollowUpMode,
-    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+    resolveControlUiServerQueueMode(currentDisplayRuntimeConfig(runtimeConfig), {
       configNeedsApply: runtimeConfig.configNeedsApply,
       effectiveMode: state.chatEffectiveQueueMode,
       sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,

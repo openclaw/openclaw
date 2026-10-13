@@ -52,7 +52,6 @@ afterEach(() => {
 function taskContext(databaseAdmissionPort?: MessagePort): WorkerTaskContext {
   return {
     deletedAgentDatabaseFences: [],
-    databaseAdmissions: [],
     ...(databaseAdmissionPort ? { databaseAdmissionPort } : {}),
   };
 }

@@ -208,7 +208,6 @@ src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
-src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
@@ -303,7 +302,6 @@ src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/exec-approvals-cli.ts
-src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
 src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts

@@ -1,7 +1,6 @@
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
-import type { StateLeaseProcessOwner } from "../../infra/state-lease-process-owner.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
@@ -141,9 +140,9 @@ export function deleteTemplateAsync(
 
 export function retainTemplateReaderAsync(
   env: NodeJS.ProcessEnv,
-  input: { id: string; key: string; owner: StateLeaseProcessOwner; unpublish?: true },
+  input: OpenClawStateWorkerOperations["worktrees.templates.retainReader"]["input"],
   commitGuard: () => void,
-): Promise<void> {
+): Promise<WorktreeTemplateRecord | undefined> {
   return runTemplateCommand(env, { type: "worktrees.templates.retainReader", input }, commitGuard);
 }
 

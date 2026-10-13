@@ -1288,12 +1288,17 @@ export function createAgentEventHandler({
         ...(evt.data.phase === "retrying"
           ? {
               phase: "starting_model",
-              ...(evt.data.reason === "rate_limit"
+              ...(["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].includes(
+                String(evt.data.reason),
+              )
                 ? {
                     retry: {
                       attempt: evt.data.attempt,
                       maxAttempts: evt.data.maxAttempts,
                       reason: evt.data.reason,
+                      ...(typeof evt.data.retryAt === "number" && Number.isFinite(evt.data.retryAt)
+                        ? { retryAt: evt.data.retryAt }
+                        : {}),
                     },
                   }
                 : {}),

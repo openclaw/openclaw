@@ -148,7 +148,7 @@ describe("resolveTurnRecap", () => {
   let host: { turnRecapWatch: TurnRecapWatch | null };
   const runId = "watched-run";
   const doneRow = { lastRunId: runId, status: "done" as const, runtimeMs: 14_000 };
-  const usage = (outputTokens: number, owner = runId) =>
+  const usage = (outputTokens: number | null, owner = runId) =>
     new Map([[owner, { outputTokens, seq: 1 }]]);
   const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
     resolveTurnRecap(host, { sessionKey: SESSION, ...params });
@@ -186,6 +186,11 @@ describe("resolveTurnRecap", () => {
       runId,
       runtimeMs: 14_000,
       outputTokens: 680,
+    });
+    expect(resolve({ row: doneRow, usageByRun: usage(null) })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: null,
     });
   });
 

@@ -49,8 +49,9 @@ the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they
-finish. Selecting the count opens the **Subagents** panel on its list. Child
-sessions that are not subagents are not part of that count.
+finish. Selecting the count opens the **Subagents** panel on its list. Starting
+or discovering subagents does not open the panel automatically or change your
+selected panel. Child sessions that are not subagents are not part of that count.
 
 Under the reply, each unfinished subagent has its own row
 showing its name and current activity headline. Rows stay in launch order as
@@ -176,7 +177,7 @@ Side chat answers questions about the selected session and its project without e
 
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
-Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
+Restoring the Side chat thread checks current session visibility without waiting for unrelated session writes. Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
 Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
 
@@ -442,7 +443,9 @@ Native Codex Code Mode calls show **run JavaScript** when no purpose is availabl
 
 Filesystem paths and credential-shaped values remain readable in tool activity and conversation text. Logs and diagnostic exports retain secret masking. Compact tool labels shorten macOS, Linux, and Windows home-directory prefixes to `~` while retaining the directory and filename.
 
-A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
+Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when the runtime supplies a deadline, or **Trying fallback model…**. Attempt failures stay out of the conversation while automatic recovery continues. A terminal failure leaves one icon-backed notice in the thread, preserving any partial output. The latest failed run offers **Try again** (a continuation that checks completed work rather than replaying the original prompt) and **Change model**. Your unsent draft stays intact. If you reload or reconnect during a run, its terminal error refreshes the conversation automatically so the failure notice and recovery actions become available. **Details** exposes the safe failure diagnostic without starting another request.
+
+Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up. A run-error banner remains available when its durable thread notice has not loaded; once that notice is present, the duplicate banner is hidden.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
@@ -461,6 +464,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
+    - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails and provides Open, Download, and Copy actions for the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated full-image downloads while the image remains cached.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.

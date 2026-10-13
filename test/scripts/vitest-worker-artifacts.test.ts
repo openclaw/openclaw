@@ -24,6 +24,7 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helper
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 import { copyCompiledFsSafeRuntimeFixture } from "./fs-safe-package.test-support.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createPreparedWorkerCompiler,
   interceptCompilerBuild,
@@ -428,7 +429,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             ? runNodeScript(
                 [driver],
                 preparedCompiler.env(
-                  { ...process.env, TMPDIR: outerRoot, TMP: outerRoot, TEMP: outerRoot },
+                  testRunnerFixtureEnv({ TMPDIR: outerRoot, TMP: outerRoot, TEMP: outerRoot }),
                   "node",
                 ),
                 undefined,
@@ -637,7 +638,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
           root,
           {
-            ...process.env,
+            ...testRunnerFixtureEnv(),
             OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           },
@@ -832,7 +833,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               ],
               root,
               {
-                ...process.env,
+                ...testRunnerFixtureEnv(),
                 OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
                 OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
               },
@@ -895,7 +896,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
               ],
               root,
               {
-                ...process.env,
+                ...testRunnerFixtureEnv(),
                 OPENCLAW_VITEST_MAX_WORKERS: "2",
                 RAYON_NUM_THREADS: "",
                 TOKIO_WORKER_THREADS: "",
@@ -1104,6 +1105,7 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
         const clients = ["first", "second"].map((name) => {
           const ready = path.join(directory, name);
           const child = spawn(process.execPath, [clientScript, ready], {
+            env: testRunnerFixtureEnv(),
             detached: true,
             stdio: ["ignore", "pipe", "pipe", "ipc"],
           });
@@ -1348,10 +1350,11 @@ export default class {
       export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{usePolling:true}},test:{environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,reporters:['default',${JSON.stringify(reporter)}]}};
     `,
       );
+      const env = testRunnerFixtureEnv();
       const handle = spawnWatchedVitestProcess({
         pnpmArgs: ["exec", "node", "node_modules/vitest/vitest.mjs", "--watch", "--config", config],
-        spawnParams: resolveVitestSpawnParams(process.env),
-        env: process.env,
+        spawnParams: resolveVitestSpawnParams(env),
+        env,
       });
       let output = "";
       handle.child.stdout?.on("data", (chunk) => {
@@ -1512,8 +1515,10 @@ export default class {
         // invalid sentinel that could fail even if stale-artifact fallback regressed.
         const staleWorkerPath = "infra/sqlite-readonly-location.worker.js";
         const staleWorker = path.join(fixture, "dist", staleWorkerPath);
-        fs.mkdirSync(path.dirname(staleWorker), { recursive: true });
-        fs.copyFileSync(path.join(initialDirectory, "dist", staleWorkerPath), staleWorker);
+        // The old entry and its split chunks must remain an executable graph.
+        fs.cpSync(path.join(initialDirectory, "dist/infra"), path.dirname(staleWorker), {
+          recursive: true,
+        });
         // This checkout exercises source freshness, not the full runtime inventory.
         // Keep real compiler phases while avoiding repeated unrelated application builds.
         writeFixture(

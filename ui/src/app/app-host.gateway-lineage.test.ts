@@ -1,6 +1,5 @@
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
-import { render } from "lit";
-import { flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,10 +8,10 @@ import type {
   GatewayHelloOk,
 } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 // These direct-render fixtures exercise Gateway lineage without the app lifecycle.
 // Browser tests cover deferred login loading and recovery.
 import "../components/login-gate.ts";
-import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -26,7 +25,7 @@ import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admissio
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
-import { renderChatComposer } from "../pages/chat/components/chat-composer.tsx";
+import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
@@ -38,6 +37,7 @@ import {
   createGatewayRequestMock,
   type GatewayRequestMock,
 } from "../test-helpers/gateway-client.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
@@ -258,6 +258,7 @@ describe("Control UI Gateway target lineage", () => {
         void drawShell();
       });
       const composer = createComposerContainer();
+      let unmountComposer: (() => void) | undefined;
       try {
         expect(
           admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {
@@ -298,21 +299,25 @@ describe("Control UI Gateway target lineage", () => {
         await vi.waitFor(() => expect(state.chatLoading).toBe(false));
         const sameOwner = nextRecovery === "synthetic-recovery-a";
         const active = activeQueuedMessageEdit(state);
-        render(
-          renderChatComposer(
-            createComposerProps({
-              queue: state.chatQueue,
-              sessionKey,
-              queuedEdit: {
-                editingId: active?.id ?? null,
-                editingText: active?.draftText,
-                source: active?.source,
-                onCancel: () => cancelQueuedMessageEdit(state),
-              },
-            }),
-          ),
-          composer,
+        const composerView = mountSolid(
+          () =>
+            createComponent(
+              ChatComposer,
+              createComposerProps({
+                queue: state.chatQueue,
+                sessionKey,
+                queuedEdit: {
+                  editingId: active?.id ?? null,
+                  editingText: active?.draftText,
+                  source: active?.source,
+                  onCancel: () => cancelQueuedMessageEdit(state),
+                },
+              }),
+            ),
+          { container: composer },
         );
+        unmountComposer = composerView.unmount;
+        flush();
         if (!sameOwner) {
           await handleSendChat(state, captured.draftText, {
             resumeQueuedMessageEditId: captured.id,
@@ -352,7 +357,8 @@ describe("Control UI Gateway target lineage", () => {
         releaseShell();
         releasePane();
         releaseOutbox();
-        render(null, composer);
+        // Dispose the Solid owner before resetting the shared composer fixture.
+        unmountComposer?.();
 
         pane.disconnectedCallback();
         sessions.dispose();

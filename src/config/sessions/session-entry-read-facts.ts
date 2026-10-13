@@ -6,6 +6,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
+import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import type { SessionActorTarget } from "./session-actor-contract.js";
@@ -121,13 +122,12 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
       request.projection === "full" ||
       request.projection === "sharing" ||
       request.projection === "exact") &&
-    !request.lifecycleSessionKey &&
     !request.replyInitializationSessionKey &&
     !request.manualCompact &&
     !request.transcript &&
-    !request.runtimeTarget &&
     !request.includeAuthProfileSource &&
-    !request.includeColdMetadata
+    !request.includeColdMetadata &&
+    (request.projection !== "sharing" || (!request.lifecycleSessionKey && !request.runtimeTarget))
   );
 }
 
@@ -147,17 +147,13 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
   };
 }
 
-/** Hits require the current committed write token; callers keep their own live assertions. */
+/** The actor owner admits committed facts; callers keep their own live assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
   nativeOwner?: AgentDatabaseGenerationClaim,
 ): SessionEntryCohortResult | undefined {
   if (!eligible(request)) {
-    return undefined;
-  }
-  const before = readSqliteDatabaseWriteTokenForPath(database.path);
-  if (!before) {
     return undefined;
   }
   const validation = captureOpenClawAgentDatabaseReadValidation(database);
@@ -231,6 +227,30 @@ export function readRetainedSessionEntryFacts(
       }
     }
   }
+  let lifecycleTimestamps: SessionEntryCohortResult["lifecycleTimestamps"] = {};
+  if (request.lifecycleSessionKey) {
+    const entry = entries.find(
+      ({ sessionKey }) => sessionKey === request.lifecycleSessionKey,
+    )?.entry;
+    const sessionStartedAt = resolveTimestamp(entry?.sessionStartedAt);
+    if (sessionStartedAt === undefined) {
+      return undefined;
+    }
+    lifecycleTimestamps = {
+      sessionStartedAt,
+      lastInteractionAt: resolveTimestamp(entry?.lastInteractionAt),
+    };
+  }
+  const runtimeTarget = request.runtimeTarget;
+  if (
+    runtimeTarget &&
+    !entries.some(
+      ({ sessionKey, entry }) =>
+        sessionKey === runtimeTarget.sessionKey && entry.sessionId === runtimeTarget.sessionId,
+    )
+  ) {
+    return undefined;
+  }
   for (const expected of request.expected?.sessions ?? []) {
     const entry = entries.find(({ sessionKey }) => sessionKey === expected.sessionKey)?.entry;
     if (
@@ -241,13 +261,7 @@ export function readRetainedSessionEntryFacts(
       return undefined;
     }
   }
-  validation.assertCurrent();
-  nativeOwner?.assertCurrent();
-  if (
-    !source ||
-    !databaseIdentity ||
-    readSqliteDatabaseWriteTokenForPath(database.path) !== before
-  ) {
+  if (!source || !databaseIdentity) {
     return undefined;
   }
   return {
@@ -255,7 +269,8 @@ export function readRetainedSessionEntryFacts(
     entries,
     members,
     participantRecords,
-    lifecycleTimestamps: {},
+    lifecycleTimestamps,
+    ...(runtimeTarget ? { runtimeTarget: { ...runtimeTarget, storePath: database.path } } : {}),
     source,
     databaseIdentity,
     ...(request.projection === "sharing"

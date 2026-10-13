@@ -332,6 +332,7 @@ it.each(["lifecycle", "authority"] as const)(
         target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
         updateMode: "none",
       });
+      await input.actor.read({ assertCurrent, authorize: assertCurrent });
       bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
       const adopt = input.actor.adoptRun;
       vi.spyOn(input.actor, "adoptRun").mockImplementationOnce(async (...args) => {

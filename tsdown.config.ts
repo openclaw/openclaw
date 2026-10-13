@@ -12,6 +12,7 @@ import {
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createPackageRuntimeUrlBuildPlugin } from "./scripts/lib/package-runtime-url-build-plugin.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
@@ -24,6 +25,7 @@ import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-sessio
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
@@ -118,7 +120,7 @@ function matchesExternalOption(
 
 function buildInputOptions(
   options: InputOptionsArg,
-  build?: { bundleAllDependencies?: boolean },
+  build?: { bundleAllDependencies?: boolean; bundleFsSafe?: boolean },
 ): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -159,7 +161,12 @@ function buildInputOptions(
     ...options,
     external(id: string, parentId: string | undefined, isResolved: boolean) {
       return (
-        (!build?.bundleAllDependencies && shouldNeverBundleDependency(id)) ||
+        (!build?.bundleAllDependencies &&
+          !(
+            build?.bundleFsSafe &&
+            (id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/"))
+          ) &&
+          shouldNeverBundleDependency(id)) ||
         matchesExternalOption(previousExternal, id, parentId, isResolved)
       );
     },
@@ -219,6 +226,7 @@ function createBashParserAssetsPlugin(): TsdownPlugin {
 function nodeBuildConfig(
   config: UserConfig,
   declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
+  build?: Parameters<typeof buildInputOptions>[1],
 ): UserConfig {
   return {
     ...config,
@@ -240,7 +248,7 @@ function nodeBuildConfig(
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options),
+    inputOptions: (options) => buildInputOptions(options, build),
   };
 }
 
@@ -917,22 +925,41 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) =>
-    nodeBuildConfig(
+  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) => {
+    const bundleFsSafe = [
+      "infra/sqlite-readonly-location.worker",
+      "state/openclaw-state-read.worker",
+    ].includes(name);
+    const isFsSafe = (id: string) =>
+      id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
+    return nodeBuildConfig(
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry: { [name]: source },
         deps: {
           ...unifiedDeps,
+          neverBundle: bundleFsSafe
+            ? (id) => shouldNeverBundleDependency(id) && !isFsSafe(id)
+            : unifiedDeps.neverBundle,
           alwaysBundle: (id) =>
-            shouldAlwaysBundleDependency(id) || shouldBundleRuntimeSqliteDependency(id),
+            shouldAlwaysBundleDependency(id) ||
+            shouldBundleRuntimeSqliteDependency(id) ||
+            (bundleFsSafe &&
+              (isFsSafe(id) ||
+                ["semver", "tslog"].some(
+                  (packageName) => id === packageName || id.startsWith(`${packageName}/`),
+                ))),
         },
-        outputOptions: { codeSplitting: false },
-        plugins: [createStateSchemaInlinePlugin()],
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        plugins: [
+          createStateSchemaInlinePlugin(),
+          ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),
+        ],
       },
       false,
-    ),
-  ),
+      { bundleFsSafe },
+    );
+  }),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -959,6 +986,10 @@ const configs: UserConfig[] = [
     "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
   }),
   workerDeployBuildConfig({
+    "worker/gateway-state-owner-heartbeat.worker":
+      "src/infra/gateway-state-owner-heartbeat.worker.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
   workerDeployBuildConfig({
@@ -967,9 +998,10 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
   }),
-  workerDeployBuildConfig({
-    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
-  }),
+  workerDeployBuildConfig(
+    { "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts" },
+    true,
+  ),
   workerDeployBuildConfig({
     "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
   }),

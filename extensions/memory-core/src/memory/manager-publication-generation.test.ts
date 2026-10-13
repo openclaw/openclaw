@@ -33,7 +33,7 @@ async function withPublishedIndex(run: (database: MemoryIndexDatabase) => Promis
       writeOptions: { agentId: "main", path: path.join(state.stateDir, "agent.sqlite") },
       readOnly: false,
       allowExtension: false,
-      schema: { cacheEnabled: false, ftsEnabled: false },
+      schema: { cacheEnabled: true, ftsEnabled: false },
     });
     try {
       await run(database);
@@ -149,6 +149,47 @@ it("retains session entry facts across memory publication and refreshes after a 
       );
       expect((await getSessionEntryAsync(target))?.label).toBe("After");
       expect(entryReads()).toHaveLength(1);
+    } finally {
+      messages.mockRestore();
+    }
+  });
+});
+
+it("retains published memory facts across session and embedding-cache writes", async () => {
+  await withPublishedIndex(async (database) => {
+    await database.writeMetadata(metadata);
+    const facts = database.facts;
+    const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+    try {
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath: database.db.location()!,
+        sessionKey: "agent:main:memory-facts",
+        entry: { sessionId: "memory-facts", updatedAt: 1 },
+      });
+      await database.refreshFacts();
+      await database.mutateEmbeddingCache(
+        {
+          kind: "upsert",
+          header: {
+            agentId: "main",
+            provider: { id: "test", model: "test" },
+            providerKey: "test",
+            maxEntries: 2,
+          },
+          entries: [{ hash: "test", embedding: [1] }],
+        },
+        () => {},
+        () => true,
+      );
+      await database.refreshFacts();
+      expect(database.facts).toBe(facts);
+      expect(indexCommands(messages.mock.calls)).not.toContain("index.facts");
+
+      await database.writeMetadata({ ...metadata, model: "updated-model" });
+      await database.refreshFacts();
+      expect(database.facts.meta?.model).toBe("updated-model");
+      expect(indexCommands(messages.mock.calls)).not.toContain("index.facts");
     } finally {
       messages.mockRestore();
     }

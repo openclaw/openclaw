@@ -109,6 +109,8 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
   if (typeof physicalIdentity !== "string") {
     return undefined;
   }
+  // Interrupted sweeps wait for the next interval too; appends must not amplify contention.
+  state.sweptAt = now;
   const controller = new AbortController();
   const lease = new Int32Array(new SharedArrayBuffer(4));
   Atomics.store(lease, 0, 1);
@@ -168,7 +170,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     });
     reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
   } catch (error) {
-    log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+    log.warn(`Trajectory retention deferred until the next sweep: ${String(error)}`);
     state.pending = cleanup();
     void state.pending.catch(observeFailure);
     return state.pending;
@@ -215,31 +217,25 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
   state.pending = runInDetachedAsyncContext(async () => {
     try {
       await nextTurn(undefined, { signal: controller.signal });
-      let refreshes = 0;
-      let sweepId = await execute((worker) =>
+      const sweepId = await execute((worker) =>
         worker.execute({ type: "trajectory.retention.begin", input: undefined }),
       );
-      let snapshot: TrajectoryRuntimeRetentionPlan | undefined;
-      let needsRead = true;
+      let snapshot: TrajectoryRuntimeRetentionPlan | undefined =
+        await retainedReader.owner.readTrajectoryRetention(
+          {
+            input,
+            now,
+            schemaContract: captureCanonicalSessionValidationSchema(),
+            expectedIdentity: { key: `file:${physicalIdentity}`, birthtime: identity.birthtime },
+            env: options.env ?? process.env,
+          },
+          {
+            signal: controller.signal,
+            timeoutMs: readSqliteInspectionBudget("read-only snapshot", database.path).timeoutMs,
+          },
+        );
       for (;;) {
         assertCurrent();
-        if (needsRead) {
-          snapshot = await retainedReader.owner.readTrajectoryRetention(
-            {
-              input,
-              now,
-              schemaContract: captureCanonicalSessionValidationSchema(),
-              expectedIdentity: { key: `file:${physicalIdentity}`, birthtime: identity.birthtime },
-              env: options.env ?? process.env,
-            },
-            {
-              signal: controller.signal,
-              timeoutMs: readSqliteInspectionBudget("read-only snapshot", database.path).timeoutMs,
-            },
-          );
-          assertCurrent();
-          needsRead = false;
-        }
         const result = await execute((worker) =>
           worker.execute({
             type: "trajectory.retention.delete",
@@ -247,23 +243,13 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
           }),
         );
         snapshot = undefined;
-        if (result.complete) {
-          state.sweptAt = now;
+        if (result.complete || result.refresh) {
           break;
-        }
-        if (result.refresh) {
-          if (++refreshes > 1) {
-            break;
-          }
-          sweepId = await execute((worker) =>
-            worker.execute({ type: "trajectory.retention.begin", input: undefined }),
-          );
-          needsRead = true;
         }
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        log.warn(`Trajectory retention deferred until the next append: ${String(error)}`);
+        log.warn(`Trajectory retention deferred until the next sweep: ${String(error)}`);
       }
     } finally {
       await cleanup();

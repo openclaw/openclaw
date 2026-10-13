@@ -31,6 +31,8 @@ export type ChatImageContent = {
   mimeType: string;
   fileName?: string;
   sourceIndex: number;
+  width?: number;
+  height?: number;
 };
 
 export type OffloadedRef = {
@@ -202,6 +204,8 @@ export async function persistInboundImagesForTranscript(params: {
             kind: "image",
             ...(image.fileName ? { fileName: image.fileName } : {}),
             sizeBytes: saved.size,
+            width: image.width,
+            height: image.height,
           },
         });
       } catch (err) {
@@ -417,6 +421,8 @@ export async function parseMessageWithAttachments(
           mimeType: finalMime,
           ...(att.fileName ? { fileName: att.fileName } : {}),
           sourceIndex: idx,
+          width: prepared.width,
+          height: prepared.height,
         });
         imageOrder.push("inline");
         continue;
@@ -474,7 +480,8 @@ export async function parseMessageWithAttachments(
         ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
       };
       for (const field of ["durationMs", "width", "height"] as const) {
-        const value = att[field];
+        // Only byte-derived image geometry is authoritative; absent metadata stays unknown.
+        const value = isImage && field !== "durationMs" ? prepared[field] : att[field];
         if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
           offloaded[field] = value;
         }

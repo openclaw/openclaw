@@ -24,6 +24,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   canDeleteSessionRows,
+  isNativeCatalogAdoptionSessionKey,
   isPinnableUiSessionRow,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
@@ -232,7 +233,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       hello: this.context.gateway.snapshot.hello,
     });
     const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
-    const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
+    const deleteAllowed = Boolean(
+      row &&
+      !isNativeCatalogAdoptionSessionKey(row.key) &&
+      canDeleteSessionRows([row], configuredMainKey),
+    );
     const pinnable = row != null && isPinnableUiSessionRow(row);
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
@@ -372,7 +377,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
               active: subagents ? subagentsVisible : processesVisible,
-              // Keep the selected intent if a live batch opens the panel while the menu hides.
               onActivate: () =>
                 this.requestBackgroundPanel(
                   slot,

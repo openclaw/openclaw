@@ -104,6 +104,7 @@ describe("buildAssistantMessage", () => {
     };
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.usage).toMatchObject({
+      usageReport: { state: "available" },
       input: 20,
       cacheRead: 80,
       contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },

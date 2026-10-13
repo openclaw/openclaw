@@ -261,7 +261,7 @@ export function acquireGatewayOwnerLease(params: {
             operationLabel: `gateway.owner-lease.${operation}`,
           },
         ),
-      { env, path: databasePath },
+      { env, path: databasePath, sealOnClose: operation === "release" },
     );
   const expiresAt = mutateLease("acquire", (db) => {
     const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));

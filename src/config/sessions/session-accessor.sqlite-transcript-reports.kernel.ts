@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUsage } from "../../agents/usage.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -26,6 +27,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "./session-entry-codec.js";
+import { projectSessionUsageSnapshot } from "./session-entry-usage.js";
 import {
   decodeSessionTranscriptReportFacts,
   projectSessionTranscriptReportFacts,
@@ -204,7 +206,15 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     writeSessionEntry(
       database,
       resolved.sessionKey,
-      { ...current, updatedAt: Math.max(current.updatedAt ?? 0, Date.now()) },
+      {
+        ...current,
+        // The fallback and its unavailable usage are one committed observation.
+        ...projectSessionUsageSnapshot(
+          normalizeUsage(asOptionalRecord(preparedMessage.persistedMessage.usage)),
+          undefined,
+        ),
+        updatedAt: Math.max(current.updatedAt ?? 0, Date.now()),
+      },
       { canonicalPreviousEntry: current },
     );
   }

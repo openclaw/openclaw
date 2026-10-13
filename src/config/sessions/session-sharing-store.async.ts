@@ -6,7 +6,10 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { withSqliteCommittedPublications } from "../../infra/sqlite-post-commit.js";
+import {
+  stageSqliteTransactionState,
+  withSqliteCommittedPublications,
+} from "../../infra/sqlite-post-commit.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { observeSqliteWorkerCommittedFacts } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -295,6 +298,10 @@ export async function runSessionCollaborationWrite<
               ...location,
               databaseIdentity: identity,
             });
+            const sharingAuthorityChanged =
+              capturedCommand.type === "add" ||
+              capturedCommand.type === "remove" ||
+              capturedCommand.type === "owner.assign";
             let publicationKeys = [location.sessionKey];
             let mutationDispatched = false;
             let resultReceived = false;
@@ -362,6 +369,8 @@ export async function runSessionCollaborationWrite<
                         memberships,
                         publicationKeys,
                         participantProjections,
+                        undefined,
+                        sharingAuthorityChanged,
                       );
                     }
                   }
@@ -402,11 +411,19 @@ export async function runSessionCollaborationWrite<
                       } else {
                         publicationState.result = {
                           value: withSqliteCommittedPublications(db, () =>
-                            publication.settleChanges(changes, (currentKeys, invalidations) => {
-                              const selected = publish(result, location, database, currentKeys);
-                              sessionChanges.emitBatch(invalidations, db);
-                              return selected;
-                            }),
+                            publication.settleChanges(
+                              changes,
+                              (currentKeys, invalidations, release) => {
+                                const selected = publish(result, location, database, currentKeys);
+                                sessionChanges.emitBatch(invalidations, db);
+                                stageSqliteTransactionState(db, {
+                                  stage() {},
+                                  commit: release,
+                                  rollback: () => publication.settle(undefined, true),
+                                });
+                                return selected;
+                              },
+                            ),
                           ),
                         };
                       }
@@ -470,10 +487,17 @@ export async function runSessionCollaborationWrite<
                   collectNestedErrorCandidates(error).some(
                     (errorCandidate) => extractErrorCode(errorCandidate) === "outcome-unknown",
                   ));
-              if (unknown && !capturedCommand.type.startsWith("suggestion.") && db.isOpen) {
-                publication.beginChanges(publicationKeys);
+              if (unknown && !capturedCommand.type.startsWith("suggestion.")) {
+                publication.beginChanges(
+                  publicationKeys,
+                  undefined,
+                  undefined,
+                  undefined,
+                  undefined,
+                  sharingAuthorityChanged,
+                );
               }
-              publication.settle(undefined, unknown && db.isOpen);
+              publication.settle(undefined, unknown);
               throw error;
             } finally {
               publication.settle(undefined, false);

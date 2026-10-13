@@ -173,6 +173,7 @@ suite.define(() => {
           await waitForProfile(originalProfile);
           await installNativeBridge(page);
           await page.locator(".sidebar-issues-button:visible").click();
+          await page.locator("#sidebar-issues-panel").waitFor();
           await postNativeUpdate();
           expect(await page.locator("html").getAttribute("data-native-update-posts")).toBe("1");
           expect(await gateway.getRequests("update.run")).toHaveLength(0);

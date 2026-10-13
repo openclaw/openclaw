@@ -1166,7 +1166,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         expect(result.stdout).not.toContain(path.join(cwd, "openclaw"));
       } else {
         expect(result.stdout).toBe(
-          mode === "source" ? "cache:disabled;respawn:1" : "cache:enabled;respawn:0",
+          mode === "source"
+            ? "cache:disabled;respawn:1"
+            : mode === "default"
+              ? "cache:disabled;respawn:0"
+              : "cache:enabled;respawn:0",
         );
       }
     },
@@ -1879,7 +1883,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          assert.deepEqual({ ...process.env }, before);
          process.stdout.write("cache-base:verified");`,
     );
-    const args = [path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs")];
+    const args = [
+      path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs"),
+      "gateway",
+      "run",
+    ];
     if (mode === "foreign") {
       const preload = path.join(fixtureRoot, "foreign.mjs");
       await fs.writeFile(

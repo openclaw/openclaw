@@ -30,6 +30,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -176,6 +177,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
+  ctx: ModelCallDiagnosticContext,
 ): NonNullable<ModelCallStreamOptions> {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -224,6 +226,16 @@ function withDiagnosticRequestContext(
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
     observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {
@@ -244,6 +256,11 @@ export function createModelLifecycle(params: {
   createObserver: (capturePromptStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
+  const transportContext = {
+    sessionKey: params.ctx.sessionKey,
+    runId: params.ctx.runId,
+    requestId: callId,
+  };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(areDiagnosticsEnabledForProcess());
   const eventBase: ModelCallEventBase = {
@@ -273,7 +290,13 @@ export function createModelLifecycle(params: {
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  const propagatedOptions = withDiagnosticRequestContext(
+    params.options,
+    trace,
+    observer,
+    callId,
+    params.ctx,
+  );
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
     if (observer.state.terminalEventEmitted) {
@@ -376,6 +399,9 @@ export function createModelLifecycle(params: {
     eventBase,
     observer,
     propagatedOptions,
+    runInTransportContext<T>(run: () => T): T {
+      return withModelTransportContext(transportContext, run);
+    },
     startedAt,
     observeChunk(chunk: unknown) {
       observer.observeResponseChunk(startedAt, chunk);

@@ -43,6 +43,14 @@ The wait result also carries the run's `terminalReply` and, when available,
 reply reached the external source conversation. A2A announcements consume that
 fact instead of using display-history mirrors as delivery evidence.
 
+When a provider rejects a malformed tool call before dispatch, the built-in
+runner can continue once from the current transcript after earlier tools have
+settled. Earlier failed tools do not block this continuation when every failure
+carries host evidence that execution never started and its result already
+precedes the rejected response in the current turn. Failures that may have caused
+side effects, unfinished tools, and asynchronous work still block it; the
+continuation does not replay the original task or increase the retry budget.
+
 ## Queueing and concurrency
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
@@ -128,6 +136,7 @@ complete schema still enforces constraints such as `oneOf` exclusivity.
 - Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
+- A confirmed final send, reply, thread reply, or poll to the current source conversation ends the run loop in both automatic and message-tool delivery modes. An added reaction with explicit `final: true` on the current source message also ends it. Progress actions (`final: false`), reactions elsewhere, removals, and unconfirmed actions do not.
 
 ## Reply shaping
 
@@ -153,6 +162,16 @@ A confirmed delivery prevents duplicate generation. Pending delivery or continua
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
 ## Compaction and retries
+
+In Control UI chat, recovery stays beside the working indicator rather than
+creating a message for every failed attempt. Same-model retry status includes
+its attempt count and an absolute retry time for backoff display. Model fallback
+transitions remain available when reconnecting to an active run.
+
+Once recovery ends in failure, chat shows one run-owned failure notice. Useful
+partial text and media remain separate from that notice. Failed-attempt
+diagnostics stay in the raw transcript; display history collapses them by run
+identity, not by comparing error text.
 
 When an OpenAI Responses request hits its output limit while generating a tool
 call, the built-in harness finishes already admitted tools and retries from their

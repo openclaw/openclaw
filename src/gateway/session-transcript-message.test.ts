@@ -26,9 +26,9 @@ describe("trusted transcript display metadata", () => {
       __openclaw: { runId: "recovering-run" },
       pending: false,
     },
-    { content: [], __openclaw: { runId: "other-run" }, pending: false },
+    { content: [], __openclaw: { runId: "other-run" }, pending: true },
   ])(
-    "defers only diagnostic-only failures of the exact active run: %j",
+    "defers attempt diagnostics without inferring terminal settlement: %j",
     ({ pending, ...failure }) => {
       const raw = {
         role: "assistant",
@@ -40,11 +40,15 @@ describe("trusted transcript display metadata", () => {
       const result = projectSessionMessagePayload({
         message: raw,
         sessionKey: "agent:main:main",
-        isRunActive: (runId) => runId === "recovering-run",
       });
       expect(result.deferredAssistantError === true).toBe(pending);
       expect(Boolean(result.payload)).toBe(!pending);
-      expect(result.projectionState.assistantErrorPending).toBe(pending);
+      expect(result.projectionState.assistantErrorPending).toBe(true);
+      if (failure["__openclaw"].runId === "recovering-run" && result.payload) {
+        expect(result.payload.message).not.toHaveProperty("openclawRunError");
+        expect(result.payload.message).not.toHaveProperty("stopReason");
+        expect(result.payload.message).not.toHaveProperty("errorMessage");
+      }
       expect(raw).toEqual(original);
     },
   );

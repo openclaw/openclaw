@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createSessionProjection,
+  projectLiveSessionMessage,
+} from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
+import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import {
@@ -505,6 +510,13 @@ const answer = {
   stopReason: "stop",
   __openclaw: { id: "answer", seq: 3, runId: "run-a" },
 };
+const terminal = (runId = "run-a") => ({
+  role: "custom",
+  customType: "run-failed-before-reply",
+  content: "Recovery exhausted.",
+  details: { runId },
+  __openclaw: { id: "terminal-" + runId, seq: 10, runId },
+});
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
@@ -531,6 +543,7 @@ it.each([
     for (const content of [[], [text("Partial reply")]]) {
       const message = {
         ...failed,
+        __openclaw: { id: "legacy", seq: 2 },
         ...error,
         content,
         errorMessage: "PRIVATE_PROVIDER_DETAIL",
@@ -575,6 +588,7 @@ it.each([
   const message = {
     ...failed,
     ...partial,
+    __openclaw: { id: "legacy", seq: 2 },
     errorCode: "incomplete_tool_call",
     errorMessage: "PRIVATE_PROVIDER_DETAIL",
   };
@@ -622,6 +636,79 @@ it("preserves a model-fallback event marker through history projection", () => {
   expect(projectChatDisplayMessages([notice])).toEqual([notice]);
 });
 
+it("shows one settled notice while preserving each attempt's partial output", () => {
+  const partial = { ...failed, content: [text("The first step completed.")] };
+  const empty = { ...failed, __openclaw: { id: "failed-again", seq: 3, runId: "run-a" } };
+  const receipt = {
+    role: "custom",
+    customType: "run-failed-before-reply",
+    content: "The request failed after retries.",
+    details: { runId: "run-a", error: "PRIVATE_PROVIDER_ERROR" },
+    __openclaw: { id: "receipt", seq: 4 },
+  };
+  const raw = [user, partial, empty, receipt];
+  const original = structuredClone(raw);
+  const projected = projectChatDisplayMessages(raw);
+  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
+    { runId: "run-a", summary: "The request failed after retries." },
+  ]);
+  expect(projected.filter((message) => message.role === "assistant")).toEqual([
+    { ...partial, stopReason: undefined, errorMessage: undefined },
+  ]);
+  expect(projected.at(-1)).toMatchObject({ role: "custom", content: receipt.content });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROVIDER_ERROR");
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  expect(raw).toEqual(original);
+});
+
+it.each([
+  { content: [{ type: "image", url: "/media/proof.png", mimeType: "image/png" }] },
+  { content: [tool] },
+])("keeps structured partial output separate from its final notice: %j", ({ content }) => {
+  const projected = projectChatDisplayMessages([{ ...failed, content }, terminal()]);
+  expect(projected).toHaveLength(2);
+  expect(projected[0]).toMatchObject({ role: "assistant", content });
+  expect(projected[0]).not.toHaveProperty("openclawRunError");
+  expect(projected[0]).not.toHaveProperty("stopReason");
+  expect(readRunFailureNotice(projected[1])?.runId).toBe("run-a");
+  let state = createSessionProjection({ sessionKey: "agent:main:split" }, projected);
+  for (const message of projected) {
+    state = projectLiveSessionMessage(state, message);
+  }
+  expect(state.messages).toEqual(projected);
+});
+
+it("keeps unrelated historical failures but never exposes active attempt diagnostics", () => {
+  const other = terminal("run-b");
+  const partial = { ...failed, content: [text("Useful partial answer")] };
+  const projected = projectChatDisplayMessages([user, partial, other]);
+  expect(projected.map(readRunFailureNotice).filter(Boolean)).toEqual([
+    { runId: "run-b", summary: "Recovery exhausted." },
+  ]);
+  expect(projected.find((message) => message.role === "assistant")).toMatchObject({
+    content: [text("Useful partial answer")],
+  });
+  expect(projected.filter((message) => message.role === "assistant")).toHaveLength(1);
+});
+
+it("does not infer exhaustion from historical attempts or a page boundary", () => {
+  const other = { ...failed, __openclaw: { id: "other", seq: 3, runId: "run-b" } };
+  for (const rows of [
+    [user, failed],
+    [user, failed, other],
+  ]) {
+    const before = structuredClone(rows);
+    expect(projectChatDisplayMessages(rows)).toEqual([user]);
+    expect(rows).toEqual(before);
+  }
+  expect(
+    projectChatDisplayMessages([user, failed, terminal(), other, terminal("run-b")])
+      .map(readRunFailureNotice)
+      .filter(Boolean)
+      .map((notice) => notice?.runId),
+  ).toEqual(["run-a", "run-b"]);
+});
+
 it("retires repeated non-visible failed attempts after their run answers", () => {
   const failures = Array.from({ length: 4 }, (_, attempt) => ({
     ...failed,
@@ -635,45 +722,28 @@ it("retires repeated non-visible failed attempts after their run answers", () =>
   expect(raw).toEqual(original);
 });
 
-it.each([false, true])(
-  "retires a recovered overflow copy without hiding partial output (projected=%s)",
-  (projected) => {
-    const copy =
-      "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
-    const overflow = {
-      ...failed,
-      content: [text(copy)],
-      errorCode: "context_length_exceeded",
-      errorMessage: "Your input exceeds the context window of this model.",
-    };
-    const message = projected ? projectChatDisplayMessage(overflow) : overflow;
-    if (!message) {
-      throw new Error("Expected an overflow display projection");
-    }
-    const original = structuredClone(message);
-    expect(projectChatDisplayMessages([user, message, answer])).toEqual([user, answer]);
-    expect(projectedIds([user, message])).toContainEqual(failed["__openclaw"]);
-    expect(
-      projectedIds([
-        user,
-        message,
-        { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
-      ]),
-    ).toContainEqual(failed["__openclaw"]);
-    expect(
-      projectedIds([user, message, { ...user, content: "Next question" }, answer]),
-    ).toContainEqual(failed["__openclaw"]);
-    const partial = { ...message, content: [text(copy + "\n\nThe first step completed.")] };
-    expect(projectedIds([user, partial, answer])).toContainEqual(failed["__openclaw"]);
-    expect(message).toEqual(original);
-  },
-);
+it("hides attributed overflow diagnostics while preserving partial answers", () => {
+  const overflow = {
+    ...failed,
+    errorCode: "context_length_exceeded",
+    errorMessage: "Your input exceeds the context window of this model.",
+  };
+  expect(projectChatDisplayMessage(overflow)).toBeUndefined();
+  expect(projectChatDisplayMessages([user, overflow, answer])).toEqual([user, answer]);
+  const partial = { ...overflow, content: [text("The first step completed.")] };
+  expect(projectChatDisplayMessages([user, partial])[1]).toMatchObject({
+    content: partial.content,
+  });
+  expect(projectChatDisplayMessages([user, partial, answer])[1]).toMatchObject({
+    content: partial.content,
+  });
+});
 
 it.each([
   { ...answer, provider: "openclaw", model: "gateway-injected" },
   { ...answer, stopReason: "toolUse" },
-])("keeps the failure without a successful runtime answer: %j", (later) => {
-  expect(projectedIds([user, failed, later])).toContainEqual(failed["__openclaw"]);
+])("does not infer terminal failure from later partial progress: %j", (later) => {
+  expect(projectedIds([user, failed, later])).not.toContainEqual(failed["__openclaw"]);
 });
 
 it.each([false, true])(
@@ -705,7 +775,7 @@ it.each([false, true])(
         continuation,
         { ...answer, __openclaw: { ...answer["__openclaw"], runId: "other" } },
       ]),
-    ).toContainEqual(failed["__openclaw"]);
+    ).not.toContainEqual(failed["__openclaw"]);
     expect(raw).toEqual(original);
   },
 );
@@ -713,10 +783,10 @@ it.each([false, true])(
 it("keeps unattributed failures and failures separated by a new user turn", () => {
   const unattributed = { ...failed, __openclaw: { id: "failed", seq: 2 } };
   expect(projectedIds([user, unattributed, answer])).toContainEqual(unattributed["__openclaw"]);
-  expect(projectedIds([user, failed, { ...user, content: "next turn" }, answer])).toContainEqual(
-    failed["__openclaw"],
-  );
-  expect(projectedIds([user, failed])).toContainEqual(failed["__openclaw"]);
+  expect(
+    projectedIds([user, failed, { ...user, content: "next turn" }, answer]),
+  ).not.toContainEqual(failed["__openclaw"]);
+  expect(projectedIds([user, failed])).not.toContainEqual(failed["__openclaw"]);
 });
 
 it("preserves partial content even when the redundant text field is empty", () => {
@@ -727,7 +797,7 @@ it("preserves partial content even when the redundant text field is empty", () =
 });
 
 it("repairs only matching attempts when run identities interleave", () => {
-  const other = { ...failed, __openclaw: { id: "other", seq: 3, runId: "run-b" } };
+  const other = terminal("run-b");
   expect(projectedIds([user, failed, other, answer])).toEqual([
     user["__openclaw"],
     other["__openclaw"],
@@ -747,9 +817,7 @@ it("refreshes SSE history after an appended failure recovers", async () => {
   });
   expect(
     (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
-  ).toMatchObject({
-    stopReason: "error",
-  });
+  ).toBeUndefined();
   expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });

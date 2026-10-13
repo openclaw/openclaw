@@ -263,9 +263,16 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
-  const stateBusy = collectNestedErrorCandidates(options.error).some(
+  const errors = collectNestedErrorCandidates(options.error);
+  const stateBusy = errors.some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
+  // Names survive worker transport without loading the state owner's runtime here.
+  const stateRefusal = errors.find(
+    (error): error is Error => error instanceof Error && error.name === "StateDatabaseAccessError",
+  );
+  const reason = (error: unknown) =>
+    `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
@@ -274,11 +281,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
           options.error.name === "OpenClawDatabaseSchemaPreflightError"))
     ) {
       // Doctor cannot repair these refusals; their producers own the required recovery steps.
-      const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
-      lines.push(
-        `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-      );
-      return lines;
+      return ["[openclaw] OpenClaw needs a manual recovery step.", reason(options.error)];
+    }
+    if (stateRefusal) {
+      return [`[openclaw] ${options.title}`, reason(stateRefusal)];
     }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
@@ -286,11 +292,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       : isUpdateCommand || isPluginUpdateCommand;
     return [
       `[openclaw] ${options.title}`,
-      ...(showReason
-        ? [
-            `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-          ]
-        : []),
+      ...(showReason ? [reason(options.error)] : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
         : options.includeDoctorHint === false
@@ -298,13 +300,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
           : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
     ];
   }
-  const lines = [
-    `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatCliOperatorError(options.error, {
-      argv: options.argv,
-      env,
-    })}`,
-  ];
+  const lines = [`[openclaw] ${options.title}`, reason(options.error)];
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");

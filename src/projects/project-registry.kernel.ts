@@ -6,8 +6,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema-ensure.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import type {
   ProjectRegistryIdentity,
   ProjectRegistryInsert,
@@ -81,12 +83,17 @@ export function insertProjectRegistryInDatabase(
   return rowToProject(row);
 }
 
-export function listProjectRegistryInDatabase(database: DatabaseSync): ProjectRegistryRecord[] {
-  const db = getNodeSqliteKysely<ProjectsDatabase>(database);
-  return executeSqliteQuerySync(database, db.selectFrom("projects").selectAll()).rows.map(
-    rowToProject,
-  );
-}
+export const projectRegistryReadOperations = {
+  "projects.list": (_input: undefined, database) => ({
+    type: "projects.list" as const,
+    projects: tableExists(database, "projects")
+      ? executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<ProjectsDatabase>(database).selectFrom("projects").selectAll(),
+        ).rows.map(rowToProject)
+      : [],
+  }),
+} satisfies WorkerOperationHandlers<DatabaseSync>;
 
 export function resolveProjectRegistryInDatabase(
   database: DatabaseSync,
