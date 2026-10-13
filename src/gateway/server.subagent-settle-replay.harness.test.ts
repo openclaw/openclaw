@@ -601,7 +601,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       completion.mockClear();
       const replayed = await dispatch(child);
       if (visible) {
-        expect(replayed, child.requesterSettleWake?.lastError).toBe(true);
+        expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(true);
         expect(acceptedMessages).toHaveLength(1);
         expect(admittedSources).toEqual([child.childSessionKey]);
         expect(agentCommandMock).toHaveBeenCalledOnce();
@@ -638,7 +638,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         });
         return;
       }
-      expect(replayed, child.requesterSettleWake?.lastError).toBe(true);
+      expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(true);
       expect(admittedSources).toEqual([originalSource, originalSource]);
       expect(agentCommandMock).toHaveBeenCalledTimes(retryable ? 2 : 1);
       expect(completion.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
