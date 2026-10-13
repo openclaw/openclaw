@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -12,7 +13,7 @@ import {
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { createWorkerPlacementMoveService } from "../worker-environments/placement-move-service.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "../worker-environments/placement-record.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -284,39 +285,6 @@ describe("sessions.dispatch", () => {
     },
   );
 
-  it("dispatches codex sessions through SSH without requiring node command allowlisting", async () => {
-    useWorktreeSession({
-      agentRuntimeOverride: "codex",
-      providerOverride: "openai",
-      modelOverride: "gpt-test",
-    });
-    const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: {
-          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
-            mode === "remote-exec",
-        } as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
-
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        executionMode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-          consumesWorkerSlot: false,
-        },
-      }),
-      expect.any(Function),
-      undefined,
-      undefined,
-    );
-    expectDispatchError(respond, "remote dispatch reached", ErrorCodes.UNAVAILABLE);
-  });
-
   it("moves an abandoned session back to the Gateway with exact-source CAS", async () => {
     useWorktreeSession();
     const move = vi.fn().mockResolvedValue({ state: "local", generation: 7 });
@@ -419,106 +387,6 @@ describe("sessions.dispatch", () => {
       expectDispatchError(respond, `session cannot move from placement ${source.state}`);
     },
   );
-
-  it.each([2, 3])(
-    "redispatches a reclaimed session with correlated identity (environment epoch: %s)",
-    async (ownerEpoch) => {
-      useWorktreeSession();
-      const dispatchedPlacement: WorkerSessionPlacementRecord = {
-        ...activePlacementRecord(),
-        environmentId: "environment-2",
-        generation: 5,
-        activeOwnerEpoch: 2,
-      };
-      const dispatch = vi.fn().mockResolvedValue(dispatchedPlacement);
-      const context = makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, reclaimedPlacementRecord()]]),
-        },
-      });
-      vi.spyOn(context.workerEnvironmentService!, "get").mockReturnValue({
-        environmentId: "environment-2",
-        providerId: "fake",
-        profileId: "test",
-        leaseId: "lease-2",
-        sharedHost: false,
-        state: "attached",
-        ownerEpoch,
-        createdAtMs: 1,
-        idleSinceAtMs: null,
-        destroyRequestedAtMs: null,
-        attachedSessionIds: [sessionId],
-        desktopAvailable: false,
-        desktopApps: [],
-        tunnelStatus: "stopped",
-      });
-      const respond = await invoke(context);
-
-      expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId,
-          sessionKey,
-          agentId: "main",
-          profileId: "test",
-        }),
-        expect.any(Function),
-        undefined,
-        undefined,
-      );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          placement: expect.objectContaining({
-            state: "active",
-            environmentId: "environment-2",
-            generation: 5,
-            ...(ownerEpoch === 2 ? { providerId: "fake", profileId: "test" } : {}),
-          }),
-        }),
-        undefined,
-      );
-      if (ownerEpoch !== 2) {
-        const payload = vi.mocked(respond).mock.calls[0]?.[1];
-        expect(payload).not.toHaveProperty("placement.providerId");
-        expect(payload).not.toHaveProperty("placement.profileId");
-      }
-    },
-  );
-
-  it("allows a failed placement to redispatch after its environment is proven gone", async () => {
-    useWorktreeSession();
-    const dispatch = vi.fn().mockResolvedValue({
-      ...reclaimedPlacementRecord(),
-      state: "active",
-      environmentId: "environment-next",
-      generation: 6,
-      activeOwnerEpoch: 2,
-      recoveryError: null,
-    });
-    const getEnvironment = vi.fn(() => undefined);
-
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: {
-          get: getEnvironment,
-          supportsExecutionMode: () => true,
-        } as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: {
-          getMany: () => new Map([[sessionId, failedPlacementRecord()]]),
-        },
-      }),
-    );
-
-    expect(getEnvironment).toHaveBeenCalledWith("environment-previous");
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ placement: expect.objectContaining({ state: "active" }) }),
-      undefined,
-    );
-  });
 
   it.each([
     [
@@ -679,7 +547,14 @@ describe("sessions.dispatch", () => {
       workerSessionPlacementService: { getMany: () => new Map([[sessionId, provisioning]]) },
     });
     const changes = vi.fn();
-    onTestFinished(sessionChanges.subscribe(changes));
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        // Capture placement broadcasts, excluding writes that prepare the fixture store.
+        if ("sessionKey" in change && change.agentId === undefined) {
+          changes(change);
+        }
+      }),
+    );
     const respond = await invoke(context, { profileId: "test", machineClass: "large", os: "os-a" });
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 
@@ -723,6 +598,7 @@ describe("sessions.dispatch", () => {
           projectProfiles: { "github.com/acme/app": "mapped" },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       replaceSessionEntrySync(
         { agentId: "main", sessionKey, storePath: cfg.session.store },
         {
@@ -733,7 +609,7 @@ describe("sessions.dispatch", () => {
           worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
         },
       );
-      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetWithStore);
+      mocks.resolveTarget.mockImplementation(resolveGatewaySessionStoreTargetInWorker);
       mocks.findLiveByOwner.mockReturnValue({
         id: "worktree-1",
         ownerKind: "session",
@@ -919,7 +795,14 @@ describe("sessions.dispatch", () => {
       const reclaim = vi.fn().mockResolvedValue(reclaimed);
       const context = reclaimContext(() => reclaimed, reclaim);
       const changes = vi.fn();
-      onTestFinished(sessionChanges.subscribe(changes));
+      onTestFinished(
+        sessionChanges.subscribe((change) => {
+          // Capture placement broadcasts, excluding writes that prepare the fixture store.
+          if ("sessionKey" in change && change.agentId === undefined) {
+            changes(change);
+          }
+        }),
+      );
       const respond = await invokeSessionReclaim(context);
 
       expect(reclaim).toHaveBeenCalledWith(
@@ -986,7 +869,14 @@ describe("sessions.dispatch", () => {
       );
 
       const changes = vi.fn();
-      onTestFinished(sessionChanges.subscribe(changes));
+      onTestFinished(
+        sessionChanges.subscribe((change) => {
+          // Capture placement broadcasts, excluding writes that prepare the fixture store.
+          if ("sessionKey" in change && change.agentId === undefined) {
+            changes(change);
+          }
+        }),
+      );
       const respond = await invokeSessionReclaim(context);
 
       expectReclaimed(respond);
@@ -1021,7 +911,14 @@ describe("sessions.dispatch", () => {
 
           try {
             const changes = vi.fn();
-            onTestFinished(sessionChanges.subscribe(changes));
+            onTestFinished(
+              sessionChanges.subscribe((change) => {
+                // Capture placement broadcasts, excluding writes that prepare the fixture store.
+                if ("sessionKey" in change && change.agentId === undefined) {
+                  changes(change);
+                }
+              }),
+            );
             const respond = await invokeSessionReclaim(context);
 
             expect(respond).toHaveBeenCalledWith(

@@ -5,10 +5,12 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import { readSessionSubmittedInput } from "../config/sessions/session-accessor.js";
 import {
-  loadExactSessionEntry,
-  readSessionSubmittedInput,
-} from "../config/sessions/session-accessor.js";
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { decodeSessionTranscriptWorkerReadError } from "../config/sessions/session-history-worker-errors.js";
 import {
   captureIncognitoSessionBinding,
@@ -27,7 +29,7 @@ import { rethrowIncognitoSessionError } from "../state/incognito-session-error.j
 import {
   getOwedHarnessCompletionTask,
   hasHarnessCompletionFinalReceipt,
-  readAdmittedHarnessCompletionInput,
+  readAdmittedHarnessCompletionInputAsync,
 } from "./agent-harness-completion-recovery.js";
 
 const log = createSubsystemLogger("agents/harness-completion-recovery");
@@ -37,9 +39,12 @@ function sameRequester(claim: HarnessCompletionRecovery, entry: SessionEntry): b
 }
 
 type CompletionTarget = { agentId: string; sessionKey: string; storePath: string };
-function readCurrent(target: CompletionTarget): SessionEntry | undefined {
-  const loaded = loadExactSessionEntry({ ...target, readConsistency: "latest" });
-  return loaded?.sessionKey === target.sessionKey ? loaded.entry : undefined;
+async function readCurrent(target: CompletionTarget): Promise<SessionEntry | undefined> {
+  const loaded = await readSessionEntriesFromStoreInWorker({
+    ...target,
+    sessionKeys: [target.sessionKey],
+  });
+  return loaded.entries.find(({ sessionKey }) => sessionKey === target.sessionKey)?.entry;
 }
 
 async function readActorCurrent(
@@ -122,6 +127,10 @@ export async function reconcileHarnessCompletionDelivery(
     taskRunId?: string;
   },
 ): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+  const memory = getSessionActorStorageBinding(params);
+  if (memory) {
+    return reconcileMemoryHarnessCompletionDelivery(params, memory);
+  }
   const binding = captureIncognitoSessionBinding(params);
   const claim = binding?.actor.sessions.captureCurrent(params.sessionKey);
   const reconcile = async () => {
@@ -133,11 +142,56 @@ export async function reconcileHarnessCompletionDelivery(
   return binding ? binding.actor.sessions.withSharedState(reconcile) : reconcile();
 }
 
+function reconcileMemoryHarnessCompletionDelivery(
+  params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
+  binding: SessionActorStorageBinding,
+): "unowned" | "pending" | "delivered" | "blocked" {
+  try {
+    const snapshot = binding.actor.storage!.readCurrent(
+      {
+        type: "session.completion.read",
+        input: { sourceRunId: params.sourceRunId, mode: "committed" },
+      },
+      binding.authority,
+    );
+    const entry = snapshot.entry;
+    if (!entry) {
+      return "unowned";
+    }
+    const receipt = getRestartRecoveryTerminalDeliveryEvidence(entry, params.sourceRunId);
+    const claim =
+      entry.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId
+        ? entry.restartRecoveryHarnessCompletion
+        : receipt?.harnessCompletion;
+    if (!claim) {
+      return entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+        hasRestartRecoveryTerminalRun(entry, params.sourceRunId) ||
+        snapshot.hasSubmittedInput
+        ? "blocked"
+        : "unowned";
+    }
+    const classified = classifyCompletionClaim(params, entry, claim);
+    if (classified) {
+      return classified;
+    }
+    const runId = entry.restartRecoveryDeliveryRunId;
+    return (runId && hasLiveCompletionOwner(claim, runId)) || snapshot.validInput
+      ? "pending"
+      : "blocked";
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    log.warn(
+      `Could not inspect harness completion custody for ${params.sessionKey}: ${String(error)}`,
+    );
+    return "blocked";
+  }
+}
+
 async function reconcileCurrentHarnessCompletionDelivery(
   params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
   binding?: IncognitoSessionBinding,
 ): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
-  const entry = binding ? await readActorCurrent(params, binding) : readCurrent(params);
+  const entry = binding ? await readActorCurrent(params, binding) : await readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
     // applies its existing requester lifecycle checks.
@@ -161,7 +215,7 @@ async function reconcileCurrentHarnessCompletionDelivery(
       { ...params, sessionId: entry.sessionId },
       `${params.sourceRunId}:user`,
     );
-    const current = binding ? await readActorCurrent(params, binding) : readCurrent(params);
+    const current = binding ? await readActorCurrent(params, binding) : await readCurrent(params);
     return !current ||
       current.sessionId !== entry.sessionId ||
       current.lifecycleRevision !== entry.lifecycleRevision ||
@@ -221,7 +275,7 @@ async function reconcileCurrentHarnessCompletionDelivery(
       }
       return snapshot.validInput ? "pending" : "blocked";
     }
-    const validInput = readAdmittedHarnessCompletionInput({
+    const validInput = await readAdmittedHarnessCompletionInputAsync({
       claim,
       entry,
       storePath: params.storePath,

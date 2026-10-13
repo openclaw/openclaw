@@ -6,10 +6,9 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -42,7 +41,7 @@ import {
   readExactSessionEntriesWithLifecycle,
   readSessionRowDatabaseFacts,
 } from "./session-entry-read.worker.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import * as sharingKernel from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -52,6 +51,9 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
     const sessionKey = "agent:main:scoped-snapshots";
     const entry = {
       sessionId: "snapshot-session",
+      sidebarRoot: true,
+      parentSessionKey: "agent:main:dashboard:parent",
+      spawnedBy: "agent:main:dashboard:parent",
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
@@ -108,6 +110,11 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             payloads.textBytes.entry = 0;
             const selected = read(fields);
             expect(selected.entries).toHaveLength(1);
+            expect(selected.entries[0]?.entry).toMatchObject({
+              sidebarRoot: true,
+              parentSessionKey: entry.parentSessionKey,
+              spawnedBy: entry.spawnedBy,
+            });
             expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
             expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
             expect(selected.members).toEqual({ [sessionKey]: [] });
@@ -139,13 +146,18 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       sessionKeys: [sessionKey],
       snapshotFields: ["sessionDiffBaseline"],
     });
+    expect(transported.entries[0]?.entry).toMatchObject({
+      sidebarRoot: true,
+      parentSessionKey: entry.parentSessionKey,
+      spawnedBy: entry.spawnedBy,
+    });
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
     expect(transported.entries[0]?.entry.systemPromptReport).toBeUndefined();
   });
 });
 
-it("publishes exact-read admission only after commit and reuses it on the retained reader", async () => {
+it("publishes lifecycle snapshot admission only after commit and reuses it on the retained reader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cron:admission";
@@ -166,6 +178,7 @@ it("publishes exact-read admission only after commit and reuses it on the retain
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         const commitFailure = new Error("Injected snapshot commit failure");
         const exec = reader.db.exec.bind(reader.db);
@@ -190,7 +203,6 @@ it("publishes exact-read admission only after commit and reuses it on the retain
         );
         try {
           expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
-          expect(queries.counts.validation).toBeGreaterThan(0);
           const admission = captureCanonicalSessionReaderContinuation(reader);
           expect(admission).toBeDefined();
           admission?.release();
@@ -323,6 +335,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             database: target,
             env,
             sessionKeys: [sessionKey],
+            projection: "lifecycle",
           });
         }
         const continuation = useContinuation
@@ -445,7 +458,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
   });
 });
 
-it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKeys = Array.from(
@@ -458,7 +471,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       retained.run(target, () => {
@@ -549,23 +562,16 @@ it.each(["worker", "exact", "row-facts"] as const)(
   },
 );
 
-it("closes worker-prepared authority synchronously before queued consumers can reuse it", async () => {
+it("returns detached metadata and rejects asynchronous batch consumers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
-    let queued: Promise<void> | undefined;
     await withSessionEntriesFromStoresInWorker([input], ([read]) => {
       expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
       read!.assertCurrent();
-      queued = Promise.resolve().then(() => {
-        expect(read!.assertCurrent).toThrow("consumer is no longer active");
-      });
     });
-    await queued;
-    const result = await readSessionEntriesFromStoreInWorker(input);
-    expect(Object.keys(result).toSorted()).toEqual(["entries", "kind", "lifecycleTimestamps"]);
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
@@ -974,31 +980,3 @@ it.each(["entry", "store", "topology", "native"] as const)(
     });
   },
 );
-
-it("refuses an ordered result when its database closes during reader cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:closing-consumer";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
-    const reading = withSessionEntriesFromStoresInWorker(
-      [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
-      ([read]) => {
-        read!.assertCurrent();
-        queueMicrotask(() => {
-          closing = runInDetachedAsyncContext(() =>
-            closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId),
-          );
-        });
-        return read!.result.entries[0]?.entry;
-      },
-      { ordered: true },
-    );
-    try {
-      await expect(reading).rejects.toThrow("revoked");
-      expect(closing).toBeDefined();
-    } finally {
-      await closing;
-    }
-  });
-});

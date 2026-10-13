@@ -83,15 +83,9 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
     await panel.locator(".lr-files summary").click();
     await panel.locator(".lr-files .lr-diff").waitFor();
     await panel.getByRole("button", { name: "Discussion 1", exact: true }).click();
-    expect(
-      await panel
-        .locator(".lr-comments")
-        .evaluate(
-          (node) =>
-            node.getRootNode() instanceof ShadowRoot &&
-            (node.getRootNode() as ShadowRoot).activeElement === node,
-        ),
-    ).toBe(true);
+    expect(await panel.locator(".lr-comments").evaluate((node) => node.matches(":focus"))).toBe(
+      true,
+    );
     await panel.locator(".lr-url").fill(url + "#comment-1");
     await panel.locator(".lr-url").press("Enter");
     await expect

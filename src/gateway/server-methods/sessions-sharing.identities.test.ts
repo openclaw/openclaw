@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -54,6 +55,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("session member picker identities", () => {
   it("lists sharing evidence independently of placement display failures", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:sharing-display-failure";
       const scope = { agentId: "main", sessionKey };
       replaceSessionEntrySync(scope, { sessionId: "sharing-display-failure", updatedAt: 1 });
@@ -91,6 +93,16 @@ describe("session member picker identities", () => {
   it("limits creators to the current combined-store scope across configuration changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const stores = [state.path("picker-selected.sqlite"), state.path("picker-other.sqlite")];
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {} },
+        },
+        session: { store: stores[0] },
+      };
+      let cfg = initialConfig;
+      setRuntimeConfigSnapshot(cfg);
       for (const [index, storePath] of stores.entries()) {
         replaceSessionEntrySync(
           { agentId: "main", storePath, sessionKey: `agent:main:scope-${index}` },
@@ -101,19 +113,11 @@ describe("session member picker identities", () => {
           },
         );
       }
-      const initialConfig: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {} },
-        },
-        session: { store: stores[0] },
-      };
-      let cfg = initialConfig;
       const requestContext = context(vi.fn(), cfg);
       requestContext.getRuntimeConfig = () => cfg;
       for (const [index, storePath] of stores.entries()) {
         cfg = { ...initialConfig, session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
         sessionChanges.emit({ all: true, scope: "config" });
         const expected = [{ type: "agent", id: `creator-${index}` }];
         const listed = await call(
@@ -129,6 +133,7 @@ describe("session member picker identities", () => {
 
   it("lists current identities and adds members without decoding unrelated saved prompts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:profile-member";
       const profile = ensureProfileForEmail("member@example.com");
       setDisplayName(profile.id, "Member");
@@ -187,6 +192,7 @@ describe("session member picker identities", () => {
       const requestContext = context(vi.fn(), {
         agents: { ownership: "explicit", entries: { main: {}, research: {} } },
       });
+      setRuntimeConfigSnapshot(requestContext.getRuntimeConfig());
       await call("session.members.list", { sessionKey }, requestContext);
       const projection = getSessionRowProjection(requestContext)!;
       await projection.ensureMaterialized();
@@ -200,6 +206,9 @@ describe("session member picker identities", () => {
         { type: "human", id: profileOnly.id, label: "Profile only" },
       ];
       const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
+      const profileReads = vi
+        .spyOn(userProfileReads, "listProfiles")
+        .mockRejectedValue(new Error("Profile worker enumeration is unavailable"));
       const parse = JSON.parse;
       let unrelatedDecodes = 0;
       const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
@@ -223,6 +232,7 @@ describe("session member picker identities", () => {
       } finally {
         parsed.mockRestore();
         scans.mockRestore();
+        profileReads.mockRestore();
       }
       expect(
         authorizeResolvedSessionMutation({
@@ -238,6 +248,7 @@ describe("session member picker identities", () => {
 
   it("refreshes picker creators after creation and deletion without retaining request actors", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:picker-target";
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },
@@ -311,6 +322,7 @@ describe("session member picker identities", () => {
 describe("session sharing authority", () => {
   it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:sharing-authority";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -367,6 +379,7 @@ describe("session sharing authority", () => {
 
   it("refuses membership evidence after a published foreign ownership change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:sharing-snapshot-owner";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(scope, {
@@ -409,6 +422,7 @@ describe("session sharing authority", () => {
 
   it("refuses revoked managers and dirty membership at the worker commit grant", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:sharing-guest" },
         {
@@ -491,6 +505,7 @@ describe("session sharing authority", () => {
 
   it("keeps the original session bound while membership preparation yields", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:sharing-preparation";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 1 });
@@ -536,9 +551,10 @@ describe("session sharing authority", () => {
   });
 
   it.each(["session.members.list", "session.members.add"] as const)(
-    "rechecks the current manager after profile enumeration for %s",
+    "rechecks the current manager after projection preparation for %s",
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:profile-enumeration-authority";
         const owner = ensureProfileForEmail("owner-enumeration@example.test");
         const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
@@ -554,17 +570,16 @@ describe("session sharing authority", () => {
         const client = identifiedClient(owner.id);
         const requestContext = context(vi.fn());
         await initializeSessionReadContext(requestContext);
+        const projection = getSessionRowProjection(requestContext)!;
+        const preparation =
+          method === "session.members.list" ? "prepareSelection" : "ensureMaterialized";
+        const prepare = projection[preparation].bind(projection);
         const ready = createDeferredCore();
         const release = createDeferredCore();
-        const enumerate = userProfileReads.listProfiles;
-        const read = vi.spyOn(userProfileReads, "listProfiles").mockImplementationOnce(async () => {
-          const profiles = await enumerate().catch((error: unknown) => {
-            ready.reject(error);
-            throw error;
-          });
+        const read = vi.spyOn(projection, preparation).mockImplementationOnce(async () => {
+          await prepare();
           ready.resolve();
           await release.promise;
-          return profiles;
         });
         const respond = vi.fn();
         const pending = sessionSharingHandlers[method]!({
@@ -598,6 +613,14 @@ describe("session sharing board ticket authority", () => {
   afterEach(() => closeOpenClawAgentDatabasesForTest());
   it("authorizes tickets against their signed agent and issuing Gateway", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
         { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
@@ -611,13 +634,6 @@ describe("session sharing board ticket authority", () => {
           createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, work: {} },
-        },
-      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       let gatewayAActive = true;
       const gatewayARef: { value?: GatewayRequestContext } = {};
       const gatewayA: GatewayRequestContext = {

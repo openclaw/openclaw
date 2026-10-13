@@ -200,7 +200,7 @@ private struct ExecApprovalPromptCard: View {
                     approvalDialogButton(Text("Allow Once")) {
                         self.onDecision(.allowOnce)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .openClawProminentButton()
                     .disabled(self.isResolving)
                 }
 

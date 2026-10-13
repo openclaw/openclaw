@@ -15,6 +15,8 @@ title: "iOS app"
 
 Availability: The official iPhone app is available on the [App Store](https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132). Local development builds can also run from source.
 
+The app requires iOS 26.2 or iPadOS 26.2 or later.
+
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).

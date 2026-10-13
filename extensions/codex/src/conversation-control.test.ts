@@ -4,8 +4,16 @@ import {
   getSessionEntry,
   resolveStorePath,
   upsertSessionEntry,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureOpenClawAgentDatabaseExecution } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  observeHostDataSql,
+  openIncognitoTestActor,
+  useSessionStoreTempDirs,
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
@@ -72,7 +80,8 @@ const sharedClientMocks = vi.hoisted(() => ({
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => ({
+vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient:
@@ -80,7 +89,7 @@ vi.mock("./app-server/shared-client.js", () => ({
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
   }),
-  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+  withCodexAppServerClientRequestScope: async (params: {
     lease: { client?: unknown };
     options?: { timeoutMs?: number };
     run: (
@@ -106,6 +115,62 @@ describe("codex conversation controls", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each(["native", "bound"] as const)(
+    "reads %s private permission policy through its selected owner",
+    async (mode) => {
+      const env = { OPENCLAW_STATE_DIR: tempDir };
+      const session = {
+        agentId: "main",
+        sessionId: "private-policy",
+        sessionKey: "agent:main:dashboard:incognito-policy",
+      };
+      const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+      const authority = { assertCurrent() {} };
+      const actor = mode === "bound" ? await openIncognitoTestActor(env, authority) : undefined;
+      const entry: SessionEntry = {
+        sessionId: session.sessionId,
+        updatedAt: 1,
+        incognito: true,
+        permissionMode: "full",
+      };
+      try {
+        if (actor) {
+          await actor.sessions.create(authority, { sessionKey: session.sessionKey, entry });
+        } else {
+          await upsertSessionEntry({ ...session, storePath, entry });
+        }
+        const read = async () => {
+          const sql = observeHostDataSql();
+          try {
+            await expect(
+              setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+            ).resolves.toBe("Codex permissions: full access.");
+            if (actor) {
+              expect(sql.queries).toEqual([]);
+            }
+          } finally {
+            sql.restore();
+          }
+        };
+        if (actor) {
+          await withIncognitoSessionActor(actor, read);
+        } else {
+          await read();
+          expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual([]);
+        }
+      } finally {
+        await actor?.close();
+      }
+      if (actor) {
+        await expect(
+          withIncognitoSessionBinding({ actor }, () =>
+            setCodexConversationPermissionsImpl({ session, storePath, assertCurrent() {} }),
+          ),
+        ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" });
+      }
+    },
+  );
 
   it("persists fast mode on the binding and permissions on the session", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

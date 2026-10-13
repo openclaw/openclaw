@@ -938,7 +938,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[3], "assistant", "Final answer.");
   });
 
-  it("keeps the complete terminal reply above a steer when no later delta arrived", () => {
+  it("keeps the complete terminal reply after an accepted steer when no later delta arrived", () => {
     const state = createState({
       chatRunId: "run-1",
       chatStream: "Before steer.",
@@ -966,7 +966,7 @@ describe("handleChatGatewayEvent", () => {
     expectTextMessage(state.chatMessages[1], "user", "Steer");
     expectTextMessage(state.chatMessages[2], "assistant", "Before steer. Final unseen suffix.");
     const rendered = buildChatItems({
-      paneId: "terminal-above-steer",
+      paneId: "terminal-after-steer",
       sessionKey: state.sessionKey,
       runId: state.chatRunId,
       messages: state.chatMessages,
@@ -978,7 +978,7 @@ describe("handleChatGatewayEvent", () => {
     }).flatMap((item) =>
       item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
     );
-    expect(rendered).toEqual(["Ask", "Before steer. Final unseen suffix.", "Steer"]);
+    expect(rendered).toEqual(["Ask", "Steer", "Before steer. Final unseen suffix."]);
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {
@@ -1746,20 +1746,18 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
   });
 
-  it("expires each shared startup reader without consuming a late joiner's retry window", async () => {
-    const unavailable = (retryAfterMs: number) =>
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "chat.history unavailable during gateway startup",
-        details: { method: "chat.history" },
-        retryable: true,
-        retryAfterMs,
-      });
-    const retryableError = unavailable(250);
+  it("expires shared startup readers together and allows an explicit retry", async () => {
+    const unavailable = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "chat.history unavailable during gateway startup",
+      details: { method: "chat.history" },
+      retryable: true,
+      retryAfterMs: 59_000,
+    });
     const secondAttempt = createDeferred<unknown>();
     const request = vi
       .fn()
-      .mockRejectedValueOnce(unavailable(59_000))
+      .mockRejectedValueOnce(unavailable)
       .mockImplementationOnce(() => secondAttempt.promise)
       .mockResolvedValueOnce(createAssistantHistory("awake"));
     const client = createTestClient(request);
@@ -1774,21 +1772,23 @@ describe("loadChatHistory retry handling", () => {
     const secondLoad = loadChatHistory(secondState);
     expect(request).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1_001);
-    await firstLoad;
-    expect(firstState.chatLoading).toBe(false);
-    expect(getChatHistoryLoadState(firstState)).toMatchObject({
-      phase: "failed",
-      message: expect.stringContaining("timed out"),
-    });
-    expect(secondState.chatLoading).toBe(true);
-    expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
-    secondAttempt.reject(retryableError);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await secondLoad;
+    await Promise.all([firstLoad, secondLoad]);
+    for (const state of [firstState, secondState]) {
+      expect(state.chatLoading).toBe(false);
+      expect(getChatHistoryLoadState(state)).toMatchObject({
+        phase: "failed",
+        message: expect.stringContaining("timed out"),
+      });
+    }
+    expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);
+    await loadChatHistory(secondState);
 
     expect(request).toHaveBeenCalledTimes(3);
     expect(secondState.chatMessages).toEqual([textMessage("assistant", "awake")]);
     expect(firstState.chatMessages).toEqual([]);
+    secondAttempt.resolve(createAssistantHistory("expired"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(secondState.chatMessages).toEqual([textMessage("assistant", "awake")]);
   });
 
   type RecoveredToolFixture = {

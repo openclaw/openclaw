@@ -67,7 +67,7 @@ export function settleWorkspaceWatchTargetsPlan(
   replanningRoots.delete(watcherKey);
 }
 
-export function clearWorkspaceWatchTargets(): void {
+function clearWorkspaceWatchTargets(): void {
   workspaceWatchTargets.clear();
   rootTargetPaths = undefined;
   replanningRoots.clear();
@@ -195,6 +195,32 @@ export function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: 
 }
 
 export const workspaceWatchLastEnsuredAt = new Map<string, number>();
+
+// Keep detached subscriptions owned so a later in-process close can retire them.
+const detachedWatchers: SkillsPathWatchState[] = [];
+
+// macOS retires each FSEvents stream with a synchronous fseventsd round trip
+// (seconds apiece under load). A process-owning stop detaches observation and
+// leaves native release to process exit instead.
+export function releaseSkillsWatchers(mode: "close" | "detach"): void {
+  const active = [...detachedWatchers.splice(0), ...pathWatchers.values()];
+  pathWatchers.clear();
+  clearWorkspaceWatchTargets();
+  workspaceWatchOwners.clear();
+  workspaceWatchTargetCache.clear();
+  workspaceWatchLastEnsuredAt.clear();
+  for (const state of active) {
+    if (mode === "detach") {
+      // closed and registry identity fence every callback, scan and pending sample.
+      state.closed = true;
+      state.verified = false;
+      clearTimeout(state.timer);
+      detachedWatchers.push(state);
+    } else {
+      void state.close();
+    }
+  }
+}
 
 export function disposeWorkspacePathWatchState(
   watcherKey: string,

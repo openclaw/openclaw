@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveForwardedExitCompilerArgs } from "../bootstrap/node-exit-safe-compilers.js";
+import { resolveForwardedNodeCompilerArgs } from "../bootstrap/node-compiler-args.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
@@ -12,12 +12,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import {
-  runtimeProcessEntrypoints,
-  SQLITE_READONLY_CHILD_ARG,
-} from "./runtime-process-entrypoints.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
@@ -232,16 +230,16 @@ export function runScopedSqliteInspection<T>(
 
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
-    resolveRuntimeWorkerUrl(
-      options.mode === "content-version"
-        ? runtimeProcessEntrypoints.sqliteSourceRevision
-        : runtimeProcessEntrypoints.sqliteReadOnly,
+    resolveRuntimeProcessEntrypointUrl(
+      options.mode === "content-version" || options.mode === "file-generation"
+        ? "sqliteSourceRevision"
+        : "sqliteReadOnly",
     ),
   );
   return {
     runtimeGeneration,
     argv: [
-      ...resolveForwardedExitCompilerArgs(),
+      ...resolveForwardedNodeCompilerArgs(),
       ...resolveRuntimeWorkerArgv(moduleUrl),
       SQLITE_READONLY_CHILD_ARG,
       ...sqliteReadOnlyWorkerRequestArgs(pathname, options),
@@ -258,7 +256,7 @@ export function captureSqliteReadOnlyWorkerLaunch(
   const broker = source === "canonical" ? getSpawnBroker() : undefined;
   return {
     runtimeGeneration: captureRuntimeWorkerSource(
-      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly),
+      resolveRuntimeProcessEntrypointUrl("sqliteReadOnly"),
     ).runtimeGeneration,
     env: {
       ...resolveNodeCompileCacheEnv(env),
@@ -276,7 +274,7 @@ export function createScopedSqliteReadOnlyWorker(
     retainOnOperationError?: boolean;
   },
 ): ReturnType<typeof createSqliteReadOnlyWorkerSession> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const workerUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
   // Launch facts are captured by the caller; the reusable child belongs to its scope.
   return runInDetachedAsyncContext(() =>
     createSqliteReadOnlyWorkerSession({
@@ -331,7 +329,7 @@ export function runSqliteReadOnlyWorker(
 export function runSqliteReadOnlyWorker(
   pathname: string,
   options: {
-    mode: "sync" | "async";
+    mode: "sync" | "async" | "file-generation";
     stagingRoot?: string;
     signal?: AbortSignal;
   },
@@ -637,7 +635,7 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" = "sync",
+  mode: "sync" | "content-version" | "file-generation" = "sync",
 ): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const started = log.isEnabled("trace") ? performance.now() : undefined;

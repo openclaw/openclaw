@@ -1,6 +1,7 @@
 import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -227,7 +228,7 @@ suite.define(() => {
           .locator(".chat-bubble")
           .getByText("Split seed completed.", { exact: true })
           .waitFor();
-        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        await selectChatLayoutAction(page, "Open split view");
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         const left = panes.nth(0);
@@ -401,6 +402,7 @@ suite.define(() => {
               {
                 host,
                 identity: "unchanged-route-and-owner",
+                id: "recovery-fence-fixture",
               },
             );
             component.style.cssText =
@@ -410,7 +412,7 @@ suite.define(() => {
           },
           { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
         );
-        const notice = page.locator("openclaw-chat-outbox-recovery");
+        const notice = page.locator("#recovery-fence-fixture");
         const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
@@ -433,9 +435,7 @@ suite.define(() => {
           // Leaving Incognito reveals the retained source, never an adopted destination.
           await hostHandle.evaluate((host) => {
             host.selectedChatSessionIncognito = false;
-            const component = document.querySelector(
-              "openclaw-chat-outbox-recovery",
-            ) as LitElement & {
+            const component = document.querySelector("#recovery-fence-fixture") as LitElement & {
               identity: string;
             };
             component.identity = "non-incognito-review-owner";

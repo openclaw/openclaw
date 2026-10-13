@@ -330,7 +330,7 @@ function expectApiKeyLogin(
   apiKey: string,
   readAccount = false,
 ): void {
-  const options = { assertCurrent: undefined };
+  const options = expect.anything();
   const login = ["account/login/start", { type: "apiKey", apiKey }, options];
   if (readAccount) {
     expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false }, options);
@@ -350,7 +350,7 @@ function expectTokenLogin(
   const call = [
     "account/login/start",
     { type: "chatgptAuthTokens", accessToken, chatgptAccountId, chatgptPlanType },
-    { assertCurrent: undefined },
+    expect.anything(),
   ];
   if (count === undefined) {
     expect(request).toHaveBeenCalledWith(...call);
@@ -555,9 +555,7 @@ describe("Codex auth bridge", () => {
     expect(desktop.marketplace).not.toHaveBeenCalled();
   });
 
-  it("does not let a stale desktop generation publish artifacts after its successor", async ({
-    agentDir,
-  }) => {
+  it("checks caller authority after queued artifact work", async ({ agentDir }) => {
     const firstMarketplaceStarted = createDeferred<void>();
     const releaseFirstMarketplace = createDeferred<void>();
     let activeMarketplaceCalls = 0;
@@ -580,7 +578,7 @@ describe("Codex auth bridge", () => {
         activeMarketplaceCalls -= 1;
         return "/managed/openai-bundled";
       });
-    let currentEpoch = 1;
+    let callerCurrent = true;
     const startOptions = createStartOptions();
     const first = reconcileArtifacts({
       startOptions,
@@ -588,27 +586,22 @@ describe("Codex auth bridge", () => {
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
       assertCurrent: () => {
-        if (currentEpoch !== 1) {
-          throw new Error("desktop generation X is stale");
+        if (!callerCurrent) {
+          throw new Error("caller authority revoked");
         }
       },
     });
     await firstMarketplaceStarted.promise;
-    currentEpoch = 2;
+    callerCurrent = false;
     const second = reconcileArtifacts({
       startOptions,
       agentDir,
       pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
-      assertCurrent: () => {
-        if (currentEpoch !== 2) {
-          throw new Error("desktop generation Y is stale");
-        }
-      },
     });
     releaseFirstMarketplace.resolve();
 
-    await expect(first).rejects.toThrow("desktop generation X is stale");
+    await expect(first).rejects.toThrow("caller authority revoked");
     await expect(second).resolves.toBeUndefined();
     expect(maxActiveMarketplaceCalls).toBe(1);
     expect(desktop.service).toHaveBeenCalledTimes(1);
@@ -944,15 +937,16 @@ describe("Codex auth bridge", () => {
   it("does not record native login auth after post-response lifecycle retirement", async ({
     agentDir,
   }) => {
+    let current = true;
     const harness = createClientHarness({
       onWrite: (line, send) => {
         const message = JSON.parse(line) as { id?: string | number };
         if (message.id !== undefined) {
           send({ id: message.id, result: { type: "chatgptAuthTokens" } });
+          current = false;
         }
       },
     });
-    let checks = 0;
     try {
       persistProfile(
         agentDir,
@@ -968,8 +962,7 @@ describe("Codex auth bridge", () => {
           client: harness.client,
           ...profileParams(agentDir),
           assertCurrent: () => {
-            checks += 1;
-            if (checks > 2) {
+            if (!current) {
               throw new Error("login owner retired");
             }
           },
@@ -1406,6 +1399,9 @@ describe("Codex auth bridge", () => {
       ...profileParams(agentDir, authProfileStore),
       authHandoff: authHandoff(credential.access, "account-b"),
     });
+    const incompatibleRejection = expect(incompatibleWaiter).rejects.toThrow(
+      "ChatGPT workspace changed during Codex token refresh",
+    );
     await started.promise;
 
     refresh.resolve({
@@ -1425,9 +1421,7 @@ describe("Codex auth bridge", () => {
       chatgptAccountId: "account-a",
       chatgptPlanType: null,
     });
-    await expect(incompatibleWaiter).rejects.toThrow(
-      "ChatGPT workspace changed during Codex token refresh",
-    );
+    await incompatibleRejection;
     expect(oauth.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -1611,7 +1605,7 @@ describe("Codex auth bridge", () => {
     expect(request).toHaveBeenCalledWith(
       "account/read",
       { refreshToken: false },
-      { assertCurrent: undefined },
+      expect.anything(),
     );
   });
 

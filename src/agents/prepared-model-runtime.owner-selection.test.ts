@@ -7,6 +7,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
@@ -54,6 +59,35 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it("awaits cold metadata preparation before deriving runtime selections", async () => {
+    const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
+    using resolveMetadata = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockReturnValueOnce(prepared.promise);
+    const deriveRuntimePluginSelections = vi.fn(() => []);
+    const input = fixture.agentInput("cold-metadata", {});
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config: input.config,
+      manifestRegistry: makeRegistry([]),
+    });
+    const pending = acquireAgentRunPreparedModelRuntime(input, {
+      deriveRuntimePluginSelections,
+    });
+    expect(resolveMetadata).toHaveBeenCalledOnce();
+    expect(deriveRuntimePluginSelections).not.toHaveBeenCalled();
+    prepared.resolve(metadataSnapshot);
+    const lease = await pending;
+    try {
+      expect(deriveRuntimePluginSelections).toHaveBeenCalledExactlyOnceWith({
+        config: input.config,
+        metadataSnapshot,
+      });
+      expect(lease.snapshot.metadataSnapshot).toBe(metadataSnapshot);
+    } finally {
+      await lease[Symbol.asyncDispose]();
+    }
+  });
+
   it.each(["binding owner", "binding demand", "environment", "workspace"] as const)(
     "matches the configured owner for %s",
     async (scope) => {
@@ -412,50 +446,6 @@ describe("prepared model runtime owner selection", () => {
 
     expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
     expect(runtimeRegistryCount).toBe(2);
-  });
-
-  it("publishes a current sibling when another auth owner is superseded", async () => {
-    const config = {};
-    const supersededDir = fixture.state.agentDir("auth-retry-superseded");
-    const siblingDir = fixture.state.agentDir("auth-retry-sibling");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
-    const firstSibling = await publishPreparedModelRuntimeSnapshot({
-      config,
-      agentDir: siblingDir,
-    });
-    const releaseSupersededRefreshGate = createDeferred();
-    let blockedSupersededRefresh = true;
-    mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
-      if (agentDir === supersededDir && blockedSupersededRefresh) {
-        blockedSupersededRefresh = false;
-        await releaseSupersededRefreshGate.promise;
-      }
-      return { agentDir: String(agentDir), wrote: false };
-    });
-
-    let siblingPending: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
-    try {
-      mocks.mutationListener?.({ affectsInheritedStores: true });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
-      siblingPending = publishPreparedModelRuntimeSnapshot({
-        config,
-        agentDir: siblingDir,
-      });
-      mocks.mutationListener?.({ agentDir: supersededDir, affectsInheritedStores: false });
-      releaseSupersededRefreshGate.resolve();
-
-      await expect(siblingPending).resolves.not.toBe(firstSibling);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(6));
-      await expect(
-        prepareModelRuntimeSnapshot({ config, agentDir: supersededDir }),
-      ).resolves.toMatchObject({ agentDir: supersededDir });
-    } finally {
-      releaseSupersededRefreshGate.resolve();
-      await Promise.allSettled([
-        siblingPending,
-        prepareModelRuntimeSnapshot({ config, agentDir: supersededDir }),
-      ]);
-    }
   });
 });
 

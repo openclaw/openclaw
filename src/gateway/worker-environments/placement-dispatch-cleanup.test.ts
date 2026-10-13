@@ -1,18 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 
+afterEach(() => clearRuntimeConfigSnapshot());
+
 describe("worker placement cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
+  beforeEach(() => setRuntimeConfigSnapshot(support.testState.config));
 
   it("retries pending failed-environment teardown before clearing the placement", async () => {
     const placementStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
       now: () => 1_000,
     });
-    const harness = createHarness(support.testState.stateDb, placementStore, {
+    const harness = await createHarness(support.testState.stateDb, placementStore, {
       failAt: "sync",
       destroyFails: true,
       destroyFailureState: "destroying",

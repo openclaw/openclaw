@@ -4,7 +4,7 @@ import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/ru
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
@@ -16,12 +16,110 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
-import { addSessionMember } from "./session-sharing-store.native.js";
+import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 
-it("prepares bounded facts on one admitted source and refreshes after foreign and local writes", async () => {
+it.each([false, true])("reads complete cold entry facts with lifecycle=%s", async (lifecycle) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:fused";
+    const scope = { agentId: "main", env, storePath: database.path, sessionKey };
+    replaceSessionEntrySync(scope, {
+      sessionId: "fused",
+      updatedAt: 1,
+      sessionStartedAt: 1,
+      skillsSnapshot: { prompt: "cold prompt", skills: [] },
+    });
+    const contribution = {
+      identity: { type: "agent" as const, id: "participant" },
+      sessionAgentId: "main",
+      promptedAt: 2,
+    };
+    recordSessionParticipant(scope, contribution);
+    addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 3 });
+    const operations = await loadAgentEntryReadOperations();
+    const context: AgentWorkerOperationContext = {
+      open: () => database,
+      options: { agentId: "main", path: database.path, env },
+      admit: () => {},
+      writeTransaction: () => {
+        throw new Error("A fact read cannot write");
+      },
+    };
+    const read = (snapshotFields?: SessionEntryCohortRequest["snapshotFields"]) =>
+      operations["session.entry.read"](
+        {
+          sessionKeys: [sessionKey, "agent:main:absent"],
+          snapshotFields,
+          includeMembers: true,
+          includeParticipantRecords: true,
+          ...(lifecycle ? { lifecycleSessionKey: sessionKey } : {}),
+        },
+        context,
+      );
+    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+    const transactions = vi.spyOn(database.db, "exec");
+    try {
+      const first = read();
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
+        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      );
+      expect(first.entries).toMatchObject([
+        {
+          sessionKey,
+          entry: {
+            sessionId: "fused",
+            skillsSnapshot: { prompt: "cold prompt" },
+            participants: [{ identity: contribution.identity }],
+            participantCount: 1,
+          },
+        },
+      ]);
+      expect(first.members).toEqual({
+        [sessionKey]: [{ identityId: "member", addedBy: "owner", addedAt: 3 }],
+      });
+      expect(first.participantRecords).toEqual({
+        [sessionKey]: [
+          {
+            identity: contribution.identity,
+            contributionCount: 1,
+            firstPromptedAt: 2,
+            lastPromptedAt: 2,
+          },
+        ],
+      });
+      expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
+      statements.counts.all = 0;
+      expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
+      expect(statements.counts.all).toBe(1);
+      recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
+      removeSessionMember(scope, "member");
+      statements.counts.all = 0;
+      transactions.mockClear();
+      const next = read();
+      expect(next.members).toEqual({ [sessionKey]: [] });
+      expect(next.participantRecords?.[sessionKey]).toMatchObject([
+        { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
+      ]);
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls.map(([sql]) => sql)).toEqual(
+        lifecycle ? ["BEGIN", "COMMIT"] : [],
+      );
+      database.db
+        .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
+        .run(9_007_199_254_740_992n, sessionKey);
+      expect(read).toThrow("cannot be represented safely");
+    } finally {
+      transactions.mockRestore();
+      statements.restore();
+    }
+  });
+});
+
+it("prepares bounded facts on one admitted source and refreshes after sibling and local writes without probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:cohort";
@@ -114,14 +212,47 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       transcript: {
         sessionKey,
         entryIds: ["question"],
+        includeSession: true,
+        contextAuthority: true,
         contextValidation: { version: currentVersion },
         replayValidation: { allowInitial: false, expectedLifecycleRevision: "original" },
       },
     };
-    expect(read(replayRequest).transcript).toMatchObject({
-      contextValidated: true,
-      anchors: [{ entryId: "question" }],
-    });
+    const repeated = trackSqliteStatementExecutions(
+      database.db,
+      ["entry", "participants"],
+      (sql) =>
+        sql.includes('from "session_nodes"') && !sql.includes('"actor_')
+          ? "entry"
+          : sql.startsWith('select "session_key", "identity_namespace"')
+            ? "participants"
+            : null,
+    );
+    try {
+      expect(read(replayRequest).transcript).toMatchObject({
+        contextValidated: true,
+        session: { sessionId: "cohort", lifecycleRevision: "original" },
+        contextAuthority: { entry: { sessionId: "cohort", lifecycleRevision: "original" } },
+        anchors: [{ entryId: "question" }],
+      });
+      expect(repeated.counts.participants).toBe(0);
+      // The cohort loads its row once; anchors consume that same snapshot.
+      expect(repeated.counts.entry).toBeLessThanOrEqual(1);
+      writeSessionEntry(database, sessionKey, { ...entry, lifecycleRevision: "updated" });
+      expect(() => read(replayRequest)).toThrow("writer claim");
+      expect(
+        read({
+          ...replayRequest,
+          transcript: {
+            ...replayRequest.transcript!,
+            replayValidation: { allowInitial: false, expectedLifecycleRevision: "updated" },
+          },
+        }).transcript?.session?.lifecycleRevision,
+      ).toBe("updated");
+      writeSessionEntry(database, sessionKey, entry);
+    } finally {
+      repeated.restore();
+    }
     expect(
       read({
         ...replayRequest,
@@ -138,7 +269,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       incarnation: first.databaseIdentity.incarnation,
       sessions: [{ sessionKey, sessionId: "cohort", lifecycleRevision: "original" }],
     };
-    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
+    const peer = openNodeSqliteDatabase(database.path);
     const nativeRead = entryCache.readExactSessionEntryCandidatesInDatabase;
     const commit = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
@@ -195,16 +326,16 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(standalone.databaseIdentity).toEqual(first.databaseIdentity);
       expect(standalone.lifecycleTimestamps).toEqual({});
       expect(transactionCommands).toEqual([]);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       sql.counts.fresh = 0;
       const pinned = read();
       expect(pinned.members?.[sessionKey]?.map(({ identityId }) => identityId)).toEqual(["member"]);
       expect(pinned.runtimeTarget?.sessionKey).toBe(sessionKey);
       expect(pinned.coldArchives).toEqual([]);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       expect(sql.counts.authSchema).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
-      // A known write cannot hide the foreign change from this connection's next use.
+      // A known write cannot hide a sibling's earlier commit on the next use.
       writeSessionEntry(database, parentKey, { sessionId: "parent", updatedAt: 2 });
       sql.counts.fresh = 0;
       transactionCommands.length = 0;
@@ -227,7 +358,7 @@ it("prepares bounded facts on one admitted source and refreshes after foreign an
       expect(
         current.entries.find(({ sessionKey: key }) => key === parentKey)?.entry.updatedAt,
       ).toBe(2);
-      expect(sql.counts.fresh).toBe(1);
+      expect(sql.counts.fresh).toBe(0);
       expect(transactionCommands).toEqual(["BEGIN", "COMMIT"]);
       expect(reopen).not.toHaveBeenCalled();
       expect(

@@ -2,7 +2,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runWithSqliteBusyTimeout, shouldReportSqliteLockFailure } from "./sqlite-busy-timeout.js";
+import {
+  readSqliteBusyTimeout,
+  runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
+  shouldReportSqliteLockFailure,
+} from "./sqlite-busy-timeout.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,6 +56,41 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(shouldReportSqliteLockFailure(database)).toBe(true);
     expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
     expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
+  });
+
+  it("retains owner changes and nested overrides without rereading or setting unchanged policy", () => {
+    database = new DatabaseSync(":memory:");
+    setSqliteBusyTimeout(database, 5000);
+    const prepare = vi.spyOn(database, "prepare");
+    const exec = vi.spyOn(database, "exec");
+
+    setSqliteBusyTimeout(database, 5000);
+    runWithSqliteBusyTimeout(database, 5000, () => undefined);
+    expect(exec).not.toHaveBeenCalled();
+
+    setSqliteBusyTimeout(database, 37);
+    expect(readSqliteBusyTimeout(database)).toBe(37);
+    runWithSqliteBusyTimeout(database, 0, () => {
+      expect(() =>
+        runWithSqliteBusyTimeout(database!, 25, () => {
+          throw new Error("nested failure");
+        }),
+      ).toThrow("nested failure");
+      expect(readSqliteBusyTimeout(database!)).toBe(0);
+    });
+    expect(readSqliteBusyTimeout(database)).toBe(37);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 37 });
+  });
+
+  it("discards the connection policy when the native connection closes and reopens", () => {
+    database = new DatabaseSync(":memory:");
+    setSqliteBusyTimeout(database, 37);
+    database.close();
+    database.open();
+    expect(readSqliteBusyTimeout(database)).toBe(0);
+    runWithSqliteBusyTimeout(database, 25, () => undefined);
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
   });
 
   it.each([-1, 1.5])("rejects invalid timeout %s", (timeout) => {

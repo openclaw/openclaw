@@ -20,8 +20,8 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-ChatGPT Responses WebSocket connection expiry follows this recovery policy even
-after streaming starts. The failed socket is retired; recovery continues the
+ChatGPT Responses WebSocket connection expiry and a normal close before the
+terminal event follow this recovery policy even after streaming starts. The failed socket is retired; recovery continues the
 saved transcript instead of replaying the request inside the transport.
 
 Anthropic streaming errors retain their structured error type, so rate limits,
@@ -349,6 +349,8 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits.
 
+`agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
+
 The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response clears that window without resetting the total retry count; partial output and tool activity alone do not. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 
 The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget. `0` disables retries, and rate limits remain capped at 10 total attempts. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
@@ -375,6 +377,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end. The chain can then settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
+    - Plugins can return `fallbacksOverride` from `before_model_resolve` to select a run-scoped chain, including `[]` to fail on the selected model instead of trying configured fallbacks. See [local model routing](/plugins/hooks/prompt-and-session#restrict-a-run-to-local-models).
 
   </Accordion>
 </AccordionGroup>
@@ -490,7 +493,9 @@ These notices are operational messages, not assistant content. They deliver once
 
 Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
-When a fallback answers, the Control UI shows the successful answer once and removes empty failed-attempt placeholders from that same run. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output remain visible.
+For admitted session runs, the Control UI records attempted fallback switches as transcript event dividers, using the same presentation as compaction events. It shows the previous model, the fallback being tried, and the reason for the switch while that candidate is still working. The event remains in history after reload and does not claim the fallback succeeded. When a later turn successfully returns to the selected model, a matching **Returned to selected model** divider records the fallback and selected model. Starting a new attempt or failing on the selected model does not record a successful return.
+
+When a fallback answers, the Control UI shows the successful answer once and removes diagnostic-only failed-attempt placeholders from that same run, including a recovered context-overflow notice. Hidden internal continuation prompts do not start a new user turn for this recovery matching. The raw transcript retains the failed attempts for troubleshooting. Failed turns and attempts that produced partial visible output or media remain visible.
 
 ## Observability and failure summaries
 

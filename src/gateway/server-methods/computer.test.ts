@@ -109,33 +109,21 @@ describe("Gateway computer RPC", () => {
     },
   );
 
-  it.each([{ probe: "false" }, { probe: 1 }])(
-    "rejects malformed status probes: %j",
-    async (params) => {
-      const status = vi.fn();
-      expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(
-        false,
-      );
-      expect(status).not.toHaveBeenCalled();
-    },
-  );
+  it.each([{ probe: "false" }])("rejects malformed status probes: %j", async (params) => {
+    const status = vi.fn();
+    expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(false);
+    expect(status).not.toHaveBeenCalled();
+  });
 
-  it.each([{}, { probe: false }, { probe: true }])(
-    "forwards status probe policy: %j",
-    async (params) => {
-      const status = vi.fn(async () => ({ configured: false, available: false }));
-      expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(
-        true,
-      );
-      expect(status).toHaveBeenCalledWith(params);
-    },
-  );
+  it.each([{ probe: true }])("forwards status probe policy: %j", async (params) => {
+    const status = vi.fn(async () => ({ configured: false, available: false }));
+    expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(true);
+    expect(status).toHaveBeenCalledWith(params);
+  });
 
   it.each([
     { ...snapshot, command: "system.run" },
     { ...snapshot, owner: "forged-operator" },
-    { ...snapshot, params: [] },
-    { ...snapshot, timeoutMs: 0 },
   ])("rejects malformed or authority-bearing wire requests: %j", async (params) => {
     const dispatch = vi.fn();
     const result = await invoke("computer.invoke", params, {

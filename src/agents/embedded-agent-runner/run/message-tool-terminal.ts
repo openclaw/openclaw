@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAgentAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
@@ -8,9 +9,10 @@ import {
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
+import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
+import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
@@ -34,34 +36,64 @@ function argsRecordForToolCall(context: AfterToolCallContext): Record<string, un
 }
 
 /**
- * Ends the turn after a tool batch settles in which a `canDeliverSourceReply` tool
- * authored a final source reply. The host delivers that reply itself, so another
- * model turn would only restate it. The decision runs once per assistant message,
- * after every call (capable or not, executed or rejected) has settled, so no sibling
- * outcome can reopen the turn. It admits exactly what the tool completion handler
- * captures: a direct, non-error result with a deliverable final reply.
+ * Admits a complete batch of direct tool-authored replies from the finalized
+ * message results, after message_end extensions and persistence have settled.
+ * Any failed or unhandled sibling leaves the entire batch with the model; no
+ * partial reply is queued that could hide the continuation or its failure.
  */
 export function installToolAuthoredSourceReplyTerminalHook(params: {
   agent: Agent;
   sourceReplyCapableToolNames?: ReadonlySet<string>;
-}): void {
+  idempotencyScope: string;
+  onSourceReplies: (payloads: MessagingToolSourceReplyPayload[]) => void;
+}): () => void {
   const capableToolNames = params.sourceReplyCapableToolNames;
   if (!capableToolNames?.size) {
-    return;
+    return () => {};
   }
   const previous = getInternalToolTurnCompletion(params.agent);
-  setInternalToolTurnCompletion(
-    params.agent,
-    (context) =>
-      previous?.(context) === true ||
-      context.toolResults.some(
-        (toolResult) =>
-          !toolResult.isError &&
-          !isToolResultError(toolResult) &&
-          capableToolNames.has(normalizeToolPolicyName(toolResult.toolName)) &&
-          extractToolAuthoredSourceReplyPayload(toolResult) !== undefined,
-      ),
-  );
+  const complete: NonNullable<typeof previous> = (context) => {
+    const previousComplete = previous?.(context) === true;
+    const replies: MessagingToolSourceReplyPayload[] = [];
+    for (const result of context.toolResults) {
+      if (result.isError || isToolResultError(result)) {
+        return previousComplete;
+      }
+      if (!capableToolNames.has(normalizeToolPolicyName(result.toolName))) {
+        if (context.terminalToolCallIds.has(result.toolCallId)) {
+          continue;
+        }
+        return previousComplete;
+      }
+      const reply = captureToolAuthoredSourceReply({
+        result,
+        toolCallId: result.toolCallId,
+        idempotencyScope: resolveAgentAssistantTurnId(context.message) ?? params.idempotencyScope,
+      });
+      if (!reply) {
+        const sourceReply = asOptionalRecord(readToolResultDetails(result)?.sourceReply);
+        if (sourceReply?.final !== false && context.terminalToolCallIds.has(result.toolCallId)) {
+          continue;
+        }
+        return previousComplete;
+      }
+      replies.push({
+        ...reply,
+        toolAuthoredForTurnId: resolveAgentAssistantTurnId(context.message),
+      });
+    }
+    if (replies.length === 0) {
+      return previousComplete;
+    }
+    params.onSourceReplies(replies);
+    return true;
+  };
+  setInternalToolTurnCompletion(params.agent, complete);
+  return () => {
+    if (getInternalToolTurnCompletion(params.agent) === complete) {
+      setInternalToolTurnCompletion(params.agent, previous);
+    }
+  };
 }
 
 export function installMessageToolOnlyTerminalHook(

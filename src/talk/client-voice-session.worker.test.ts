@@ -41,7 +41,6 @@ import {
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
-  isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "./client-voice-session.js";
@@ -729,7 +728,9 @@ describe("client voice session worker contract", () => {
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-      expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
+      expect(
+        readVoiceSessionRecord(binding.agentId, binding.voiceSessionId)?.transcriptCapable,
+      ).toBe(true);
       expect(observation.queries).toHaveLength(2);
       expect(observation.queries.join("\n")).not.toMatch(/\b(?:pragma_)?data_version\b/i);
     } finally {
@@ -737,7 +738,9 @@ describe("client voice session worker contract", () => {
     }
     await closeClientVoiceSession({ ...binding, config: {} });
     expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
-    expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
+    expect(readVoiceSessionRecord(binding.agentId, binding.voiceSessionId)?.transcriptCapable).toBe(
+      true,
+    );
   });
 
   it("rejects a transcript after another connection closes the admitted call", async () => {

@@ -134,24 +134,19 @@ function hasPath(root: unknown, segments: string[]): boolean {
       if (parsedIndex === undefined || parsedIndex >= cursor.length) {
         return false;
       }
-      if (index === segments.length - 1) {
-        return true;
+      if (index < segments.length - 1) {
+        cursor = cursor[parsedIndex];
       }
-      cursor = cursor[parsedIndex];
-      continue;
+    } else {
+      if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
+        return false;
+      }
+      if (index < segments.length - 1) {
+        cursor = cursor[segment];
+      }
     }
-    if (!isRecord(cursor)) {
-      return false;
-    }
-    if (!Object.hasOwn(cursor, segment)) {
-      return false;
-    }
-    if (index === segments.length - 1) {
-      return true;
-    }
-    cursor = cursor[segment];
   }
-  return false;
+  return true;
 }
 
 /** Computes provider upserts/deletes between original and edited config. */

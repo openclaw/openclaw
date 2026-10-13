@@ -47,7 +47,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
@@ -55,7 +55,7 @@ import {
   resolveCronJobsStorePath,
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
   emitClawFailure,
@@ -74,6 +74,7 @@ import type {
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { clawRemovalJournalGateway } from "./claws-cli.removal-journal.js";
+import { offlineClawAction } from "./claws-cli.state-owner.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -230,7 +231,9 @@ export async function runClawsInspectCommand(
   }
 }
 
-export async function runClawsAddCommand(
+export const runClawsAddCommand = offlineClawAction("add", runClawsAddCommandLocal);
+
+async function runClawsAddCommandLocal(
   sourcePath: string,
   opts: ClawsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -256,7 +259,7 @@ export async function runClawsAddCommand(
     return;
   }
 
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const listedMcpServers = await listConfiguredMcpServers();
   if (!listedMcpServers.ok) {
     runtime.error(listedMcpServers.error);
@@ -470,7 +473,9 @@ export async function runClawsAddCommand(
   }
 }
 
-export async function runClawsStatusCommand(
+export const runClawsStatusCommand = offlineClawAction("status", runClawsStatusCommandLocal);
+
+async function runClawsStatusCommandLocal(
   target: string | undefined,
   opts: ClawsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -496,7 +501,9 @@ export async function runClawsStatusCommand(
   }
 }
 
-export async function runClawsRemoveCommand(
+export const runClawsRemoveCommand = offlineClawAction("remove", runClawsRemoveCommandLocal);
+
+async function runClawsRemoveCommandLocal(
   target: string,
   opts: ClawsRemoveOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -595,6 +602,9 @@ export async function runClawsRemoveCommand(
       runtime.exit(1);
     }
   } catch (error) {
+    if (error instanceof ExitError) {
+      throw error;
+    }
     const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
     const message = error instanceof Error ? error.message : String(error);
     emitClawFailure(runtime, opts.json, message, {
@@ -606,7 +616,9 @@ export async function runClawsRemoveCommand(
   }
 }
 
-export async function runClawsExportCommand(
+export const runClawsExportCommand = offlineClawAction("export", runClawsExportCommandLocal);
+
+async function runClawsExportCommandLocal(
   agentId: string,
   opts: ClawsExportOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -618,7 +630,7 @@ export async function runClawsExportCommand(
       throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
     }
     const result = await exportClawAgent(agentId, opts.out, {
-      config: getRuntimeConfig(),
+      config: await captureRuntimeConfigAsyncReader()(),
       sourceMcpServers: listedMcpServers.mcpServers,
       ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
     });

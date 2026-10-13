@@ -62,11 +62,16 @@ const DEFAULT_STRICT_MIGRATION_BUSY_TIMEOUT_MS = 5_000;
 const STRICT_MIGRATION_TABLE_PREFIX = "__openclaw_strict_migration_";
 const SQLITE_ROWID_ALIASES = ["_rowid_", "rowid", "oid"] as const;
 
-function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: string }> {
+export function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: string }> {
   return (db.prepare("PRAGMA table_list").all() as TableListRow[]).filter(
     (row): row is TableListRow & { name: string } =>
       row.schema === "main" && typeof row.name === "string" && !row.name.startsWith("sqlite_"),
   );
+}
+
+/** Canonical bootstrap needs no legacy rebuild when every ordinary table is already STRICT. */
+export function hasNonStrictSqliteTables(db: DatabaseSync): boolean {
+  return readMainTableList(db).some((row) => row.type === "table" && Number(row.strict) !== 1);
 }
 
 function readTableColumns(db: DatabaseSync, tableName: string): TableColumnRow[] {

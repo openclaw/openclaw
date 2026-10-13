@@ -17,21 +17,19 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
-  CLAWHUB_SKILLS_SH_TRUST_LABEL,
   fetchClawHubSkillCard,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
-  readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
   updateSkillsFromClawHub,
@@ -60,6 +58,7 @@ import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
+import { buildSkillVerificationOutput } from "./skills-cli-verification-output.js";
 import {
   formatSkillInfo,
   formatSkillsCheck,
@@ -70,11 +69,6 @@ import {
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { registerSkillsSearchCli } from "./skills-search-cli.js";
-
-type ResolvedClawHubSkillVerificationTarget = Extract<
-  Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
-  { ok: true }
->;
 
 const skillInstallLogger = {
   info: (message: string) => defaultRuntime.log(message),
@@ -95,7 +89,7 @@ type ResolveSkillsWorkspaceOptions = {
   skipPluginValidation?: boolean;
 };
 
-type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
 const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
@@ -124,11 +118,11 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   return normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
+async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig(
+  const config = await captureRuntimeConfigAsyncReader(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  );
+  )();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -145,7 +139,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
 }
 
 async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
+  const resolved = await resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -181,11 +175,11 @@ async function runSkillsAction(
   });
 }
 
-function resolveClawHubTargetWorkspace(
+async function resolveClawHubTargetWorkspace(
   command: Command,
   opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
-): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
+): Promise<Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined> {
   const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
@@ -193,7 +187,7 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
-    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
+    return { config: await captureRuntimeConfigAsyncReader()(), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
 }
@@ -201,34 +195,6 @@ function resolveClawHubTargetWorkspace(
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
   const envelope = result as { ok: unknown; decision: unknown };
   return envelope.ok !== true || envelope.decision !== "pass";
-}
-
-function buildSkillVerificationOutput(
-  result: ClawHubSkillVerificationResponse,
-  target: ResolvedClawHubSkillVerificationTarget,
-): Record<string, unknown> {
-  const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
-  return {
-    ...result,
-    openclaw: {
-      resolution: {
-        source: target.resolution.source,
-        selector: target.resolution.selector,
-        registry: target.resolution.registry,
-        installedVersion: target.resolution.installedVersion,
-        ...(target.requestedReference ? { reference: target.requestedReference } : {}),
-      },
-      ...(target.trustState
-        ? {
-            trust: {
-              state: target.trustState,
-              label: CLAWHUB_SKILLS_SH_TRUST_LABEL,
-            },
-          }
-        : {}),
-      ...(verifiedSourceUrl ? { verifiedSourceUrl } : {}),
-    },
-  };
 }
 
 function readVerifiedSkillCardUrl(
@@ -357,7 +323,7 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -434,6 +400,9 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -482,7 +451,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const target = resolveClawHubTargetWorkspace(command, opts);
+          const target = await resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
@@ -525,6 +494,9 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
           }
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -565,7 +537,7 @@ export function registerSkillsCli(program: Command) {
             ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
-          const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
+          const workspace = await resolveClawHubTargetWorkspace(command, opts, reportError);
           if (!workspace) {
             return;
           }
@@ -613,6 +585,9 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
+          if (err instanceof ExitError) {
+            throw err;
+          }
           reportError(formatErrorMessage(err));
           exitCode = 1;
         }
@@ -635,7 +610,9 @@ export function registerSkillsCli(program: Command) {
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await action(
-        resolveSkillsWorkspace({ agentId: resolveOptionFromCommand<string>(command, "agent") }),
+        await resolveSkillsWorkspace({
+          agentId: resolveOptionFromCommand<string>(command, "agent"),
+        }),
       );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);

@@ -1,13 +1,34 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_ROW_DETAIL_FIELDS } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROW_DETAIL_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
+import {
+  ensureBoardSchema,
+  putBoardWidgetInDatabase,
+} from "../boards/sqlite-board-store.kernel.js";
+import {
+  assignSessionOwner,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import {
   initializeSessionReadContext,
@@ -23,12 +44,285 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps sidebar display facts while bounding the wire payload", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
+    const count = benchmark ? 5_000 : 8;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "sidebar-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const profiles = Array.from({ length: 4 }, (_value, index) =>
+      ensureProfileForEmail(`sidebar-${index}@example.test`),
+    );
+    for (let index = 0; index < count; index++) {
+      const actor = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
+      const scope = {
+        agentId: "main",
+        sessionKey: `agent:main:dashboard:synthetic-session-${index}`,
+      };
+      replaceSessionEntrySync(scope, {
+        sessionId: `synthetic-session-${index}`,
+        updatedAt: 1_800_000_000_000 + index,
+        createdAt: 1_800_000_000_000 + index,
+        label: `Review the synthetic workspace change ${index}`,
+        visibility: "shared",
+        modelProvider: "test-provider",
+        model: "test-model",
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        permissionMode: "full",
+        createdActor: actor,
+      });
+      if (index >= count - 200) {
+        assignSessionOwner(scope, {
+          owner: { type: "human", id: profiles[index % profiles.length]!.id },
+          assignedBy: actor,
+          assignedAt: 1_800_000_000_000,
+        });
+        for (const profile of profiles) {
+          recordSessionParticipant(scope, {
+            identity: { type: "profile", id: profile.id },
+            promptedAt: 1_800_000_000_000,
+          });
+        }
+      }
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "sidebar") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { source: "sidebar", rowMode, limit: 200, agentId: "main" },
+      });
+    try {
+      const compact = await read("compact");
+      const result = await read("sidebar");
+      const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+      expect(result.sessions).toHaveLength(Math.min(count, 200));
+      expect(rows[0]).toMatchObject({
+        label: `Review the synthetic workspace change ${count - 1}`,
+        owner: { actor: { id: profiles[(count - 1) % profiles.length]!.id } },
+        participants: expect.arrayContaining(
+          profiles
+            .filter((_value, index) => index !== (count - 1) % profiles.length)
+            .map((profile) =>
+              expect.objectContaining({ identity: { type: "profile", id: profile.id } }),
+            ),
+        ),
+      });
+      for (const [index, row] of rows.entries()) {
+        expect(row.createdActor).toEqual(compact.sessions[index]!.createdActor);
+        expect(row.expandedParticipants).toEqual(compact.sessions[index]!.expandedParticipants);
+        expect(row).not.toHaveProperty("model");
+        expect(row).not.toHaveProperty("totalTokens");
+        expect(row).not.toHaveProperty("sharedFacts");
+      }
+      expect(result.sessions[0]).not.toHaveProperty("createdActor");
+      expect(result.sharedFacts).toBeDefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(compact)) * 0.5,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          const page = await read(rowMode);
+          if (process.env.OPENCLAW_SIDEBAR_BENCH_DIR) {
+            const { writeFile } = await import("node:fs/promises");
+            await writeFile(
+              `${process.env.OPENCLAW_SIDEBAR_BENCH_DIR}/${rowMode}.json`,
+              JSON.stringify(page),
+            );
+          }
+          const fields: Record<string, number> = {};
+          for (const row of page.sessions) {
+            for (const [key, value] of Object.entries(row)) {
+              fields[key] =
+                (fields[key] ?? 0) + Buffer.byteLength(JSON.stringify({ [key]: value }));
+            }
+          }
+          const samples = [];
+          for (let round = 0; round < 30; round++) {
+            const start = performance.now();
+            const payload = await read(rowMode);
+            const presented = performance.now();
+            const wire = serializeGatewayFrame({
+              type: "res",
+              id: "sidebar",
+              ok: true,
+              payload,
+            }).toString();
+            const serialized = performance.now();
+            const parsed = JSON.parse(wire);
+            expandSessionRowFacts(parsed.payload.sessions, parsed.payload.sharedFacts);
+            samples.push({
+              presentMs: presented - start,
+              serializeMs: serialized - presented,
+              parseMs: performance.now() - serialized,
+              bytes: Buffer.byteLength(wire),
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "sidebar-payload", rowMode, count, fields, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
+it("projects dashboard cards without sending session execution details", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
+    const count = benchmark ? 200 : 2;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "gallery-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    ensureBoardSchema(openOpenClawAgentDatabase({ agentId: "main" }));
+    for (let index = 0; index < count; index++) {
+      const sessionKey = `agent:main:dashboard-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `dashboard-${index}`,
+          updatedAt: 1_800_000_000_000 + index,
+          label: `Dashboard ${index}`,
+          visibility: "shared",
+          boardFace: "dashboard",
+          modelProvider: "test-provider",
+          model: "test-model",
+          providerOverride: "test-provider",
+          modelOverride: "test-model",
+          inputTokens: 1000,
+          outputTokens: 500,
+          totalTokens: 1500,
+          totalTokensFresh: true,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          permissionMode: "full",
+          createdActor: { type: "system", label: "Synthetic author" },
+        },
+      );
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          putBoardWidgetInDatabase(
+            database,
+            sessionKey,
+            normalizeBoardWidgetPutParams({
+              sessionKey,
+              name: "status",
+              content: { kind: "html", html: "<p>Ready</p>" },
+            }),
+            "synthetic-view",
+          );
+        },
+        { agentId: "main" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "compact" | "dashboard") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: {
+          source: "dashboard",
+          rowMode,
+          limit: count,
+          hasBoard: true,
+          archived: "all",
+          excludeDock: true,
+          agentId: "main",
+        },
+      });
+    const wire = (payload: unknown) =>
+      serializeGatewayFrame({ type: "res", id: "gallery", ok: true, payload }).toString();
+    try {
+      const compact = await read("compact");
+      const dashboard = await read("dashboard");
+      expect(dashboard.sessions).toHaveLength(count);
+      expect(dashboard.sessions[0]).toMatchObject({
+        key: `agent:main:dashboard-${count - 1}`,
+        sessionId: `dashboard-${count - 1}`,
+        rowMode: "dashboard",
+        label: `Dashboard ${count - 1}`,
+        createdActor: { type: "system" },
+        boardFace: "dashboard",
+        hasBoard: true,
+      });
+      for (const field of [
+        "model",
+        "modelProvider",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "permissionMode",
+        "participants",
+      ]) {
+        expect(dashboard.sessions[0]).not.toHaveProperty(field);
+      }
+      expect(compact.sessions[0]).toMatchObject({
+        model: "test-model",
+        totalTokens: 1500,
+        permissionMode: "full",
+      });
+      expect((await read("compact")).sessions).toEqual(compact.sessions);
+      expect(Buffer.byteLength(wire(dashboard))).toBeLessThan(
+        Buffer.byteLength(wire(compact)) * 0.75,
+      );
+      if (benchmark) {
+        for (const rowMode of ["compact", "dashboard"] as const) {
+          const samples = [];
+          for (let round = 0; round < 5; round++) {
+            const cpu = process.threadCpuUsage();
+            const start = performance.now();
+            let bytes = 0;
+            for (let request = 0; request < 25; request++) {
+              bytes = Buffer.byteLength(wire(await read(rowMode)));
+            }
+            const elapsed = process.threadCpuUsage(cpu);
+            samples.push({
+              cpuMs: (elapsed.user + elapsed.system) / 25_000,
+              wallMs: (performance.now() - start) / 25,
+              bytes,
+            });
+          }
+          console.log(
+            JSON.stringify({ benchmark: "dashboard-sessions-list", rowMode, count, samples }),
+          );
+        }
+      }
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
 it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const alice = roleClient("view", "cold-alice");
     const bob = roleClient("view", "cold-bob");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(alice);
+    prepareGatewayRecipientProfile(bob);
     const rows = 130;
     for (let index = 0; index < rows; index++) {
       replaceSessionEntrySync(
@@ -60,7 +354,9 @@ it("coalesces cold sidebar selection across row slices only for the same princip
             request: { limit, rowMode: "compact" },
           });
         const results = await Promise.all(
-          Array.from({ length: 6 }, (_, index) => read({ ...alice, connId: `reconnect-${index}` })),
+          Array.from({ length: 6 }, (_value, index) =>
+            read({ ...alice, connId: `reconnect-${index}` }),
+          ),
         );
         expect(results[0]!.sessions).toHaveLength(100);
         expect(results[0]!.totalCount).toBe(rows);
@@ -88,10 +384,17 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
   const start = 1_800_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(start);
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "first-list");
     const clients = [client, { ...client }, roleClient("view", "second-identity")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
     const scope = { agentId: "main", sessionKey: "agent:main:serialized" };
     const entry = {
       sessionId: "serialized",
@@ -323,9 +626,14 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
 
 it("refreshes shared socket selection when the same viewer changes roles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "selection-viewer");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
     const profileId = client.authenticatedUserProfile!.profileId;
     for (const [suffix, creator] of [
       ["owned", profileId],
@@ -357,9 +665,16 @@ it("refreshes shared socket selection when the same viewer changes roles", async
 
 it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const recipient of clients) {
+      prepareGatewayRecipientProfile(recipient);
+    }
     const scope = { agentId: "main", sessionKey: "agent:main:private-list" };
     replaceSessionEntrySync(scope, {
       sessionId: "private-list",

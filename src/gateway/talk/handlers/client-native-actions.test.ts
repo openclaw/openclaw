@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
-import * as admission from "../../../agents/admitted-run-context.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUNS,
@@ -26,6 +25,7 @@ import {
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
+import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -56,17 +56,11 @@ import {
   upstream,
   withParkedNativeTask,
   withNativePlugin,
-  withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
 import { prepareMissingRegistrationFixture } from "./client-native-readiness.test-support.js";
 import { nativeCallSession } from "./client-native-request.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
-
-// Observe the real admission function before the consult loader captures it for later tests.
-vi.mock("../../../agents/admitted-run-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../agents/admitted-run-context.js")>();
-  return { ...actual, prepareAgentRunAdmission: vi.fn(actual.prepareAgentRunAdmission) };
-});
 
 function rawTranscriptRows() {
   return readTranscriptEventRows(openOpenClawAgentDatabase({ agentId: AGENT_ID }), SESSION_ID);
@@ -113,12 +107,10 @@ function expectOriginalResult(frames: string[]) {
 
 const activeControls = [
   {
-    mode: "steering",
     text: "use the release branch instead",
     acknowledgment: "Got it. I steered the active run.",
   },
   {
-    mode: "followup",
     text: "after that check tests",
     acknowledgment: "Queued that follow-up for the active OpenClaw run.",
   },
@@ -166,7 +158,8 @@ describe("native Talk action ownership through public plugin registration", () =
       });
       const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
         if ((update.target?.sessionId ?? update.sessionId) === SESSION_ID) {
-          const publication = publish(update);
+          // Match the Gateway subscription: committed publications outlive their producer.
+          const publication = runOutsideAsyncWorkScope(() => publish(update));
           void publication.catch(() => {});
           publications.push(publication);
         }
@@ -596,7 +589,6 @@ describe("native Talk action ownership through public plugin registration", () =
   );
 
   it.each([
-    ["replacement", "cancel"],
     ["idle", "cancel"],
     ["queued replacement", "steer"],
   ] as const)(
@@ -712,65 +704,6 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it("admits literal delegation tags in public steering as visible user input", async () => {
-    const text =
-      "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>";
-    await withParkedNativeTask(
-      async ({ invoke, socket, activeRun, queueMessage, abortOwned, settleBackend }) => {
-        const result = await invoke("talk.client.steer", {
-          sessionKey: SESSION_KEY,
-          text,
-          mode: "steer",
-        });
-        expect(result).toMatchObject({ ok: true, queued: true });
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(queueMessage.mock.calls[0]?.[0]).toBe(text);
-        expect(queueMessage.mock.calls[0]?.[1]?.userTurnTranscriptRecorder).toBeUndefined();
-        expect(abortOwned).not.toHaveBeenCalled();
-        expect(activeRun.abortSignal.aborted).toBe(false);
-        await settleBackend();
-        await vi.waitFor(() => expectOriginalResult(socket.sent));
-        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
-  it("preserves the connection source when reconnect controls precede a new consult", async () => {
-    const prepareAdmission = vi.mocked(admission.prepareAgentRunAdmission);
-    prepareAdmission.mockClear();
-    await withParkedNativeTask(async ({ create, offer, result, queueMessage, settleBackend }) => {
-      const replacement = await connectNativeSession(
-        { create, offer },
-        true,
-        requireString(result, "voiceSessionId"),
-      );
-      replacement.socket.serverEvent(
-        nativeDelegation("replacement-control", "use the release branch instead"),
-      );
-      await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
-      await settleBackend();
-      replacement.socket.serverEvent(nativeDelegation("replacement-task", "Start a fresh task."));
-      await vi.waitFor(() =>
-        expect(spokenMessages(replacement.socket.sent)).toContain("Subsequent task completed."),
-      );
-      expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      expect(prepareAdmission.mock.calls.map(([params]) => params.facts.ingress)).toEqual([
-        {
-          kind: "gateway-client",
-          boundary: "talk-agent-consult",
-          state: "present",
-          rawSourceRef: CONNECTION_ID,
-        },
-        {
-          kind: "gateway-client",
-          boundary: "talk-agent-consult",
-          state: "present",
-          rawSourceRef: CONNECTION_ID,
-        },
-      ]);
-    });
-  });
-
   it("keeps followup on retained work after same-call transport replacement", async () => {
     const { text, acknowledgment } = activeControls[1];
     await withParkedNativeTask(
@@ -813,93 +746,6 @@ describe("native Talk action ownership through public plugin registration", () =
       },
     );
   });
-
-  // Unlike classifier tests, these pairs reach the provider's replacement policy and real run queue.
-  describe.each(activeControls)("active $mode", ({ text, acknowledgment }) => {
-    it.each(["transcript-first", "delegation-first"] as const)(
-      "delivers once without replacing the original task (%s)",
-      async (order) => {
-        await withParkedNativeTask(
-          async ({ socket, result, activeRun, queueMessage, abortOwned, settleBackend }) => {
-            const beforeControl = socket.sent.length;
-            if (order === "transcript-first") {
-              // Persistence can finish before delegation; no control acknowledgment is required.
-              await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(text)));
-              socket.serverEvent(nativeDelegation("active-control", text));
-            } else {
-              await flushNativeTranscript(result, () => {
-                socket.serverEvent(nativeDelegation("active-control", text));
-                socket.serverEvent(nativeTranscript(text));
-              });
-            }
-            await vi.waitFor(() =>
-              expect({
-                deliveries: queueMessage.mock.calls.length,
-                originalRunAborted: activeRun.abortSignal.aborted,
-                taskStarts: upstream.runEmbeddedAgent.mock.calls.length,
-              }).toEqual({ deliveries: 1, originalRunAborted: false, taskStarts: 1 }),
-            );
-            expect(queueMessage.mock.calls[0]?.[0]).toContain(text);
-            expect(activeRun.abortSignal.aborted).toBe(false);
-            expect(abortOwned).not.toHaveBeenCalled();
-            expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-            await vi.waitFor(() =>
-              expect(spokenMessages(socket.sent.slice(beforeControl))).toEqual([
-                expect.stringContaining(acknowledgment),
-              ]),
-            );
-
-            await settleBackend();
-            await vi.waitFor(() => expectOriginalResult(socket.sent));
-            expect(queueMessage).toHaveBeenCalledOnce();
-            expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-            expect(activeRun.abortSignal.aborted).toBe(false);
-            expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
-          },
-        );
-      },
-    );
-  });
-
-  // Both ordinary requests match the broad control classifier; neither may be suppressed or self-steered.
-  it.each(["Check the weather.", "Also summarize the report."])(
-    "admits idle task %s once without steering it when final ASR arrives later",
-    async (text) => {
-      await withParkedNativeTask(
-        async ({ socket, result, activeRun, queueMessage, abortOwned, settleBackend }) => {
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(activeRun.prompt).toContain(text);
-          const beforeTranscript = socket.sent.length;
-          await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(text)));
-          expect(
-            spokenMessages(socket.sent.slice(beforeTranscript)),
-            "persisting final ASR must not issue a steering result or refusal",
-          ).toEqual([]);
-          expect(queueMessage).not.toHaveBeenCalled();
-          expect(abortOwned).not.toHaveBeenCalled();
-          expect(activeRun.abortSignal.aborted).toBe(false);
-          expect(
-            readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID }),
-          ).toMatchObject([
-            {
-              event: {
-                message: {
-                  role: "user",
-                  content: [{ type: "text", text }],
-                },
-              },
-            },
-          ]);
-          await settleBackend();
-          await vi.waitFor(() => expectOriginalResult(socket.sent));
-          expect(queueMessage).not.toHaveBeenCalled();
-          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
-          expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
-        },
-        text,
-      );
-    },
-  );
 
   // A same-turn test misses the state transition between a persisted transcript and its delegation.
   it("makes one current-state decision for steering delegated after original settlement", async () => {

@@ -7,7 +7,7 @@ import type {
   PluginInstallRequest,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import type { PluginToolPreview } from "./tool-preview.ts";
+import type { PluginToolPreview } from "./tool-preview.tsx";
 
 registerPluginManagementEnglish();
 

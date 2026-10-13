@@ -17,9 +17,6 @@ vi.mock("./attempt-results.js", () => ({
   buildCodexTurnStartFailureResult: vi.fn(),
   isInvalidCodexImagePayloadError: () => recovery.kind === "image",
 }));
-vi.mock("./thread-lifecycle-errors.js", () => ({
-  isCodexContextRestartSelectionChangedError: () => false,
-}));
 vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   runCodexAgentEndHook: vi.fn(),

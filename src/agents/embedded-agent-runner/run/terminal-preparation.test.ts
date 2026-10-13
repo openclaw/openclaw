@@ -250,6 +250,48 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
+  it.each([
+    { stopReason: "stop", thinking: false, keepAnswer: false },
+    { stopReason: "length", thinking: true, keepAnswer: false },
+    { stopReason: "stop", thinking: false, keepAnswer: true },
+  ] as const)(
+    "keeps pre-tool text out of empty $stopReason terminal metadata (thinking=$thinking, kept=$keepAnswer)",
+    async ({ stopReason, thinking, keepAnswer }) => {
+      const terminal: AssistantMessage = {
+        ...assistantMessage(stopReason),
+        api: "ollama",
+        provider: "ollama",
+        content: thinking ? [{ type: "thinking", thinking: "Considering the file." }] : [],
+      };
+      const keptAnswer = {
+        assistant: {
+          ...assistantMessage(),
+          content: [{ type: "text" as const, text: "Completed answer." }],
+        },
+        messageIndex: 1,
+      };
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts: ["I will read the file."],
+          toolMetas: [{ toolName: "read" }],
+          messagesSnapshot: [terminal],
+          lastAssistant: terminal,
+          currentAttemptAssistant: terminal,
+          currentAttemptCompletedAssistant: terminal,
+          keptAnswer: keepAnswer ? keptAnswer : undefined,
+        }),
+        currentAttemptCompletedAssistant: terminal,
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason },
+          signalOwnedInterruption: false,
+        },
+      });
+      const expected = keepAnswer ? "Completed answer." : undefined;
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantRawText).toBe(expected);
+    },
+  );
+
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
     async (stopReason) => {

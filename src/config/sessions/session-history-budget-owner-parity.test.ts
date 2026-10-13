@@ -5,10 +5,10 @@ import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  insertRepositoryGitHubPublication,
-  readRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-} from "../../gateway/github-repository-publication-store.js";
+  insertRepositoryGitHubPublicationFixture as insertRepositoryGitHubPublication,
+  readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication,
+} from "../../gateway/github-publication-store.test-support.js";
+import { repositoryGitHubPublicationDigest } from "../../gateway/github-repository-publication-store.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   onSessionIdentityMutation,

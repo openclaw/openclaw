@@ -129,7 +129,13 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
   };
 }
 
-type StreamEvent = { type: string; delta?: string; reason?: string };
+type StreamEvent = {
+  type: string;
+  delta?: string;
+  reason?: string;
+  partial?: AssistantMessage;
+  contentIndex?: number;
+};
 
 type GoogleLifecycleParams = Parameters<typeof runGoogleGenerateContentLifecycle>[0];
 type GoogleGenerateContentStream = ReturnType<
@@ -222,6 +228,10 @@ describe("Google stream projection", () => {
       "done",
     ]);
     expect(output.responseId).toBe("response-1");
+    const toolDelta = events.find((event) => event.type === "toolcall_delta");
+    expect(toolDelta?.partial?.content[toolDelta.contentIndex ?? -1]).toMatchObject({
+      partialJson: '{"query":"cats"}',
+    });
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toEqual([
       { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
@@ -275,17 +285,22 @@ describe("Google stream projection", () => {
     expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
   });
 
-  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
-    const { output, events } = await runFixture([
-      response({
-        parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
-        finishReason: FinishReason.MAX_TOKENS,
-      }),
-    ]);
-    expect(events.find((event) => event.type === "done")?.reason).toBe("length");
-    expect(output.stopReason).toBe("length");
-    expect(output.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
-  });
+  it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
+    "preserves %s when the partial response contains a function call",
+    async (finishReason) => {
+      const { output, events } = await runFixture([
+        response({
+          parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
+          finishReason,
+        }),
+      ]);
+      expect(events.find((event) => event.type === "done")?.reason).toBe("length");
+      expect(output.stopReason).toBe("length");
+      expect(output.content).toEqual([
+        expect.objectContaining({ type: "toolCall", name: "lookup" }),
+      ]);
+    },
+  );
 
   it.each([
     {

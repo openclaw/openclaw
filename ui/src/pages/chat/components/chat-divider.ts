@@ -8,6 +8,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import "./chat-skill-learned-notice.tsx";
 
 export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
   const archiveActor = activeSession?.archivedBy;
@@ -97,6 +98,15 @@ export function renderChatDivider(item: Extract<ChatItem, { kind: "divider" }>) 
 }
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+  if (item.skillChanges) {
+    return html`
+      <div data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+        <openclaw-chat-skill-learned-notice
+          .notice=${item.skillChanges}
+        ></openclaw-chat-skill-learned-notice>
+      </div>
+    `;
+  }
   const body = item.text
     ? html`
         <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>

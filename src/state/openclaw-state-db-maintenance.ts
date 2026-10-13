@@ -15,6 +15,11 @@ import {
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
 import {
+  getStateRuntimeSchemaAdmission,
+  getStateSchemaVersionAdmission,
+  publishStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
+import {
   LAZY_ADDITIVE_STATE_TABLES,
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -84,7 +89,12 @@ export function prepareStateDatabaseSchemaRepair(
 ): () => string[] {
   const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
   const assertWriteAllowed = () =>
-    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+    assertOpenClawStateWriteAllowed({
+      database,
+      databasePath: pathname,
+      env,
+      inspectOwnership: true,
+    });
   const admit = () => {
     assertSupportedStateSchemaVersion(database, pathname);
     if (danglingWorkshopIndex) {
@@ -136,7 +146,9 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_transcript_commits",
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
-const STATE_MIGRATION_VERSIONS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const;
+const STATE_MIGRATION_VERSIONS = [
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+] as const;
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
 /** Require canonical shared-state ownership without requiring the latest schema. */
@@ -144,6 +156,10 @@ export function assertOpenClawStateDatabaseOwner(
   database: DatabaseSync,
   options: { pathname: string },
 ): { schema_version?: unknown } {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted && getStateRuntimeSchemaAdmission(database)) {
+    return { schema_version: admitted.userVersion };
+  }
   const hasMetadataTable = tableExists(database, "schema_meta");
   let metadata;
   try {
@@ -263,6 +279,10 @@ export function markCurrentStateSchemaVersion(
   }
   const version = resolveStateSchemaVersionToPublish(db);
   db.exec(`PRAGMA user_version = ${version};`);
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: version,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   if (
     tableExists(db, "schema_meta") &&
     ["meta_key", "schema_version", "updated_at"].every((column) =>
@@ -461,6 +481,10 @@ export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): 
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
   db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  publishStateSchemaVersionAdmission(db, {
+    userVersion: schemaVersion,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   executeSqliteQuerySync(
     db,
     kysely

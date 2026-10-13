@@ -384,11 +384,11 @@ describe("worker placement session admission", () => {
   );
 
   it.each(["full", "targeted"] as const)(
-    "%s recovery preserves same-session ordering and admits unrelated dispatch",
+    "%s recovery admits only result recovery while the session is busy",
     async (kind) => {
       const dispatchEntered = createDeferredCore();
       const releaseDispatch = createDeferredCore();
-      const recover = vi.fn(async () => {});
+      const recover = vi.fn(async (_mode?: "results-only") => {});
       const admissionAttempted = createDeferredCore();
       const admitted: boolean[] = [];
       const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => {
@@ -414,10 +414,12 @@ describe("worker placement session admission", () => {
       const sweep = coordinated.reconcileActive(kind === "targeted" ? "worker-active" : undefined);
       await admissionAttempted.promise;
       await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
-      expect(recover).not.toHaveBeenCalled();
       if (kind === "full") {
+        expect(recover).not.toHaveBeenCalled();
         await sweep;
         expect(admitted).toEqual([false]);
+      } else {
+        expect(recover).toHaveBeenCalledExactlyOnceWith("results-only");
       }
       releaseDispatch.resolve();
       await Promise.all([first, sweep]);

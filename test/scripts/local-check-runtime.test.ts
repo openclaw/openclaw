@@ -617,7 +617,11 @@ describe("Tooling bootstrap dependency ownership", () => {
     const checkout = path.join(root, "checkout");
     const lib = path.join(checkout, "scripts", "lib");
     fs.mkdirSync(lib, { recursive: true });
-    for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts"]) {
+    for (const file of [
+      "tsx-cli-shim.mjs",
+      "local-check-runtime.mts",
+      "managed-cleanup-handoff.mts",
+    ]) {
       fs.copyFileSync(path.resolve("scripts", "lib", file), path.join(lib, file));
     }
     fs.writeFileSync(

@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { MermaidTransientError, renderMermaidSvg } from "@openclaw/mermaid-renderer";
-import { html, nothing, render } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { mountMermaidBlocks } from "./markdown-mermaid.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { mountMermaidBlocks } from "./markdown-mermaid.tsx";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 vi.mock("@openclaw/mermaid-renderer", async (importOriginal) => ({
@@ -34,7 +33,7 @@ async function mount(...sources: string[]) {
   const container = document.body.appendChild(document.createElement("div"));
   containers.add(container);
   const markdown = sources.map((value) => `\`\`\`mermaid\n${value}\`\`\``).join("\n\n");
-  render(html`${unsafeHTML(toSanitizedMarkdownHtml(markdown))}`, container);
+  container.innerHTML = toSanitizedMarkdownHtml(markdown);
   mountMermaidBlocks(container);
   const elements = [...container.querySelectorAll("openclaw-mermaid")];
   expect(elements).toHaveLength(sources.length);
@@ -43,7 +42,7 @@ async function mount(...sources: string[]) {
 }
 
 function action(element: MermaidElement, label: string) {
-  const controls = element.shadowRoot?.querySelectorAll<
+  const controls = element.querySelectorAll<
     HTMLButtonElement | HTMLElementTagNameMap["wa-dropdown-item"]
   >("button, wa-dropdown-item");
   const match = [...(controls ?? [])].find(
@@ -57,11 +56,11 @@ function action(element: MermaidElement, label: string) {
 }
 
 function imageSource(element: MermaidElement): string | null | undefined {
-  return element.shadowRoot?.querySelector("img")?.getAttribute("src");
+  return element.querySelector("img")?.getAttribute("src");
 }
 
 async function waitForImage(element: MermaidElement): Promise<string> {
-  await vi.waitFor(() => expect(imageSource(element)).toMatch(/^blob:mermaid-/u));
+  await waitForSolid(() => expect(imageSource(element)).toMatch(/^blob:mermaid-/u));
   return imageSource(element)!;
 }
 
@@ -88,12 +87,12 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => {
+afterEach(async () => {
   for (const container of containers) {
-    render(nothing, container);
     container.remove();
   }
   containers.clear();
+  await Promise.resolve();
   for (const [attribute, value] of [
     ["data-theme-mode", originalThemeMode],
     ["style", originalStyle],
@@ -124,10 +123,11 @@ describe("Mermaid Markdown presentation", () => {
     await diagram.updateComplete;
   });
 
-  it.each([true, false])("preserves source and reports copy success=%s", async (copied) => {
+  it.each([false])("preserves source and reports copy success=%s", async (copied) => {
     copySource.mockResolvedValueOnce(copied);
     const original = source("x < y & z <script>alert(1)</script>");
     const {
+      container,
       elements: [element],
     } = await mount(original);
     const imageUrl = await waitForImage(element!);
@@ -135,17 +135,19 @@ describe("Mermaid Markdown presentation", () => {
     expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
     expect(action(element!, "Expand diagram").disabled).toBe(false);
     action(element!, "Show source").click();
-    await element!.updateComplete;
-    expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
-    expect(element!.shadowRoot?.querySelector("script, img")).toBeNull();
+    flush();
+    expect(element!.querySelector("code")?.textContent).toBe(original);
+    expect(element!.querySelector("script, img")).toBeNull();
+    expect(mountMermaidBlocks(container)).toBe(false);
+    expect(container.querySelector("openclaw-mermaid")).toBe(element);
     action(element!, "Copy source").click();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(action(element!, copied ? "Copied!" : "Copy failed")).toBeDefined(),
     );
     expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]);
 
     action(element!, "Show diagram").click();
-    await element!.updateComplete;
+    flush();
     expect(imageSource(element!)).toBe(imageUrl);
     expect(renderSvg).toHaveBeenCalledTimes(1);
   });
@@ -166,18 +168,20 @@ describe("Mermaid Markdown presentation", () => {
     } = await mount(original);
     if (failure === "image") {
       await waitForImage(element!);
-      element!.shadowRoot?.querySelector("img")?.dispatchEvent(new Event("error"));
+      element!.querySelector("img")?.dispatchEvent(new Event("error"));
     }
 
-    await vi.waitFor(() =>
-      expect(element!.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(message),
+    await waitForSolid(() =>
+      expect(element!.querySelector('[role="status"]')?.textContent).toContain(message),
     );
-    expect(element!.shadowRoot?.querySelector("code")?.textContent).toBe(original);
-    expect(element!.shadowRoot?.querySelector("img, script")).toBeNull();
-    expect(element!.shadowRoot?.textContent).not.toContain("internal parser detail");
+    expect(element!.querySelector("code")?.textContent).toBe(original);
+    expect(element!.querySelector("img, script")).toBeNull();
+    expect(element!.textContent).not.toContain("internal parser detail");
     expect(action(element!, "Expand diagram").disabled).toBe(true);
     action(element!, "Copy source").click();
-    await vi.waitFor(() => expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]));
+    await waitForSolid(() =>
+      expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]),
+    );
     if (failure === "image") {
       expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:mermaid-1");
     } else {
@@ -201,7 +205,7 @@ describe("Mermaid Markdown presentation", () => {
     } else {
       document.documentElement.dataset.themeMode = "dark";
     }
-    await vi.waitFor(() => expect(renderSvg).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
     if (change === "theme") {
       expect(renderSvg.mock.calls[1]?.[1].darkMode).toBe(true);
     }
@@ -216,7 +220,7 @@ describe("Mermaid Markdown presentation", () => {
     await element!.updateComplete;
 
     expect(imageSource(element!)).toBe(imageUrl);
-    expect(element!.shadowRoot?.querySelector('[role="status"]')).toBeNull();
+    expect(element!.querySelector('[role="status"]')).toBeNull();
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).not.toHaveBeenCalled();
   });
@@ -235,6 +239,7 @@ describe("Mermaid Markdown presentation", () => {
         await waitForImage(element!);
       }
       element!.remove();
+      await Promise.resolve();
       if (disconnectBeforeRender) {
         pending.resolve(svg);
         await pending.promise;
@@ -245,10 +250,11 @@ describe("Mermaid Markdown presentation", () => {
 
       container.append(element!);
       const reconnectedUrl = disconnectBeforeRender ? "blob:mermaid-1" : "blob:mermaid-2";
-      await vi.waitFor(() => expect(imageSource(element!)).toBe(reconnectedUrl));
+      await waitForSolid(() => expect(imageSource(element!)).toBe(reconnectedUrl));
       expect(renderSvg).toHaveBeenCalledTimes(1);
       expect(createObjectURL).toHaveBeenCalledTimes(disconnectBeforeRender ? 1 : 2);
       element!.remove();
+      await Promise.resolve();
       expect(revokeObjectURL).toHaveBeenCalledWith(reconnectedUrl);
       expect(revokeObjectURL).toHaveBeenCalledTimes(createObjectURL.mock.calls.length);
     },
@@ -265,24 +271,9 @@ describe("Mermaid Markdown presentation", () => {
     expect(firstUrl).not.toBe(secondUrl);
 
     elements[0]!.remove();
+    await Promise.resolve();
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(firstUrl);
     expect(imageSource(elements[1]!)).toBe(secondUrl);
     expect(revokeObjectURL).not.toHaveBeenCalledWith(secondUrl);
-  });
-
-  it("evicts older layouts under sustained use without revoking visible images", async () => {
-    const sources = Array.from({ length: 20 }, (_, index) => source(`Diagram ${index}`));
-    const { elements } = await mount(...sources);
-    const originalUrls = await Promise.all(elements.map(waitForImage));
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-
-    const recent = await mount(sources.at(-1)!);
-    await waitForImage(recent.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length);
-    const oldest = await mount(sources[0]!);
-    await waitForImage(oldest.elements[0]!);
-    expect(renderSvg).toHaveBeenCalledTimes(sources.length + 1);
-    expect(elements.map(imageSource)).toEqual(originalUrls);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
   });
 });

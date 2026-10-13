@@ -47,7 +47,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
-import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -67,8 +67,8 @@ import {
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreAsync,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   applySecretRefHeaderSentinels,
   requireApiKey,
 } from "./model-auth.js";
@@ -124,14 +124,17 @@ async function prepareBtwRuntimeAuth(params: {
 }) {
   const { model } = params;
   const storeOptions = { profileId: params.authProfileId, allowKeychainPrompt: false };
-  const loadStore = (externalCliProviderIds?: readonly string[]) =>
+  const loadStore = async (externalCliProviderIds?: readonly string[]) =>
     externalCliProviderIds
-      ? ensureAuthProfileStore(params.agentDir, { ...storeOptions, externalCliProviderIds })
-      : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, storeOptions);
+      ? await ensureAuthProfileStoreAsync(params.agentDir, {
+          ...storeOptions,
+          externalCliProviderIds,
+        })
+      : await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, storeOptions);
   let store: AuthProfileStore;
   let ignoreAutoPreferredProfile = false;
   if (isOpenAIProvider(model.provider)) {
-    store = loadStore(["openai"]);
+    store = await loadStore(["openai"]);
   } else {
     const selection = {
       provider: model.provider,
@@ -143,14 +146,14 @@ async function prepareBtwRuntimeAuth(params: {
         params.authProfileIdSource === "user" ? params.authProfileId : undefined,
     };
     let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection(selection);
-    store = loadStore(externalCliAuthScope.providerIds);
+    store = await loadStore(externalCliAuthScope.providerIds);
     if (!externalCliAuthScope.providerIds) {
       externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
         ...selection,
         store,
       });
       if (externalCliAuthScope.providerIds) {
-        store = loadStore(externalCliAuthScope.providerIds);
+        store = await loadStore(externalCliAuthScope.providerIds);
       }
     }
     ignoreAutoPreferredProfile = externalCliAuthScope.ignoreAutoPreferredProfile;
@@ -240,29 +243,16 @@ function sanitizeBtwAssistantMessage(
   message: Extract<Message, { role: "assistant" }>,
 ): Extract<Message, { role: "assistant" }> | undefined {
   const rawContent = (message as { content?: unknown }).content;
+  let content: TextContent[];
   if (typeof rawContent === "string") {
-    const trimmed = rawContent.trim();
-    return trimmed.length > 0
-      ? {
-          ...message,
-          content: [{ type: "text", text: trimmed }],
-        }
-      : undefined;
+    const text = rawContent.trim();
+    content = text ? [{ type: "text", text }] : [];
+  } else {
+    content = (normalizeBtwContentBlocks(rawContent) ?? []).flatMap((block): TextContent[] =>
+      isBtwTextBlock(block) ? [{ type: "text", text: block.text }] : [],
+    );
   }
-  const blocks = normalizeBtwContentBlocks(rawContent);
-  if (!blocks) {
-    return undefined;
-  }
-  const content = blocks.flatMap((block): TextContent[] =>
-    isBtwTextBlock(block) ? [{ type: "text", text: block.text }] : [],
-  );
-  if (content.length === 0) {
-    return undefined;
-  }
-  return {
-    ...message,
-    content,
-  };
+  return content.length > 0 ? { ...message, content } : undefined;
 }
 
 async function toSimpleContextMessages(params: {
@@ -694,17 +684,6 @@ export async function runBtwSideQuestion(
       if (cached) {
         return cached;
       }
-      await ensureSelectedAgentHarnessPlugin({
-        provider,
-        modelId,
-        config: params.cfg,
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        workspaceDir,
-        ...(agentHarnessId ? { agentHarnessId } : {}),
-        ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
-        pluginRegistry: preparedModelRuntime.pluginRegistry!,
-      });
       const selectionParams = {
         provider,
         modelId,
@@ -714,6 +693,11 @@ export async function runBtwSideQuestion(
         ...(agentHarnessId ? { agentHarnessId } : {}),
         ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
       };
+      await ensureSelectedAgentHarnessPlugin({
+        ...selectionParams,
+        workspaceDir,
+        pluginRegistry: preparedModelRuntime.pluginRegistry!,
+      });
       const harness = modelProvider
         ? selectAgentHarnessForPreparedModelProviders({
             ...selectionParams,
@@ -790,7 +774,7 @@ export async function runBtwSideQuestion(
       runtime: Awaited<ReturnType<typeof resolveRuntimeModel>>,
       routeFinalized = false,
     ): Promise<BtwHarnessSideQuestionDispatch> => {
-      const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
+      const toolsAllow = await preparePluginHarnessPolicyToolsAllow({
         config: params.cfg,
         sessionId,
         sessionKey: params.sessionKey,
@@ -916,6 +900,14 @@ export async function runBtwSideQuestion(
           sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
           workspaceDir,
         }));
+      using sandboxLifetime = {
+        [Symbol.dispose]: () => {
+          if (!placement.sandbox) {
+            sandbox?.[Symbol.dispose]?.();
+          }
+        },
+      };
+      void sandboxLifetime;
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         params.cfg,
         sideRunId,
@@ -1049,23 +1041,21 @@ export async function runBtwSideQuestion(
     const sessionAuthProfileSource = sessionAuthProfileId
       ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
       : undefined;
+    const cliSelection = {
+      provider: params.provider,
+      cfg: params.cfg,
+      agentId: sessionAgentId,
+      modelId: params.model,
+    };
     const cliProviderFromSessionAuth = sessionAuthProfileId
       ? resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.cfg,
-          agentId: sessionAgentId,
-          modelId: params.model,
+          ...cliSelection,
           authProfileId: sessionAuthProfileId,
         })?.trim()
       : undefined;
     const cliProviderFromAuthOrder =
       !sessionAuthProfileId || sessionAuthProfileSource === "auto"
-        ? resolveCliRuntimeExecutionProvider({
-            provider: params.provider,
-            cfg: params.cfg,
-            agentId: sessionAgentId,
-            modelId: params.model,
-          })?.trim()
+        ? resolveCliRuntimeExecutionProvider(cliSelection)?.trim()
         : undefined;
     const resolvedCliProvider = cliProviderFromSessionAuth ?? cliProviderFromAuthOrder;
     const cliProvider =

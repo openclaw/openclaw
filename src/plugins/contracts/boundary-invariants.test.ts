@@ -33,6 +33,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/qa-lab/src/gateway-registration.ts",
   "extensions/visitor-access/index.ts",
   "extensions/workboard/index.ts",
+  "extensions/x/src/work-origin.ts",
 ] as const;
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
@@ -48,10 +49,11 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
   "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
-  "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
+  "extensions/onepassword/index.ts": ["before_tool_call"],
   "extensions/qa-lab/src/gateway-registration.ts": ["before_agent_run"],
   "extensions/visitor-access/index.ts": ["gateway_start"],
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
+  "extensions/x/src/work-origin.ts": ["before_prompt_build"],
 } as const satisfies Record<
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]

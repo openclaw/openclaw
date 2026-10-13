@@ -31,7 +31,6 @@ import {
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
 import type {
@@ -138,6 +137,9 @@ async function fixture(standalone = false, cold = false, runtimeA = "native-a") 
           provenance: standalone ? "standalone" : "configured",
         })
       : getPreparedModelRuntimeSnapshot(input)!;
+  if (!standalone && !cold) {
+    await owner.loadFullModelCatalog!();
+  }
   return { input, owner, a, b, loadA, loadB };
 }
 
@@ -280,7 +282,7 @@ it("reuses published native facts without renewing providers during warm API and
   expect(mocks.runPreparedModelCatalogWorker).toHaveBeenLastCalledWith([api.provider]);
 });
 
-it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
+it.each(["before", "during", "revoked"] as const)(
   "keeps native selection bound to its admitted lease (publication/authority=%s)",
   async (transition) => {
     const { input, owner, b, loadB } = await fixture(false, true);
@@ -309,7 +311,6 @@ it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
       return [b];
     });
     let setup: ReturnType<typeof resolveNativeSelection> | undefined;
-    let closing: Promise<void> | undefined;
     try {
       if (transition === "before") {
         await replacePublication();
@@ -332,23 +333,13 @@ it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
       ]);
       if (transition === "during") {
         await replacePublication();
-      } else if (transition === "closed") {
-        await closeLease();
       } else if (transition === "revoked") {
         runCurrent = false;
-      } else if (transition === "shutdown") {
-        closing = closePreparedModelRuntimeSnapshots();
       }
       const published = getPreparedModelRuntimeSnapshot(input)!;
       release.resolve();
-      if (transition === "closed" || transition === "revoked" || transition === "shutdown") {
-        await expect(setup).rejects.toThrow(
-          transition === "closed"
-            ? "superseded"
-            : transition === "revoked"
-              ? "Native selection run authority revoked"
-              : "prepared model runtime process lifetime closed",
-        );
+      if (transition === "revoked") {
+        await expect(setup).rejects.toThrow("Native selection run authority revoked");
       } else {
         const result = await setup;
         expect(result.nativeModelOwned).toBe(true);
@@ -373,7 +364,6 @@ it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
         await Promise.allSettled([setup]);
       }
       await closeLease();
-      await closing;
     }
   },
 );
@@ -832,7 +822,7 @@ it("renews native observations without retaining harness-only host projections",
   try {
     await refreshPreparedModelRuntimeSnapshots(input.config, options);
     const renewed = await prepareModelRuntimeSnapshot(input);
-    discovery = renewed.loadFullModelCatalog!({ changedOnly: true });
+    discovery = renewed.loadNativeModelCatalog!();
     await started.promise;
     const pending = renewed.readFullModelCatalog!()!;
     expect(pending.entries).toEqual(

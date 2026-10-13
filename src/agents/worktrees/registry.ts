@@ -8,7 +8,6 @@ import {
 import { withStateDatabaseSchemaMaintenance } from "../../infra/state-database-maintenance.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -310,15 +309,4 @@ export function assertWorktreeRemovalAvailable(
       "Worktree removal is in progress; retry after cleanup settles",
     );
   }
-}
-
-export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      ({ db }) =>
-        collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(worktreeId), false).livePids
-          .length > 0,
-      { env },
-    ) ?? false
-  );
 }

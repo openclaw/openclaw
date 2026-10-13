@@ -5,6 +5,7 @@ import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-host.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { NAVIGATION_RAIL_WIDTH } from "./navigation-surface.ts";
 import { loadSettings, settingsKeyForGateway } from "./settings.ts";
 
 setupSidebarTest();
@@ -45,13 +46,18 @@ describe("sidebar preferences across tabs", () => {
         window.dispatchEvent(new StorageEvent("storage", { key }));
         await settleLitElement(shell);
         expect(runtime.context.navigation.snapshot.pinnedAgentIds).toEqual(["research"]);
-        expect(frame!.style.getPropertyValue("--shell-nav-expanded-width")).toBe("360px");
+        expect(frame!.style.getPropertyValue("--shell-nav-expanded-width")).toBe(
+          `${360 + NAVIGATION_RAIL_WIDTH}px`,
+        );
       }
 
       divider!.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.25 } }));
       await settleLitElement(shell);
 
-      expect(loadSettings()).toMatchObject({ navWidth: 320, pinnedAgentIds: ["research"] });
+      expect(loadSettings()).toMatchObject({
+        navWidth: 320 - NAVIGATION_RAIL_WIDTH,
+        pinnedAgentIds: ["research"],
+      });
       expect(runtime.context.navigation.snapshot.pinnedAgentIds).toEqual(["research"]);
       expect(frame!.style.getPropertyValue("--shell-nav-expanded-width")).toBe("320px");
     },

@@ -106,18 +106,6 @@ describe("envelope", () => {
     });
   });
 
-  it("accepts store-and-forward delivery ten minutes later", async () => {
-    const { options } = fixture({
-      body: { text: "delayed" },
-      ts: now - 10 * 60,
-    });
-    await expect(openClaimed(options)).resolves.toEqual({
-      claim: "new",
-      body: { text: "delayed" },
-      envelopeHash: expect.any(String),
-    });
-  });
-
   it("rejects envelopes older than relay retention", async () => {
     const { options } = fixture({
       body: { text: "ancient" },

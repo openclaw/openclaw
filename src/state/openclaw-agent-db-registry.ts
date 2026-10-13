@@ -17,6 +17,7 @@ import {
   recordOpenClawAgentDatabaseRegistryMutation,
 } from "./openclaw-agent-db-registry-listing.js";
 import {
+  adoptOpenClawAgentDatabaseSchema,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   setOpenClawAgentDatabaseValidation,
@@ -143,10 +144,13 @@ export function registerOpenClawAgentDatabase(
       }
       emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     },
-    { env: params.env },
+    { env: params.env, initializationAgentPaths: [params.path] },
   );
   if (params.admittedDb) {
-    setOpenClawAgentDatabaseValidation({ ...params, db: params.admittedDb });
+    const database = { ...params, db: params.admittedDb };
+    if (!adoptOpenClawAgentDatabaseSchema(database)) {
+      setOpenClawAgentDatabaseValidation(database);
+    }
   } else {
     invalidateOpenClawAgentDatabaseValidation(params.path);
   }

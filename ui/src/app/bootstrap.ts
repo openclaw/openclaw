@@ -1,3 +1,4 @@
+import "./boot-capabilities.ts";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   parseControlUiFocusLocation,
@@ -290,7 +291,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     connectionBootstrap,
     initialChatRoute:
       startsApplicationRouter &&
-      sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
+      sessionRefFromPath(applicationLocation.pathname, basePath) !== null,
   });
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
@@ -339,17 +340,20 @@ export function bootstrapApplication(): ApplicationRuntime {
       );
       return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
     },
-    onNativeUpdateDeclined: () => {
-      const snapshot = overlays.snapshot;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy =
-        snapshot.updateRunning ||
-        snapshot.updateReconciliationPending ||
-        campaign?.state === "applying";
-      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-        void overlays.runUpdate();
-      }
-    },
+    prepareNativeUpdateFallback: () => ({
+      isCurrent: overlays.captureUpdateTarget(),
+      run: () => {
+        const snapshot = overlays.snapshot;
+        const campaign = snapshot.updateSchedule?.campaign;
+        const busy =
+          snapshot.updateRunning ||
+          snapshot.updateReconciliationPending ||
+          campaign?.state === "applying";
+        if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+          void overlays.runUpdate();
+        }
+      },
+    }),
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&
@@ -385,6 +389,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     hasPendingGateway || startup.nativeClient || startup.pendingBootstrapToken,
   );
   const initialConnectionRevision = gateway.connectionRevision;
+  let firstConfigConnection = true;
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;
@@ -416,7 +421,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     const client = snapshot.client;
     if (lastPostConnectClient !== client) {
       lastPostConnectClient = client;
-      void connectionBootstrap.run("config", () => config.refresh());
+      const ifNeeded = firstConfigConnection;
+      firstConfigConnection = false;
+      void config.refresh({ ifNeeded });
       void connectionBootstrap.run("session-observer", () =>
         sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
       );
@@ -560,6 +567,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: () => {
+      if (!startupLifecycle.signal.aborted) {
+        void config.refresh({ ifNeeded: true });
+      }
       const stopRouter = () => router.stop();
       if (startsApplicationRouter) {
         startupLifecycle.addDisposer(stopRouter);
@@ -614,9 +624,6 @@ export function bootstrapApplication(): ApplicationRuntime {
             : {}),
         }),
       );
-      steps.push(() => {
-        void config.refresh({ skipWithoutAuthCandidate: true });
-      });
       if (startsApplicationRouter) {
         if (initialFirstRunDecision) {
           steps.push(() => initialFirstRunDecision);

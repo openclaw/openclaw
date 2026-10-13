@@ -1,9 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadCombinedSessionStoreForGateway } from "./session-transcript-hit.js";
+import { loadCombinedSessionStoreForGatewayAsync } from "./session-transcript-hit.js";
 
 it.each([
   {
@@ -68,12 +70,27 @@ it.each([
       incognito: true,
     });
 
-    const { store } = loadCombinedSessionStoreForGateway(cfg, options);
-
-    expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
-    for (const entry of Object.values(store)) {
-      expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
-      expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+    const invocation = new AsyncLocalStorage<boolean>();
+    const queries: string[] = [];
+    // Ambient WAL maintenance has its own context and is not work caused by this SDK read.
+    const sql = observeHostDataSql((query) => {
+      if (invocation.getStore()) {
+        queries.push(query);
+      }
+    });
+    try {
+      const { store } = await invocation.run(true, () =>
+        loadCombinedSessionStoreForGatewayAsync(cfg, options),
+      );
+      expect(queries).toEqual([]);
+      expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
+      for (const entry of Object.values(store)) {
+        expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
+        expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+      }
+    } finally {
+      sql.restore();
+      invocation.disable();
     }
   });
 });

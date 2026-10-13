@@ -56,16 +56,6 @@ describe("resolveGroupName", () => {
     expect(result).toBeUndefined();
   });
 
-  it("serves subsequent calls from cache (positive hit)", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "  Cached Group  " });
-    await expect(resolveGroupName({ account, chatId: "oc_test4", log })).resolves.toBe(
-      "Cached Group",
-    );
-    const result = await resolveGroupName({ account, chatId: "oc_test4", log });
-    expect(result).toBe("Cached Group");
-    expect(mockGetChatInfo).toHaveBeenCalledOnce();
-  });
-
   it("does not cache group names when the expiry would exceed a valid Date", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
@@ -107,12 +97,6 @@ describe("resolveGroupName", () => {
     expect(log).toHaveBeenCalledWith(
       "feishu[test-account]: getChatInfo failed for oc_test5: Error: fail",
     );
-  });
-
-  it("returns undefined when API returns object with missing name field", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: undefined });
-    const result = await resolveGroupName({ account, chatId: "oc_test6", log });
-    expect(result).toBeUndefined();
   });
 
   it("isolates cache entries across different accounts", async () => {

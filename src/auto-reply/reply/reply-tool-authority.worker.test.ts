@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -6,6 +5,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
@@ -39,12 +39,14 @@ const policyKey = "agent:main:authority-policy";
 
 it("prepares embedded tool authority without caller-thread SQL and refuses a closing owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
+    setRuntimeConfigSnapshot(config);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: policyKey },
       { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
     );
     const admission = prepareAgentRunAdmission({
-      cfg: {},
+      cfg: config,
       operationalRunInstance: createOperationalRunInstanceRef("worker-authority"),
       facts: {
         agentId: "main",
@@ -59,7 +61,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
         sessionKey: executionKey,
         runId: "worker-authority",
         agentId: "main",
-        config: {},
+        config,
         sessionFile: "/tmp/authority-worker.jsonl",
         workspaceDir: state.workspaceDir,
         provider: "openai",
@@ -95,27 +97,33 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "retains the %s-agent source while rereading foreign sandbox policy before steering",
+  "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
       const classificationKey =
         policyAgent === "borrowed" ? executionKey : `agent:${policyAgent}:authority-policy`;
+      const config = {
+        agents: {
+          defaults: { sandbox: { mode: "all" as const } },
+          entries: { main: {}, policy: {} },
+        },
+        tools: { sandbox: { tools: { deny: ["exec"] } } },
+      };
+      setRuntimeConfigSnapshot(config);
       await upsertSessionEntryCore(
         { agentId: policyAgentId, sessionKey: classificationKey },
         { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
       );
-      // Settle setup maintenance before retaining the readers used across the foreign commit.
+      // Settle setup maintenance before retaining the readers used across the policy change.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
       const run = createQueueTestRun({ prompt: "authority" });
       Object.assign(run.run, {
         sessionKey: executionKey,
         runtimePolicySessionKey: classificationKey,
         agentId: "main",
-        config: {
-          agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
-          tools: { sandbox: { tools: { deny: ["exec"] } } },
-        },
+        config,
       });
       const admission =
         policyAgent === "borrowed"
@@ -157,28 +165,24 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          expect(initialEntries).toBe(1);
+          // The borrowed admission read already warmed the entry facts.
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
           for (const read of initialReads) {
             read.mockRestore();
           }
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
-        const foreign = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: policyAgentId, env: state.env }),
+        await upsertSessionEntryCore(
+          { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },
+          { sandboxMode: undefined },
         );
-        try {
-          foreign
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
-            )
-            .run(classificationKey);
-        } finally {
-          foreign.close();
-        }
         const calls = observeMainThreadSql();
         try {
           discovery.mockClear();
+          expect(() => snapshot.fingerprint(run.run)).toThrow(
+            "Tool authority classification session changed",
+          );
           expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
           if (reader) {
             expect(discovery).not.toHaveBeenCalled();
@@ -203,6 +207,7 @@ it.each(["main", "policy", "borrowed"] as const)(
           calls.restore();
         }
       } finally {
+        snapshot.close();
         discovery.mockRestore();
         await admission?.databaseClaim.release();
       }
@@ -303,6 +308,7 @@ it.each(["execution", "separate"] as const)(
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
         expect(discovery).not.toHaveBeenCalled();
       } finally {
+        independent.close();
         discovery.mockRestore();
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(executionKey, null);

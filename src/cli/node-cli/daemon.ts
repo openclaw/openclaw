@@ -55,6 +55,7 @@ type NodeDaemonInstallOptions = Parameters<typeof resolveNodeGatewayOptions>[0] 
   shareInstalledApps?: boolean;
   commands?: string[];
   allCommands?: boolean;
+  authFromEnv?: boolean;
   runtime?: string;
   runtimePath?: string;
   force?: boolean;
@@ -218,6 +219,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     installedAppsSharing: opts.shareInstalledApps,
     commands: opts.commands,
     allCommands: opts.allCommands,
+    gatewayAuthFromEnv: opts.authFromEnv,
     runtime: retainedRuntime?.runtime ?? runtimeRaw,
     runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
     runtimePath: retainedRuntime?.path,
@@ -225,11 +227,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     warn,
   });
 
+  if (!json && installPlan.installationMessage) {
+    defaultRuntime.log(installPlan.installationMessage);
+  }
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
     service,
     warnings,
-    emit,
+    emit: (payload) => emit({ ...payload, message: installPlan.installationMessage }),
     fail,
     install: async () => {
       await service.install({

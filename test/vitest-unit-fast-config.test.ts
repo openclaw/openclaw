@@ -105,7 +105,7 @@ describe("unit-fast vitest lane", () => {
             "src/hooks/frontmatter.test.ts",
             "src/media-generation/runtime-shared.test.ts",
             "src/routing/account-lookup.test.ts",
-          ].join("\\0") + "\\0";
+          ].map((file) => "H " + file).join("\\0") + "\\0";
           return {
             pid: 0,
             output: [null, stdout, ""],
@@ -451,14 +451,14 @@ describe("unit-fast vitest lane", () => {
             return spawn.call(this, command, args, options);
           }
           if (mode === "incomplete") {
-            return { status: 0, stdout: files[0] + "\\0",
+            return { status: 0, stdout: "H " + files[0] + "\\0",
               error: Object.assign(new Error("incomplete output"), { code: "ENOBUFS" }) };
           }
           if (mode === "unavailable") {
             return spawn(path.join(process.cwd(), "missing-git"), args, options);
           }
-          const script = "process.stdout.write(" + JSON.stringify("src/filler.ts\\0") +
-            ".repeat(90_000) + " + JSON.stringify(files.join("\\0") + "\\0") + ")";
+          const script = "process.stdout.write(" + JSON.stringify("H src/filler.ts\\0") +
+            ".repeat(90_000) + " + JSON.stringify(files.map((file) => "H " + file).join("\\0") + "\\0") + ")";
           return spawn(process.execPath, ["-e", script], options);
         };
         syncBuiltinESMExports();
@@ -554,6 +554,7 @@ describe("unit-fast vitest lane", () => {
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     for (const file of [
+      "src/acp/translator.error-kind.test.ts",
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
       "src/agents/code-mode-quickjs.integration.test.ts",
@@ -566,6 +567,10 @@ describe("unit-fast vitest lane", () => {
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
       expect(resolveUnitFastIsolatedTestIncludePattern(file), file).toBeNull();
     }
+    expect(
+      unitFastAnalysis.find((entry) => entry.file === "src/acp/translator.error-kind.test.ts")
+        ?.reasons,
+    ).toEqual(["database-worker-owner"]);
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/openai-transport-stream.base.test.ts")).toBe(false);
     expect(
@@ -638,7 +643,6 @@ describe("unit-fast vitest lane", () => {
     // Fixture files must genuinely import a stateful test helper; #121923
     // rewrote the outbound poll tests to be stateless, so they left this list.
     const files = [
-      "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",

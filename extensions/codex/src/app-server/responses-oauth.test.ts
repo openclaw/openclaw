@@ -8,13 +8,14 @@ import {
 const owner = vi.hoisted(() => ({
   credential: undefined as AuthProfileCredential | undefined,
   resolve: vi.fn(),
+  readCurrent: vi.fn<() => AuthProfileCredential | undefined>(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (original) => {
   const actual = await original<typeof import("openclaw/plugin-sdk/agent-runtime")>();
   return {
-    isPendingOAuthRefreshFence: actual.isPendingOAuthRefreshFence,
-    isSameOAuthRefreshGeneration: actual.isSameOAuthRefreshGeneration,
-    findPersistedAuthProfileCredential: () => owner.credential,
+    ...actual,
+    findPersistedAuthProfileCredential: owner.readCurrent,
+    findPersistedAuthProfileCredentialAsync: async () => owner.credential,
     resolveApiKeyForProfile: owner.resolve,
   };
 });
@@ -35,6 +36,7 @@ function credential(subject = "subject") {
 beforeEach(() => {
   owner.credential = credential();
   owner.resolve.mockReset();
+  owner.readCurrent.mockReset().mockImplementation(() => owner.credential);
 });
 async function create() {
   const store: AuthProfileStore = {
@@ -51,6 +53,7 @@ async function create() {
 
 it("refreshes through the selected persisted OAuth owner and retains only same-subject authority", async () => {
   const auth = await create();
+  expect(owner.readCurrent).not.toHaveBeenCalled();
   owner.resolve.mockImplementation(async (params) => {
     expect(params.forceRefresh).toBe(true);
     expect(params.allowProfileFallback).toBe(false);
@@ -58,7 +61,7 @@ it("refreshes through the selected persisted OAuth owner and retains only same-s
     const updated = { ...credential(), access: "rotated-access", refresh: "rotated-refresh" };
     params.validateOAuthCredential(updated);
     owner.credential = updated;
-    return { apiKey: updated.access, profileId, credential: updated };
+    return { apiKey: updated.access, profileId, credential: updated, readCurrentCredential: null };
   });
   const resolved = await auth.resolve(true);
   expect(resolved.token).toBe("rotated-access");
@@ -74,9 +77,15 @@ it.each(["deleted", "sharing-declined"])(
     owner.resolve.mockImplementation(async () => {
       owner.credential =
         change === "deleted" ? undefined : { ...credential(), authFlow: "chatgpt-identity" };
-      return { apiKey: "synthetic-access", profileId, credential: credential() };
+      return {
+        apiKey: "synthetic-access",
+        profileId,
+        credential: credential(),
+        readCurrentCredential: null,
+      };
     });
-    await expect(auth.resolve(false)).rejects.toThrow("subscription sharing is unavailable");
+    const prepared = await auth.resolve(false);
+    expect(() => prepared.assertCurrent()).toThrow("subscription sharing is unavailable");
   },
 );
 
@@ -101,19 +110,54 @@ function pendingFence() {
   };
 }
 
-it("joins the exact persisted refresh generation and accepts its pending marker at final I/O", async () => {
+it.each([false, true])(
+  "joins the exact refresh generation at final I/O (personal=%s)",
+  async (personal) => {
+    const auth = await create();
+    owner.credential = pendingFence();
+    owner.resolve.mockImplementation(async () => {
+      owner.credential = credential();
+      return {
+        apiKey: "synthetic-access",
+        profileId,
+        credential: credential(),
+        readCurrentCredential: personal ? () => owner.credential : null,
+      };
+    });
+    const resolved = await auth.resolve(false);
+    expect(owner.resolve).toHaveBeenCalledOnce();
+    owner.credential = pendingFence();
+    expect(() => resolved.assertCurrent()).not.toThrow();
+    owner.credential = {
+      ...pendingFence(),
+      refresh: pendingFence().refresh.replace(/9414/, "ffff"),
+    };
+    expect(() => resolved.assertCurrent()).toThrow();
+    if (personal) {
+      expect(owner.readCurrent).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("uses only the personal owner's retained capability after preparation", async () => {
   const auth = await create();
-  owner.credential = pendingFence();
-  owner.resolve.mockImplementation(async () => {
-    owner.credential = credential();
-    return { apiKey: "synthetic-access", profileId, credential: credential() };
+  let current = true;
+  owner.resolve.mockResolvedValue({
+    apiKey: "synthetic-access",
+    profileId,
+    credential: credential(),
+    readCurrentCredential: () => {
+      if (!current) {
+        throw new Error("revoked personal authority");
+      }
+      return credential();
+    },
   });
-  const resolved = await auth.resolve(false);
-  expect(owner.resolve).toHaveBeenCalledOnce();
-  owner.credential = pendingFence();
-  expect(() => resolved.assertCurrent()).not.toThrow();
-  owner.credential = { ...pendingFence(), refresh: pendingFence().refresh.replace(/9414/, "ffff") };
-  expect(() => resolved.assertCurrent()).toThrow();
+  const prepared = await auth.resolve(false);
+  prepared.assertCurrent();
+  current = false;
+  expect(() => prepared.assertCurrent()).toThrow("revoked personal authority");
+  expect(owner.readCurrent).not.toHaveBeenCalled();
 });
 
 it("materializes a pending cold-start snapshot from the existing refresh owner's result", async () => {

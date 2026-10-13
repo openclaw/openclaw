@@ -22,9 +22,10 @@ trap 'rm -rf "$temp_dir"' EXIT
 archive="$temp_dir/simslim.tar.gz"
 extract_dir="$temp_dir/extract"
 
+# This immutable GET can retry connection failures too; curl resets its output file.
 curl --fail --location --silent --show-error \
   --connect-timeout 10 --max-time 120 \
-  --retry 3 --retry-max-time 120 \
+  --retry 3 --retry-all-errors --retry-max-time 120 \
   --output "$archive" \
   "https://github.com/MobAI-App/simslim/releases/download/v$simslim_version/simslim-v$simslim_version-macos-arm64.tar.gz"
 archive_checksum="$(shasum -a 256 "$archive" | awk '{print $1}')"

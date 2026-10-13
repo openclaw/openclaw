@@ -10,8 +10,8 @@ export {
 } from "../infra/node-sqlite.js";
 
 export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
+export { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 export {
-  cosineSimilarity,
   decodeMemoryEmbedding,
   parseEmbedding,
 } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";

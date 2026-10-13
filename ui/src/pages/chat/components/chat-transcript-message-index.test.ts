@@ -324,7 +324,7 @@ describe("completed reply frame ownership", () => {
     },
   );
 
-  it("keeps resumed work with its final answer above the steer", () => {
+  it("keeps resumed work with its final answer after the steer", () => {
     const messages = replyHistory(["run-u", "run-1"]);
     const steer = {
       role: "user",
@@ -334,14 +334,16 @@ describe("completed reply frame ownership", () => {
     };
     messages.splice(2, 0, steer);
     const chain = project(messages);
-    const [frame] = frames(chain);
+    const [before, frame] = frames(chain);
     expect(chain.transcriptItems).toEqual([
       expect.objectContaining({ role: "user" }),
-      frame,
+      before,
       expect.objectContaining({ role: "user" }),
+      frame,
     ]);
+    expect(messagesIn([before!])).toEqual([messages[1]]);
     expect(frame?.runId).toBe("run-1");
-    expect(messagesIn([frame!])).toEqual([messages[1], ...messages.slice(3)]);
+    expect(messagesIn([frame!])).toEqual(messages.slice(3));
     expect(frame?.parts[0]?.kind).toBe("work-group");
     expect(frame?.outcome).toMatchObject({
       kind: "completed",

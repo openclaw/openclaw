@@ -4,40 +4,21 @@ import type { codexCatalogThreadStatus } from "./session-catalog-parsing.js";
 import { hasLiveCodexCatalogSource, type CodexCatalogSource } from "./session-catalog-source.js";
 
 export type CodexCatalogStatus = ReturnType<typeof codexCatalogThreadStatus>;
-type FieldEntry<T> = { revision: number; value?: T };
-
-/** Orders field observations independently from catalog row publication. */
+/** Bounded display observations; later publications replace earlier ones. */
 export class CodexCatalogField<T> {
-  private revision = 0;
-  private minimumCapture = 0;
-  private readonly entries = new Map<string, FieldEntry<T>>();
-
-  capture(): number {
-    return ++this.revision;
-  }
+  private readonly entries = new Map<string, T>();
 
   update(threadId: string, value: T): void {
-    this.put(threadId, { revision: ++this.revision, value });
-  }
-
-  observe(threadId: string, value: T, capturedRevision: number): boolean {
-    if (
-      capturedRevision < this.minimumCapture ||
-      (this.entries.get(threadId)?.revision ?? 0) > capturedRevision
-    ) {
-      return false;
-    }
-    this.put(threadId, { revision: capturedRevision, value });
-    return true;
+    this.put(threadId, value);
   }
 
   get(threadId: string): T | undefined {
-    return this.entries.get(threadId)?.value;
+    return this.entries.get(threadId);
   }
 
   some(predicate: (value: T) => boolean): boolean {
     for (const entry of this.entries.values()) {
-      if (entry.value !== undefined && predicate(entry.value)) {
+      if (predicate(entry)) {
         return true;
       }
     }
@@ -45,23 +26,22 @@ export class CodexCatalogField<T> {
   }
 
   delete(threadId: string): void {
-    this.put(threadId, { revision: ++this.revision });
+    this.entries.delete(threadId);
   }
 
   deleteWhere(predicate: (value: T) => boolean): void {
     for (const [threadId, entry] of this.entries) {
-      if (entry.value !== undefined && predicate(entry.value)) {
+      if (predicate(entry)) {
         this.delete(threadId);
       }
     }
   }
 
   invalidate(): void {
-    this.minimumCapture = ++this.revision;
     this.entries.clear();
   }
 
-  private put(threadId: string, entry: FieldEntry<T>): void {
+  private put(threadId: string, entry: T): void {
     const id = boundedCatalogString(threadId, MAX_SESSION_ID_LENGTH);
     if (!id) {
       return;
@@ -69,25 +49,16 @@ export class CodexCatalogField<T> {
     this.entries.delete(id);
     this.entries.set(id, entry);
     if (this.entries.size > CODEX_CATALOG_MAX_ROWS) {
-      const oldest = this.entries.entries().next().value;
-      if (oldest) {
-        // Evicting a field/tombstone must not admit a snapshot predating its mutation.
-        this.minimumCapture = Math.max(this.minimumCapture, oldest[1].revision);
-        this.entries.delete(oldest[0]);
-      }
+      this.entries.delete(this.entries.keys().next().value!);
     }
   }
 }
 
 export type CodexCatalogSourcedValue<T> = { value: T; sources: Set<CodexCatalogSource> };
 
-/** Live field values share revision fencing and source-lifetime invalidation. */
+/** Live field values retain source-lifetime invalidation. */
 export class CodexCatalogLiveField<T> {
   protected readonly values = new CodexCatalogField<CodexCatalogSourcedValue<T>>();
-
-  capture(): number {
-    return this.values.capture();
-  }
 
   get(threadId: string): T | undefined {
     const current = this.values.get(threadId);

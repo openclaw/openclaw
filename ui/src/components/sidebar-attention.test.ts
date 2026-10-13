@@ -556,18 +556,16 @@ describe("sidebar attention refresh ownership", () => {
   it.each(["success", "failure"] as const)(
     "keeps writer auth ownership after a stale Main %s settles",
     async (outcome) => {
-      const staleCron = deferred<unknown>();
+      const pendingCron = deferred<unknown>();
       const staleAuth = deferred<ModelAuthStatusResult>();
       const switchedAuth = deferred<ModelAuthStatusResult>();
       const responses = {
         "cron.list": [
           Promise.resolve(cronListResponse([cronJob("current")])),
-          staleCron.promise,
-          Promise.resolve(cronListResponse([cronJob("current")])),
+          pendingCron.promise,
           Promise.resolve(cronListResponse([cronJob("current")])),
         ],
         "cron.status": [
-          Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 }),
           Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 }),
           Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 }),
           Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 }),
@@ -676,9 +674,13 @@ describe("sidebar attention refresh ownership", () => {
       expect(element.querySelector('[data-attention-kind="updateAvailable"]')).not.toBeNull();
       expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull();
 
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(9));
+      await waitForFast(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "models.authStatus"),
+        ).toHaveLength(3),
+      );
       eventListener?.({ type: "event", event: "cron", payload: {} });
-      await waitForFast(() => expect(request).toHaveBeenCalledTimes(11));
+      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
       switchedAuth.resolve(authStatus(2));
       await waitForFast(() =>
         expect(
@@ -690,16 +692,16 @@ describe("sidebar attention refresh ownership", () => {
       const storedDismissals = localStorage.getItem(ATTENTION_KEY);
 
       now = 300_000;
-      staleCron.resolve(cronListResponse([cronJob("stale")]));
+      pendingCron.resolve(cronListResponse([cronJob("refreshed")]));
       if (outcome === "success") {
         staleAuth.resolve(authStatus(3, "ok"));
       } else {
         staleAuth.reject(new Error("stale Main auth"));
       }
-      await Promise.allSettled([staleCron.promise, staleAuth.promise, switchedAuth.promise]);
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, 0);
-      });
+      await Promise.allSettled([pendingCron.promise, staleAuth.promise, switchedAuth.promise]);
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3),
+      );
       await element.updateComplete;
 
       expect(

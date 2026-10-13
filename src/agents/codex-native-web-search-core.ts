@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCodexNativeWebSearchConfig } from "./codex-native-web-search.shared.js";
 import {
@@ -32,11 +32,11 @@ function hasCodexNativeWebSearchTool(tools: unknown): boolean {
 }
 
 /** Checks whether OpenAI/Codex auth is available for native web search. */
-export function hasAvailableCodexAuth(params: {
+export async function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
-}): boolean {
+}): Promise<boolean> {
   if (params.authStore) {
     return listProfilesForProvider(params.authStore, "openai").length > 0;
   }
@@ -53,7 +53,7 @@ export function hasAvailableCodexAuth(params: {
 
   if (params.agentDir) {
     try {
-      const store = ensureAuthProfileStore(params.agentDir, {
+      const store = await ensureAuthProfileStoreAsync(params.agentDir, {
         externalCli: externalCliDiscoveryForProviderAuth({
           cfg: params.config,
           provider: "openai",
@@ -85,10 +85,7 @@ export function resolveCodexNativeSearchActivation(
     params.webSearchEnabled !== false && params.config?.tools?.web?.search?.enabled !== false;
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
-  const hasRequiredAuth =
-    params.modelApi !== "openai-chatgpt-responses" ||
-    params.modelProvider !== "openai" ||
-    hasAvailableCodexAuth(params);
+  // The model request owns credential admission; search selection consumes its transport.
   const searchProvider = params.config?.tools?.web?.search?.provider?.trim().toLowerCase();
   const managedProviderSelected = Boolean(
     searchProvider && searchProvider !== "auto" && searchProvider !== "openai",
@@ -101,18 +98,15 @@ export function resolveCodexNativeSearchActivation(
         ? ("managed_provider_selected" as const)
         : !nativeEligible
           ? ("model_not_eligible" as const)
-          : !hasRequiredAuth
-            ? ("codex_auth_missing" as const)
-            : !isNativeWebSearchAllowedByToolPolicy(params)
-              ? ("tool_policy_denied" as const)
-              : undefined;
+          : !isNativeWebSearchAllowedByToolPolicy(params)
+            ? ("tool_policy_denied" as const)
+            : undefined;
 
   return {
     globalWebSearchEnabled,
     codexNativeEnabled: codexConfig.enabled,
     codexMode: codexConfig.mode,
     nativeEligible,
-    hasRequiredAuth,
     state: inactiveReason ? ("managed_only" as const) : ("native_active" as const),
     ...(inactiveReason ? { inactiveReason } : {}),
   };

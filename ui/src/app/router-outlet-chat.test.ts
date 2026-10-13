@@ -17,6 +17,7 @@ import {
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { pages as chatPages } from "../pages/chat/route.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import "./router-outlet.ts";
 
 // The fixture supplies its own page renderer; retain the registered route's ownership policy.
@@ -35,11 +36,12 @@ type TestModule = {
   renderOwnerKey?: (match: OwnerMatch, settled: OwnerMatch | undefined) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, ChatRouteData>;
-type RouterOutletElement = LitElement & {
-  router?: TestRouter;
-  retryContext?: TestContext;
-  retentionScope?: object;
-};
+type RouterOutletElement = LitElement &
+  ControlUiReadinessOutlet & {
+    router?: TestRouter;
+    retryContext?: TestContext;
+    retentionScope?: object;
+  };
 
 function location(pathname: string, search = ""): RouteLocation {
   return { pathname, search, hash: "" };
@@ -328,13 +330,22 @@ describe("openclaw-router-outlet chat ownership", () => {
     await settleOutlet(outlet);
     expect(appView.isConnected).toBe(true);
     expect(appView.closest("[inert]")).not.toBeNull();
+    expect(outlet.presentationSettled).toBe(false);
+    let settled = false;
+    const settlement = outlet.settlePresentation().then((value) => {
+      settled = value;
+      return value;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
 
     teardownDone.resolve(undefined);
-    await expect.poll(() => outlet.querySelector("mcp-app-view") !== appView).toBe(true);
+    expect(await settlement).toBe(true);
     await settleOutlet(outlet);
     expect(appView.isConnected).toBe(false);
     expect(outlet.querySelector("mcp-app-view")).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")?.closest("[inert]")).toBeNull();
+    expect(outlet.presentationSettled).toBe(true);
     router.stop();
   });
 

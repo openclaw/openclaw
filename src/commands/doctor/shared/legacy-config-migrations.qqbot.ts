@@ -437,7 +437,7 @@ export const LEGACY_CONFIG_MIGRATIONS_QQBOT: LegacyConfigMigrationSpec[] = [
         hasLegacyStreamingTransport,
       ),
       qqbotEntryRule(
-        'QQBot allowFrom IDs must migrate to Tencent QQBot 2.0 canonical uppercase OpenIDs. Run "openclaw doctor --fix".',
+        'QQBot allowFrom IDs must migrate to Tencent QQBot 2.0 uppercase OpenIDs. Run "openclaw doctor --fix".',
         (entry) => {
           const current = normalizeIds(entry.allowFrom);
           const normalized = normalizeLegacyAllowFrom(entry.allowFrom);

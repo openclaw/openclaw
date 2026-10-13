@@ -27,7 +27,7 @@ Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With 
 ```
 
 <Note>
-`sessions_history` is the safer cross-session recall path: it returns a bounded, redacted view, not a raw transcript dump. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
+`sessions_history` provides bounded cross-session recall without secret-masking the retained text. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
 </Note>
 
 <Warning>
@@ -355,7 +355,7 @@ Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to ident
 
 Set `channels.<channel>.defaultAccount` to choose the account used when `accountId` is omitted. When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
 
-Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
+Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
 
 ## Concepts
 

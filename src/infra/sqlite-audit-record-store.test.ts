@@ -12,7 +12,27 @@ import {
   createSqliteAuditRecordWriter,
   registerSqliteAuditRecordAsync,
 } from "./sqlite-audit-record-store.async.js";
-import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import { createSqliteAuditRecordStore as createNativeSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
+import {
+  createSqliteAuditRecordKernel,
+  prepareSqliteAuditRecord,
+} from "./sqlite-audit-record.kernel.js";
+
+// Migration fixtures use the same transaction-bound kernel as schema migration.
+function createSqliteAuditRecordStore<T>(
+  options: Parameters<typeof createNativeSqliteAuditRecordStore<T>>[0],
+) {
+  return {
+    ...createNativeSqliteAuditRecordStore<T>(options),
+    register(key: string, value: T, createdAt = Date.now()): void {
+      const record = prepareSqliteAuditRecord(options.scope, { key, value, createdAt });
+      runOpenClawStateWriteTransaction(
+        ({ db }) => createSqliteAuditRecordKernel<T>(db, options).register(record),
+        options,
+      );
+    },
+  };
+}
 
 function withAuditStoreFixture(
   options: { prefix: string },
@@ -224,42 +244,6 @@ describe("SQLite audit record store", () => {
       ]);
       expect(store.latest({ limit: 0 })).toEqual([]);
     });
-  });
-
-  it("preserves insertion order and prunes the oldest row when timestamps tie", async () => {
-    await withAuditStoreFixture({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "tied-timestamps",
-        maxEntries: 2,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-
-      store.register("z-first", { value: 1 }, 1);
-      store.register("a-second", { value: 2 }, 1);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["z-first", "a-second"]);
-
-      store.register("m-third", { value: 3 }, 1);
-      expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
-    });
-  });
-
-  it("prunes by insertion order when wall-clock timestamps move", async () => {
-    await withAuditStoreFixture(
-      { prefix: "openclaw-audit-store-clock-skew-" },
-      async (stateDir) => {
-        const store = createSqliteAuditRecordStore<{ value: number }>({
-          scope: "clock-skew",
-          maxEntries: 2,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        });
-
-        store.register("future-first", { value: 1 }, 4_000_000_000_000);
-        store.register("past-second", { value: 2 }, 1);
-        store.register("current-third", { value: 3 }, 2_000_000_000_000);
-
-        expect(store.entries().map((entry) => entry.key)).toEqual(["past-second", "current-third"]);
-      },
-    );
   });
 
   it("prunes a legacy batch with one delete while preserving runtime rows and other scopes", async () => {

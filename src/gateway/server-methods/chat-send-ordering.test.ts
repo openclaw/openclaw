@@ -124,9 +124,9 @@ it.for([false, true])(
     const firstPreparationEntered = createDeferred();
     const releaseFirstPreparation = createDeferred();
     const laterAdmissionEntered = createDeferred();
-    const seed = skillSelection.seedSkillLibrarySelection;
+    const seed = skillSelection.prepareSkillLibrarySession;
     const seedSpy = vi
-      .spyOn(skillSelection, "seedSkillLibrarySelection")
+      .spyOn(skillSelection, "prepareSkillLibrarySession")
       .mockImplementationOnce(async (...args) => {
         firstPreparationEntered.resolve();
         await releaseFirstPreparation.promise;

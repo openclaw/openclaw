@@ -60,7 +60,11 @@ import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent
 import { clearPendingFinalDeliveryAfterSuccess } from "./dispatch-from-config.pending-final.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function createCliBackendTestConfig() {
@@ -171,64 +175,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       { storePath: params.storePath, sessionKey: params.sessionKey },
       params.entry as unknown as SessionEntry,
     );
-  }
-
-  async function runEmptyDirectReply(
-    agentResult: Record<string, unknown>,
-    options?: {
-      agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
-      config?: OpenClawConfig;
-      onBlockReply?: (payload: unknown) => Promise<void> | void;
-      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
-    },
-  ) {
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    const resultMeta = requireRecord(agentResult.meta, "agent result meta");
-    const agentMeta = requireRecord(resultMeta.agentMeta, "agent result agent meta");
-    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
-      if (typeof onAgentEvent === "function") {
-        for (const event of options?.agentEvents ?? []) {
-          await onAgentEvent(event);
-        }
-      }
-      return {
-        payloads: [],
-        ...agentResult,
-        meta: {
-          ...resultMeta,
-          agentMeta: {
-            provider: "anthropic",
-            model: "claude",
-            ...agentMeta,
-          },
-          finalAssistantVisibleText: "",
-        },
-      };
-    });
-
-    return createBaseRun({
-      run: {
-        agentId: "main",
-        agentDir: path.join(rootDir, "agent"),
-        config: options?.config ?? {},
-        reasoningLevel: "on",
-      },
-      reply: {
-        opts: {
-          onBlockReply: options?.onBlockReply,
-          onAgentRunTerminalOutcome: options?.onAgentRunTerminalOutcome,
-        },
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
-      },
-    }).run();
   }
 
   async function runBaseReplyWithAgentMeta(params: {
@@ -356,11 +302,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 0,
       };
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: "session",
-        resetTriggered: false,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
       const requestBudget = {
         contextWindow: 32_768,
@@ -487,7 +429,7 @@ describe("runReplyAgent auto-compaction token update", () => {
             sessionStore: { [sessionKey]: sessionEntry },
             sessionKey,
             storePath,
-            replyOperation: operation,
+            opts: { onReplyOperationOwned },
           },
         });
         const result = await withPluginRuntimeGatewayRequestScope(
@@ -503,12 +445,21 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
           turn.run,
         );
+        const operation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
 
         expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
         expect(runtimeErrorMock).not.toHaveBeenCalled();
         expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         expectReplyText(result, "Two plus two is four.");
         expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        operation.completeWithAfterClearBarrier(delivery.promise, 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
+        // Foreground priority has cleared, but maintenance still waits for actual delivery.
         let maintenanceSettled = false;
         const maintenance = waitForSessionMaintenance(sessionKey).then(() => {
           maintenanceSettled = true;
@@ -516,10 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         await Promise.resolve();
         await Promise.resolve();
         expect(maintenanceSettled).toBe(false);
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        operation.completeWithAfterClearBarrier(delivery.promise, 1);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(["user"]);
         if (preempted) {
           releaseForeground = await beginForegroundSessionMaintenance(sessionKey);
         }
@@ -562,110 +509,13 @@ describe("runReplyAgent auto-compaction token update", () => {
       } finally {
         vi.useRealTimers();
         delivery.resolve();
-        operation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
         setLoggerOverride(null);
       }
     },
   );
-
-  it.each([
-    ["without side effects", { meta: { agentMeta: {} } }],
-    [
-      "with only a reply directive",
-      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
-    ],
-    ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }],
-    [
-      "after an intentional terminal tool batch",
-      { meta: { agentMeta: {}, intentionalTerminalCompletion: "tool-batch" } },
-    ],
-    [
-      "after a child spawn without a pending continuation",
-      {
-        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
-        meta: { agentMeta: {} },
-      },
-    ],
-  ] satisfies Array<[string, Record<string, unknown>]>)(
-    "surfaces missing required direct replies %s",
-    async (_label, agentResult) => {
-      const onAgentRunTerminalOutcome = vi.fn();
-      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
-      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
-      expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    },
-  );
-
-  it("threads the empty interactive direct fallback through normal final preparation", async () => {
-    const result = await runEmptyDirectReply(
-      { meta: { agentMeta: {} } },
-      { config: { channels: { whatsapp: { replyToMode: "first" } } } },
-    );
-
-    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(payload.replyToId).toBe("msg");
-  });
-
-  it.each([
-    ["reasoning", { text: "internal reasoning", isReasoning: true }],
-    ["commentary", { text: "internal commentary", isCommentary: true }],
-  ])("surfaces a fallback for disabled %s-only direct output", async (_label, payload) => {
-    const onBlockReply = vi.fn();
-    const result = await runEmptyDirectReply(
-      {
-        payloads: [payload],
-        meta: { agentMeta: {} },
-      },
-      { onBlockReply },
-    );
-
-    const fallback = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(fallback.text).toContain("did not produce a visible reply");
-    expect(onBlockReply).not.toHaveBeenCalled();
-  });
-
-  it("surfaces terminal direct failures after runtime compaction progress", async () => {
-    const onBlockReply = vi.fn();
-    const result = await runEmptyDirectReply(
-      {
-        meta: {
-          agentMeta: {},
-          error: { kind: "tool_result_mismatch", message: "terminal failure after notice" },
-        },
-      },
-      {
-        agentEvents: [
-          { stream: "compaction", data: { phase: "start" } },
-          { stream: "compaction", data: { phase: "end", completed: true } },
-        ],
-        config: {
-          agents: { defaults: { compaction: { notifyUser: true } } },
-        },
-        onBlockReply,
-      },
-    );
-
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expectRecordFields(result, { isError: true }, "terminal failure");
-  });
-
-  it("surfaces empty direct replies when runtime compaction notice delivery fails", async () => {
-    const result = await runEmptyDirectReply(
-      { meta: { agentMeta: {} } },
-      {
-        agentEvents: [{ stream: "compaction", data: { phase: "start" } }],
-        config: {
-          agents: { defaults: { compaction: { notifyUser: true } } },
-        },
-        onBlockReply: vi.fn().mockRejectedValue(new Error("delivery failed")),
-      },
-    );
-
-    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
-    expect(payload.text).toContain("did not produce a visible reply");
-  });
 
   it("loads post-compaction context before starting a queued followup drain", async () => {
     const workspaceDir = tempDirs.make("openclaw-post-compaction-queued-followup-");
@@ -789,12 +639,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         totalTokens: 50_000,
       };
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-      const replyOperation = createReplyOperation({
-        sessionKey,
-        sessionId: sessionEntry.sessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: upstreamAbort.signal,
-      });
+      const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       let releaseFallback: () => void = () => undefined;
       let markCandidateSettled: () => void = () => undefined;
       const candidateSettled = new Promise<void>((resolve) => {
@@ -846,13 +691,17 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionStore: { [sessionKey]: sessionEntry },
           sessionKey,
           storePath,
-          replyOperation,
+          opts: { abortSignal: upstreamAbort.signal, onReplyOperationOwned },
         },
       });
 
       try {
         const pending = baseRun.run();
         await candidateSettled;
+        const replyOperation = expectDefined(
+          onReplyOperationOwned.mock.calls[0]?.[0],
+          "admitted reply operation",
+        );
         if (superseded) {
           replyOperation.supersede();
         } else {
@@ -874,7 +723,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         expect(peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"))).toEqual([]);
       } finally {
         releaseFallback();
-        replyOperation.complete();
+        onReplyOperationOwned.mock.calls[0]?.[0].complete();
       }
     },
   );

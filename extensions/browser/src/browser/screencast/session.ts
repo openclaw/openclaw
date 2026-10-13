@@ -341,10 +341,7 @@ export function attachBrowserScreencastViewer(
   };
   let session = sessions.get(key);
   let previousDrain: Promise<void> | undefined;
-  if (
-    session &&
-    (session.closed || session.params.lifecycleGeneration !== params.lifecycleGeneration)
-  ) {
+  if (session && (session.closed || session.params.profileSignal !== params.profileSignal)) {
     previousDrain = session.close(4004, "target_closed");
     session = undefined;
   }

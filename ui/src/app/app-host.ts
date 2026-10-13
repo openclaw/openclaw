@@ -8,9 +8,9 @@ import {
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar.ts";
 import "../components/assistant-panel.ts";
-import "../components/modal-dialog.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";
+import type { AppSidebarBase } from "../components/app-sidebar-base.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
@@ -53,6 +53,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   APP_SIDEBAR_ELEMENT,
@@ -96,6 +97,7 @@ class OpenClawShell
   implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
+  readiness: ControlUiReadiness | undefined;
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;
@@ -134,7 +136,10 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement = document.createElement(APP_SIDEBAR_ELEMENT.tagName);
+  readonly navigationSidebar: HTMLElement &
+    Partial<Pick<AppSidebarBase, "navigationVisible" | "updateComplete">> = document.createElement(
+    APP_SIDEBAR_ELEMENT.tagName,
+  );
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
@@ -161,6 +166,11 @@ class OpenClawShell
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = new LazyRenderer(this, () =>
     import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
+  );
+  readonly debugOverlayFrame = new LazyRenderer(this, () =>
+    import("../pages/debug/debug-overlay-frame.ts").then(
+      (module) => module.renderPendingDebugOverlay,
+    ),
   );
   private readonly sidebarUpdateCardImport = createIdleImport(
     () => import("../components/sidebar-update-card.ts"),
@@ -328,7 +338,7 @@ class OpenClawShell
         () => this.context?.runtimeConfig,
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
-            this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
+            void this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
             notify();
           }),
         (runtimeConfig) => {
@@ -336,7 +346,7 @@ class OpenClawShell
           if (snapshot) {
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
-          this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
+          void this.shellGateway.reconcileServerUiPrefs(runtimeConfig);
         },
       );
   }
@@ -359,12 +369,13 @@ class OpenClawShell
       if (prefs && runtimeConfig) {
         pushServerUiPrefs(runtimeConfig, prefs, {
           profile: this.context?.gateway.snapshot,
-          afterCommit: ({ needsRefresh, retainedLocal }) =>
-            this.shellGateway.reconcileCommittedServerUiPrefs(
+          afterCommit: ({ needsRefresh, retainedLocal }) => {
+            void this.shellGateway.reconcileCommittedServerUiPrefs(
               runtimeConfig,
               needsRefresh,
               retainedLocal,
-            ),
+            );
+          },
         });
       }
     });
@@ -596,6 +607,10 @@ class OpenClawShell
     if (document.title !== title) {
       document.title = title;
     }
+  }
+
+  protected override willUpdate(): void {
+    this.readiness?.invalidate();
   }
 
   override updated(changed: PropertyValues<this>) {

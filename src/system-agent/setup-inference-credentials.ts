@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { applyMergePatch } from "../config/merge-patch.js";
@@ -26,7 +26,7 @@ import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
-  choiceMatchesCredential,
+  findSetupCredentialChoice,
   supportsSetupManualSecret,
   supportsSetupTextInference,
 } from "./setup-inference-auth-options.js";
@@ -71,12 +71,12 @@ export function selectSetupCredential(
   );
 }
 
-export function isSetupCredentialReplacement(params: {
+export async function isSetupCredentialReplacement(params: {
   provider: string;
   baseConfig: OpenClawConfig;
   agentDir: string;
-}): boolean {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+}): Promise<boolean> {
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const provider = resolveProviderIdForAuth(params.provider, {
     config: params.baseConfig,
     storedCredential: true,
@@ -113,7 +113,7 @@ export async function saveSetupCredential(params: {
   /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
   persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
 }): Promise<{ profile: ProviderAuthResult["profiles"][number]; config: OpenClawConfig }> {
-  const replacement = isSetupCredentialReplacement({
+  const replacement = await isSetupCredentialReplacement({
     ...params,
     provider: params.profile.credential.provider,
   });
@@ -165,9 +165,8 @@ export async function saveSetupCredential(params: {
   await params.beforePersistentEffect?.();
   if (params.persistAuthProfiles) {
     await params.persistAuthProfiles([candidate]);
-    const credential = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir).profiles[
-      candidate.profileId
-    ];
+    const credential = (await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir))
+      .profiles[candidate.profileId];
     if (!credential) {
       throw new Error(
         "The saved setup credential could not be read. Check Model Setup before retrying.",
@@ -244,7 +243,7 @@ async function stagePreparedCandidate(
         return ctx.beforePersistentEffect("credential");
       },
     });
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     profile = saved.profile;
     preparedConfig = saved.config;
   }
@@ -281,7 +280,7 @@ export async function stageSavedAuthCandidate(
   ctx: StageContext,
   profileId: string,
 ): Promise<StagedCandidate | StageFailure> {
-  const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
     return {
@@ -297,11 +296,7 @@ export async function stageSavedAuthCandidate(
     includeUntrustedWorkspacePlugins: false,
     includeWorkspacePlugins: false,
   });
-  const choice = saved?.authChoice
-    ? choices.find(
-        (entry) => entry.choiceId === saved.authChoice && entry.pluginId === saved.pluginId,
-      )
-    : choices.find((entry) => choiceMatchesCredential(entry, credential));
+  const choice = findSetupCredentialChoice(choices, credential);
   if (saved?.authChoice && !choice) {
     return {
       error: "The saved sign-in's provider is no longer available. Review installed providers.",
@@ -343,7 +338,7 @@ export async function stageSavedAuthCandidate(
         (providerConfig.headers ??= {})["api-key"] = key;
       }
     }
-    ctx.credentialsSaved = true;
+    ctx.effects.credentialsSaved = true;
     return await stagePreparedCandidate(ctx, {
       result: { profiles: [{ profileId, credential }], defaultModel: modelRef },
       config,
@@ -573,7 +568,7 @@ export async function stageProviderAuthCandidate(
         }
         throwIfSetupInferenceCancelled(params);
         const store = interactive
-          ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir)
+          ? await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)
           : undefined;
         let result = await waitForProviderAuth(
           runProviderPluginAuthMethodUnpersisted({

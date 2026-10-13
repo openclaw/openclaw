@@ -22,6 +22,16 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import {
+  readSessionActorTranscriptReplica,
+  retainSessionActorTranscriptReplica,
+} from "./session-actor-replica.js";
+import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
+import {
+  readSessionActorTranscriptContext,
+  seedSessionActorTranscriptContext,
+} from "./session-actor-transcript-replica.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
@@ -35,6 +45,7 @@ import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydr
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import {
   resolveSessionTranscriptReadFence,
+  resolveSqliteSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
@@ -53,6 +64,10 @@ import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
+import {
+  readOwnedSessionTranscriptEntry,
+  readOwnedSessionTranscriptState,
+} from "./transcript-write-context.js";
 
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
@@ -141,6 +156,71 @@ export function prepareSessionTranscriptHydration(
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
+  const memory = captureSessionActorTranscriptRead(source, signal);
+  if (memory) {
+    const version = () => ({ generation: null, rawSeq: null, updatedAt: null });
+    return {
+      target: memory.target,
+      assertCurrent: memory.assertCurrent,
+      read: async () => {
+        if (!memory.missing) {
+          return memory.read("session.history.hydrate", { limits });
+        }
+        memory.assertCurrent();
+        return limits
+          ? {
+              kind: "bounded",
+              snapshot: {
+                activeLeafEntryId: null,
+                version: version(),
+                events: [],
+                opaqueParents: new Map(),
+                parents: new Map(),
+                firstKeptRanges: new Map(),
+                persistedSuffixStartSeq: 0,
+                boundaryCount: 0,
+                serializedBytes: 0,
+                totalEvents: 0,
+                transcriptMutationAt: null,
+                truncated: false,
+                completeActivePath: true,
+              },
+            }
+          : {
+              kind: "full",
+              snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
+            };
+      },
+      readCurrentTurnEntry: async (request) => {
+        if (!memory.missing) {
+          return memory.read("session.history.current-turn-entry", request);
+        }
+        memory.assertCurrent();
+        return { kind: "current-turn-entry", version: version() };
+      },
+      readMaintenance: async (request) => {
+        if (!memory.missing) {
+          return memory.read("session.history.maintenance", { request });
+        }
+        memory.assertCurrent();
+        return { kind: "transcript-maintenance" };
+      },
+      readRecentActiveEvents: async (maxEvents) => {
+        if (!memory.missing) {
+          return memory.read("session.history.recent-active-events", { maxEvents });
+        }
+        memory.assertCurrent();
+        return [];
+      },
+      readLatestActiveMessage: async () => {
+        if (!memory.missing) {
+          return memory.read("session.history.latest-active-message", {});
+        }
+        memory.assertCurrent();
+        return undefined;
+      },
+    };
+  }
   const incognito = captureIncognitoSessionHistoryBinding(source);
   if (incognito) {
     return prepareIncognitoSessionTranscriptHydration({ ...incognito, limits, signal });
@@ -223,8 +303,67 @@ export function prepareSessionTranscriptHydration(
       assertAgentDatabaseTerminalOpenAllowed(databasePath);
     }
   };
-  const read = (): Promise<PreparedSessionTranscriptHydration> =>
-    readInOwner<PreparedSessionTranscriptHydration>(
+  const retainedRead = (selection?: NonNullable<SessionEntryCohortRequest["transcript"]>) => {
+    if (!contextLimits) {
+      return undefined;
+    }
+    const hot = readOwnedSessionTranscriptState(target);
+    if (!hot) {
+      return undefined;
+    }
+    const retained = readSessionActorTranscriptReplica(hot);
+    const prepared = readSessionActorTranscriptContext(retained, hot, contextLimits, admission);
+    if (!prepared) {
+      return undefined;
+    }
+    runWithSessionTranscriptReadFence(admission, () =>
+      resolveSqliteSessionTranscriptReadFence({
+        database: { path: target.storePath },
+        ...target,
+      }),
+    );
+    if (selection) {
+      const transcript = readSessionActorTranscriptAnchors(
+        hot,
+        { agentId: target.agentId, path: target.storePath, sessionId: target.sessionId },
+        selection,
+        retained?.tail,
+      );
+      if (!transcript) {
+        return undefined;
+      }
+      prepared.transcript = transcript;
+    } else {
+      delete prepared.transcript;
+    }
+    return prepared;
+  };
+  const retainRead = (prepared: PreparedSessionTranscriptHydration) => {
+    if (prepared.kind !== "bounded" || !contextLimits) {
+      return;
+    }
+    const hot = readOwnedSessionTranscriptState(target);
+    if (!hot) {
+      return;
+    }
+    const retained = seedSessionActorTranscriptContext(
+      readSessionActorTranscriptReplica(hot),
+      hot,
+      prepared,
+      contextLimits,
+      admission,
+    );
+    if (retained) {
+      retainSessionActorTranscriptReplica(hot, retained);
+    }
+  };
+  const read = async (): Promise<PreparedSessionTranscriptHydration> => {
+    signal?.throwIfAborted();
+    const retained = retainedRead();
+    if (retained) {
+      return retained;
+    }
+    const prepared = await readInOwner<PreparedSessionTranscriptHydration>(
       () =>
         contextLimits
           ? {
@@ -238,6 +377,9 @@ export function prepareSessionTranscriptHydration(
       (owner, resolvedScope) =>
         owner.readTranscript({ target, resolvedScope, limits: contextLimits, admission }, signal),
     );
+    retainRead(prepared);
+    return prepared;
+  };
   const readCohort: SessionTranscriptHydrationReader["readCohort"] =
     contextLimits && !incognitoOptions
       ? (selection, consume) => {
@@ -265,28 +407,30 @@ export function prepareSessionTranscriptHydration(
                     async (_identity, assertOwner) => {
                       assertSource();
                       const assertNative = captureSessionEntryNativeMutationWitness([database]);
-                      const prepared = await owner.readTranscript(
-                        {
-                          target: scope,
-                          resolvedScope: resolved,
-                          expectedIdentity,
-                          limits: contextLimits,
-                          admission,
-                          transcript: capturedSelection,
-                        },
-                        signal,
-                      );
+                      const prepared =
+                        retainedRead(capturedSelection) ??
+                        (await owner.readTranscript(
+                          {
+                            target: scope,
+                            resolvedScope: resolved,
+                            expectedIdentity,
+                            limits: contextLimits,
+                            admission,
+                            transcript: capturedSelection,
+                            preparedEntry: readOwnedSessionTranscriptEntry(target),
+                          },
+                          signal,
+                        ));
                       signal?.throwIfAborted();
                       assertOwner();
                       assertSource();
                       assertNative();
+                      retainRead(prepared);
                       const consumed = consume(prepared);
                       if (isPromiseLike(consumed)) {
                         void Promise.resolve(consumed).catch(() => {});
                         throw new Error("Transcript cohort consumers must remain synchronous");
                       }
-                      assertSource();
-                      assertNative();
                     },
                     true,
                     undefined,

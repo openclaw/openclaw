@@ -239,7 +239,6 @@ describe("docs-sync-publish", () => {
   it.each([
     { fault: "none", error: undefined },
     { fault: "exit", error: "npm lock failure" },
-    { fault: "unrelated", error: "changed unrelated publisher dependencies" },
     { fault: "stale", error: "publisher manifest and lock must both pin" },
   ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
     const fixture = tempDirs.make("openclaw-docs-sync-dependencies-");

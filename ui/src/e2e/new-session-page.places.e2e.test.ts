@@ -211,20 +211,17 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Incognito is a page-level choice on the far end of the shell-control
-      // centerline, rather than an option inside the composer.
+      // Incognito stays at the page's top-right, independent of rail navigation.
       const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
       const incognitoBox = await incognitoToggle.boundingBox();
-      const commandPaletteBox = await page
-        .getByRole("button", { name: "Open command palette" })
-        .boundingBox();
+      const pageBox = await page.locator(".new-session-page").boundingBox();
       expect(incognitoBox).not.toBeNull();
-      expect(commandPaletteBox).not.toBeNull();
-      const incognitoCenterY = (incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0) / 2;
-      const commandPaletteCenterY =
-        (commandPaletteBox?.y ?? 0) + (commandPaletteBox?.height ?? 0) / 2;
-      expect(Math.abs(Math.round(incognitoCenterY - commandPaletteCenterY))).toBeLessThanOrEqual(2);
-      expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
+      expect(pageBox).not.toBeNull();
+      expect(incognitoBox?.x ?? 0).toBeGreaterThan((pageBox?.x ?? 0) + (pageBox?.width ?? 0) / 2);
+      expect((incognitoBox?.x ?? 0) + (incognitoBox?.width ?? 0)).toBeLessThanOrEqual(
+        (pageBox?.x ?? 0) + (pageBox?.width ?? 0),
+      );
+      expect(incognitoBox?.y ?? 0).toBeGreaterThanOrEqual(pageBox?.y ?? 0);
       expect(
         await page
           .locator(".new-session-page__composer")
@@ -270,6 +267,9 @@ suite.define(() => {
       expect(footerBox).not.toBeNull();
       expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
+      expect((incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0)).toBeLessThanOrEqual(
+        composerBox?.y ?? 0,
+      );
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
       );

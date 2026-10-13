@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveExecutablePath } from "./executable-path.js";
+import type { ImmutableRecoveryRuntimeReference } from "./package-update-activation-immutable-recovery-schema.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackageActivationRecord } from "./package-update-activation-schema.js";
+import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
 const PACKAGE_ACTIVATION_PREFIX = ".openclaw.package-activation-";
+// Published openclaw@2026.9.8 recovery helper; newer writers keep full verification.
+export const LEGACY_PACKAGE_RECOVERY_HELPER =
+  "e08dfc1fb3ba7962f9e01d7a6770117c6cd77406b3fa4f7ba94788a670030ba0";
 
 export function packageActivationRuntimeIdentity(file: string): string {
   const stat = fs.lstatSync(file, { bigint: true });
@@ -31,15 +37,6 @@ export function capturePackageActivationRuntime(
 export function resolvePackageActivationAnchor(installKey: string): string {
   const key = createHash("sha256").update(installKey).digest("hex").slice(0, 24);
   return path.join(path.dirname(installKey), `${PACKAGE_ACTIVATION_PREFIX}${key}`);
-}
-
-export function isPackageActivationArtifactName(name: string): boolean {
-  return (
-    name.startsWith(PACKAGE_ACTIVATION_PREFIX) &&
-    /^[a-f0-9]{24}(?:\.control|\.superseded-[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?$/u.test(
-      name.slice(PACKAGE_ACTIVATION_PREFIX.length),
-    )
-  );
 }
 
 export function resolvePackageActivationControl(anchor: string): string {
@@ -101,7 +98,7 @@ export function privatePackageActivationIdentity(
       .slice(0, 64);
     const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
     throw new Error(
-      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.`,
+      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.${!directory && stat.nlink !== 1 ? " Run openclaw doctor --fix." : ""}`,
     );
   }
   return value;
@@ -148,4 +145,11 @@ export function isPackageActivationComplete(
   // A helper left by an interrupted unlink or a later replacement is cleanup,
   // not permission to restore an earlier generation or block a new update.
   return true;
+}
+
+export function resolveImmutableRecoveryCommand(
+  reference: ImmutableRecoveryRuntimeReference,
+  descriptor: ImmutableInstallDescriptor,
+): string {
+  return `${quoteCliArg(descriptor.runtime.path)} ${quoteCliArg(reference.helperPath)}`;
 }

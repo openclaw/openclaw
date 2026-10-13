@@ -3,15 +3,16 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -85,6 +86,7 @@ it.each(["rpc", "message-by-id"] as const)(
   "restores %s history without reading cold metadata on the caller",
   async (transport) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const fixture = await createSessionColdStorageFixture(state.statePath("cold-history.sqlite"));
       expect(
         await runSessionColdStorageMaintenance({
@@ -125,6 +127,7 @@ it.each(["rpc", "message-by-id"] as const)(
 
 it("appends hot transcript events without reading cold metadata on the caller", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const fixture = await createSessionColdStorageFixture(state.statePath("hot-write.sqlite"));
     const target = { ...fixture.scope, sessionId: currentId };
     await waitForSessionTranscriptProjection(target);
@@ -155,6 +158,7 @@ it("appends hot transcript events without reading cold metadata on the caller", 
 it("validates worker admission for normalized logical inputs in a shared store", async () => {
   const input = { agentId: "Other", sessionKey: "Agent:Other:Fenced-History" };
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       env: state.env,
@@ -242,6 +246,7 @@ it("validates worker admission for normalized logical inputs in a shared store",
 
 it("reads a sparse page in the transcript worker", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "worker-sparse-history",
@@ -307,6 +312,7 @@ it("reads a sparse page in the transcript worker", async () => {
 
 it("waits for a missing projection and serves the original history request", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "worker-history-rebuild",
@@ -339,6 +345,7 @@ it("waits for a missing projection and serves the original history request", asy
 
 it("reads a new branch and reset interval after earlier worker pages settle", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "worker-history-branch",
@@ -396,6 +403,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
 
 it("reduces full transcript recovery, usage, and MCP facts without caller-thread SQLite scans", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "worker-summary",

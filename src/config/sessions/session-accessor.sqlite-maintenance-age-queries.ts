@@ -13,21 +13,14 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
     );
   const projection = db
     .selectFrom("session_nodes")
-    .select(["session_key", "updated_at", "archived_at", "last_activity_at", "last_interaction_at"])
-    .select((eb) =>
-      eb
-        .case()
-        .when(eb.fn<number>("json_valid", ["entry_json"]), "=", 1)
-        .then(
-          eb.cast<number>(
-            eb.fn("json_extract", [eb.ref("entry_json"), eb.val("$.sessionStartedAt")]),
-            "integer",
-          ),
-        )
-        .else(null)
-        .end()
-        .as("session_started_at"),
-    );
+    .select([
+      "session_key",
+      "updated_at",
+      "archived_at",
+      "last_activity_at",
+      "last_interaction_at",
+      "session_started_at",
+    ]);
   const ordered = db
     .selectFrom(
       projection

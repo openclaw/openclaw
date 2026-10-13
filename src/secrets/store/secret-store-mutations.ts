@@ -176,3 +176,24 @@ export async function writeSecretStoreEntryForConfigRef(params: {
   );
   return name;
 }
+
+export async function updateSecretStoreAllowedHosts(
+  params: Pick<
+    SecretStoreWriteParams,
+    "scope" | "name" | "database" | "assertCurrent" | "updatedBy"
+  > & {
+    allowedHosts: readonly string[];
+  },
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { database: _database, assertCurrent, ...input } = params;
+  await runOpenClawStateWorkerOperation(
+    context,
+    (owner) =>
+      owner.execute({
+        type: "secrets.allowedHosts",
+        input: { ...structuredClone(input), now: Date.now() },
+      }),
+    admission(context, assertCurrent),
+  );
+}

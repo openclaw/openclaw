@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -11,6 +13,7 @@ import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
 } from "./runtime-state.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
@@ -52,6 +55,70 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("retains resolved credentials for UI edits but re-resolves explicit and changed-input refreshes", async () => {
+    const secretFile = path.join(tempDirs.make("openclaw-ui-secret-"), "secrets.json");
+    await fs.writeFile(secretFile, JSON.stringify({ apiKey: "prepared-value" }), { mode: 0o600 });
+    const config = asConfig({
+      ...explicitMainRoster(),
+      ui: { prefs: { chatShowToolCalls: false } },
+      secrets: { providers: { fixture: { source: "file", path: secretFile, mode: "json" } } },
+      models: {
+        providers: {
+          example: {
+            baseUrl: "https://example.invalid/v1",
+            apiKey: { source: "file", provider: "fixture", id: "/apiKey" },
+            models: [],
+          },
+        },
+      },
+    });
+    const env = {};
+    const initial = await prepareSecretsRuntimeSnapshot({
+      config,
+      env,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+    activateSecretsRuntimeSnapshot(initial);
+    await fs.writeFile(secretFile, JSON.stringify({ apiKey: "refreshed-value" }));
+    const displayConfig = {
+      ...config,
+      meta: { lastTouchedVersion: "2026.10.11" },
+      ui: { prefs: { chatShowToolCalls: true } },
+    };
+    const displayed = await prepareSecretsRuntimeSnapshot({
+      config: displayConfig,
+      env,
+      includeAuthStoreRefs: false,
+    });
+    expect(displayed.config.models?.providers?.example?.apiKey).toBe("prepared-value");
+    expect(displayed.config.ui?.prefs?.chatShowToolCalls).toBe(true);
+    expect(displayed.sourceConfig).toEqual(displayConfig);
+    expect(displayed.secretOwners).toEqual(initial.secretOwners);
+    const refresh = getRuntimeConfigSnapshotRefreshHandler();
+    await expect(refresh?.refresh({ sourceConfig: displayConfig })).resolves.toBe(true);
+
+    const changedFacts = structuredClone(displayConfig);
+    changedFacts.ui.prefs.chatShowToolCalls = false;
+    setConfigResolutionFacts(changedFacts, new Set());
+    for (const params of [
+      { config: displayConfig, env },
+      { config: { ...displayConfig, ui: config.ui }, env: { DISPLAY_REFRESH: "changed" } },
+      { config: changedFacts, env },
+      {
+        config: { ...displayConfig, ui: config.ui },
+        env,
+        forceColdRefKeys: new Set(["file:fixture:/apiKey"]),
+      },
+    ]) {
+      const refreshed = await prepareSecretsRuntimeSnapshot({
+        ...params,
+        includeAuthStoreRefs: false,
+      });
+      expect(refreshed.config.models?.providers?.example?.apiKey).toBe("refreshed-value");
+    }
+  });
+
   it("refreshes healthy owners while an unchanged failed owner keeps last-known-good", async () => {
     const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
     const config = (firstId: string) =>

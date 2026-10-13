@@ -17,7 +17,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: mocks.getRuntimeConfig };
+  return {
+    ...actual,
+    getRuntimeConfig: mocks.getRuntimeConfig,
+    loadConfig: mocks.getRuntimeConfig,
+    captureRuntimeConfigAsyncReader:
+      (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+      async () =>
+        mocks.getRuntimeConfig(...args),
+  };
 });
 
 vi.mock("../snapshot/git-backup.js", () => ({
@@ -28,8 +36,9 @@ vi.mock("../snapshot/git-backup.js", () => ({
   verifyGitBackupRef: mocks.verifyGitBackupRef,
 }));
 
-vi.mock("../state/backup-run-records.js", () => ({
-  recordBackupRunOutcome: mocks.recordBackupRunOutcome,
+// mock-isolation: Git backup settlement uses a controlled outcome; routing has real-ledger coverage.
+vi.mock("./backup-outcome.js", () => ({
+  recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
 }));
 
 import {
