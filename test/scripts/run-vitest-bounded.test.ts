@@ -369,7 +369,7 @@ syncBuiltinESMExports();
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.status, result.stderr).toBe(2);
       expect(result.stderr).toContain("fixture runtime identity inspected");
       expect(result.stderr).not.toContain("fixture reader or UI build admitted");
     },

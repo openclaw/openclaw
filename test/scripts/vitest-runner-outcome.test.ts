@@ -21,7 +21,8 @@ vi.mock("../../scripts/lib/vitest-runtime-selection.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/vitest-runtime-selection.mts")>()),
   shouldPrepareVitestCoreWorkers: () => true,
 }));
-vi.mock("../../scripts/lib/vitest-worker-run.mts", () => ({
+vi.mock("../../scripts/lib/vitest-worker-run.mts", async (original) => ({
+  ...(await original<typeof import("../../scripts/lib/vitest-worker-run.mts")>()),
   createVitestWorkerRun: () => ({
     descriptor: { directory: "/fixture/workers" },
     prepare: lifecycle.prepareWorkers,

@@ -609,7 +609,7 @@ describe("packed CI config continuation", () => {
     if (scenario.signaled) {
       expect(exit).toHaveBeenCalledWith("SIGTERM");
     } else if (!scenario.rejected) {
-      expect(process.exitCode).toBe(1);
+      expect(process.exitCode).toBe(scenario.code === null || scenario.timeout ? 2 : 1);
     }
   });
 });
@@ -1331,7 +1331,7 @@ describe("test-projects build admission", () => {
         ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
         ["scripts/ui.js", "build"],
       ]);
-      expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
+      expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 2);
       if (outcome === "still stale") {
         expect(await terminal.promise).toMatchObject({
           message: "Control UI setup left stale assets for runtime fixture-runtime",
