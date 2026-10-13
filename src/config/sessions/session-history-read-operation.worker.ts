@@ -7,32 +7,34 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
+const historyReadKinds = [
+  "trajectory-events",
+  "trajectory-retention",
+  "board-snapshot",
+  "board-widget-document",
+  "transcript-match",
+  "branch-summaries",
+  "session-title-fields",
+  "session-preview",
+  "model-context",
+  "context-messages",
+  "transcript-watermark",
+  "transcript-stats",
+  "transcript-message-presence",
+  "transcript-anchors",
+  "transcript-raw-delta",
+  "transcript-visible-delta",
+  "transcript-latest-assistant",
+  "session-memory-capture",
+  "session-pending-input-receipts",
+  "session-pending-input-source",
+  "session-harness-completion-source",
+] as const;
+const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
+
 type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
-  {
-    kind:
-      | "trajectory-events"
-      | "trajectory-retention"
-      | "board-snapshot"
-      | "board-widget-document"
-      | "transcript-match"
-      | "branch-summaries"
-      | "session-title-fields"
-      | "session-preview"
-      | "model-context"
-      | "context-messages"
-      | "transcript-watermark"
-      | "transcript-stats"
-      | "transcript-message-presence"
-      | "transcript-anchors"
-      | "transcript-raw-delta"
-      | "transcript-visible-delta"
-      | "transcript-latest-assistant"
-      | "session-memory-capture"
-      | "session-pending-input-receipts"
-      | "session-pending-input-source"
-      | "session-harness-completion-source";
-  }
+  { kind: (typeof historyReadKinds)[number] }
 >;
 
 type BranchReadRequest = Extract<DurableHistoryReadOperationRequest, { kind: "branch-summaries" }>;
@@ -49,32 +51,7 @@ export type SessionHistoryReadOperationRequest =
 export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
-  switch (request.kind) {
-    case "trajectory-events":
-    case "trajectory-retention":
-    case "board-snapshot":
-    case "board-widget-document":
-    case "transcript-match":
-    case "branch-summaries":
-    case "session-title-fields":
-    case "session-preview":
-    case "model-context":
-    case "context-messages":
-    case "transcript-watermark":
-    case "transcript-stats":
-    case "transcript-message-presence":
-    case "transcript-anchors":
-    case "transcript-raw-delta":
-    case "transcript-visible-delta":
-    case "transcript-latest-assistant":
-    case "session-memory-capture":
-    case "session-pending-input-receipts":
-    case "session-pending-input-source":
-    case "session-harness-completion-source":
-      return true;
-    default:
-      return false;
-  }
+  return historyReadKindSet.has(request.kind);
 }
 
 /** Load dependencies before the owner enters its synchronous, admitted read scope. */

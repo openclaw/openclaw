@@ -141,6 +141,7 @@ async function startHttpHarness(options?: {
 
 function sendRequest(options?: {
   id?: string | number;
+  taskId?: string;
   contextId?: string;
   messageId?: string;
   text?: string;
@@ -153,6 +154,7 @@ function sendRequest(options?: {
     method: options?.method ?? "SendMessage",
     params: {
       message: {
+        ...(options?.taskId ? { taskId: options.taskId } : {}),
         ...(options?.messageId ? { messageId: options.messageId } : {}),
         ...(options?.contextId ? { contextId: options.contextId } : {}),
         role: "ROLE_USER",
@@ -623,6 +625,64 @@ describe("A2A JSON-RPC protocol boundary", () => {
         },
       },
     });
+  });
+});
+
+describe("A2A SendMessage task references", () => {
+  it.each([
+    ["unknown", -32001],
+    ["foreign", -32001],
+    ["owned", -32004],
+    ["conflicting context", -32602],
+  ])("rejects %s task references without new work", async (kind, code) => {
+    const onDispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch });
+    const referenced =
+      kind === "unknown"
+        ? undefined
+        : harness.taskStore.create("existing-context", kind === "foreign" ? "beta" : "alpha");
+    const before = referenced && structuredClone(referenced);
+    const create = vi.spyOn(harness.taskStore, "create");
+
+    const response = await harness.post(
+      sendRequest({
+        taskId: referenced?.id ?? "missing",
+        contextId: kind === "conflicting context" ? "other-context" : undefined,
+        returnImmediately: true,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ error: { code } });
+    expect(create).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
+    if (referenced) {
+      expect(harness.taskStore.get(referenced.id)).toEqual(before);
+    }
+  });
+
+  it("accepts a context-only follow-up as a new task", async () => {
+    const harness = await startHttpHarness();
+    const original = harness.taskStore.create("shared-context", "alpha");
+    harness.taskStore.complete(original.id, "original reply");
+
+    const response = await harness.post(
+      sendRequest({ contextId: original.contextId, text: "follow up" }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      result: {
+        task: {
+          id: expect.not.stringMatching(original.id),
+          contextId: original.contextId,
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: "echo: follow up" }] }],
+        },
+      },
+    });
+    expect(harness.taskStore.get(original.id)?.artifacts[0]?.parts).toEqual([
+      { text: "original reply" },
+    ]);
   });
 });
 

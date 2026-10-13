@@ -90,7 +90,9 @@ By default, the request waits for the agent response. A completed response conta
 }
 ```
 
-Include `message.contextId` on subsequent requests to continue the same conversation. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+Include `message.contextId` on subsequent requests to continue the same conversation with a new task. Omit `message.taskId`: continuing an existing task is not supported, including while that task is working. Context IDs can contain letters, numbers, periods, underscores, colons, and hyphens, and must not exceed 128 characters.
+
+If `message.taskId` is supplied, unknown, expired, or other peers' task IDs return JSON-RPC error `-32001`. An owned task with a conflicting `message.contextId` returns `-32602`; otherwise, the request returns `-32004` for unsupported task continuation. None of these requests starts new work or changes the referenced task.
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
 
