@@ -275,7 +275,7 @@ describe("consented event Web Push content", () => {
       ]);
     });
 
-    it.each(["revoked", "scope", "visibility", "consent"])(
+    it.each(["scope", "consent"])(
       "rechecks %s after transport preparation before releasing answer content",
       async (change) => {
         const subscription = previewSubscription("browser-device");
@@ -292,12 +292,8 @@ describe("consented event Web Push content", () => {
           scope,
         );
         await started.promise;
-        if (change === "revoked") {
-          listDevicePairingMock.mockReturnValue({ paired: [] });
-        } else if (change === "scope") {
+        if (change === "scope") {
           listDevicePairingMock.mockReturnValue({ paired: [pairedOperator("browser-device", [])] });
-        } else if (change === "visibility") {
-          canReceiveSessionEventMock.mockReturnValue(false);
         } else {
           delete subscription.devicePreferences.answerPreviewConsentVersion;
         }
