@@ -1,6 +1,7 @@
 import { fstatSync, linkSync, renameSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
+import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -8,6 +9,7 @@ import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-metadata
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -22,7 +24,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import { schemaAdmission } from "./sqlite-schema-admission.js";
+import { readSqliteTextEncoding, schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -37,6 +39,55 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "retains %s encoding through schema changes, sibling reads, and reopen",
+    (encoding) => {
+      const filename = path.join(tempDirs.make("sqlite-encoding-admission-"), "agent.sqlite");
+      const writer = openDatabase(
+        `PRAGMA encoding = '${encoding}'; CREATE TABLE original(id)`,
+        false,
+        filename,
+      );
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        admitSqliteSchema(writer);
+        expect(getAdmittedSqliteSchemaFacts(writer)?.textEncoding).toBe(encoding);
+        const sibling = openDatabase("", true, filename);
+        writer.exec("CREATE TABLE added(id)");
+        expect(getAdmittedSqliteSchemaFacts(sibling)?.textEncoding).toBe(encoding);
+        expect(tableExists(sibling, "added")).toBe(true);
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        sibling.close();
+        expect(readSqliteTextEncoding(writer)).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+        ]);
+        writer.close();
+        const reopened = openDatabase("", true, filename);
+        reopened.exec("CREATE INDEX added_id ON added(id)");
+        expect(getAdmittedSqliteSchemaFacts(reopened)?.textEncoding).toBe(encoding);
+        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
+          "PRAGMA encoding",
+          "PRAGMA encoding",
+        ]);
+      } finally {
+        observation.restore();
+      }
+    },
+  );
+
+  it("does not retain the default encoding before the first schema object exists", () => {
+    const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
+    const database = openDatabase("", true, filename);
+    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
+    database.exec("PRAGMA encoding = 'UTF-16le'; CREATE TABLE original(id)");
+    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-16le");
+    database.close();
+    expect(getAdmittedSqliteSchemaFacts(openDatabase("", true, filename))?.textEncoding).toBe(
+      "UTF-16le",
+    );
+  });
 
   it("publishes the next write after cold writer discovery throws", () => {
     const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
@@ -162,6 +213,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const secondSnapshot = before.find((record) => record.location === second.location())!;
     const key = { name: "publication-value", read: (value: unknown) => value };
 
+    const inherited = getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY);
+    installSqliteDatabaseAdmissions([]);
+    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
+
     installSqliteDatabaseAdmissions(before);
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
     expect(
@@ -175,6 +231,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(changed).toHaveLength(1);
     expect(changed[0]!.identity).toBe(secondSnapshot.identity);
     expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
+    expect(getSqliteDatabaseAdmission(second, key)).toBe(42);
     expect(secondSnapshot.facts.has(key.name)).toBe(false);
     expect(
       captureSqliteDatabaseAdmissions().find(
@@ -184,6 +241,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
 
     revokeSqliteDatabaseAdmissions(second);
+    installSqliteDatabaseAdmissions([]);
+    expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
     installSqliteDatabaseAdmissions(changed);
     expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
@@ -455,8 +514,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
         try {
           expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
-          // One capture reads the schema cookie, user version, encoding, and catalog.
-          expect(admission.queries).toHaveLength(4);
+          // Schema capture retains the physical encoding across native snapshots.
+          expect(admission.queries).toHaveLength(3);
         } finally {
           admission.restore();
         }

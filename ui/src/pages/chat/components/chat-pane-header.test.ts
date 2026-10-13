@@ -1,4 +1,5 @@
 import { html, render } from "lit";
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -18,6 +19,7 @@ import {
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
+import { openSlot } from "../sidebar-layout.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
@@ -26,7 +28,6 @@ import {
 } from "./chat-pane-header.test-support.ts";
 import {
   canRevealSessionWorkspace,
-  renderChatPaneHeader,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspaceIcon,
 } from "./chat-pane-header.ts";
@@ -120,7 +121,7 @@ describe("chat pane header", () => {
     const onSplitDown = vi.fn();
     const onSplitRight = vi.fn();
     const onOpenSplitView = vi.fn();
-    const { container, props } = mountHeader({
+    const { container, update } = mountHeader({
       onClosePane,
       onSplitDown,
       onSplitRight,
@@ -133,6 +134,9 @@ describe("chat pane header", () => {
       [...actions.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     ).toEqual(["Share", "Layout", "…"]);
     const menu = actions.querySelector(".chat-pane__layout-menu")!;
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    menu.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(
       [...menu.querySelectorAll("wa-dropdown-item")].map((item) => item.textContent?.trim()),
     ).toEqual(["Open split view", "Split down", "Split right", "Close pane"]);
@@ -152,7 +156,7 @@ describe("chat pane header", () => {
       menu.dispatchEvent(new Event("wa-after-hide"));
       expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
     }
-    render(renderChatPaneHeader({ ...props, onClosePane: undefined }), container);
+    update({ onClosePane: undefined });
     expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
   });
 
@@ -169,6 +173,8 @@ describe("chat pane header", () => {
       onSplitDown: vi.fn(),
       onSplitRight: vi.fn(),
     });
+    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(container.querySelector('.chat-pane__layout-menu [value="terminal"]')).not.toBeNull();
     expect(container.querySelector(".chat-pane__split-down")).toBeNull();
     expect(container.querySelector(".chat-pane__split-right")).toBeNull();
@@ -181,11 +187,11 @@ describe("chat pane header", () => {
   });
 
   it("shows the muted running count only while there are active subagents", () => {
-    const { container, props } = mountHeader({ runningSubagentCount: 2 });
+    const { container, update } = mountHeader({ runningSubagentCount: 2 });
     expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
       "Subagents · 2 running",
     );
-    render(renderChatPaneHeader({ ...props, runningSubagentCount: 0 }), container);
+    update({ runningSubagentCount: 0 });
     expect(container.querySelector(".chat-pane__subagents-running")).toBeNull();
   });
 
@@ -596,6 +602,8 @@ describe("chat pane header", () => {
       "Session title",
     );
     expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+    container.querySelector(".chat-pane__layout-menu")!.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(container.querySelector('.chat-pane__layout-menu [value="terminal"]')).not.toBeNull();
   });
 
@@ -612,6 +620,29 @@ describe("chat pane header", () => {
     );
   });
 
+  it("defers panel docking choices until opening and applies the selected dock", () => {
+    const onLayoutChange = vi.fn();
+    const { container } = mountHeader({
+      sidebarLayout: openSlot({ columns: [] }, "detail"),
+      onLayoutChange,
+    });
+    const menu = container.querySelector(".chat-panel-layout-menu")!;
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    menu.dispatchEvent(new Event("wa-show"));
+    flush();
+    expect(
+      Array.from(menu.querySelectorAll("wa-dropdown-item"), (item) => item.getAttribute("value")),
+    ).toContain("dock-bottom");
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: "dock-bottom" } } }),
+    );
+    expect(onLayoutChange).not.toHaveBeenCalled();
+    menu.dispatchEvent(new Event("wa-after-hide"));
+    expect(onLayoutChange).toHaveBeenCalledWith(expect.objectContaining({ dock: "bottom" }), {
+      geometryOnly: true,
+    });
+  });
+
   it("shows copied feedback on the workspace chip", () => {
     const { container } = mountHeader({ copiedAction: "copy-path" });
     expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain("Copied");
@@ -625,6 +656,10 @@ describe("chat pane header", () => {
       canReveal: false,
     });
     expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();
+    const menu = container.querySelector(".chat-pane__workspace-menu")!;
+    expect(menu.querySelector("wa-dropdown-item")).toBeNull();
+    menu.dispatchEvent(new Event("wa-show"));
+    flush();
     expect(container.querySelector('wa-dropdown-item[value="reveal"]')).toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
   });
@@ -640,8 +675,10 @@ describe("chat pane header", () => {
     );
     expect(indicator.getAttribute("aria-describedby")).toBeTruthy();
     indicator.focus();
+    await tooltip.updateComplete;
     expect(tooltip.hasAttribute("open")).toBe(true);
     indicator.blur();
+    await tooltip.updateComplete;
     expect(tooltip.hasAttribute("open")).toBe(false);
     indicator.click();
     expect(tooltip.hasAttribute("open")).toBe(true);
@@ -951,21 +988,12 @@ describe("chat pane workspace chip icon", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     await element?.updateComplete;
-    render(
-      html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
-      mounted.container,
-    );
+    mounted.update({ title: "Updated title", workspaceIcon });
     await element?.updateComplete;
     await Promise.resolve();
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    render(
-      html`${renderChatPaneHeader({
-        ...mounted.props,
-        workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] },
-      })}`,
-      mounted.container,
-    );
+    mounted.update({ workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] } });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
@@ -987,13 +1015,9 @@ describe("chat pane workspace chip icon", () => {
     });
     const iconProps = () => resolveChatPaneWorkspaceIcon(context, "agent:main:connection");
     const mounted = mountHeader({ workspaceIcon: null });
-    // Use one Lit template callsite for initial mount and subsequent renders so
-    // this proves recovery of the same element, not a template replacement.
+    // Update one Solid root so recovery must retain the same workspace element.
     const paint = async () => {
-      render(
-        html`${renderChatPaneHeader({ ...mounted.props, workspaceIcon: iconProps() })}`,
-        mounted.container,
-      );
+      mounted.update({ workspaceIcon: iconProps() });
       const icon = mounted.container.querySelector<
         HTMLElement & { updateComplete: Promise<unknown> }
       >("openclaw-workspace-icon");

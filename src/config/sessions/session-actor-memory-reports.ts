@@ -233,18 +233,15 @@ export function executeSessionActorMemoryReportCommand(
       if (input.rows.length) {
         let preserveGeneration = true;
         const replacements = new Map(
-          input.rows.map((row) => {
+          input.rows.map(({ entryId, expectedEventJson: beforeJson, event }) => {
             const existing = state.events.find(
-              (value) => isRecord(value.event) && value.event.id === row.entryId,
+              (value) => isRecord(value.event) && value.event.id === entryId,
             );
-            if (!existing || existing.eventJson !== row.expectedEventJson) {
+            if (!existing || existing.eventJson !== beforeJson) {
               throw new SqliteTranscriptMutationConflictError(entry.sessionId);
             }
-            const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(row.event));
-            preserveGeneration &&= transcriptRewritePreservesAdmission(
-              row.expectedEventJson,
-              eventJson,
-            );
+            const eventJson = JSON.stringify(canonicalizeTranscriptEventMedia(event));
+            preserveGeneration &&= transcriptRewritePreservesAdmission(beforeJson, eventJson);
             return [existing.rawSeq, { ...existing, eventJson, event: JSON.parse(eventJson) }];
           }),
         );

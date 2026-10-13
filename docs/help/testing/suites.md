@@ -42,6 +42,47 @@ retain it. Keep tests in their assigned configs, with their process and timer
 policies, so new files inherit the same owner routing. Dedicated product E2E
 and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
+### PostgreSQL conformance
+
+`node scripts/test-database-conformance.mjs --engine postgres --connection <dsn>`
+runs the workboard suite and `src/infra/postgres-sync` tests against a disposable
+PostgreSQL database. The runner passes the connection through a Node preload
+and worker environment data to test processes and threads, without a DSN
+environment variable. It redacts the connection from child output.
+
+Arguments after `--` go to the normal test runner. Start with a file or directory
+to replace the default targets; options alone retain both suites. For example,
+append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
+
+For a local Homebrew `postgresql@17` cluster, use a temporary directory on a disk
+with enough free space. This subshell stops and removes its cluster on exit:
+
+```bash
+(
+  D=$(mktemp -d /Volumes/External/openclaw-pg.XXXXXX)
+  PG=$(brew --prefix postgresql@17)/bin
+  trap '"$PG/pg_ctl" -D "$D/data" -m immediate stop; rm -rf "$D"' EXIT
+  "$PG/initdb" -A trust -U postgres -D "$D/data"
+  "$PG/pg_ctl" -D "$D/data" -l "$D/server.log" \
+    -o "-p 55436 -k $D -h ''" -w start
+  node scripts/test-database-conformance.mjs --engine postgres \
+    --connection "postgresql://postgres@localhost:55436/postgres?host=$D"
+)
+```
+
+Alternatively, on a Docker-enabled Testbox, start `postgres:17` with trust auth
+and a loopback-only port, run the same command with
+`postgresql://postgres@127.0.0.1:5432/postgres`, then remove the container.
+
+CI's **PostgreSQL conformance** job uses a fresh `postgres:17` service. It runs
+on scheduled main CI and PRs touching `src/infra/database-engine/**`,
+`src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
+`src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
+`src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
+`src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
+Unknown PR paths conservatively select it; older targets without the runner
+omit it. The selected job is required by `openclaw/ci-gate`.
+
 ### Unit / integration (default)
 
 - Command: `pnpm test`
@@ -309,7 +350,8 @@ Native dependency policy:
 - Expectations:
   - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
   - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
-  - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
+  - Chromium and Playwright FFmpeg must be present; `node --import tsx scripts/ensure-playwright-chromium.mts` installs them, and `pnpm test:ui:e2e` already runs it
+  - The workboard native-bundle suite also needs WebKit with system dependencies (`pnpm --dir ui exec playwright install --with-deps webkit`); Crabbox Linux hydration installs both browser prerequisites
 
 The dedicated real-Gateway CI lane uses `test/vitest/vitest.ui-e2e-prebuilt.config.ts` after `OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 pnpm build` completes in each clean checkout. The separate artifact job retains SDK declaration validation. The planner balances existing serial files and selected standalone companions in one row, with the remaining audited parallel files in another. The companions share the existing two-worker phase after serial execution without an extra bundled preview. The real node/SSH desktop resize tour is release-only: when its file is selected by full manual/release validation or a direct spec edit, the first row runs `node --import tsx scripts/test-desktop-resize-real.mts` once for both carriers. The bootstrap remains required; invoking the desktop spec without its real fixture is not equivalent proof. Frequent resize, revocation, view-only filtering, takeover, and UI sizing tests remain in ordinary CI. Placement consumes the parallel-eligibility allowlist from `vitest.ui-paths.mjs` without changing Vitest scheduling. Each selected file has one CI owner; the desktop bootstrap executes each carrier once. Full manual and release selection retain the complete inventory. Prebuilt previews borrow the validated standard Control UI assets without rebuilding or deleting them; default mocked Gateway hellos use the same artifact identity, and explicit mock identity overrides still apply. Ordinary local runs retain their private builds. Keep source and built outputs unchanged until all workers and children finish. Fixtures retain their private HOME, state, ports, cleanup, and existing worker limits. Readiness failures stop without rebuilding or falling back. The ordinary local config keeps real-Gateway files serial; frozen targets and older planners retain one complete CI row and their own config/command. See [CI](/ci) for the resource policy and timing evidence.
 

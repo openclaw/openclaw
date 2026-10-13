@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render, type LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import * as attachmentTextReader from "./components/chat-attachment-text-reader.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
@@ -62,6 +63,8 @@ export function selectFile(input: HTMLInputElement, file: File) {
 }
 
 export function getAttachmentMenuOption(container: Element, label: string) {
+  container.querySelector(".agent-chat__attach-menu")?.dispatchEvent(new Event("wa-show"));
+  flush();
   return Array.from(
     container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
   ).find((button) => button.textContent?.trim() === label);

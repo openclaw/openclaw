@@ -59,12 +59,35 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         .mockImplementation(async (_runtime, _options, _authority, preflight) => {
           const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
           expect(receipt.status).toBe("backed-up");
+          const [agentIdentity, sharedIdentity] = await Promise.all([
+            fs.stat(agentPath, { bigint: true }),
+            fs.stat(shared.path, { bigint: true }),
+          ]);
           expect(preflight?.verifiedSnapshots).toEqual(
             expect.arrayContaining([
-              expect.objectContaining({ sourcePath: agentPath, role: "agent", agentId: "main" }),
-              expect.objectContaining({ sourcePath: shared.path, role: "global" }),
+              expect.objectContaining({
+                sourcePath: agentPath,
+                role: "agent",
+                agentId: "main",
+                dev: agentIdentity.dev,
+                ino: agentIdentity.ino,
+              }),
+              expect.objectContaining({
+                sourcePath: shared.path,
+                role: "global",
+                dev: sharedIdentity.dev,
+                ino: sharedIdentity.ino,
+              }),
             ]),
           );
+          expect(receipt.databaseIdentities[agentPath]).toEqual({
+            dev: Number(agentIdentity.dev),
+            ino: Number(agentIdentity.ino),
+          });
+          expect(receipt.databaseIdentities[shared.path]).toEqual({
+            dev: Number(sharedIdentity.dev),
+            ino: Number(sharedIdentity.ino),
+          });
           using database = new DatabaseSync(agentPath);
           database.exec("UPDATE update_witness SET value='candidate';");
           await fs.writeFile(state.configPath, '{"gateway":{"mode":"local"}}\n');

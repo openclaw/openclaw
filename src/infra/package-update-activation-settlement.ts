@@ -13,15 +13,14 @@ import {
 import { readRootJsonObjectSync } from "./json-files.js";
 import {
   packageActivationIdentity,
+  type PackageActivationJournal,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
 import { decodePackageActivationLauncher } from "./package-update-activation-launcher.js";
 import {
   LEGACY_PACKAGE_RECOVERY_HELPER,
   privatePackageActivationIdentity,
-  resolvePackageActivationControl,
   resolvePackageActivationHelper,
-  resolvePackageActivationJournalPath,
 } from "./package-update-activation-paths.js";
 import {
   assertPackageIntegritySettlementUnchanged,
@@ -39,48 +38,13 @@ const PACKAGE_RECOVERY_2026_9_9_HELPER =
 export function inspectRemountedPackagePublication(
   anchor: string,
   record: PackageActivationRecord,
+  remount: NonNullable<ReturnType<PackageActivationJournal["inspectRemount"]>>,
 ) {
   const d = record.descriptor;
-  if (
-    record.phase !== "publishing" ||
-    record.intent?.kind !== "publish" ||
-    record.publications.length !== 0 ||
-    !("digest" in d.candidate)
-  ) {
+  if (!("digest" in d.candidate)) {
     throw new Error("Remounted settlement requires a fully fingerprinted pending publication.");
   }
-  const historicalDevices = new Map<string, string>();
-  const currentDevices = new Map<string, string>();
-  const identities: Array<() => void> = [];
-  const bind = (historical: string, observe: () => string) => {
-    const current = observe();
-    const [oldDevice, oldInode] = historical.split(":");
-    const [device, inode] = current.split(":");
-    if (
-      oldInode !== inode ||
-      !oldDevice ||
-      !device ||
-      (historicalDevices.has(device) && historicalDevices.get(device) !== oldDevice) ||
-      (currentDevices.has(oldDevice) && currentDevices.get(oldDevice) !== device)
-    ) {
-      throw new Error("Package settlement inode or device mapping changed.");
-    }
-    historicalDevices.set(device, oldDevice);
-    currentDevices.set(oldDevice, device);
-    identities.push(() => {
-      if (observe() !== current) {
-        throw new Error("Package settlement custody changed.");
-      }
-    });
-    return current;
-  };
-  bind(d.parentIdentity, () => packageActivationIdentity(path.dirname(anchor), "parent"));
-  bind(d.journalParentIdentity, () =>
-    privatePackageActivationIdentity(resolvePackageActivationControl(anchor), "control"),
-  );
-  bind(d.journalIdentity, () =>
-    privatePackageActivationIdentity(resolvePackageActivationJournalPath(anchor), "journal"),
-  );
+  const { bind, historicalDevices } = remount;
   const helper = resolvePackageActivationHelper(anchor);
   bind(d.helperIdentity, () => privatePackageActivationIdentity(helper, "helper"));
   bind(d.anchorIdentity, () => privatePackageActivationIdentity(anchor, "anchor"));
@@ -120,11 +84,8 @@ export function inspectRemountedPackagePublication(
     }
     bind(historical, () => packageActivationIdentity(launcher, "launcher"));
   }
-  if (![...historicalDevices].some(([device, historical]) => device !== historical)) {
-    throw new Error("Separate-helper settlement requires a verified device remount.");
-  }
   const assertUnchanged = () => {
-    identities.forEach((assertIdentity) => assertIdentity());
+    remount.assertUnchanged();
     if (
       fs.lstatSync(path.join(anchor, "candidate"), { throwIfNoEntry: false }) ||
       fs.lstatSync(d.originalStageRoot, { throwIfNoEntry: false }) ||

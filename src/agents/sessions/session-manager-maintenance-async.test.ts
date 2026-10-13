@@ -9,7 +9,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { rewriteTranscriptMessageAtAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-message-rewrite.js";
+import { rewritePreparedTranscriptMessageAtAnchor } from "../../config/sessions/session-message-rewrite.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -196,7 +196,7 @@ it("preserves a steer acknowledgment committed after rewrite preparation", async
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   await rewrite.sessionManager.resetLeafAsync();
   const replacementId = await appendUser(rewrite.sessionManager, "replacement");
-  const acknowledged = await rewriteTranscriptMessageAtAnchor(source.anchor, () => ({
+  const acknowledged = await rewritePreparedTranscriptMessageAtAnchor(source.anchor, () => ({
     ...source.message,
     __openclaw: { steerTargetRunId: "steered-run" },
   }));
@@ -382,7 +382,7 @@ it("preserves a committed branch and a later target rebinding", async () => {
   expect(reopened.getLeafId()).toBe(selected);
 });
 
-it("preserves the host's once-redacted rewrite bytes through the worker commit", async () => {
+it("preserves source rewrite bytes through the worker commit", async () => {
   const { scope, manager } = await openSession();
   const sourceId = await appendUser(manager, "original");
   const rewrite = await manager.prepareTranscriptRewriteAsync();
@@ -393,7 +393,7 @@ it("preserves the host's once-redacted rewrite bytes through the worker commit",
   );
   await rewrite.commit(new Map([[sourceId, replacementId]]));
   expect(manager.getEntry(replacementId)).toMatchObject({
-    message: { content: "pass: opaque…7890" },
+    message: { content: "pass: opaque-pass-secret-1234567890" },
   });
   const reopened = await SessionManager.openAsync(scope);
   expect(reopened.getEntry(replacementId)).toEqual(manager.getEntry(replacementId));

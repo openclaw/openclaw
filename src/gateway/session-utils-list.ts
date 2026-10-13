@@ -36,7 +36,10 @@ import {
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import {
   identity as rowIdentity,
   selectionRow,
@@ -161,7 +164,7 @@ function buildSessionsListResult(
         }
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
-    sessions,
+    ...(opts.rowMode === "sidebar" ? shareSidebarSessionRows(sessions) : { sessions }),
   };
 }
 

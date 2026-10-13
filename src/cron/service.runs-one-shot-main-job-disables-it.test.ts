@@ -12,9 +12,13 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
-import { CronService, type CronEvent } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import type { CronEvent } from "./service.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { onTimer } from "./service/timer.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronJobCreate } from "./types.js";
 
@@ -80,11 +84,12 @@ async function fixture(
       }
     },
   };
-  const cron = new CronService(deps);
+  const { cron, state } = createCronServiceWithStateForTest(deps);
   await cron.start();
   const cleanup = async (service = cron) => {
     await service.status();
     service.stop();
+    await service.waitForIdle();
     await store.cleanup();
     resetSystemEventsForTest();
   };
@@ -93,7 +98,7 @@ async function fixture(
       expect(peekSystemEventEntries(sessionKey(target))).toHaveLength(0);
     }
   };
-  return { cron, deps, clock, finished: finished.promise, cleanup, expectEmptyQueue };
+  return { cron, state, deps, clock, finished: finished.promise, cleanup, expectEmptyQueue };
 }
 
 describe("CronService one-shot lifecycle", () => {
@@ -144,11 +149,12 @@ describe("CronService one-shot lifecycle", () => {
   });
 
   it("disables a retained one-shot after success and does not replay it when re-enabled", async () => {
-    const { cron, deps, clock, finished, cleanup } = await fixture();
+    const { cron, state, deps, clock, finished, cleanup } = await fixture();
     try {
       const job = await cron.add(mainJob({ deleteAfterRun: false }));
       expect(job.state.nextRunAtMs).toBe(atMs);
-      await clock.advanceTo(atMs);
+      clock.setTime(atMs);
+      await onTimer(state);
       await finished;
       expect(cron.getJob(job.id)?.enabled).toBe(false);
       expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("hello", {
@@ -157,7 +163,8 @@ describe("CronService one-shot lifecycle", () => {
       });
       expect(deps.requestHeartbeat).toHaveBeenCalled();
       expect((await cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
-      await clock.advanceBy(1_000);
+      clock.setTime(clock.clock.now() + 1_000);
+      await onTimer(state);
       expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     } finally {
       await cleanup();
@@ -201,11 +208,12 @@ describe("CronService one-shot lifecycle", () => {
       deliveryError: unknown || reason ? undefined : "delivery rejected",
       deliverySuppressionReason: reason,
     }));
-    const { cron, deps, clock, finished, cleanup } = await fixture({ runIsolatedAgentJob });
+    const { cron, state, deps, clock, finished, cleanup } = await fixture({ runIsolatedAgentJob });
     let current = cron;
     try {
       const job = await cron.add(isolatedJob({ delivery: { mode: "announce", bestEffort } }));
-      await clock.advanceTo(atMs);
+      clock.setTime(atMs);
+      await onTimer(state);
       expect(await finished).toMatchObject({
         status: "ok",
         completionStatus: completion,
@@ -228,13 +236,15 @@ describe("CronService one-shot lifecycle", () => {
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
       cron.stop();
       const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
-      current = new CronService({
+      const restarted = createCronServiceWithStateForTest({
         ...deps,
         scheduler: createTestGatewayScheduler(clock.clock),
         runIsolatedAgentJob: restartedRun,
       });
+      current = restarted.cron;
       await current.start();
-      await clock.advanceBy(60_000);
+      clock.setTime(clock.clock.now() + 60_000);
+      await onTimer(restarted.state);
       expect(restartedRun).not.toHaveBeenCalled();
       if (completion === "succeeded") {
         expect(current.getJob(job.id)).toBeUndefined();
@@ -334,10 +344,13 @@ describe("CronService one-shot lifecycle", () => {
         error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
         executionStarted,
       }));
-      const { cron, deps, clock, finished, cleanup } = await fixture({ runIsolatedAgentJob });
+      const { cron, state, deps, clock, finished, cleanup } = await fixture({
+        runIsolatedAgentJob,
+      });
       try {
         const job = await cron.add(isolatedJob());
-        await clock.advanceTo(atMs);
+        clock.setTime(atMs);
+        await onTimer(state);
         expect(await finished).toMatchObject({ jobId: job.id, status: "error" });
         const stored = cron.getJob(job.id);
         expect(stored?.enabled).toBe(!executionStarted);

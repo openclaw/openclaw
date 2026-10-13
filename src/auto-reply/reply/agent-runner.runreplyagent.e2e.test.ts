@@ -57,7 +57,10 @@ import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallbac
 import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
 import { registerReplyCompactionCases } from "./agent-runner.runreplyagent.compaction.cases.js";
 import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
-import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import {
+  createReplyAgentSessionFixture,
+  runSuccessfulReplyModelFixture,
+} from "./agent-runner.runreplyagent.fixture.test-support.js";
 import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
@@ -456,9 +459,10 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-  }
+  const activeAuthority =
+    activeOperation && params?.isActive && params.bindActiveAuthority !== false
+      ? prepareReplyToolAuthority(followupRun)
+      : undefined;
 
   return {
     followupRun,
@@ -466,6 +470,9 @@ function createMinimalRun(params?: {
     typing,
     opts,
     run: async () => {
+      if (activeOperation && activeAuthority) {
+        await activeOperation.bindToolAuthoritySnapshotAsync(activeAuthority);
+      }
       const runReplyAgent = await getRunReplyAgent();
       const operation = replyRunRegistry.get(sessionKey);
       if (operation && params?.attachSteerBackend !== false) {
@@ -802,8 +809,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
-    active.bindToolAuthorityRoute(activeRoute);
+    await active.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    await active.bindToolAuthorityRouteAsync(activeRoute);
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -5145,10 +5152,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
+    state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
@@ -5215,10 +5219,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
       let callCount = 0;
 
-      state.runEmbeddedAgentMock.mockResolvedValue({
-        payloads: [{ text: "final" }],
-        meta: {},
-      });
+      state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
       const fallbackSpy = vi
         .spyOn(modelFallbackModule, "runWithModelFallback")
         .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
@@ -5523,10 +5524,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
+    state.runEmbeddedAgentMock.mockImplementation(runSuccessfulReplyModelFixture);
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementation(async (params: TestModelFallbackRunnerParams) => {

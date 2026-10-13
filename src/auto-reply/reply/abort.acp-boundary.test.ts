@@ -229,6 +229,12 @@ it.each([
         childAdmission = await beginSessionWorkAdmission({
           scope: storePath,
           identities: [runningKey, "running-session"],
+          run: {
+            runId: "running",
+            sessionKey: runningKey,
+            sessionId: "running-session",
+            agentId: "main",
+          },
           assertAllowed: () => {},
           onInterrupt: () => nativeInterrupted.resolve(),
         });
@@ -240,6 +246,9 @@ it.each([
         await registerSubagentRun({
           runId,
           childSessionKey,
+          childAgentId: "main",
+          sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+            ?.entry,
           requesterSessionKey: sourceKey,
           requesterAgentId: "main",
           requesterDisplayKey: sourceKey,

@@ -96,9 +96,22 @@ export function readSessionEntrySideMetadata(
   };
 }
 
+export function projectSessionEntryCacheMetadata(
+  entry: SessionEntry,
+  sideMetadata: SessionEntrySideMetadata,
+): SessionEntry {
+  const projected = { ...entry, ...sideMetadata };
+  for (const field of ["owner", "participants", "participantCount"] as const) {
+    if (sideMetadata[field] === undefined) {
+      delete projected[field];
+    }
+  }
+  return freezeJsonSnapshot(projected);
+}
+
 export function projectSessionEntryCacheUpdate(
   entryJson: string,
-  sideMetadata: SessionEntrySideMetadata | undefined,
+  sideMetadata: SessionEntrySideMetadata,
   snapshotEntry?: SessionEntry,
   snapshots?: readonly SessionEntrySnapshot[],
 ): SessionEntry | undefined {
@@ -124,5 +137,5 @@ export function projectSessionEntryCacheUpdate(
           });
     Object.assign(parsedEntry, cold);
   }
-  return parsedEntry ? freezeJsonSnapshot({ ...parsedEntry, ...sideMetadata }) : undefined;
+  return parsedEntry ? projectSessionEntryCacheMetadata(parsedEntry, sideMetadata) : undefined;
 }

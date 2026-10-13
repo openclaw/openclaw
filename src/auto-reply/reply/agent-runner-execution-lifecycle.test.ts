@@ -34,6 +34,7 @@ import {
   expectMockCallArgFields,
   requireMockCall,
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
@@ -51,7 +52,7 @@ import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
-const execution = await import("./agent-runner-execution.js");
+const executeRawAgentTurn = await getRawExecuteAgentTurnForTest();
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
   agentId: "main",
@@ -69,7 +70,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
 
-    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeRawAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.outcome).toMatchObject({ kind: "settled", sessionWriter: compactionTarget });
     expect(result.outcome.compaction).toBeUndefined();
@@ -102,7 +103,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
           assertCurrent: () => {},
           getFailure: () => failure,
         },
-        () => execution.executeAgentTurn(params),
+        () => executeRawAgentTurn(params),
       ).finally(() => {
         completed = true;
       });
@@ -142,7 +143,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       },
     );
 
-    const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+    const result = await executeRawAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(result.outcome).toMatchObject({ kind: "aborted", reason: "user" });
   });
@@ -194,7 +195,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       });
 
       try {
-        const result = await execution.executeAgentTurn(
+        const result = await executeRawAgentTurn(
           createMinimalRunAgentTurnParams({ opts: { onAgentRunTerminalOutcome } }),
         );
 
@@ -600,7 +601,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       try {
         const params = createMinimalRunAgentTurnParams({ replyOperation });
         params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-        const pending = execution.executeAgentTurn(params);
+        const pending = executeRawAgentTurn(params);
         await candidateSettled.promise;
         upstreamAbort.abort(
           reason === "restart" ? createAgentRunRestartAbortError() : new Error("caller cancelled"),
@@ -710,7 +711,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         },
       );
 
-      const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
+      const result = await executeRawAgentTurn(createMinimalRunAgentTurnParams());
 
       expect(result.outcome).toMatchObject({ kind: "settled", autoCompactionCount: 8 });
       expect(result.outcome.compaction).toEqual({

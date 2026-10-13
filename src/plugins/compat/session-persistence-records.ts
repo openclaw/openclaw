@@ -201,6 +201,9 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/session-catalog.deleteSessionUpstreamLink",
       "openclaw/plugin-sdk/agent-harness-session-runtime.createNativeSessionInitializationOwner().prepare().link",
     ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and one shared DEP_SESSION_PERSISTENCE warning per plugin and upstream-link capability family; unscoped consumers share one SDK-level warning",
+    ],
     tests: [
       "src/plugin-sdk/session-catalog-upstream-compat.test.ts",
       "src/plugin-sdk/agent-harness-session-compat.test.ts",
@@ -314,7 +317,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Source validation follows consumption; the synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
+      "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Owner and admission checks cover consumption; later transcript writes do not invalidate the captured snapshot. The synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
   },
   {
     code: "session-reset-freshness-sync-read",
@@ -385,13 +388,40 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "Native harnesses can admit binding operations through worker-backed session authority. Released official harness plugins retain synchronous authority capture and lineage-checking mutation callbacks across host upgrades.",
   },
   {
+    code: "native-session-deletion-unbound-callbacks",
+    ...DEPRECATED_SESSION_COMPAT,
+    owner: "agent-runtime",
+    introduced: "2026-08-26",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    replacement:
+      "Pass participants from createNativeSessionBindingLifecycleV2.withDeletion for reversible stored bindings or createNativeSessionCommitFinalizer for commit-only cleanup. Factory-produced participants and the existing harness hooks remain supported; direct unbound callbacks retain synchronous commit and rollback until the next Plugin SDK major.",
+    docsPath:
+      "/plugins/sdk-migration/how-to-migrate#replace-unbound-native-session-deletion-callbacks",
+    surfaces: [
+      "AgentHarnessSessionDeletionMutation unbound commit/rollback callbacks",
+      "AgentHarness.withSessionDeletion unbound mutation argument",
+      "AgentHarness.withSessionContextReset unbound mutation argument",
+    ],
+    diagnostics: [
+      "TypeScript contract documentation and one shared DEP_SESSION_PERSISTENCE warning per plugin and native-session-deletion family per process, emitted only for unbound callbacks",
+    ],
+    tests: [
+      "src/config/sessions/session-native-binding.reclamation.test.ts",
+      "src/config/sessions/session-native-binding.settlement.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Session replacement can settle typed native bindings through the existing worker transaction. Unbound synchronous harness callbacks are deprecated with supported factory replacements; stored data and update behavior are unchanged.",
+  },
+  {
     code: "session-manager-sync-persistence",
     ...DEPRECATED_SESSION_COMPAT,
     introduced: "2026-10-01",
     deprecated: "2026-10-01",
     warningStarts: "2026-10-01",
     replacement:
-      "Await the matching Async-suffixed SessionManager method, including the returned rewrite commit. Retain synchronous adapters only for shipped third-party contracts until the next Plugin SDK major and explicit breaking-release approval.",
+      "Await the matching Async-suffixed SessionManager method, including the returned rewrite commit. For resolveCurrentTurnEntryId with includeOmittedCustomMessages, await openAsync and traverse the complete view without that option. Retain synchronous adapters only for shipped third-party contracts until the next Plugin SDK major and explicit breaking-release approval.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
     surfaces: [
       "SessionManager.appendMessage",
@@ -415,6 +445,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "SessionManager.openModelContext",
       "SessionManager.setSessionTarget",
       "SessionManager.reloadPersistedTranscript",
+      "SessionManager.resolveCurrentTurnEntryId.includeOmittedCustomMessages",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations naming awaited twins",
@@ -503,6 +534,23 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Agent execution reuses completed native preparation while explicit host admission refreshes schema proof. Released execution objects do not require private host capabilities; preparation calls and implementations retain their Promise contract. Schemas, stored data, and update behavior are unchanged.",
+  },
+  {
+    code: "acp-session-sync-read",
+    ...DEPRECATED_SESSION_COMPAT,
+    introduced: "2026-09-04",
+    deprecated: "2026-10-11",
+    warningStarts: "2026-10-11",
+    replacement:
+      "Await readAcpSessionEntryAsync. Bundled consumers use the existing worker-backed reader; the released synchronous reader keeps its result contract until removal in a later stable release after deprecation ships.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#acp-metadata-binding-compatibility",
+    surfaces: ["openclaw/plugin-sdk/acp-runtime.readAcpSessionEntry"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and one shared DEP_PLUGIN_SDK warning per plugin and ACP-session family per process on legacy use",
+    ],
+    tests: ["src/plugin-sdk/acp-runtime.test.ts", "src/acp/runtime/session-meta-read.test.ts"],
+    releaseNote:
+      "ACP session reads run through the existing worker. Bundled callers await metadata while the released synchronous SDK reader remains deprecated and supported; schemas, stored data, and update behavior are unchanged.",
   },
   {
     code: "acp-session-metadata-released-signatures",

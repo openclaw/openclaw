@@ -53,6 +53,7 @@ import {
 } from "../worker-environments/session-placement-lifecycle.js";
 import { hasGatewaySessionAbortOwner } from "./chat-abort-authorization.js";
 import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
+import type { ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type LifecyclePlacementService = NonNullable<
@@ -69,6 +70,7 @@ type SessionLifecycleParams = {
   storePath: string;
   sessionKeys: string[];
   sessionId?: string;
+  session?: ChatAbortSessionSnapshot;
   embeddedRun?: EmbeddedRunDrainTarget | null;
   agentId: string;
   sessionKey: string;
@@ -169,7 +171,7 @@ export async function prepareSessionLifecycleDrain(
         // cancellation completion here: it may need placement and lifecycle recovery.
         params.authorize?.();
         params.beforeCancel?.();
-        const workerStop = prepareSessionWorkerPlacementStop(params);
+        const workerStop = await prepareSessionWorkerPlacementStop(params);
         params.authorize?.();
         releaseAdmissions = closeSessionWorkAdmissions({
           scope: params.storePath,
@@ -235,6 +237,7 @@ export async function prepareSessionLifecycleDrain(
           sessionKey: params.sessionKeys[0]!,
           sessionKeyAliases: params.sessionKeys.slice(1),
           sessionId: params.sessionId,
+          session: params.session,
           agentId: params.agentId,
           defaultAgentId: params.defaultAgentId,
           abortOrigin: "rpc",

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -27,10 +28,6 @@ import {
   cronAbortErrorClassification,
   isSetupTimeoutErrorText,
 } from "./execution-errors.js";
-import {
-  assertServiceCronRunReceiptCurrent,
-  trackServiceCronRunReceiptSettlement,
-} from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
@@ -235,19 +232,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
   let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
-  const receiptSource = opts?.runReceipt
-    ? { handle: opts.runReceipt, context: opts.runReceiptContext }
-    : undefined;
-  const assertRunCurrent = receiptSource
-    ? () =>
-        assertServiceCronRunReceiptCurrent(
-          state,
-          receiptSource.handle,
-          opts?.activeJobMarker,
-          receiptSource.context,
-          runAbortController.signal,
-        )
-    : undefined;
+  const assertRunCurrent = async () => {
+    runAbortController.signal.throwIfAborted();
+    opts?.runReceiptContext?.admission.assertCurrent();
+    if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
+      throw new Error("Gateway restarting.");
+    }
+  };
   const deliveryAttemptFence = opts?.runReceipt
     ? createCronCompletionDeliveryFence({
         state,
@@ -418,7 +409,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
     watchdog?.start();
     const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     commandSettlement = job.payload.kind === "command" ? corePromise : undefined;
-    const runPromise = corePromise.then(async (result) => {
+    // Cancellation returns early, but the launch still owns the core's cleanup and delivery tail.
+    const runPromise = trackAsyncWork(async () => {
+      const result = await corePromise;
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
         state,
@@ -431,15 +424,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         deliveryAttemptFence,
       );
     });
-    // Timeout/cancel projects an outcome before an abort-ignoring core settles;
-    // keep the receipt and shutdown drain tied to the underlying promise.
-    if (opts?.runReceipt) {
-      trackServiceCronRunReceiptSettlement({
-        state,
-        handle: opts.runReceipt,
-        settlement: runPromise,
-      });
-    }
+    // Abort-ignoring work remains tracked by the task owner for shutdown cleanup.
     trackActiveCronTaskRunSettlement(
       runPromise,
       runAbortController.signal,

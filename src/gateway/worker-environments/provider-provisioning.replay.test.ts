@@ -284,7 +284,7 @@ describe("worker environment service provision replay", () => {
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
     const dispatch = createProviderReplayDispatch({
-      initialPlacements: placements.list(),
+      initialPlacements: await placements.listAsync(),
       placements,
       environments: restarted,
       resolveDevicePlacementRequirement: async () => ({
@@ -298,9 +298,9 @@ describe("worker environment service provision replay", () => {
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(
       async (environmentId, reconcileEnvironmentCore) => {
-        const owners = placements
-          .list()
-          .filter((candidate) => candidate.environmentId === environmentId);
+        const owners = (await placements.listAsync()).filter(
+          (candidate) => candidate.environmentId === environmentId,
+        );
         if (owners.length !== 1 || owners[0]?.state !== "provisioning") {
           await reconcileEnvironmentCore();
           return;

@@ -70,15 +70,16 @@ type ChatHistoryPaneRequests = {
 
 export type InitialChatSnapshotHydration = {
   sessionKey: string;
-  startedBeforeReady: boolean;
+  connected: boolean;
   promise: Promise<void>;
-  readyAt?: number;
   wait?: Promise<boolean>;
   complete?: () => void;
   cancel?: () => void;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
+// Start at history publication so slow network time never spends the cache grace period.
+const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   let requests = chatHistoryPaneRequests.get(owner);
@@ -140,8 +141,8 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
     return;
   }
   if (state.connected) {
-    hydration.readyAt ??= Date.now();
-  } else if (hydration.readyAt !== undefined) {
+    hydration.connected = true;
+  } else if (hydration.connected) {
     retireInitialChatSnapshot(state);
   }
 }
@@ -152,35 +153,25 @@ export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<bool
   if (!hydration) {
     return undefined;
   }
-  if (
-    !hydration.startedBeforeReady ||
-    !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
-  ) {
+  if (!areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)) {
     retireInitialChatSnapshot(state);
     return undefined;
   }
   if (hydration.wait) {
     return hydration.wait;
   }
-  const readyAt = (hydration.readyAt ??= Date.now());
-  // The connection owns the budget; mounting offline must not spend it.
-  const remaining = Math.max(0, 300 - (Date.now() - readyAt));
-  if (remaining === 0) {
-    retireInitialChatSnapshot(state);
-    return undefined;
-  }
   hydration.wait = new Promise<boolean>((resolve) => {
     const finish = (current: boolean) => {
-      clearTimeout(timer);
+      clearTimeout(timeout);
       if (requests.initialSnapshotHydration === hydration) {
         delete requests.initialSnapshotHydration;
       }
       resolve(current);
     };
+    const timeout = setTimeout(() => finish(true), INITIAL_CHAT_SNAPSHOT_WAIT_MS);
     const complete = () => finish(true);
     hydration.complete = complete;
     hydration.cancel = () => finish(false);
-    const timer = setTimeout(complete, remaining);
     void hydration.promise.then(complete, complete);
   });
   return hydration.wait;

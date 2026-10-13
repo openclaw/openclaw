@@ -237,6 +237,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the dependency pin guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "deps:pins:check",
+      command: "pnpm",
+      args: ["deps:pins:check"],
+    });
+  });
+
   it("runs the shared focused guard pass once across every source root", () => {
     const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;

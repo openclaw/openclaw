@@ -413,6 +413,7 @@ describe("createCopilotToolBridge", () => {
       await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
         const result = await createCopilotToolBridge({
           attemptParams: {
+            config: {},
             conversationToolPolicy: {
               deny: ["exec", "process", "write", "edit", "ask_user"],
             },

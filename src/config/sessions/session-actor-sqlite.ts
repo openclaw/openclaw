@@ -7,8 +7,10 @@ import type {
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
-import { projectSessionActorAuthority } from "./session-actor-command.js";
+import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
@@ -23,7 +25,9 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
+import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
   admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement"> &
@@ -36,7 +40,6 @@ export type SessionActorTransport = {
   run<T>(
     operation: (scope: {
       execute: SqliteWorkerStore<SessionActorOperations>["execute"];
-      captureGeneration(): { assertCurrent(): void };
     }) => Promise<T>,
     authorize: (
       request: SqliteWorkerAdmissionRequest,
@@ -91,33 +94,14 @@ export function createSqliteSessionActorExecutor(
   } & SessionActorExecutorGuards,
 ): SessionActorExecutor {
   const { target } = params;
-  let generation: { assertCurrent(): void } | undefined;
   let fenced = false;
-  const checkGeneration = (scope: TransportScope) => {
-    try {
-      generation?.assertCurrent();
-    } catch {
-      params.replica.invalidate();
-    }
-    generation = scope.captureGeneration();
-    generation.assertCurrent();
-  };
-  const isInstalled = (snapshot: SessionActorHotState): boolean => {
-    try {
-      generation?.assertCurrent();
-    } catch {
-      params.replica.invalidate();
-      return false;
-    }
-    return params.replica.read() === snapshot;
-  };
   const authorize = (
     authority: SessionActorAuthority,
     observe?: (
       native: NativeAdmission,
+      publication: unknown,
       stage: "transaction" | "commit",
-      state: SessionActorAuthorityFacts,
-      final: boolean,
+      snapshot: SessionActorAuthorityFacts,
     ) => void,
   ) => {
     let actorAdmissionSeen = false;
@@ -145,8 +129,15 @@ export function createSqliteSessionActorExecutor(
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
         const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
-        authority.authorize(request.stage, snapshot, facts.publication);
-        observe?.(native, request.stage, snapshot, facts.final === true);
+        const publication = facts.publication;
+        observe?.(native, publication, request.stage, snapshot);
+        authority.authorize(
+          request.stage,
+          snapshot,
+          isRecord(publication) && publication.kind === "session-actor-outcome"
+            ? publication.publication
+            : publication,
+        );
       } else if (
         actorAdmissionSeen &&
         (request.stage === "commit" || (request.stage === "transaction" && facts !== undefined))
@@ -162,15 +153,13 @@ export function createSqliteSessionActorExecutor(
   };
   const read = (authority: SessionActorAuthority) =>
     params.transport.run(async (scope) => {
-      checkGeneration(scope);
       params.assertReadable();
       authority.assertCurrent();
       let snapshot = params.replica.read();
-      for (let attempt = 0; !snapshot && attempt < 2; attempt += 1) {
+      if (!snapshot) {
         const pending = params.replica.beginRead();
         try {
           snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-          generation?.assertCurrent();
           pending.install(snapshot);
           // Disclose the immutable installed revision, including a superseding receipt.
           snapshot = params.replica.read();
@@ -179,7 +168,7 @@ export function createSqliteSessionActorExecutor(
         }
       }
       if (!snapshot) {
-        throw new Error("Session actor changed before its read could publish");
+        throw new SessionActorReadInvalidatedError();
       }
       fenced = false;
       params.assertReadable();
@@ -187,15 +176,8 @@ export function createSqliteSessionActorExecutor(
       authority.authorize("commit", snapshot);
       authority.assertCurrent();
       params.assertReadable();
-      if (!isInstalled(snapshot)) {
-        snapshot = params.replica.read();
-        if (!snapshot) {
-          throw new Error("Session actor changed before read disclosure");
-        }
-        authority.authorize("commit", snapshot);
-        authority.assertCurrent();
-        params.assertReadable();
-      }
+      // Policy callbacks do not write session state. A synchronous bookkeeping
+      // change during authorization is visible to the next read.
       return snapshot;
     }, authorize(authority));
   const command = async <Phase extends SessionActorPhase>(
@@ -206,13 +188,17 @@ export function createSqliteSessionActorExecutor(
   ): Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>> => {
     const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
-    const selected: {
-      native?: NativeAdmission;
-      transactionSnapshot?: SessionActorAuthorityFacts;
-      commitSnapshot?: SessionActorAuthorityFacts;
-    } = {};
+    let native: NativeAdmission | undefined;
+    let previousEntry: SessionActorAuthorityFacts["entry"];
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
+    let candidate: unknown;
+    const transfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+      if (candidate !== undefined) {
+        throw new Error("Session actor transferred more than one outcome");
+      }
+      candidate = value;
+    });
     const unknown = (error: unknown): Outcome => ({
       kind: "unknown",
       target,
@@ -240,7 +226,6 @@ export function createSqliteSessionActorExecutor(
       outcome = await params.transport.run(
         (scope) => {
           running = (async (): Promise<Outcome> => {
-            checkGeneration(scope);
             if (fenced) {
               return unknown(
                 new Error("Session actor requires reconciliation before another command"),
@@ -251,43 +236,27 @@ export function createSqliteSessionActorExecutor(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
-            const native = selected.native;
             let result: Outcome;
             if (native) {
               const settled = await native.retained.settled;
-              const evidence = native.admission.committed?.facts;
+              const witness = native.admission.committed?.facts;
+              const evidence =
+                isRecord(witness) && witness.kind === "session-actor-committed-transfer"
+                  ? transfer.completed && witness.transferId === transfer.id
+                    ? candidate
+                    : undefined
+                  : witness;
               const receipt = isRecord(evidence) ? evidence.receipt : undefined;
               if (
                 isRecord(evidence) &&
                 evidence.kind === "committed" &&
                 isRecord(receipt) &&
-                selected.transactionSnapshot !== undefined &&
-                selected.commitSnapshot !== undefined &&
                 receipt.kind === "session-actor-committed" &&
                 receipt.commandId === captured.commandId &&
                 receipt.phaseId === captured.phaseId &&
-                receipt.phase === name &&
-                isDeepStrictEqual(receipt.beforeVersion, selected.transactionSnapshot.version) &&
-                (captured.expected === undefined ||
-                  isDeepStrictEqual(receipt.beforeVersion, captured.expected)) &&
-                isDeepStrictEqual(receipt.afterVersion, selected.commitSnapshot.version) &&
-                selected.commitSnapshot.version.epoch ===
-                  selected.transactionSnapshot.version.epoch &&
-                selected.commitSnapshot.version.sequence ===
-                  selected.transactionSnapshot.version.sequence + 1 &&
-                isRecord(receipt.postimage) &&
-                isDeepStrictEqual(
-                  {
-                    target: receipt.postimage.target,
-                    version: receipt.postimage.version,
-                    entry: receipt.postimage.entry,
-                    writeToken: receipt.postimage.writeToken,
-                    dependencySessionIds: receipt.postimage.dependencySessionIds,
-                  },
-                  selected.commitSnapshot,
-                )
+                receipt.phase === name
               ) {
-                // SAFETY: The paired native receipt owns the result type; the checks above match its command and postimage.
+                // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
                 committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
@@ -296,22 +265,30 @@ export function createSqliteSessionActorExecutor(
                 }
                 result = committed;
                 try {
+                  // Retained effect predicates must observe this commit before its callbacks.
+                  if (target.database.kind === "file") {
+                    const entry = committed.receipt.postimage.entry;
+                    publishRetainedSessionEntryChange(
+                      target.database.physicalIdentity,
+                      target.sessionKey,
+                      entry ? projectSessionSharingEntry(entry) : undefined,
+                      previousEntry,
+                      true,
+                      entry,
+                    );
+                  }
+                  // Partial transcript publication precedes installation of the full actor replica.
+                  publishCommittedSessionTranscriptReceipts(
+                    committed.receipt.transcript.authorityReceipts,
+                  );
                   observer?.committed(committed);
                 } catch (error) {
                   result = preserveFailure(error);
                 }
               } else if (
-                evidence === undefined &&
+                witness === undefined &&
                 reply.ok &&
-                (reply.value.kind === "rolled-back" ||
-                  (reply.value.kind === "stale-version" &&
-                    captured.expected !== undefined &&
-                    isDeepStrictEqual(reply.value.expected, captured.expected) &&
-                    isDeepStrictEqual(
-                      projectSessionActorAuthority(reply.value.postimage),
-                      selected.transactionSnapshot,
-                    ) &&
-                    !isDeepStrictEqual(reply.value.postimage.version, captured.expected))) &&
+                (reply.value.kind === "rolled-back" || reply.value.kind === "stale-version") &&
                 (settled.kind === "not-entered" ||
                   native.admission.settlement?.kind === "completed")
               ) {
@@ -366,13 +343,13 @@ export function createSqliteSessionActorExecutor(
           })();
           return running;
         },
-        authorize(authority, (native, stage, snapshot, final) => {
-          selected.native = native;
+        authorize(authority, (admission, publication, stage, snapshot) => {
+          native = admission;
           if (stage === "transaction") {
-            selected.transactionSnapshot ??= snapshot;
+            previousEntry = snapshot.entry;
           }
-          if (stage === "commit" && final) {
-            selected.commitSnapshot = snapshot;
+          if (isRecord(publication) && publication.kind === "session-actor-outcome") {
+            transfer.accept(publication.transfer);
           }
         }),
       );
@@ -386,8 +363,8 @@ export function createSqliteSessionActorExecutor(
             outcome = preserveFailure(error);
           }
         } catch (settlementError) {
-          if (selected.native) {
-            await selected.native.retained.settled;
+          if (native) {
+            await native.retained.settled;
           }
           outcome = preserveFailure(settlementError);
         }
@@ -421,20 +398,11 @@ export function createSqliteSessionActorExecutor(
   const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
     params.assertReadable();
     authority.assertCurrent();
-    try {
-      generation?.assertCurrent();
-    } catch {
-      params.replica.invalidate();
-      return undefined;
-    }
     const installed = fenced ? undefined : params.replica.read();
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
       params.assertReadable();
-      if (!isInstalled(installed)) {
-        return undefined;
-      }
     }
     return installed;
   };

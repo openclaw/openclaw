@@ -98,6 +98,9 @@ describe("canonical shared-state resource drainage", () => {
       created.admission.identity.key,
     );
     expect(precreationProof?.identity.key).toMatch(/^path:/);
+    expect(Atomics.load(new BigInt64Array(precreationProof!.revision), 0)).not.toBe(
+      precreationProof!.epoch,
+    );
     expect(created.admission.coordinationKey).toBe(coordinationKey);
     absent.admission.assertCurrent();
     await closeOpenClawStateDatabaseByPathAsync(pathname);
@@ -173,11 +176,13 @@ describe("canonical shared-state resource drainage", () => {
     const original = lifecycle.capture(pathname);
     expect(original.identity.key).toMatch(/^path:/);
     const coordinationKey = original.coordinationKey;
+    const precreation = original.captureIntegrity!();
     expect(coordinationKey).toBe(original.identity.key);
     writeFileSync(pathname, "");
     linkSync(pathname, alias);
     const observed = lifecycle.capture(alias);
     expect(original.identity.key).toBe(observed.identity.key);
+    expect(Atomics.load(new BigInt64Array(precreation.revision), 0)).not.toBe(precreation.epoch);
     expect(original.coordinationKey).toBe(coordinationKey);
     expect(observed.coordinationKey).toBe(coordinationKey);
     lifecycle.publish(pathname);

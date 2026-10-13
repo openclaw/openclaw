@@ -11,12 +11,20 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
-import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -45,13 +53,13 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
-  const { resolveConversationCapabilityProfile } =
+  const { prepareConversationCapabilityProfile } =
     await import("../../agents/conversation-capability-profile.js");
   const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.source.sessionKey;
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const capabilityProfile = await prepareConversationCapabilityProfile({
     config,
     sessionKey,
     sandboxSessionKey: sessionKey,
@@ -113,6 +121,17 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   const reviewSession = resolveInternalSessionEffectsIdentity({ agentId, runId });
   const origin = foregroundPromptContext.cronCreatorCallerOrigin;
   const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
+  const writeScopes = [sessionKey, sqliteSessionIdWriteScope(candidate.source.sessionId)];
+  const readWriteToken = () =>
+    readSqliteDatabaseScopedWriteTokenForPath(candidate.source.storePath, writeScopes);
+  let validatedWriteToken: string | undefined;
+  using sourceLifetime: Disposable & {
+    entry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
+  } = {
+    [Symbol.dispose]() {
+      this.entry?.release();
+    },
+  };
 
   // Fork the foreground model context through the completed turn; the review's tool
   // schemas and prefix match the foreground so the provider prompt cache is reused.
@@ -120,6 +139,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     source: typeof candidate.source,
     assertPhysicalCurrent: () => void,
     assertPreparationCurrent: () => void,
+    databaseIdentity?: string,
   ) => {
     const sessionManager = await SessionManager.openModelContextAsync(source, {
       cwd: workspaceDir,
@@ -147,6 +167,18 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         }
         if (facts.contextValidated) {
           sourceEntry = current;
+          if (databaseIdentity) {
+            sourceLifetime.entry = retainPreparedSessionEntryPredicate({
+              databaseIdentity,
+              sessionKey,
+              entry: current,
+              matches: (_before, after) =>
+                after?.sessionId === current.sessionId &&
+                (after.lifecycleRevision ?? null) === (current.lifecycleRevision ?? null) &&
+                after.permissionMode === current.permissionMode,
+            });
+          }
+          validatedWriteToken = readWriteToken();
         }
       },
     );
@@ -175,7 +207,12 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
             );
           }
         };
-        return prepare({ ...candidate.source, ...scope }, assertSourceIdentity, assertCurrent);
+        return prepare(
+          { ...candidate.source, ...scope },
+          assertSourceIdentity,
+          assertCurrent,
+          expectedIdentity?.key,
+        );
       },
       abortSignal,
     );
@@ -187,16 +224,63 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     sessionId: sourceEntry.sessionId,
     lifecycleRevision: sourceEntry.lifecycleRevision ?? null,
   };
-  const assertSourceCurrent = () => {
+  const assertScopeCurrent = () => {
     assertPhysicalCurrent();
+    if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
+      throw new SessionTranscriptReadFenceError("Session review authority changed");
+    }
     if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto") {
       throw new Error("Skill Workshop was turned off during review.");
     }
-    // fs-safe requires synchronous authority immediately before mutation.
-    // SDK sync writers bypass the FIFO; the connection-local witness misses
-    // foreign commits. Retain this fence until the next SDK major retires them.
-    validateSessionTranscriptContextAnchor(source, candidate.source, sourceEntry);
   };
+  const assertReceiptCurrent = (token: string | undefined) => {
+    assertScopeCurrent();
+    if (token === undefined || readWriteToken() !== token) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+  };
+  const prepareSource = async (): Promise<PreparedSessionSourceAuthority> => {
+    assertScopeCurrent();
+    if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
+      // The reader retains writer admission through this callback. Reuse its
+      // authority until an owning session or transcript writer publishes a change.
+      validatedWriteToken = undefined;
+      await readSessionTranscriptAnchorsAsync(
+        source,
+        {
+          entryIds: [],
+          contextValidation: { through: candidate.source, expectedAuthority: sourceEntry },
+        },
+        abortSignal,
+        (facts) => {
+          if (facts.contextValidated) {
+            validatedWriteToken = readWriteToken();
+          }
+        },
+      );
+    }
+    const token = validatedWriteToken;
+    const assertCurrent = () => assertReceiptCurrent(token);
+    assertCurrent();
+    return { assertCurrent, checks: [] };
+  };
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    Object.assign(
+      () => {
+        // Model liveness follows admitted entry facts; each effect separately
+        // revalidates the completed-turn anchor and retains its exact write receipt.
+        assertScopeCurrent();
+        if (!sourceLifetime.entry) {
+          assertReceiptCurrent(validatedWriteToken);
+        }
+      },
+      {
+        assertScopeCurrent,
+        prepareSessionSource: prepareSource,
+        prepareSessionSourceScope: prepareSource,
+      },
+    ),
+  ]);
   const preparedRunAdmission = prepareAgentRunAdmission({
     cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(runId),

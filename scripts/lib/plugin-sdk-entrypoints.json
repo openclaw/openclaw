@@ -243,6 +243,8 @@
   "sqlite-runtime",
   "sqlite-runtime-testing",
   "sqlite-worker-runtime",
+  "database-engine-runtime",
+  "database-engine-worker-runtime",
   "session-transcript-hit",
   "session-visibility",
   "ssrf-dispatcher",

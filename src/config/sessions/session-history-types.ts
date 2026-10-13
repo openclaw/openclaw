@@ -1,8 +1,8 @@
-import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
 } from "../../gateway/session-artifact-read.js";
+import type { SessionTranscriptUsageSnapshot } from "../../gateway/session-transcript-derived-readers.js";
 import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
@@ -108,7 +108,6 @@ export type ChatHistoryPageParams = {
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
   cliHistoryHomeDir?: string;
-  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -186,6 +185,10 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "recent-usage";
+      params: { target: SessionTranscriptReadScope; maxBytes: number };
+    }
   | {
       kind: "history-event-page";
       params: {
@@ -291,6 +294,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
   | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "recent-text"; result: SessionRecentConversationText[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }

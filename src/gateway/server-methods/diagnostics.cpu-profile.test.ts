@@ -102,6 +102,7 @@ function request(
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
     context: {
+      getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
       requestEntryLifetime: options.gateway,
     } as unknown as GatewayRequestOptions["context"],

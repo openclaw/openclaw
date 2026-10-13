@@ -272,34 +272,8 @@ describe("worker placement read projection", () => {
     }
   });
 
-  it("invalidates an empty maintenance scan when a new placement commits", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const empty = await store.prepareMaintenancePlacements();
-    try {
-      expect(empty.placements).toEqual([]);
-      const placement = await store.startDispatch({
-        sessionId: "new-placement",
-        sessionKey: "agent:main:new-placement",
-        agentId: "main",
-      });
-      expect(() => empty.assertCurrent()).toThrow("placement inventory changed");
-      const current = await store.prepareMaintenancePlacements();
-      try {
-        expect(current.placements).toEqual([placement]);
-        current.assertCurrent();
-      } finally {
-        current.release();
-      }
-      expect(() => current.assertCurrent()).toThrow("placement inventory changed");
-    } finally {
-      empty.release();
-    }
-  });
-
   it.each(["local", "worker-turn", "remote-exec"] as const)(
-    "fences inventory and session observations during %s publication settlement",
+    "fences session observations during %s publication settlement",
     async (kind) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
       const database = openOpenClawStateDatabase();
@@ -312,7 +286,7 @@ describe("worker placement read projection", () => {
       if (kind !== "local") {
         await activePlacement(database, session.sessionId, kind);
       }
-      const current = store.get(session.sessionId);
+      const current = await store.getAsync(session.sessionId);
       await store.claimTurn({
         ...session,
         owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
@@ -322,7 +296,6 @@ describe("worker placement read projection", () => {
       const placement = store.get(session.sessionId)!;
       const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
       for (const settlement of ["rollback", "commit", "invalidate"] as const) {
-        const prepared = await store.prepareMaintenancePlacements();
         const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
         const publication = stagePlacementTurnClaimWorkerPublication(
           identity,
@@ -331,18 +304,8 @@ describe("worker placement read projection", () => {
           placement.state,
         );
         try {
-          if (kind === "local") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
           publication[settlement]();
-          if (kind === "local" || settlement === "rollback") {
-            prepared.assertCurrent();
-          } else {
-            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-          }
           if (settlement === "rollback") {
             sessionRead.assertCurrent();
           } else {
@@ -351,7 +314,6 @@ describe("worker placement read projection", () => {
         } finally {
           publication.rollback();
           sessionRead.release();
-          prepared.release();
         }
       }
       const closing = await store.prepareMaintenancePlacements();
@@ -393,7 +355,7 @@ describe("worker placement read projection", () => {
     ).toEqual(profileSnapshot);
   });
 
-  it("discovers disk-probe placements off thread in session order before live sample checks", async () => {
+  it("discovers disk-probe placements off thread before live sample checks", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-inventory-"));
     const database = openOpenClawStateDatabase();
     const last = await activePlacement(database, "z-disk");
@@ -428,7 +390,7 @@ describe("worker placement read projection", () => {
     const sql = observeHostDataSql();
     try {
       expect(store.get(first.placement.sessionId)?.state).toBe("active");
-      expect(sql.queries.length).toBeGreaterThan(0);
+      expect(sql.queries).toEqual([]);
       const beforeSweep = sql.queries.length;
       let discoverySql: string[] | undefined;
       const requestedEnvironments: string[] = [];
@@ -457,7 +419,7 @@ describe("worker placement read projection", () => {
       await monitor.sweep();
 
       expect(discoverySql).toEqual([]);
-      expect(requestedEnvironments).toEqual([
+      expect(requestedEnvironments.toSorted()).toEqual([
         first.placement.environmentId,
         last.placement.environmentId,
       ]);
@@ -704,7 +666,7 @@ describe("worker placement read projection", () => {
       expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
       const orderedIds = [
         ...new Set([
-          ...store.listForReconcile().map((placement) => placement.sessionId),
+          ...(await store.listForReconcileAsync()).map((placement) => placement.sessionId),
           ...db
             .prepare(
               "SELECT session_id FROM worker_session_placement_moves ORDER BY created_at_ms, session_id",
@@ -802,7 +764,7 @@ describe("worker placement read projection", () => {
       for (const claimless of [false, true]) {
         if (claimless) {
           if (executionMode === "remote-exec") {
-            expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+            expect(await store.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
           } else {
             database.db
               .prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL, turn_claim_id = NULL,

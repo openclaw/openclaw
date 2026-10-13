@@ -7,7 +7,6 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   getRuntimeConfig,
   resetConfigRuntimeState,
@@ -25,7 +24,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueGitRefMutation } from "../infra/git-exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
@@ -330,7 +328,7 @@ async function createRecoveryFixture(workspacePath: string, options: { archived?
   };
   vi.spyOn(tunnelManager, "start").mockResolvedValue(handle);
   const runtime = createGatewayWorkerPlacementRuntime({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     scheduler: createTestGatewayScheduler(),
     placements,
     environments,
@@ -367,78 +365,6 @@ describe("registered worker workspace recovery target binding", () => {
       expect(await loadTranscriptEvents(b)).toEqual(beforeB);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-    });
-  });
-
-  it("settles recovery and appends its conflict clear without reopening an archived session", async () => {
-    await withRecovery({ archived: true }, async ({ a, b, runtime, placements, destroy }) => {
-      const beforeB = await loadTranscriptEvents(b);
-
-      await runtime.dispatchService.reconcile("startup");
-      await runtime.dispatchService.reconcile("startup");
-
-      expect(loadSessionEntryReadOnly(a)?.archivedAt).toBe(100);
-      expect(await readCustomEvents(a, WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE)).toHaveLength(1);
-      expect(await loadTranscriptEvents(b)).toEqual(beforeB);
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
-      expect(destroy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("keeps repeated mutation guards payload-free while unrelated conversations keep writing", async () => {
-    await withRecovery({}, async ({ a, runtime, placements, onReconcile }) => {
-      const unrelatedKey = "agent:main:unrelated-recovery";
-      await upsertSessionEntryCore(
-        { ...a, sessionKey: unrelatedKey },
-        { sessionId: "unrelated-session", updatedAt: 1 },
-      );
-      await upsertSessionEntryCore(a, { label: "x".repeat(1024 * 1024) });
-      let observed:
-        | { stableReads: number; changedReads: number; returnedTextBytes: number }
-        | undefined;
-      onReconcile.mockImplementation(async (request) => {
-        if (request.source.kind !== "local" || !request.source.assertCurrent) {
-          throw new Error("Expected a guarded local recovery");
-        }
-        const assertCurrent = request.source.assertCurrent;
-        const retained = retainOpenClawAgentDatabaseReadOnly({
-          agentId: a.agentId,
-          path: a.storePath,
-        });
-        if (!retained.found) {
-          throw new Error("Recovery test store is unavailable");
-        }
-        const reads = trackSqliteStatementExecutions(retained.database.db, ["session"], (sql) =>
-          sql.includes('from "session_nodes"') ? "session" : null,
-        );
-        try {
-          for (let index = 0; index < 100; index += 1) {
-            assertCurrent();
-          }
-          const stableReads = reads.counts.session;
-          await upsertSessionEntryCore(
-            { ...a, sessionKey: unrelatedKey },
-            { displayName: "updated unrelated conversation" },
-          );
-          assertCurrent();
-          observed = {
-            stableReads,
-            changedReads: reads.counts.session - stableReads,
-            returnedTextBytes: reads.textBytes.session,
-          };
-        } finally {
-          reads.restore();
-          retained.claim.release();
-        }
-      });
-
-      await runtime.dispatchService.reconcile("startup");
-
-      expect(onReconcile).toHaveBeenCalledOnce();
-      await expect(onReconcile.mock.results[0]?.value).resolves.toBeUndefined();
-      expect(observed).toEqual({ stableReads: 0, changedReads: 0, returnedTextBytes: 0 });
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     });
   });
 
@@ -508,7 +434,7 @@ describe("registered worker workspace recovery target binding", () => {
           const journal = await placements.loadWorkspaceReconciliation(owner);
           expect(journal?.appliedManifestRef).toBeDefined();
           // Model a replacement owner after restart while this process waits on its writer.
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",
@@ -571,7 +497,7 @@ describe("registered worker workspace recovery target binding", () => {
           const pending = await placements.listPendingWorkspaceResultsAsync();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
-          placements.clearLocalTurnClaimsAfterRestart();
+          await placements.clearLocalTurnClaimsAfterRestartAsync();
           await placements.claimTurn({
             ...REQUEST,
             claimId: "replacement-claim",

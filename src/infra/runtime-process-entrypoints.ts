@@ -42,6 +42,7 @@ export const runtimeProcessEntrypoints = {
   localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
   identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
   workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
+  skillsDiscovery: runtimeProcessEntrypoint("skills/runtime/discovery.worker"),
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
   progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
@@ -54,9 +55,6 @@ export const runtimeProcessEntrypoints = {
     "config/sessions/session-message-rewrite.worker",
   ),
   sessionDiskBudget: runtimeProcessEntrypoint("config/sessions/disk-budget.worker"),
-  sessionTranscriptStats: runtimeProcessEntrypoint(
-    "config/sessions/session-transcript-stats.worker",
-  ),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
   acpParentStreamStore: runtimeProcessEntrypoint(
     "agents/subagents/spawn/acp-parent-stream-store.worker",
@@ -68,6 +66,7 @@ export const runtimeProcessEntrypoints = {
     "agents/harness/context-engine-turn-outbox.worker",
   ),
   sqliteStore: runtimeProcessEntrypoint("infra/sqlite-store.worker"),
+  sqliteWriterAdmission: runtimeProcessEntrypoint("infra/sqlite-writer-admission.worker"),
   agentSchemaInspection: runtimeProcessEntrypoint("state/openclaw-agent-schema-inspection.worker"),
   stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
   githubExec: runtimeProcessEntrypoint("agents/github-exec-launcher"),

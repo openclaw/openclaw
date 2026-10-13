@@ -119,6 +119,7 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
     }) &&
     (request.projection === undefined ||
       request.projection === "full" ||
+      request.projection === "sharing" ||
       request.projection === "exact") &&
     !request.lifecycleSessionKey &&
     !request.replyInitializationSessionKey &&
@@ -164,9 +165,10 @@ export function readRetainedSessionEntryFacts(
     return undefined;
   }
   nativeOwner?.assertCurrent();
-  const projection = request.snapshotFields ?? "full";
+  const projection = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
   const entries: SessionEntryCohortResult["entries"] = [];
   const members: NonNullable<SessionEntryCohortResult["members"]> = {};
+  const sharingMembers: NonNullable<SessionEntryCohortResult["sharing"]>["members"] = [];
   const participantRecords: NonNullable<SessionEntryCohortResult["participantRecords"]> = {};
   let source: SessionEntryCohortResult["source"] | undefined;
   let databaseIdentity: SessionEntryCohortResult["databaseIdentity"] | undefined;
@@ -185,6 +187,7 @@ export function readRetainedSessionEntryFacts(
     const facts = readSessionActorEntryFacts(target);
     if (
       !facts ||
+      (request.projection === "sharing" && (!facts.entry || facts.members === undefined)) ||
       (facts.snapshots !== "full" &&
         (projection === "full" || projection.some((field) => !facts.snapshots.includes(field)))) ||
       (request.includeMembers && facts.members === undefined) ||
@@ -216,6 +219,12 @@ export function readRetainedSessionEntryFacts(
       });
       if (facts.members) {
         members[key] = facts.members;
+        if (request.projection === "sharing") {
+          sharingMembers.push({
+            sessionKey: key,
+            identityIds: facts.members.map(({ identityId }) => identityId),
+          });
+        }
       }
       if (facts.participants?.length) {
         participantRecords[key] = facts.participants;
@@ -249,6 +258,16 @@ export function readRetainedSessionEntryFacts(
     lifecycleTimestamps: {},
     source,
     databaseIdentity,
+    ...(request.projection === "sharing"
+      ? {
+          sharing: {
+            source: { agentId: database.agentId, path: database.path },
+            databaseIdentity: `file:${databaseIdentity.identity}`,
+            members: sharingMembers,
+            placeholders: [],
+          },
+        }
+      : {}),
   };
 }
 
@@ -282,7 +301,7 @@ export function retainSessionEntryReadFacts(
     }
     const previous = readSessionActorEntryFacts(target);
     const entry = byKey.get(toUSVString(key));
-    const fields = request.snapshotFields ?? "full";
+    const fields = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
     retainSessionActorEntryFacts(
       target,
       {
@@ -295,6 +314,7 @@ export function retainSessionEntryReadFacts(
         participants: result.participantRecords
           ? (result.participantRecords[key] ?? [])
           : previous?.participants,
+        projection: previous?.projection,
       },
       result.databaseIdentity.incarnation,
     );

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   loadSessionEntry,
@@ -18,6 +19,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("reuses admitted session facts for artifacts and observes subsequent visibility changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:prepared-artifacts",

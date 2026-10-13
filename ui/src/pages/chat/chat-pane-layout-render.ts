@@ -6,6 +6,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSessionBackground } from "../../components/session-background-view.ts";
@@ -58,6 +59,10 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private conversationTabDependencies: readonly unknown[] = [];
+  private conversationTab:
+    | { label: string; icon: ReturnType<typeof renderAgentIdentityAvatar> }
+    | undefined;
   private readonly toolIcons = new ChatToolIconController(
     this,
     () => this.context,
@@ -217,7 +222,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
-    const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
+    // Publish the mutable owner's current fields across the reactive property boundary.
+    const companionThread = {
+      ...this.sessionCompanionThreads.view(companionSessionKey, currentAgentId),
+    };
     const companionPresented = slotPresentation("companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
     this.syncSessionCompanionPresentation(companionPresented.isPresented());
@@ -368,12 +376,28 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
                     !this.presented && this.connectionGeneration === connectionGeneration,
                 })}
               ></openclaw-plugin-contributions>`;
+    const avatar = resolveAssistantDisplayAvatar(chatProps);
+    const conversationTabDependencies = [
+      chatProps.assistantName,
+      avatar.id,
+      avatar.avatar,
+      avatar.textAvatar,
+      currentThemeBranding(),
+    ];
+    if (
+      conversationTabDependencies.some(
+        (value, index) => value !== this.conversationTabDependencies[index],
+      )
+    ) {
+      this.conversationTabDependencies = conversationTabDependencies;
+      this.conversationTab = {
+        label: chatProps.assistantName,
+        icon: renderAgentIdentityAvatar(avatar),
+      };
+    }
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
-      conversationTab: {
-        label: chatProps.assistantName,
-        icon: renderAgentIdentityAvatar(resolveAssistantDisplayAvatar(chatProps)),
-      },
+      conversationTab: this.conversationTab,
       availableWidth: this.paneWidth,
       fetchFavicon: resolveChatLinkFaviconFetcher(state),
       callbacks,

@@ -4,6 +4,10 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Ws from "../../../packages/gateway-client/src/websocket.test-support.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
@@ -104,6 +108,7 @@ async function connectTestWs(
 
 describe("attachGatewayWsConnectionHandler", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     cleanupTalkConnectionMock.mockReset();
@@ -115,6 +120,7 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    clearRuntimeConfigSnapshot();
   });
 
   it("keeps public worker sockets off the legacy challenge and plugin surface", async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
@@ -24,7 +24,26 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  metadataScopes: [] as AsyncDisposable[],
 }));
+
+vi.mock("../commands/doctor/shared/plugin-metadata-snapshot-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+    >();
+  return {
+    ...actual,
+    createDoctorPluginMetadataSnapshotScope: (
+      params: Parameters<typeof actual.createDoctorPluginMetadataSnapshotScope>[0],
+    ) => {
+      const scope = actual.createDoctorPluginMetadataSnapshotScope(params);
+      vi.spyOn(scope, Symbol.asyncDispose);
+      mocks.metadataScopes.push(scope);
+      return scope;
+    },
+  };
+});
 
 vi.mock("../agents/model-catalog.js", () => ({
   findModelInCatalog: (
@@ -138,6 +157,7 @@ function expectSchemaError(findings: readonly HealthFinding[], expected: Partial
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
+    mocks.metadataScopes.length = 0;
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -150,6 +170,38 @@ describe("doctor runtime tool schema checks", () => {
       .mockImplementation(({ context }) => context.tools);
     mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
+  });
+
+  afterEach(() => {
+    for (const scope of mocks.metadataScopes) {
+      expect(scope[Symbol.asyncDispose]).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("releases its metadata scope when inspection preparation returns early", async () => {
+    const tools = await import("../plugins/tools.js");
+    const acquire = vi.spyOn(tools, "acquirePluginToolInspectionRegistry");
+    const failure = new Error("Inspection preparation failed");
+    await acquire.withImplementation(
+      async () => {
+        throw failure;
+      },
+      async () => {
+        await expect(collectRuntimeToolSchemaFindings({})).resolves.toContainEqual(
+          expect.objectContaining({ severity: "warning", requirement: failure.message }),
+        );
+      },
+    );
+    acquire.mockRestore();
+  });
+
+  it("leaves a supplied metadata scope with its caller", async () => {
+    const { createDoctorPluginMetadataSnapshotScope } =
+      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js");
+    await using scope = createDoctorPluginMetadataSnapshotScope({});
+    await collectRuntimeToolSchemaFindings({}, { runWithPluginMetadataSnapshot: scope.run });
+    expect(mocks.metadataScopes).toHaveLength(1);
+    expect(scope[Symbol.asyncDispose]).not.toHaveBeenCalled();
   });
 
   it("reports active bundle MCP schemas before a model turn", async () => {

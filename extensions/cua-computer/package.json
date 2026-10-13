@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.0",
-    "@trycua/cua-driver": "0.33.1",
+    "@openclaw/fs-safe": "0.26.2",
+    "@trycua/cua-driver": "0.33.4",
     "rastermill": "0.4.0",
     "zod": "4.6.5"
   },
@@ -18,30 +18,30 @@
   },
   "cuaDriverArtifacts": {
     "darwin-universal-binary": {
-      "archiveSha256": "8bb7aa27f5f33ae2fb7a8cfe0804d4b962487da6fd27fd3bc5d61fe039831d6c"
+      "archiveSha256": "1a1c7979749ee04585d16b17d6e3588ae8d9553dfbc84e6729af09a88a8b4775"
     },
     "linux-arm64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "61351917112a7691217227073561b258d035a2dd57605f91edce6c93a4c60f35",
-        "libcua_driver_sdk.so": "043aa493cc0adae437892bebe6176ea84c02b2cfe9ed7cb3b6c1185eb4c9b408"
+        "cua_driver_node_runtime.node": "280a88c264f4406762cb277df16d951b40858024a7f3fc045feddc8848f2b66f",
+        "libcua_driver_sdk.so": "44b2fab1994490fe5726e4cfb195ca72dc8bdee52900554446febc0135bd5373"
       }
     },
     "linux-x64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "d7b6c20f9d56a20b8eab3001e64e703bc76f19cda698990cf262ada55bb24c45",
-        "libcua_driver_sdk.so": "4d1c6e5f03eea5c5da5c6f60e9ff7247933a5abec4d44915cf88013fec94945f"
+        "cua_driver_node_runtime.node": "4c3c18772a0805e7682d63439aa075bb67d91d7e4ad46aa007eb5894078dfdb4",
+        "libcua_driver_sdk.so": "d645e220c8f490ec5fbd4dbab8d509bdeb3590a96228cc1c4ad01e9dd19caa7d"
       }
     },
     "win32-arm64-msvc": {
       "files": {
-        "cua_driver_sdk.dll": "250db2a39a4834ffecaca6d7ae60a2b3f581a619e47f9b7767cb5f1ff42f3d96",
-        "cua_driver_node_runtime.node": "c15baf1cfab5eb4f108f9d2d6dcded76cdfd5fffcda4af9041843e06db7b6740"
+        "cua_driver_sdk.dll": "5f5784a148486c057e5b425c12770fb26f03f9ddf1ecf19fd067978a67cc551c",
+        "cua_driver_node_runtime.node": "003d7de1f901d91b94bc362ae387ee6d5371436574195390f33517406afa7c7f"
       }
     },
     "win32-x64-msvc": {
       "files": {
-        "cua_driver_sdk.dll": "f731d2c4b7985561bb9be406c89f6fd37d71fe94f6e751dcbd2a9b0d5e50b5a9",
-        "cua_driver_node_runtime.node": "b15d2ef6d84d6b969e288fe50fccec6c68436fc7e5b9c715832c4b01d401bf3a"
+        "cua_driver_sdk.dll": "ce7faf21267c9ae0c3e80ad9dbbdf93258edaae4c4dd276e5b036f96f7208242",
+        "cua_driver_node_runtime.node": "826750c50bd93fd10e2aca5db892c408469043d3cb8371b7403a9922a735f06b"
       }
     }
   },

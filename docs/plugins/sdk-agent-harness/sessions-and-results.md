@@ -57,12 +57,19 @@ to `<OPENCLAW_STATE_DIR>/acpx` when the new default is empty. Set
 values are never relocated. Failed adoption warns and retains the old location
 for the process so an update does not silently hide existing sessions.
 
-`withSessionDeletion` acquires the native owner's lease before calling
-`run({ commit, rollback })`. Core invokes the synchronous `commit()` at the
-session row deletion boundary and `rollback()` if the transaction fails.
-Rollback must also tolerate a failed or unapplied commit. Keep asynchronous
-subscription cleanup after `run` so it does not hold the SQLite writer queue;
-do not restore bindings for errors after the session transaction committed.
+`withSessionDeletion` acquires the native owner's lease before invoking `run`.
+For stored native bindings, use `createNativeSessionBindingLifecycleV2` so core
+can commit deletion and rollback through its worker participant. Use
+`createNativeSessionCommitFinalizer` for effects that only run after commit.
+Opaque `run({ commit, rollback })` callbacks remain deprecated compatibility:
+for durable Gateway deletion, core invokes `commit()` only after the worker
+acknowledges the session commit and does not call `rollback()` for a failed
+database write. Legacy cleanup failures warn without undoing deletion; cleanup
+must tolerate an absent session and be safe to retry after a process exit.
+Stopped-owner maintenance and process-local incognito deletion retain their
+native transaction contract. Keep asynchronous subscription cleanup after `run`;
+do not restore bindings after the session transaction committed. See
+[deletion companions](/plugins/sdk-migration/compatibility-policy#harness-deletion-companions).
 
 Recheck `params.assertCurrent()` after awaited work and immediately before
 mutating native state. The callback belongs to one registered harness lifetime;
@@ -86,13 +93,17 @@ Official harnesses use the JavaScript-only private
 Plugin SDK contract. Binding mutations use action-bound plugin-state observations
 and conditional writes in the shared-state worker. Durable bundled session
 deletion and conditional rollback settle in the executing agent worker.
-Synchronous reads still serve native lease assertions; opaque released deletion
-callbacks, incognito sessions, and message-cut transactions keep their existing
-native ownership.
-`createNativeSessionBindingLifecycle` owns exact-token lease acquisition,
+Final native lease assertions stay synchronous; opaque
+released deletion callbacks, incognito sessions, and message-cut transactions
+keep their existing native ownership.
+`createNativeSessionBindingLifecycleV2` owns exact-token lease acquisition,
 renewal, mutation fences, and transactional deletion/rollback. The backend
-supplies matching synchronous and asynchronous views of the same plugin-state
-namespace, its record codec, acquisition/retention policy, errors, and timing.
+supplies `NativeSessionBindingStateStoreV2` over the same plugin-state namespace,
+including awaited `lookup`, action-bound `withCurrent`, and the synchronous
+effect guard `assertLeaseCurrent`. Supply its `workerCodec`, record codec,
+acquisition/retention policy, errors, and timing. The old
+`createNativeSessionBindingLifecycle` and its synchronous store view remain
+deprecated compatibility until the next Plugin SDK major.
 Pass host authority through `assertCurrent` and validate the expected generation
 in `assertRecordCurrent`. Leases coordinate storage; they grant no execution
 authority. Keep native cleanup after the host transaction commits.
@@ -103,10 +114,16 @@ Combine it with host authority for normal work. Cleanup may use retained lease
 ownership after host retirement, but must reject an expired, replaced, or closed
 lease even while the harness remains alive.
 
-`captureNativeSessionGenerationAuthority`, `reclaimNativeSessionGeneration`,
-and `resolveNativeSessionBinding` preserve the host generation and predecessor
-across waits, adopting a verified predecessor before stale reclamation. A missing
-host entry permits an ephemeral session; a failed read cannot authorize a binding.
+Await `prepareNativeSessionGenerationAuthority`,
+`reclaimNativeSessionGenerationWithAuthority`, and
+`resolveNativeSessionBindingWithAuthorityV2` to preserve the host generation and
+predecessor across waits, adopting a verified predecessor before stale
+reclamation. The V2 resolver awaits `readBinding` and returns
+`{ binding, authority }`. A missing host entry permits an ephemeral session; a
+failed read cannot authorize a binding. The older generation helpers and the
+non-V2 `resolveNativeSessionBindingWithAuthority` retain synchronous binding
+reads only for compatibility; see the
+[generation authority migration](/plugins/sdk-migration/compatibility-policy#native-session-generation-authority).
 
 `createNativeSessionInitializationOwner` associates binding and upstream-link
 writes with the exact host creation handle. Rollback requires the matching
@@ -169,11 +186,11 @@ Use `isDeliveredMessagingToolSendToCurrentSource` for source-route comparisons a
 transcript owner's confirmation. Presentation middleware cannot establish new
 delivery facts.
 
-The same runtime entrypoint exports `sanitizeToolArgs` for diagnostic tool
-arguments and event payloads. It redacts nested fields without mutating the input
-and preserves own JSON keys, including `__proto__`; repeated references become
-`"[Circular]"`. Use `sanitizeToolResult` for result presentation, which also applies
-the shared result-size and image-storage rules.
+Pass tool arguments unchanged to execution and event consumers; the former
+`sanitizeToolArgs` export has been removed. Use `sanitizeToolResult` for result
+presentation and its shared size and image-storage rules. It does not mask
+secrets. Secret masking belongs at logging and diagnostic export boundaries;
+`logging.redactPatterns` does not apply to tool or transcript content.
 
 For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
 from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its

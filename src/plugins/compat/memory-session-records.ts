@@ -14,7 +14,7 @@ export const MEMORY_SESSION_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-inventory-readers",
     surfaces: ["loadArchivedSessions", "resolveMemorySessionTargets"],
     diagnostics: [
-      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+      "TypeScript @deprecated annotations, migration documentation, and a runtime warning once per plugin and family",
     ],
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
@@ -33,9 +33,9 @@ export const MEMORY_SESSION_COMPAT_RECORDS = [
     warningStarts: "2026-10-11",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Await loadMemorySessionMetadataAsync and loadMemorySessionMetadataBatchAsync from memory-core-host-engine-sessions. Bundled ingestion uses the history worker; synchronous metadata readers retain their signatures until the next Plugin SDK major.",
+      "Await loadMemorySessionMetadataAsync and loadMemorySessionMetadataBatchAsync from memory-core-host-engine-sessions. Bundled ingestion uses the history worker; the synchronous metadata reader retains its signature until the next Plugin SDK major.",
     docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-inventory-readers",
-    surfaces: ["loadMemorySessionMetadata", "loadMemorySessionMetadataBatch"],
+    surfaces: ["loadMemorySessionMetadata"],
     diagnostics: [
       "TypeScript @deprecated annotations, migration documentation, and one shared DEP_PLUGIN_SDK warning per plugin and memory-session family on main-thread legacy use",
     ],

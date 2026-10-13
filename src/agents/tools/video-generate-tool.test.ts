@@ -19,6 +19,10 @@ import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as pluginConfig from "../../plugins/config-state.js";
@@ -67,7 +71,9 @@ function savedMedia(fileName: string, size: number, contentType = "video/mp4") {
 function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
-  return { agents: { defaults } };
+  const config = { agents: { defaults } };
+  setRuntimeConfigSnapshot(config, config);
+  return config;
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({
@@ -229,6 +235,7 @@ describe("createVideoGenerateTool", () => {
   afterEach(() => {
     clearPluginMetadataLifecycleCaches();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
   });
 
   it("exposes video generation for an auth-backed video provider", () => {
@@ -638,7 +645,10 @@ describe("createVideoGenerateTool", () => {
   defineMediaGenerationCancellationTests({
     kind: "video",
     tasks: taskExecutorMocks,
-    createTool: (options) => expectVideoGenerateTool(createVideoGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return expectVideoGenerateTool(createVideoGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "channel:1" },
     references: ["./first.png", "./second.png"],
     referenceSignal: "caller",
@@ -667,7 +677,10 @@ describe("createVideoGenerateTool", () => {
     kind: "video",
     tasks: taskExecutorMocks,
     listTasks: mediaActivityMocks.listOperations,
-    createTool: (options) => expectVideoGenerateTool(createVideoGenerateTool(options)),
+    createTool: (options) => {
+      setRuntimeConfigSnapshot(options.config ?? {}, options.config);
+      return expectVideoGenerateTool(createVideoGenerateTool(options));
+    },
     requesterOrigin: { channel: "discord", to: "channel:1" },
     setupProviders: () => {
       vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([

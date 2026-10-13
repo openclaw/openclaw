@@ -156,7 +156,7 @@ function normalizeAssistantMediaSource(source: string): string | null {
   return trimmed;
 }
 
-type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
+type AssistantMediaPolicy = NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
 function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
@@ -246,7 +246,12 @@ async function resolveAssistantMediaAvailability(
       mimeType && (mediaKind === "audio" || mediaKind === "video")
         ? await resolvePlaybackMetadataForSource({
             sourcePath: opened.realPath,
-            sourceStat: opened.stat,
+            sourceStat: {
+              size: opened.stat.size,
+              mtimeMs: opened.stat.mtimeMs,
+              ctimeMs: opened.stat.ctimeMs,
+              exactIdentity: opened.exactIdentity,
+            },
             mimeType,
             kind: mediaKind,
             signal,
@@ -344,7 +349,7 @@ export async function handleControlUiAssistantMediaRequest(
     }
   }
   const policyParams = { config: opts?.config ?? {}, sessionKey, agentId };
-  const policy = resolveAssistantMediaPolicy({
+  const policy = await resolveAssistantMediaPolicy({
     ...policyParams,
     requestAuth: requestAuth ?? undefined,
     reader: isMetaRequest ? undefined : ticketCandidate?.reader,
@@ -353,6 +358,7 @@ export async function handleControlUiAssistantMediaRequest(
     respondControlUiNotFound(res);
     return true;
   }
+  using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.placementRead?.release() };
   if (relativeSource) {
     if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
       respondControlUiNotFound(res);
@@ -382,7 +388,7 @@ export async function handleControlUiAssistantMediaRequest(
   const assertCurrentPolicy = () =>
     assertAssistantMediaPolicyCurrent(
       policyParams,
-      policy,
+      mediaPolicy,
       Boolean(allowance),
       requestAuth ?? undefined,
     );
@@ -438,7 +444,12 @@ export async function handleControlUiAssistantMediaRequest(
     ) {
       const playback = await resolvePlaybackTranscode({
         sourcePath: opened.realPath,
-        sourceStat: opened.stat,
+        sourceStat: {
+          size: opened.stat.size,
+          mtimeMs: opened.stat.mtimeMs,
+          ctimeMs: opened.stat.ctimeMs,
+          exactIdentity: opened.exactIdentity,
+        },
         mimeType: contentType,
         kind: mediaKind,
         signal: byteStream.signal,

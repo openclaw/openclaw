@@ -17,6 +17,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../../acp/runtime/registry.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -206,6 +207,7 @@ it.each([
       );
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      await captureRuntimeConfigAsyncReader()();
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "worker",
@@ -243,6 +245,7 @@ it.each([
       );
       clearConfigCache();
       clearRuntimeConfigSnapshot();
+      await captureRuntimeConfigAsyncReader()();
       managerTesting.resetAcpSessionManagerForTests();
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,

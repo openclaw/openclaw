@@ -118,7 +118,7 @@ describe("public session document", () => {
     );
   });
 
-  it("groups tool work between every assistant message with bounded redacted summaries", () => {
+  it("groups tool work between every assistant message with bounded unmasked summaries", () => {
     const secret = `sk-${"a".repeat(48)}`;
     const html = render([
       { role: "assistant", phase: "commentary", content: "Checking the files." },
@@ -150,20 +150,21 @@ describe("public session document", () => {
     expect(html).toContain("Ran 2 tools");
     expect(html).toContain("src/example.ts");
     expect(html).not.toMatch(/RESULT_BODY_MUST_STAY_PRIVATE|THOUGHT_MUST_STAY_PRIVATE|TAIL_MARKER/);
-    expect(html).not.toContain(secret);
+    expect(html).toContain(secret);
     expect(html).not.toContain('<details class="tools" open');
     expect(html.indexOf("Checking the files.")).toBeLessThan(html.indexOf("Ran 2 tools"));
     expect(html.indexOf("Ran 2 tools")).toBeLessThan(html.indexOf("The cause is clear."));
   });
 
   it("links user, assistant, and tool images only through entry-scoped public media", () => {
+    const fileName = `sk-${"a".repeat(48)}.png`;
     const html = render(
       [
         {
           role: "user",
           __openclaw: { id: "user-entry" },
           content: [
-            { type: "image", data: "PRIVATE_BYTES", fileName: "photo.png" },
+            { type: "image", data: "PRIVATE_BYTES", fileName },
             { type: "file", fileName: "notes.pdf", url: "file:///private/notes.pdf" },
           ],
         },
@@ -191,6 +192,7 @@ describe("public session document", () => {
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
     expect(html.match(/<img /g)).toHaveLength(3);
+    expect(html).toContain(`alt="${fileName}"`);
     for (const entry of ["user-entry", "assistant-entry", "tool-entry"]) {
       expect(html).toContain(`&amp;entry=${entry}&amp;attachment=content-0`);
     }
@@ -233,7 +235,7 @@ describe("public session document", () => {
     );
   });
 
-  it("strips generated envelopes and applies built-in and operator redaction", () => {
+  it("strips generated envelopes while preserving conversation text", () => {
     const token = `sk-${"a".repeat(48)}`;
     const operatorSecret = "internal-ticket-8315";
     applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
@@ -252,8 +254,9 @@ describe("public session document", () => {
       expect(html).toContain("Visible response");
       expect(html).not.toContain("private runtime context");
       expect(html).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-      expect(html).not.toContain(token);
-      expect(html).not.toContain(operatorSecret);
+      expect(html).toContain(token);
+      expect(html).toContain(operatorSecret);
+      expect(html).toContain(`<title>Shared ${token} ${operatorSecret} · OpenClaw</title>`);
     } finally {
       resetLogger();
     }

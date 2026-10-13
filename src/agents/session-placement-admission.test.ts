@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   enqueueCommandInLane,
@@ -44,11 +48,16 @@ const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = 
   runLocal,
 ) => await runLocal();
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
   settleRequesterAfterSessionSpawns.mockReset();
   settleRequesterAfterSessionSpawns.mockResolvedValue(true);
+  clearRuntimeConfigSnapshot();
 });
 
 describe("captured compaction placement owner", () => {

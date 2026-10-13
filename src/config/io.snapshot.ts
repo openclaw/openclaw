@@ -296,7 +296,7 @@ async function readConfigSnapshotWithPreparation(
           : options.prepareValidation
             ? prepareConfigSnapshotValidation(validationRequest)
             : withSynchronousArtifactPreservingStateSnapshot(() => {
-                const pending = context.resolveDeferredPluginMigrations();
+                const pending = context.options.deferredPluginMigrations;
                 return {
                   deferredPluginMigrations: pending,
                   validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {

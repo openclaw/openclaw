@@ -3,10 +3,7 @@ import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
 } from "../infra/sqlite-worker-operation-admission.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "./openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
@@ -20,7 +17,6 @@ import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,
   parseUserGitHubConnection,
-  resolvePersonalGitHubOwnerInDatabase,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -101,14 +97,6 @@ export async function resolvePersonalGitHubOwnerAsync(profile: string) {
   );
   context.admission.assertCurrent();
   return resolved;
-}
-
-/** Native final-effect guard; preparation uses the shared-state worker. */
-export function resolvePersonalGitHubOwner(
-  profile: string,
-  db = openOpenClawStateDatabase().db,
-): string | undefined {
-  return resolvePersonalGitHubOwnerInDatabase(profile, db);
 }
 
 /** Native adapter for the released synchronous personal OAuth service contract. */

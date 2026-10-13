@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -16,7 +20,14 @@ import {
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-transcript-markers-");
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-transcript-markers-",
+);
 const timestamp = "2026-08-11T18:00:00.000Z";
 
 function message(id: string, content: string, role: "user" | "assistant" | "toolResult" = "user") {
@@ -84,6 +95,7 @@ describe("session transcript reader marker projection", () => {
     tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(() => {

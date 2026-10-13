@@ -3,7 +3,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { withIncognitoSessionBinding } from "../../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -44,11 +45,17 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetSubagentRegistryForTests();
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildSubagentList", () => {
   it("enriches mixed children from their captured actors and recorded durable owners", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const authority = { assertCurrent() {} };
       const actors = await Promise.all(
         ["main", "research"].map((agentId) =>
@@ -140,11 +147,53 @@ describe("buildSubagentList", () => {
     });
   });
 
+  it("keeps raw child metadata separate by logical owner in custom stores", async () => {
+    await withOpenClawTestState({ label: "subagent-list-raw-owners" }, async (state) => {
+      const storePath = state.statePath("shared-{agentId}.sqlite");
+      const cfg: OpenClawConfig = { session: { store: storePath } };
+      const now = Date.now();
+      const runs = ["main", "research"].map((childAgentId): SubagentRunRecord => ({
+        runId: `run-${childAgentId}`,
+        childSessionKey: "global",
+        childAgentId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: childAgentId,
+        model: "openai/run-fallback",
+        cleanup: "keep",
+        createdAt: now,
+        execution: { status: "running", startedAt: now },
+      }));
+      for (const run of runs) {
+        await replaceSessionEntry(
+          {
+            agentId: run.childAgentId,
+            storePath: storePath.replace("{agentId}", run.childAgentId!),
+            sessionKey: "global",
+          },
+          { sessionId: run.runId, updatedAt: now, model: `openai/saved-${run.childAgentId}` },
+        );
+      }
+
+      const list = await buildSubagentList({
+        cfg,
+        runs,
+        recentMinutes: 30,
+        readSnapshot: new Map(),
+      });
+      expect(list.active.map(({ runId, model }) => ({ runId, model }))).toEqual([
+        { runId: "run-main", model: "openai/saved-main" },
+        { runId: "run-research", model: "openai/saved-research" },
+      ]);
+    });
+  });
+
   it("reads fresh active and recent metadata from each visible child's store", async () => {
     await withOpenClawTestState({ label: "subagent-list-selection" }, async (state) => {
       const cfg: OpenClawConfig = {
         session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const now = Date.now();
       const runs = [
         { agentId: "main", name: "active", ended: false },
@@ -257,6 +306,8 @@ describe("buildSubagentList", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       try {
         const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
+        const cfg: OpenClawConfig = { session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
         const childSessionKey = "agent:main:subagent:target";
         for (let i = 0; i < 20; i++) {
           await replaceSessionEntry(
@@ -297,7 +348,7 @@ describe("buildSubagentList", () => {
         const parse = vi.spyOn(JSON, "parse");
         try {
           const list = await buildSubagentList({
-            cfg: { session: { store: storePath } },
+            cfg,
             runs: [run],
             recentMinutes: 30,
             taskMaxChars: 110,

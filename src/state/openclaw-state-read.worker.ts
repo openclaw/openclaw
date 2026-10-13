@@ -30,12 +30,12 @@ import {
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
 import { readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase } from "../gateway/github-repository-publication-store.worker.js";
-import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
-} from "../gateway/operator-approval-standing-grants.js";
-import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+} from "../gateway/operator-approval-standing-grants.worker.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.worker.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
@@ -89,7 +89,7 @@ import {
   isConfigMachineStateReadCommand,
   readConfigMachineStateCommandInDatabase,
 } from "./config-machine-state.js";
-import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";

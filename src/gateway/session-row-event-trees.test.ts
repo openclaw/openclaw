@@ -214,6 +214,8 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
+    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
+    await initializeSessionReadContext(context);
     const createPeer = (profile: (typeof profiles)[number], connId: string) => {
       const { client, send } = createSessionRowEventPeer(profile, connId, now);
       connection.clients.add(client);
@@ -222,8 +224,6 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
       return { client, send, ancestors: new Map<string, GatewaySessionRow>() };
     };
     const peers = profiles.map((profile, index) => createPeer(profile, `tree-events-${index}`));
-    context.getSessionEventSubscriberConnIds = connection.sessionEventSubscribers.getAll;
-    await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
     const detach = connection.attachSessionRowProjection(projection);
     const payloadFor = (peer: (typeof peers)[number]): TreeEventPayload =>

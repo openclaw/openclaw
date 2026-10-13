@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { format } from "oxfmt";
 import * as ts from "typescript/unstable/ast";
-import { inspectDatabaseWorkerCompatibility } from "./lib/database-worker-compat.mts";
+import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
@@ -20,7 +20,43 @@ const primitives = new Map([
 ]);
 const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
+const testSuites = new Set([
+  // Imports Vitest; only server.auth.default-token.test.ts imports this suite.
+  "src/gateway/server.auth.default-token.suite.ts",
+]);
 const reviewed = new Map([
+  [
+    "src/config/sessions/goals-operations.ts",
+    {
+      priority: 99,
+      evidence:
+        "Ordinary sessions.goal mutations use goals-operations.worker.ts; receipt reads use session-transcript.worker.ts. Shared receipt kernels also serve native incognito and session-accessor.sqlite-transcript-turn.ts's retained native transaction. goals-management.ts retains native mutation for opaque SDK or cross-store source authority; do not classify these security-boundary callers as worker-only.",
+    },
+  ],
+  [
+    "src/infra/session-cost-usage-cache.kernel.ts",
+    {
+      priority: 99,
+      evidence:
+        "Durable refreshes use usageCache.writeRollup/prune in the agent execution worker. Shared rollup kernels also serve session-cost-usage-cache.sqlite.ts's native incognito and exclusive maintenance/deletion scopes; the incognito cutover owns their remaining runtime exposure.",
+    },
+  ],
+  [
+    "src/infra/session-cost-usage-cache.sqlite.ts",
+    {
+      priority: 99,
+      evidence:
+        "createCacheWriter.write dispatches durable writes through captured agent execution. Its native branch is selected only when supportsOpenClawAgentDatabaseExecution rejects process-held incognito or native maintenance/deletion custody; incognito remains separate migration debt.",
+    },
+  ],
+  [
+    "src/infra/outbound/current-conversation-bindings.ts",
+    {
+      priority: 99,
+      evidence:
+        "Bundled callers use awaited worker methods. Synchronous update/list/delete remain reachable through v2026.10.2's account manager and SessionBindingService SDK methods. The shared V1/V2 manager factory returns both method sets, so these escaped receivers remain conservative T1, not proven T1-compat or worker-only.",
+    },
+  ],
   [
     "src/agents/github-oauth-records.native.ts",
     {
@@ -35,22 +71,6 @@ const reviewed = new Map([
       priority: 99,
       evidence:
         "Shared SQL kernel for worker-owned GitHub records and deprecated synchronous managed/personal Gateway SDK methods. Native compatibility calls remain explicit T1 debt.",
-    },
-  ],
-  [
-    "src/gateway/mention-inbox-store.ts",
-    {
-      priority: 3,
-      evidence:
-        "Worker-backed bundled callers; deprecated 2026.9.8 synchronous Mention Inbox SDK kernel until next SDK major",
-    },
-  ],
-  [
-    "src/gateway/mention-inbox.native.ts",
-    {
-      priority: 3,
-      evidence:
-        "Deprecated 2026.9.8 synchronous Mention Inbox SDK transaction; removal at next SDK major",
     },
   ],
   [
@@ -162,10 +182,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/gateway/operator-approval-store.ts",
-    { priority: 7, evidence: "Pending-list events, resolution, expiry and pruning" },
-  ],
-  [
     "src/gateway/worker-environments/store.ts",
     { priority: 7, evidence: "Environment access listing and prepared-pool maintenance" },
   ],
@@ -204,7 +220,40 @@ const reviewed = new Map([
     "src/config/sessions/conversation-registry.ts",
     {
       priority: 99,
-      evidence: "Reaction bindings use worker; other synchronous registry callers remain",
+      evidence:
+        "Async registry reads use the session actor or session-transcript.worker.ts. selectConversationRows remains native for incognito, deprecated SDK getConversationSession, and session-entry-current-check.ts's retained synchronous source assertion; do not classify the shared read as worker-only.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-conversation-read.ts",
+    {
+      priority: 99,
+      evidence:
+        "session-transcript.worker.ts and session-source-predicate.worker.ts read conversation rows in workers; conversation-registry.ts and entry-mutation.ts retain native incognito, deprecated SDK, and borrowed transaction callers. The shared query remains mixed.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-conversation.ts",
+    {
+      priority: 99,
+      evidence:
+        "All mutations flow through writeSessionEntry in entry-store.ts, or conversation.register in openclaw-agent-execution-operations.ts. The latter is worker-only; writeSessionEntry also serves native incognito, opaque SDK transactions, and CLI import. Preserve the mixed classification of the shared identity and association kernels.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-delete-snapshot.ts",
+    {
+      priority: 99,
+      evidence:
+        "Archive, cold-storage, cleanup and lifecycle workers use this deletion snapshot; offline full-store reset, deprecated SessionManager reload, and native lifecycle/opaque SDK transactions also reach it. These checks prevent deleting changed user data; the shared snapshot is not worker-only.",
+    },
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive-transaction.ts",
+    {
+      priority: 99,
+      evidence:
+        "reclaimSqliteSessionInTransaction dispatches archive metadata writes in mutation workers; archive-store.ts also calls it only in its !supportsOpenClawAgentDatabaseExecution native branch. Durable publication uses publishSessionStateArchivesInWorker; native incognito/compatibility publication remains.",
     },
   ],
   [
@@ -246,6 +295,122 @@ const reviewed = new Map([
 
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
+  [
+    "src/infra/session-cost-usage-cache.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSessionCostUsageRefreshLockInDatabase"],
+        evidence:
+          "session-incognito-compute.worker.ts handles session.compute.usage.refreshLock and session.compute.store.refreshLock. The only other caller is acquireSessionCostUsageRefreshLockInDatabase, reached through loadUsageCacheOperations by worker-side usageCache.acquireLock dispatch.",
+      },
+      {
+        tier: "W",
+        operations: [
+          "acquireSessionCostUsageRefreshLockInDatabase",
+          "deleteSessionCostUsageRefreshLockInDatabase",
+        ],
+        evidence:
+          "Only loadUsageCacheOperations in openclaw-agent-execution-operations.ts calls these kernels, through usageCache.acquireLock/releaseLock worker handlers. session-incognito-compute.worker.ts also dispatches those handlers for native incognito refreshes; neither receiver runs on the Gateway main thread.",
+      },
+    ],
+  ],
+  [
+    "src/infra/outbound/current-conversation-bindings.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearPersistedCurrentConversationBindingsForTests"],
+        evidence:
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+      },
+    ],
+  ],
+  [
+    "src/flows/doctor-tool-schema-projection.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["collectAgentRuntimeToolSchemaFindings"],
+        evidence:
+          "Only doctor-tool-schema-runtime.ts invokes this projection through collectRuntimeToolSchemaFindings, wired exclusively into doctor-core-checks.ts by doctor-tool-schema-check.ts. Its synchronous tool construction runs under withPluginRuntimeGenerationRegistryScope during the Doctor one-shot.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-participants.native.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordSessionParticipantFromWorker"],
+        evidence:
+          "Only session-sharing-store.worker.ts invokes this worker entry. The separate native participant entry resolves aliases from the resident Gateway catalog.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/channel-operator-authority.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "resolveChannelOperatorAdminAuthority",
+          "resolveUpdateChannelOperatorAdminIdentityAuthority",
+        ],
+        evidence:
+          "Native identity capture is private to resolveChannelOperatorAdminAuthority and resolveUpdateChannelOperatorAdminIdentityAuthority; command-auth.ts passes those only to the CLI/updater captureCommandOwnerIdentity path used by update-requester-authority.ts. Gateway ingress awaits prepareChannelOperatorAdmin instead. Returned currency checks preserve update execution authority.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-owner-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["repairMergedGatewayOwnerProfile"],
+        evidence:
+          "Doctor repair-sequencing.ts invokes merged-owner repair; preview-warnings.ts invokes the same entry with shouldRepair false. No Gateway caller.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-channel-identities.ts",
+    [
+      {
+        tier: "W",
+        operations: ["linkUserChannelIdentity", "unlinkUserChannelIdentity"],
+        evidence:
+          "Only user-channel-identities.worker.ts executes channel link/unlink mutations; Gateway callers await the registered worker operations.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-tailscale-migration.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["migrateLegacyTailscaleProfileIdentities"],
+        evidence:
+          "Only commands/doctor/repair-sequencing.ts invokes the legacy Tailscale identity repair.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-quarantine-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readOpenClawAgentIntegrityVerification.read",
+          "recordOpenClawAgentIntegrityVerification",
+          "invalidateAgentIntegrityVerification",
+          "markOpenClawAgentIntegrityClean",
+        ],
+        evidence:
+          "Integrity receipts belong to agent-database lease admission and final release: openclaw-agent-db-lease.ts consumes proof during claim, records completed admission, invalidates dead-owner proof, and certifies the last clean closer. openclaw-agent-db-lifecycle.ts revokes proof on failed disposal; openclaw-agent-schema-inspection.worker.ts also reads proof during boot inspection. These are startup/lock primitives, not ordinary quarantine-decision guards.",
+      },
+    ],
+  ],
   [
     "src/secrets/store/secret-store-hidden-github.kernel.ts",
     [
@@ -412,6 +577,27 @@ const reviewedOperations = new Map([
         evidence:
           "Only offline full-store reset calls these at session-accessor.sqlite-reset.ts:65,239 via commands/cleanup-utils.ts; other archive operations retain native lifecycle callers",
       },
+      {
+        tier: "T1",
+        operations: ["hasPendingSessionTranscriptArchives"],
+        evidence:
+          "Entry/lifecycle reader workers and replacement-state.ts query pending publication. Replacement-state also serves native incognito and opaque SDK replacement transactions; keep this shared read mixed.",
+      },
+      {
+        tier: "T1",
+        operations: [
+          "prepareSessionTranscriptArchivePublishPlans",
+          "recordSessionTranscriptArchivePublishResults",
+        ],
+        evidence:
+          "Durable archive publication uses openclaw-agent-execution-operations.ts workers. archive-transaction.ts retains the !supportsOpenClawAgentDatabaseExecution native publication path from archive-store.ts; no worker-only classification while that compatibility/incognito owner remains.",
+      },
+      {
+        tier: "T1",
+        operations: ["persistSessionTranscriptArchive"],
+        evidence:
+          "Only lifecycle-state.ts deleteMaterializedSessionStatePlans inserts the canonical recovery copy. That lifecycle kernel serves mutation workers plus native incognito and opaque SDK deletion transactions; retain the shared user-data integrity check and mixed tier.",
+      },
     ],
   ],
   [
@@ -526,16 +712,13 @@ const reviewedOperations = new Map([
           "createPlacementTurnClaimOps.cancelWorkspaceResultAndReleaseTurn",
         ],
         evidence:
-          "placement-store.ts:102 selects only native restart/wait/validation; claim/release/cancel mutations run in placement-turn-claims.worker.ts:102,117,191,200,287,355,360",
+          "Claim/release/cancel mutations run only through placement-turn-claims.worker.ts; host wait and validation consume async reads and published claim facts.",
       },
       {
-        tier: "T1",
-        operations: [
-          "createPlacementTurnClaimOps.clearLocalTurnClaimsAfterRestart",
-          "clearLocalTurnClaimsInDatabase",
-        ],
+        tier: "W",
+        operations: ["clearLocalTurnClaimsInDatabase"],
         evidence:
-          "The released placement-store.ts clearLocalTurnClaimsAfterRestart facade retains synchronous native access until the next Plugin SDK major; bundled startup awaits the placement-lifecycle.worker.ts clearLocalTurnClaims operation. The shared kernel remains native compatibility debt.",
+          "Only placement-lifecycle.worker.ts clears local claims after restart; the released synchronous SDK method now rejects with async migration guidance.",
       },
     ],
   ],
@@ -570,22 +753,25 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["recordStagedWorkerWorkspaceResult"],
         evidence:
-          "Only placement-turn-claims.worker.ts:313 publishes staged results; native compatibility readers and pending-result transition guards stay T1",
+          "Only placement-turn-claims.worker.ts publishes staged results; host callers use async readers and published result facts.",
       },
       {
         tier: "W",
         operations: [
           "hasCurrentWorkspaceResultClaim",
           "clearWorkerWorkspacePendingResult",
+          "readWorkerWorkspaceReconciliationFacts",
+          "hasWorkerWorkspacePendingResult",
           "hasAcceptedWorkerWorkspacePendingResult",
           "insertWorkerWorkspacePendingResult",
+          "listPendingWorkerWorkspaceResultsInDatabase",
           "createPlacementWorkspaceResultOps.acceptWorkspaceResult",
           "assertPendingClaim",
           "createPlacementWorkspaceResultOps.handoffWorkspaceResultRecovery",
           "createPlacementWorkspaceResultOps.abandonWorkspaceResult",
         ],
         evidence:
-          "Mutation factory/helpers run only through placement-turn-claims.worker.ts:102,117,125,132,140,147,157,191,200,278,299,313,326,346; claim read also in placement-read-projection.ts:101 via state-read.worker.ts:666",
+          "Mutation helpers run through placement turn/lifecycle workers; reconciliation and pending-result reads run in the state read worker. GitHub deferral selection also runs only in state/github-publication.worker.ts. Host exports are async readers or pure row/claim helpers.",
       },
     ],
   ],
@@ -623,11 +809,13 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "find",
+          "readWorkerPlacementsForReconcileInDatabase",
           "readWorkerPlacementChangeSnapshotInDatabase",
           "readWorkerPlacementsInDatabase",
         ],
         evidence:
-          "Snapshots use openclaw-state-read.worker.ts; placement-lifecycle.worker.ts serves point lookups on the existing placement actor. Native reconciliation guards remain T1.",
+          "State read and placement workers own all row queries; GitHub deferral selection runs only in state/github-publication.worker.ts. Host consumers use pure row codecs or async/receipt-backed readers.",
       },
       {
         tier: "W",
@@ -639,7 +827,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["ensureLocal"],
         evidence:
-          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods that do not claim.",
+          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers; placement-store.ts uses the async worker facade.",
       },
     ],
   ],
@@ -685,43 +873,6 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "Only state/github-publication.worker.ts repositoryMutation report/retire calls these kernels. Native stale-request and reporting adapters retain their separate SQL and T1 classification.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.kernel.ts",
-    [
-      {
-        tier: "W",
-        operations: ["listTerminalOperatorApprovalsInDatabase"],
-        evidence:
-          "Only openclaw-state-read.worker.ts:489 serves approval history; the native compatibility operation map has no history operation",
-      },
-      {
-        tier: "W",
-        operations: ["insertOperatorApprovalInDatabase", "listPendingOperatorApprovalsInDatabase"],
-        evidence:
-          "exec-approval-manager.ts:125 insert and operator-approval-session-events.ts:194 pending supply no native guard; operator-approval-store.ts:138,173 selects worker dispatch to operator-approval-store.operations.ts:57,65 via state/openclaw-state-worker-registry.ts:119. Other approval operations retain native compatibility.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.transitions.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["closeOrphanedOperatorApprovals", "pruneTerminalOperatorApprovals"],
-        evidence:
-          "Boot calls only in server-aux-handlers.ts:105,109; remaining transitions retain native SDK compatibility",
-      },
-      {
-        tier: "W",
-        operations: [
-          "expireDueOperatorApprovalsInDatabase",
-          "consumeOperatorApprovalAllowOnceInDatabase",
-        ],
-        evidence:
-          "operator-approval-session-events.ts:178 expiry and exec-approval-manager.ts:644 consume supply no native guard; operator-approval-store.ts:173 -> operator-approval-store.operations.ts:85,89 worker dispatch. Expiry also runs from worker-only pending kernel at operator-approval-store.kernel.ts:233.",
       },
     ],
   ],
@@ -807,15 +958,18 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "ensureSkillLibrarySchema",
+          "resolveSkillLibraryActor",
           "requireSelectedSkillLibraryUpload",
+          "selectSkillLibraryOwner",
           "selectSkillLibraryEntries",
+          "selectSkillLibraryEntries.readOwners",
           "selectSkillLibraryRevision",
           "selectSkillLibraryRevisionMetadata",
           "assertSkillLibraryNameAvailable",
           "recordSkillLibraryEvent",
         ],
         evidence:
-          "Library row, revision, upload, and mutation kernels run only through the shared-state reader/writer; the SDK metadata batch remains in selection-read.kernel.ts",
+          "Library actor, owner, row, revision, upload, and mutation kernels run only through the shared-state reader/writer (read.kernel.ts, service.kernel.ts, import.kernel.ts, and store.worker.ts); readOwners is private to the worker list projection. The SDK metadata batch remains in selection-read.kernel.ts.",
       },
     ],
   ],
@@ -1009,6 +1163,12 @@ const reviewedOperations = new Map([
         evidence:
           "Only session-transcript.worker.ts:230 (presence) and session-accessor.sqlite-archive.worker.ts:483,491 (page/final) call these readers; shared archive listing remains T1.",
       },
+      {
+        tier: "T1",
+        operations: ["listTranscriptArchivesFromDatabase"],
+        evidence:
+          "Durable archive enumeration reaches this query through transcript, Memory corpus, and usage-cost workers. session-transcript-inventory-runtime.ts retains its native incognito branch; deprecated loadArchivedSessions rejects unbound durable sync access. The shared list kernel remains mixed.",
+      },
     ],
   ],
   [
@@ -1024,6 +1184,17 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "Doctor callers only: commands/doctor-session-canonical-candidates.ts:94; doctor-session-canonical-keys.ts:132; doctor-state-integrity.ts:1280; doctor-session-title-repair.ts:118; doctor-session-delivery-state.ts:112; doctor/shared/codex-route-session-repair.ts:551,552.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-availability.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["loadExactSessionEntryReadOnlyResult"],
+        evidence:
+          "Only acp/runtime/session-meta-doctor.ts calls this availability probe, from repairAcpSessionMetaKeysForDoctor and readClaimBinding for plugin Doctor claim inspection. Runtime identity evidence uses the separate operations in this file.",
       },
     ],
   ],
@@ -1143,17 +1314,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/config-revision-token.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["loadOrCreateConfigRevisionKey", "loadGatewayConfigRevisionKey"],
-        evidence:
-          "Gateway construction at server-kernel-request-runtime.ts:48; local-request-context.ts:107 also initializes it via agents/agent-command-local.ts:61 for standalone commands/boot. Existing Gateway scopes return before local allocation at local-request-context.ts:237. Request hashing captures the key and performs no SQL.",
-      },
-    ],
-  ],
-  [
     "src/gateway/github-personal-publication-store.ts",
     [
       {
@@ -1174,34 +1334,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/operator-approval-standing-grants.ts",
-    [
-      {
-        tier: "W",
-        operations: ["lookupCronStandingGrantInDatabase", "consumeCronStandingGrantInDatabase"],
-        evidence:
-          "Only openclaw-state-read.worker.ts validates and operator-approval-store.operations.ts consumes through the existing workers; bash-tools.exec-cron-grant.ts awaits operator-approval-store.ts while retaining the Gateway authority interval. No native lookup/consume facade remains.",
-      },
-      {
-        tier: "W",
-        operations: ["listCronStandingGrantsInDatabase"],
-        evidence:
-          "Only state/openclaw-state-read.worker.ts:495; server-methods/exec-approval.ts:462 -> operator-approval-store.ts:273 uses readApprovalStore -> executeExistingOpenClawStateRead at :248 even when a guard exists.",
-      },
-    ],
-  ],
-  [
-    "src/gateway/operator-approval-store.rows.ts",
-    [
-      {
-        tier: "W",
-        operations: ["hasApprovalLocatorNamespaceConflict"],
-        evidence:
-          "Only operator-approval-store.kernel.ts:98 insert calls it. Sole facade caller exec-approval-manager.ts:125 passes assertCurrent but no native guard, so operator-approval-store.ts:173 dispatches the registered worker operation.",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-drain.ts",
     [
       {
@@ -1213,19 +1345,24 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
+    "src/gateway/worker-environments/placement-retirement.ts",
     [
       {
-        tier: "T1",
-        operations: ["readWorkspaceReservationAuthority"],
+        tier: "W",
+        operations: ["retireWorkerSessionPlacement"],
         evidence:
-          "Native workspace reservation preparation and final publication guard share one current query. Native/SDK and foreign writers prevent cached authority; retirement requires complete revocation publications and foreign-writer custody at the next Plugin SDK major.",
+          "Only placement-lifecycle.worker.ts retires placement rows; host placement APIs dispatch through the lifecycle worker.",
       },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
+    [
       {
         tier: "W",
         operations: ["assertSessionWorkspaceUnreserved"],
         evidence:
-          "Dispatch in placement-lifecycle.worker.ts and the placement-turn-claims.ts claim path run in workers. Native placement-store.ts selects clear/wait/validate methods.",
+          "Only placement-lifecycle.worker.ts and worker-owned claim kernels check the reservation before the effect; host preparation uses worker reads.",
       },
     ],
   ],
@@ -1234,7 +1371,7 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["recordMemorySessionTombstonesInDatabase", "hasMemorySessionTombstone"],
+        operations: ["recordMemorySessionTombstonesInDatabase", "readMemorySessionTombstones"],
         evidence:
           "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
       },
@@ -1309,9 +1446,13 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["conflictingSubagentRunVersions", "writeSubagentRunValuesInDatabase"],
+        operations: [
+          "conflictingSubagentRunVersions",
+          "conflictingSubagentRegistrationCohort",
+          "writeSubagentRunValuesInDatabase",
+        ],
         evidence:
-          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Registration cohort reads have only the registry persistence worker caller at subagent-registry.store.worker.ts:182. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],
@@ -1496,9 +1637,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["selectAcpSessionRows"],
+        operations: ["selectAcpSessionRows", "selectAcpSessionRowsByKeys"],
         evidence:
-          "src/acp/runtime/session-meta-list.ts:21 submits acpSessions.list → src/state/openclaw-state-read.worker.ts:264.",
+          "session-meta-list.ts submits acpSessions.list to the shared read worker. Batched exact-key reads are called only by session-meta-read.worker.ts; ordinary bundled entry readers await that worker and the deprecated synchronous SDK reader uses its separate single-row operation.",
       },
     ],
   ],
@@ -1664,9 +1805,19 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["terminalizeBoundDeliveryQueueEntry", "pruneOrdinaryDeliveryReceipts"],
+        operations: [
+          "terminalizeBoundDeliveryQueueEntry",
+          "pruneOrdinaryDeliveryReceipts",
+          "pruneDeliveryQueueTombstones",
+        ],
         evidence:
-          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Bounded pruning also serves native namespace migration through delivery-queue-sqlite.kernel.ts:192. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+      },
+      {
+        tier: "W",
+        operations: ["pruneDeliveryQueueTombstoneAges"],
+        evidence:
+          "Sole runtime caller: src/infra/delivery-queue.worker.ts:480 → delivery-queue-sqlite.kernel.ts:409.",
       },
     ],
   ],
@@ -2131,9 +2282,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        operations: ["repairOpenClawAgentDatabasePaths"],
         evidence:
-          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: runStateIntegrityHealth in src/flows/doctor-health-contribution-runners.state.ts.",
       },
     ],
   ],
@@ -2173,6 +2324,12 @@ const reviewedOperations = new Map([
   [
     "src/state/user-model-accounts.ts",
     [
+      {
+        tier: "W",
+        operations: ["updateUserModelAuthProfile"],
+        evidence:
+          "Only agents/auth-profiles/store.worker.ts calls this writer, in authProfiles.personalReplace and authProfiles.personalUsage. These registered worker handlers update credentials and usage respectively; no Gateway main-thread receiver remains.",
+      },
       {
         tier: "W",
         operations: ["connectUserModelAccount"],
@@ -2286,10 +2443,16 @@ const reviewedOperations = new Map([
     "src/trajectory/runtime-store.sqlite.ts",
     [
       {
+        tier: "W",
+        operations: ["appendSqliteTrajectoryRuntimeEventsWithWriter"],
+        evidence:
+          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts; incognito sinks dispatch session.trajectory.append through session-incognito-side-data.worker.ts. The synchronous sink fallback is removed; direct native append and retention exist only in runtime-store.test-support.ts.",
+      },
+      {
         tier: "T3",
         operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
         evidence:
-          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow and trajectory export. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. The runtime-testing SDK exports the async loader, not this native row reader. Native append and retention remain T1.",
+          "Native row reads are CLI-only: commands/sessions-tail.ts tail/follow. Other callers are session-history-read-operation.worker.ts and session-incognito-side-data.worker.ts. Trajectory export and the runtime-testing SDK use the async loader, not this native row reader.",
       },
     ],
   ],
@@ -2310,11 +2473,21 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/trajectory/runtime-retention.sqlite.ts", // SQL runs only through agent execution, session-history read, incognito side-data, and entry-patch workers; runtime-retention.ts uses only the pure due/state helpers.
+  "src/claws/provenance-runtime-read.kernel.ts", // Only openclaw-state-worker-runtime.ts reads consent rows; host imports are types.
+  "src/state/user-profiles.worker.ts", // Registered profile operations; Gateway submits commands through user-profile-operations.ts.
+  "src/state/user-profile-writes.worker.ts", // Shared-state profile mutation implementation; loaded by the profile worker only.
+  "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
+  "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
+  "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
+  "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.
   "src/config/sessions/session-accessor.sqlite-worktree-owner.ts", // Only session-entry-read.worker.ts reads the worktree projection after owner-protection's worker cutover.
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
+  "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/skills/workshop/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
   "src/skills/workshop/skill-usage.kernel.ts", // changes.worker.ts owns recordSkillUsageInDatabase; host imports are type-only.
@@ -2326,6 +2499,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/standing-intents-kernel.ts", // Standing-intent worker command dispatcher only.
 
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
@@ -2503,6 +2677,39 @@ function classify(file, operation, binding, guards) {
   };
 }
 
+/** Only reviewed entries are proof roots; filename-based CLI/migration leads are not. */
+function classifyKnownEntry(file, operation) {
+  const reviewedOperation = reviewedOperations
+    .get(file)
+    ?.find(
+      (entry) =>
+        entry.operations.includes(operation) &&
+        entry.binding === undefined &&
+        entry.guard === undefined,
+    );
+  if (
+    reviewedOperation?.tier === "T2" ||
+    reviewedOperation?.tier === "T3" ||
+    reviewedOperation?.tier === "W"
+  ) {
+    return reviewedOperation.tier;
+  }
+  if (workerModules.has(file)) {
+    return "W";
+  }
+  if (cliModules.has(file)) {
+    return "T3";
+  }
+  if (
+    exceptionModules.has(file) ||
+    (file === "src/state/openclaw-state-db-schema-runtime.ts" &&
+      operation === "ensureOpenClawStateRuntimeSchema")
+  ) {
+    return "T2";
+  }
+  return undefined;
+}
+
 function ownerOf(file) {
   const parts = file.split("/");
   const depth =
@@ -2672,14 +2879,20 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
   }
   const sourceFiles = result.stdout
     .split("\0")
-    .filter((file) => /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) && !excluded.test(file));
+    .filter(
+      (file) =>
+        /\.(?:ts|tsx|js|mjs|mts|cts|cjs)$/.test(file) &&
+        !excluded.test(file) &&
+        !testSuites.has(file),
+    );
   const texts = snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
-  const compatibility = inspectDatabaseWorkerCompatibility(
+  const compatibility = inspectDatabaseWorkerBoundaries(
     root,
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
+    classifyKnownEntry,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
@@ -2718,7 +2931,17 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         ) {
           classification.tier = "T1-compat";
           classification.evidence =
-            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove at the next Plugin SDK major.";
+            "Deprecated SDK compatibility only; no bundled value references outside reviewed compatibility boundaries. Remove in a later release after stable deprecation.";
+        }
+        const nonRuntimeTier = compatibility.nonRuntimeOperations.get(file)?.get(call.operation);
+        if (
+          classification.tier === "T1" &&
+          nonRuntimeTier &&
+          compatibility.nonRuntimeCallLocations.get(file)?.has(`${call.line}:${call.column}`)
+        ) {
+          classification.tier = nonRuntimeTier;
+          classification.evidence =
+            "Mechanically proven kernel: every value reference stays within reviewed worker or maintenance entries; no runtime, SDK, or unproven callback escape.";
         }
         const group = groups.get(classification.tier) ?? {
           file,
@@ -2771,15 +2994,15 @@ function render(rows) {
     "",
     `This snapshot contains **${total.files} non-test files and ${total.calls} call expressions** for the five primitives below. The campaign previously reported 404 files; that is a historical estimate, not a fixed target or a count of call expressions. This inventory follows current source and excludes import-only matches, comments, tests, fixtures, and test support. Its scan scope and exclusions are explicit below.`,
     "",
-    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, compatibility reference graph, and `rg`; it does not load application code or open a database.",
+    "Regenerate with `pnpm db:worker-inventory:gen`; verify with `pnpm db:worker-inventory:check`. `node scripts/database-worker-inventory.mjs --json` emits every call's primitive, line, column, lexical operation path, optional variable-initializer binding, enclosing synchronous guards, file owner, tier, and classification evidence. The script uses the repository's TypeScript parser, entry-point reference graph, and `rg`; it does not load application code or open a database.",
     "",
     "## Scope and interpretation",
     "",
-    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Worker/maintenance callers retain their existing classification; escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
+    "T1 is request/event/timer exposure, including conservatively retained runtime or mixed kernels whose callers still need tracing. T1-compat is deprecated-only SDK compatibility and named shared kernels whose only main-thread paths originate at mechanically guarded deprecated APIs. Named worker/maintenance-only kernels are proven through exact reviewed entry points; filename-only leads are not proof roots. Escaped callbacks and returned-method families remain live/unproven. T2 is startup, migration, or a named boot/lock exception candidate. T3 is CLI, Doctor, or developer one-shot code. W marks worker implementations separately: their synchronous SQL is intentional and is not outstanding main-thread debt. A filename-based T2/T3/W classification is an audit lead, not a proof that every caller is safe. Do not move a mixed kernel or a module with ‘worker’ in its name to W without tracing its callers.",
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads and native approval SDK compatibility retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle and final-effect authority checks remain native residuals. Incognito category reads retain their existing classifications. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",

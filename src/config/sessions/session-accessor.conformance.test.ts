@@ -16,6 +16,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
@@ -1437,13 +1438,14 @@ describe("sqlite session normalization", () => {
       ],
     );
 
-    const result = await forkSessionEntryFromParentTarget({
-      fallbackEntry: { sessionId: "", updatedAt: 1 },
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      storePath: paths.sqlitePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
-    });
+    const result = await withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
+      forkSessionEntryFromParentTarget({
+        fallbackEntry: { sessionId: "", updatedAt: 1 },
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+        storePath: paths.sqlitePath,
+      }),
+    );
 
     expect(result).toMatchObject({
       status: "skipped",
@@ -1452,11 +1454,7 @@ describe("sqlite session normalization", () => {
         status: "skip",
         reason: "parent-too-large",
       },
-      sessionEntry: {
-        forkedFromParent: true,
-        sessionId: "",
-        updatedAt: expect.any(Number),
-      },
+      sessionEntry: { sessionId: "", updatedAt: 1 },
     });
     if (result.status !== "skipped" || result.reason !== "decision-skip") {
       throw new Error(`expected decision-skip, got ${result.status}`);

@@ -13,7 +13,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
+import { readMentionStoreSnapshot } from "./mention-inbox-store.worker.js";
 import {
   SESSION_KEY,
   SESSION_ID,

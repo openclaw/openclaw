@@ -1,17 +1,22 @@
+import type { StatementSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
@@ -19,6 +24,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-ru
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -110,6 +116,98 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it("prepares bounded usage off-thread and sees a later committed transcript", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "status-worker-usage",
+      sessionKey: "agent:main:status-worker-usage",
+      storePath: state.statePath("status.sqlite"),
+    };
+    const entry = { sessionId: target.sessionId, updatedAt: 1 };
+    const readUsage = vi.spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync");
+    await replaceSessionEntry(target, entry);
+    await appendTranscriptMessage(target, {
+      message: {
+        role: "assistant",
+        content: "x".repeat(300_000),
+        usage: { input: 10, output: 2, totalTokens: 12 },
+      },
+    });
+    await waitForSessionTranscriptProjection(target);
+    const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+    const reads: string[] = [];
+    const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(read, receiver: StatementSync, args) {
+            if (
+              /\b(?:transcript_events|session_transcript_active_events|transcript_event_identities)\b/iu.test(
+                receiver.sourceSQL,
+              )
+            ) {
+              reads.push(receiver.sourceSQL);
+            }
+            return Reflect.apply(read, receiver, args);
+          },
+        }),
+      );
+    });
+    const render = () =>
+      renderPreparedStatus({
+        sessionEntry: entry,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        includeTranscriptUsage: true,
+      });
+    setRuntimeConfigSnapshot({});
+    try {
+      const first = await render();
+      // The newest message still contributes usage when its body exceeds the byte budget.
+      expect(first.text).toContain("Tokens: 10 in / 2 out");
+      expect(reads).toEqual([]);
+
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "assistant",
+          content: "New usage",
+          usage: { input: 30, output: 4, totalTokens: 34 },
+        },
+      });
+      await waitForSessionTranscriptProjection(target);
+      reads.length = 0;
+      const latest = await render();
+      expect(latest.text).toContain("Tokens: 30 in / 4 out");
+      expect(reads).toEqual([]);
+
+      const committedEntry = {
+        ...entry,
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+        inputTokens: 60,
+        outputTokens: 6,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 60,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      } satisfies InternalSessionEntry;
+      await replaceSessionEntry(target, committedEntry);
+      readUsage.mockClear();
+      const committed = await renderPreparedStatus({
+        sessionEntry: committedEntry,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        includeTranscriptUsage: true,
+      });
+      expect(committed.text).toContain("Tokens: 60 in / 6 out");
+      expect(readUsage).not.toHaveBeenCalled();
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+  });
 
   it.each([
     { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
@@ -267,6 +365,7 @@ describe("buildStatusText prepared context windows", () => {
     } = {},
   ) {
     return await withTempHome(async () => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionId: "terminal-fallback",
@@ -595,9 +694,7 @@ describe("buildStatusText prepared context windows", () => {
   ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
     const readTail = vi
       .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync")
-      .mockImplementation(() => {
-        throw error;
-      });
+      .mockRejectedValue(error);
     const sessionEntry: InternalSessionEntry = {
       sessionId: "projection",
       updatedAt: 1,

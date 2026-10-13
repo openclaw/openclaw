@@ -1,6 +1,7 @@
 import { afterEach, expect, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
@@ -66,7 +67,9 @@ export function createSessionPlacementFactsReader(
 ): Pick<WorkerSessionPlacementStore, "readProjection"> {
   return {
     async readProjection(sessionIds) {
-      const records = placements.getMany(sessionIds);
+      const records = placements.getManyAsync
+        ? await placements.getManyAsync(sessionIds)
+        : placements.getMany(sessionIds);
       const environments = new Map();
       for (const placement of records.values()) {
         const environmentId = placement.environmentId;
@@ -160,6 +163,7 @@ export async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: {} } },
   };
+  setRuntimeConfigSnapshot(config);
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],
     ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],

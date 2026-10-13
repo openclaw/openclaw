@@ -138,7 +138,7 @@ export async function expectOneOffSharedMatrixClient(params?: {
   const accountId = params?.accountId ?? "default";
   const prepareForOneOffCalls = params?.prepareForOneOffCalls ?? 1;
   const startCalls = params?.startCalls ?? 0;
-  const releaseMode = params?.releaseMode ?? "stop";
+  const releaseMode = params?.releaseMode ?? "persist";
 
   expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
   expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({

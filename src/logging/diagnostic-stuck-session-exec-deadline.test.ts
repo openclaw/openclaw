@@ -46,9 +46,11 @@ vi.mock("../process/supervisor/adapters/child.js", () => ({
     ready: Promise.resolve(),
   }),
 }));
-vi.mock("../infra/shell-env.js", () => ({
+vi.mock("../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
   getShellPathFromLoginShell: () => null,
   resolveShellEnvFallbackTimeoutMs: () => 0,
+  shouldEnableShellEnvFallback: () => false,
 }));
 vi.mock("../agents/bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: mocks.approve,
@@ -166,6 +168,7 @@ describe("heartbeat recovery after exec preparation", () => {
         preparation.resolve({});
         await spawned.promise;
         await spawn.mock.results[0]?.value;
+        await vi.advanceTimersByTimeAsync(0);
         await waitForDiagnosticEventsDrained();
         const deadline = getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs;
         if (deadlineState !== "absent") {

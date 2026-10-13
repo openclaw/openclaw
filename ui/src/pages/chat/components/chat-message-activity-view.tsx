@@ -23,7 +23,7 @@ import {
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { activityHeadline } from "./chat-activity-headline.ts";
+import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import {
   renderBrowserTabPreviews,
@@ -225,22 +225,20 @@ function ActivityGroupBody(props: {
             )
           }
         >
-          <LitContent
-            value={activityHeadline(
-              JSON.stringify([
-                props.options.sessionKey,
-                props.options.connectionEpoch,
-                props.options.activityRunId,
-              ]),
-              state().headline,
-              state().groupSummaryLabel,
-              state().currentActivity,
-              props.options.pluginToolIcons,
-              describeToolGroup(state().visibleActivity)
-                .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-                .map(({ label }) => label),
-            )}
-          />
+          <ChatActivityHeadline
+            scope={JSON.stringify([
+              props.options.sessionKey,
+              props.options.connectionEpoch,
+              props.options.activityRunId,
+            ])}
+            activity={state().headline}
+            summary={state().groupSummaryLabel}
+            currentActivity={state().currentActivity}
+            pluginToolIcons={props.options.pluginToolIcons}
+            outcomes={describeToolGroup(state().visibleActivity)
+              .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
+              .map(({ label }) => label)}
+          />{" "}
           <LitContent
             value={renderToolReviewOutcome(
               state().reviewOutcome,
@@ -291,26 +289,14 @@ export function ActivityGroupContent(props: {
       {(activity) => (
         <Show
           when={props.presentation === "standalone"}
-          fallback={
-            <ActivityGroupBody
-              state={activity()}
-              groups={props.groups}
-              options={props.options}
-              renderEntries={props.renderEntries}
-            />
-          }
+          fallback={<ActivityGroupBody {...props} state={activity()} />}
         >
           <div
             class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
             data-chat-row-key={activity().firstGroup.key}
           >
             <div class="chat-group-messages">
-              <ActivityGroupBody
-                state={activity()}
-                groups={props.groups}
-                options={props.options}
-                renderEntries={props.renderEntries}
-              />
+              <ActivityGroupBody {...props} state={activity()} />
             </div>
           </div>
         </Show>

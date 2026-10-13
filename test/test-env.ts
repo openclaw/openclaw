@@ -15,6 +15,7 @@ import {
   LIVE_TEST_TRIGGER_ENV_KEYS,
   resolveTestHomePolicy,
 } from "./test-home-policy.mts";
+import { isCredentialEnvName } from "./vitest/credential-env-name.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 type InstallTestEnvOptions =
@@ -196,7 +197,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   }
 }
 
-function resolveRestoreEntries(): RestoreEntry[] {
+function resolveRestoreEntries(credentialEnvKeys: readonly string[]): RestoreEntry[] {
   return [
     ...HERMETIC_TEST_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "OPENCLAW_TEST_FAST", value: process.env.OPENCLAW_TEST_FAST },
@@ -230,13 +231,16 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
     { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
-    ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...[...new Set([...ISOLATED_TEST_CREDENTIAL_ENV_KEYS, ...credentialEnvKeys])].map((key) => ({
+      key,
+      value: process.env[key],
+    })),
     ...ISOLATED_TEST_SERVICE_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
 
-function initializeIsolatedTestEnv(tempHome: string): void {
+function initializeIsolatedTestEnv(tempHome: string, credentialEnvKeys: readonly string[]): void {
   // Corepack's installed toolchain is independent of application state. Bind its
   // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
   setTestEnvValue("COREPACK_HOME", resolveTestCorepackHome(process.env));
@@ -265,6 +269,10 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // Fixture env copies spread process.env credentials into assertion output.
+  for (const key of credentialEnvKeys) {
     deleteTestEnvValue(key);
   }
   // A test worker is not the parent Gateway's service. Retaining its identity
@@ -536,9 +544,10 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
       return { cleanup: () => {}, tempHome: realHome };
     }
 
-    const restore = resolveRestoreEntries();
+    const credentialEnvKeys = live ? [] : Object.keys(process.env).filter(isCredentialEnvName);
+    const restore = resolveRestoreEntries(credentialEnvKeys);
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
-    initializeIsolatedTestEnv(tempHome);
+    initializeIsolatedTestEnv(tempHome, credentialEnvKeys);
 
     if (hermetic) {
       for (const key of HERMETIC_TEST_ENV_KEYS) {

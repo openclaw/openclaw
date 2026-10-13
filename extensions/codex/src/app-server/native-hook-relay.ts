@@ -210,6 +210,8 @@ export function createCodexNativeHookRelay(params: {
     onCleanupFailure(error: Error): void;
   };
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
+  retainExecutionPolicy?: () => () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
@@ -234,6 +236,7 @@ export function createCodexNativeHookRelay(params: {
     pendingDirectChildAdmissions.clear();
   };
   let releaseProcessAdmission: (() => void) | undefined;
+  let releaseExecutionPolicy: (() => void) | undefined;
   let processAdmissionDisposed = false;
   let remoteCredential: ReturnType<typeof createCodexNativeHookRemoteCredential> | undefined;
   let remoteCleanup: Promise<void> | undefined;
@@ -359,6 +362,7 @@ export function createCodexNativeHookRelay(params: {
       params.hostCapabilities.assertActive();
       params.assertCurrent?.();
     },
+    assertActiveAsync: params.assertCurrentAsync,
     retention: {
       readClaim: readCodexNativeChildThreadId,
       // A child claim identifies the subject; successful parent finalization
@@ -418,6 +422,7 @@ export function createCodexNativeHookRelay(params: {
         rejectPendingAdmissions("native hook relay registration closed");
         processAdmissionDisposed = true;
         releaseProcessAdmission?.();
+        releaseExecutionPolicy?.();
         if (remoteCredential) {
           remoteCleanup = remoteCredential
             .dispose()
@@ -442,6 +447,7 @@ export function createCodexNativeHookRelay(params: {
   });
   if (!processAdmissionDisposed) {
     try {
+      releaseExecutionPolicy = params.retainExecutionPolicy?.();
       releaseProcessAdmission = params.nativeProcessAuthority?.owner.retainAdmission();
     } catch (error) {
       relay.unregister();
@@ -457,6 +463,7 @@ export function createCodexNativeHookRelay(params: {
         params.hostCapabilities.assertActive();
         params.assertCurrent?.();
       },
+      assertCurrentAsync: params.assertCurrentAsync,
     });
     if (processAdmissionDisposed) {
       void remoteCredential.dispose();

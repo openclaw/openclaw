@@ -59,7 +59,7 @@ describe("chat pane session menu boundary", () => {
     expect(pane.context.navigation.snapshot.sidebarEntries).not.toContain("session:" + row.key);
     expect(row.pinned).toBe(true);
   });
-  it("keeps unchanged menu children settled and reads current callbacks after a header refresh", async () => {
+  it("retains menu children and reads current callbacks after a header refresh", async () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture({ state: { groups: ["Projects"] } }),
@@ -81,7 +81,10 @@ describe("chat pane session menu boundary", () => {
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
     const items = [...menu.querySelectorAll("wa-dropdown-item")];
+    expect(items.length).toBeGreaterThan(0);
     await Promise.all(items.map((item) => item.updateComplete));
     await menu.updateComplete;
     const dropdown = menu.querySelector("wa-dropdown")!;
@@ -354,6 +357,8 @@ describe("chat pane session menu boundary", () => {
     );
     const menu = container.querySelector("openclaw-chat-header-session-menu");
     expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
     await menu?.updateComplete;
     if (fields.archived === undefined) {
       expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();

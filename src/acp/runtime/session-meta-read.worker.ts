@@ -184,7 +184,7 @@ export function readAcpSessionCommand(
       ({ keys, entry }) =>
         keys
           .map((key) => rows.get(key))
-          .find((row) => row && (!entry || acpSessionRowMatchesEntry(row, entry))) ?? null,
+          .find((row) => row && acpSessionRowMatchesEntry(row, entry)) ?? null,
     ),
   };
 }

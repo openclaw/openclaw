@@ -1406,7 +1406,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       reason: { kind: "signal", signal: "SIGKILL" },
     },
     {
-      label: "redacted output",
+      label: "credential-shaped output",
       details: { exitCode: 7 },
       output: `${dummyTelegramToken} ${"x".repeat(500)}`,
       reason: { kind: "exit", exitCode: 7 },
@@ -1435,10 +1435,10 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       expect(ctx.state.lastToolError?.terminalDiagnostic).toEqual(
         reason ? { kind: "process", sessionId: "wild-lagoon", reason } : undefined,
       );
-      if (label === "redacted output") {
+      if (label === "credential-shaped output") {
         expect(ctx.state.lastToolError?.error?.length).toBeLessThanOrEqual(401);
         expect(ctx.state.lastToolError?.error).toMatch(/…$/u);
-        expect(JSON.stringify(ctx.state.lastToolError)).not.toContain(dummyTelegramToken);
+        expect(JSON.stringify(ctx.state.lastToolError)).toContain(dummyTelegramToken);
       } else if (label === "terminal control characters") {
         expect(ctx.state.lastToolError?.error).toBeUndefined();
       }
@@ -1815,7 +1815,7 @@ describe("handleToolExecutionEnd derived tool events", () => {
   });
 
   it.each(["hideFromChannelProgress"] as const)(
-    "keeps exec %s changes timely while bounding and redacting its output lifecycle",
+    "keeps exec %s changes timely while bounding its unchanged output lifecycle",
     async (field) => {
       resetAgentEventsForTest();
       const events: Array<{ stream?: string; ts?: number; data?: Record<string, unknown> }> = [];
@@ -1888,8 +1888,8 @@ describe("handleToolExecutionEnd derived tool events", () => {
         ]) {
           expect(text).toContain("...(live output truncated)...");
           expect(requireString(text, "bounded output").length).toBeLessThan(output.length);
-          expect(text).not.toContain("sk-or-v1-abcdef0123456789");
-          expect(text).not.toContain("ghp_abcdefghij1234567890");
+          expect(text).toContain("sk-or-v1-abcdef0123456789");
+          expect(text).toContain("ghp_abcdefghij1234567890");
           expect(text).toContain("OPENROUTER_API_KEY=");
         }
         expect(commandEvents.at(-1)?.data).toMatchObject({
@@ -2346,12 +2346,12 @@ describe("messaging tool media URL tracking", () => {
   });
 });
 
-describe("control UI credential redaction (issue #72283)", () => {
+describe("control UI tool payload fidelity", () => {
   afterEach(() => {
     resetAgentEventsForTest();
   });
 
-  it("redacts gateway arguments and primitive results", async () => {
+  it("preserves gateway arguments and primitive results", async () => {
     const events = captureAgentEvents();
     const { ctx } = createTestContext();
     const result = "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789";
@@ -2371,7 +2371,7 @@ describe("control UI credential redaction (issue #72283)", () => {
       (event) => event.stream === "tool" && event.data?.phase === "result",
       "tool result",
     ).data?.result;
-    expect(JSON.stringify(emittedResult)).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(emittedResult).toBe(result);
     expect(JSON.stringify(emittedResult)).toContain("OPENROUTER_API_KEY=");
     expect(typeof emittedResult).toBe("string");
     expect(ctx.emitToolOutput).toHaveBeenCalledWith(
@@ -2386,8 +2386,8 @@ describe("control UI credential redaction (issue #72283)", () => {
       "tool start",
     );
     const serialized = JSON.stringify(startEvent.data?.args ?? {});
-    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
-    expect(serialized).not.toContain("abcdef0123456789QWERTY=");
+    expect(serialized).toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).toContain("abcdef0123456789QWERTY=");
     expect(serialized).toContain("config.apply");
   });
 });

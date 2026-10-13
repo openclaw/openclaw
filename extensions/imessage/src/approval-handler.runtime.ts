@@ -3,7 +3,7 @@ import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
   type ChannelApprovalKind,
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -387,7 +387,7 @@ async function bindIMessageApprovalEntry(params: {
   return reactionTargets.some(Boolean) || pollBound ? true : null;
 }
 
-export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   IMessagePendingDelivery,
   PreparedIMessageApprovalTarget,
   PendingIMessageApprovalEntry,

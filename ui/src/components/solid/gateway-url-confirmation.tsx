@@ -1,9 +1,14 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { Show, createEffect, createSignal, onCleanup } from "solid-js";
+import {
+  isOptionalElementDefined,
+  LazyCustomElementRequestController,
+} from "../../app/lazy-custom-element.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import "../modal-dialog.ts";
 import { Icon } from "./icon.tsx";
+import { LazyElementStateView } from "./lazy-view-error.tsx";
 
 type ConfirmationProps = {
   pendingGatewayUrl: string | null;
@@ -80,7 +85,63 @@ export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationPr
   "openclaw-gateway-url-confirmation",
   (props, host) => {
     host.style.display = "contents";
-    return <>{props.props?.pendingGatewayUrl ? renderConfirmation(() => props.props!) : null}</>;
+    const [revision, setRevision] = createSignal(0);
+    let live = true;
+    const dialogElement = {
+      tagName: "openclaw-modal-dialog",
+      get label() {
+        return t("connection.switchGateway.title");
+      },
+      loadModule: () => import("../modal-dialog.ts"),
+    };
+    const loader = new LazyCustomElementRequestController(
+      {
+        requestUpdate: () => {
+          if (live) {
+            setRevision((value) => value + 1);
+          }
+        },
+      },
+      () => props.props?.onCancel(),
+    );
+    createEffect(
+      () => Boolean(props.props?.pendingGatewayUrl),
+      (active) => loader.requestWhileActive(dialogElement, active),
+    );
+    onCleanup(() => {
+      live = false;
+      loader.requestWhileActive(dialogElement, false);
+    });
+    const loaded = () => {
+      revision();
+      return isOptionalElementDefined(dialogElement);
+    };
+    const loadingState = () => {
+      revision();
+      return loader.visibleState;
+    };
+    return (
+      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
+        {(confirmation) => (
+          <Show
+            when={loaded()}
+            fallback={
+              <Show when={loadingState()}>
+                {(state) => (
+                  <LazyElementStateView
+                    state={state()}
+                    onRetry={() => loader.retry()}
+                    onClose={() => loader.close()}
+                  />
+                )}
+              </Show>
+            }
+          >
+            {renderConfirmation(confirmation)}
+          </Show>
+        )}
+      </Show>
+    );
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );

@@ -111,7 +111,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
           const config = vi
             .spyOn(shared, "resolveLocalCapabilityRuntimeConfig")
             .mockResolvedValue(cfg);
-          const builds = vi.spyOn(ModelRegistry, "create");
+          const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
           const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
           const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {

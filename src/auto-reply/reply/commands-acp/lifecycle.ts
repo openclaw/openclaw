@@ -99,7 +99,7 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
-  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+  const runtimePolicyError = await resolveAcpSpawnRuntimePolicyError({
     cfg: params.cfg,
     requesterAgentId: params.agentId,
     requesterSessionKey: params.sessionKey,
