@@ -40,7 +40,6 @@ import {
   ComposerProgress,
   ComposerGoal,
 } from "./chat-composer-regions.tsx";
-import { ComposerRunStatus } from "./chat-composer-run-status.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
 import { resetSkillMenuState, SkillMenu, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import { SlashMenu, resetSlashMenuState, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
@@ -286,10 +285,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   return (
     <>
       <div class="agent-chat__composer-shell">
-        <ComposerRunStatus
-          waitingSubagents={props.waitingSubagents ?? null}
-          onOpenSubagents={props.onOpenSubagents}
-        />
         <div class="chat-footer__context">
           <LitContent value={props.footerContent ?? undefined} />
           <div class="agent-chat__composer-notices">

@@ -287,13 +287,9 @@ export function releaseOpenClawAgentDatabaseLease(
       database,
       db.selectFrom("agent_database_leases").select("path").where("lease_id", "=", leaseId),
     );
-    if (held && (!closeOutcome || closeOutcome === "uncheckpointed")) {
-      clearAgentDatabaseLeaseVerifications(
-        database,
-        held.path,
-        options.env,
-        closeOutcome === "uncheckpointed" ? "retain" : "revoke",
-      );
+    // Admission already dirties restart proof; an incomplete checkpoint preserves it.
+    if (held && !closeOutcome) {
+      clearAgentDatabaseLeaseVerifications(database, held.path, options.env);
     }
     executeSqliteQuerySync(
       database,
@@ -429,11 +425,10 @@ function clearAgentDatabaseLeaseVerifications(
   database: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
-  runtimeProof: "revoke" | "retain" = "revoke",
 ): void {
   for (const held of new Set([pathname, ...agentDatabaseLeasePaths(database)])) {
     if (mayShareAgentDatabaseFile(held, pathname)) {
-      clearOpenClawAgentIntegrityVerification(held, env, runtimeProof);
+      clearOpenClawAgentIntegrityVerification(held, env);
     }
   }
 }

@@ -15,6 +15,12 @@ resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Inter-session steering updates remain context for the executing turn. When that
+turn retains a human Control UI or channel source claim, recovery uses the claim
+rather than treating the latest steering message as a new delegated request.
+The existing source-authorization and delivery checks still apply; a transcript
+message alone cannot restore missing sender authority.
+
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
 provider reports an error and the turn settles before shutdown discovers it.
