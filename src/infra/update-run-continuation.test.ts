@@ -128,21 +128,26 @@ describe("Windows update repair continuation", () => {
     );
   }
 
-  it("does not grant continuation from an incomplete chain containing the live driver", () => {
+  it("grants continuation when an incomplete chain contains the verified live driver", () => {
+    // Windows chains usually end at an exited parent; every collected PID is still a
+    // creation-ordered ancestor, so finding the driver proves the continuation.
+    const chainPid = repairPid + 300;
+    const run = updateRun();
+    run.origin = {
+      driver: { host: hostname(), pid: chainPid, startIdentity: String(repairStart) },
+    };
     mockWindowsProcesses(
       () => ({
         status: 0,
         stdout: JSON.stringify([
-          { pid: process.pid, parentPid: unverifiedPid, startedAt: ticks(doctorStart) },
-          { pid: unverifiedPid, parentPid: updaterPid, startedAt: ticks(repairStart) },
+          { pid: process.pid, parentPid: chainPid, startedAt: ticks(doctorStart) },
+          { pid: chainPid, parentPid: updaterPid, startedAt: ticks(repairStart) },
         ]),
       }),
       () => repairStart,
     );
-    expect(getSelfAndAncestorPidsSync().has(unverifiedPid)).toBe(true);
-    expect(inspectUpdateRepairDriverAdmission([unverifiedDriverRun()], runId).kind).toBe(
-      "conflict",
-    );
+    expect(getSelfAndAncestorPidsSync().has(chainPid)).toBe(true);
+    expect(inspectUpdateRepairDriverAdmission([run], runId).kind).toBe("continuation");
   });
 
   it("keeps a verified continuation when a later ancestry read fails", () => {

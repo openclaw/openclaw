@@ -72,11 +72,11 @@ function inspectCurrentUpdateRunContinuation(
     const key = updateRunDriverKey(driver);
     if (!verifiedAncestorDrivers.has(key)) {
       ancestry ??= inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
-      if (!ancestry.complete) {
-        return "ancestry-unverified";
-      }
+      // Every collected PID is a verified ancestor, so finding the driver proves the
+      // continuation. The Windows walk often stops short of the root, so completeness
+      // only matters when the driver was not found.
       if (!ancestry.pids.has(driver.pid)) {
-        return "not-continuation";
+        return ancestry.complete ? "not-continuation" : "ancestry-unverified";
       }
       verifiedAncestorDrivers.add(key);
     }
