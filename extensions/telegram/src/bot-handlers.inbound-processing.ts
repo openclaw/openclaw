@@ -3,6 +3,7 @@ import {
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
@@ -174,13 +175,19 @@ export function createTelegramInboundProcessing({
           return { kind: "retry", error: mediaErr };
         }
         if (isMediaSizeLimitError(mediaErr)) {
-          const limitMb =
+          const limitBytes =
             mediaErr instanceof TelegramBotApiFileTooLargeError
-              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
-              : Math.round(mediaMaxBytes / (1024 * 1024));
-          unavailable = { reason: "oversize", limitMb };
+              ? Math.min(mediaErr.limitMb * 1024 * 1024, mediaMaxBytes)
+              : mediaMaxBytes;
+          const limit = formatByteSize(limitBytes, {
+            style: "legacy-binary",
+            maxUnit: "mega",
+            separator: "",
+            fractionDigits: (value) => (Number.isInteger(value) ? 0 : 2),
+          });
+          unavailable = { reason: "oversize", limit };
           if (sendOversizeWarning && mediaDisposition !== "silent-ingest") {
-            await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limitMb}MB.`);
+            await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limit}.`);
           }
           logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         } else {
