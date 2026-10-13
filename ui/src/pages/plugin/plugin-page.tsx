@@ -10,10 +10,9 @@ import {
 } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
-import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { LazyViewError, PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
-import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -81,7 +80,12 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
     ) {
       mode = "loading";
     }
+    const frame = lifecycle.frameView;
+    if (mode === "frame" && frame?.status !== "ready") {
+      mode = frame?.status === "error" ? "load-error" : "pending";
+    }
     return {
+      frame,
       info,
       key,
       mode,
@@ -89,6 +93,10 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       generation: lifecycle.pluginFrameGeneration,
     };
   });
+  const readyFrame = () => {
+    const frame = view().frame;
+    return frame?.status === "ready" ? frame : undefined;
+  };
   const readyView = () => {
     const state = view().state;
     return state.status === "ready" ? state.view : undefined;
@@ -96,6 +104,29 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const error = () => {
     const state = view().state;
     return state.status === "error" ? state.error : undefined;
+  };
+  const frameErrorMessage = () => {
+    const frame = view().frame;
+    if (frame?.status !== "error") {
+      return "";
+    }
+    switch (frame.error.kind) {
+      case "http":
+        return t("pluginTabs.loadErrorHttp", { status: frame.error.status });
+      case "network":
+        return t("pluginTabs.loadErrorNetwork");
+      case "content":
+        return t("pluginTabs.loadErrorContent");
+      case "script-policy":
+        return t("pluginTabs.loadErrorScriptPolicy");
+      case "embed-policy":
+        return t("pluginTabs.loadErrorEmbedPolicy");
+      case "base-policy":
+        return t("pluginTabs.loadErrorBasePolicy");
+      case "ambiguous-policy":
+        return t("pluginTabs.loadErrorAmbiguousPolicy");
+    }
+    return "";
   };
   const disabled = () =>
     !view().info?.path &&
@@ -150,25 +181,45 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
         <ShellLayoutBoundary traits={{ pluginEmbed: true }}>
           <section class="plugin-tab-embed">
             <Show when={view().generation} keyed>
-              {(_generation) => {
-                onCleanup(() => lifecycle.syncPluginThemeFrame(null));
-                return (
-                  <iframe
-                    class="plugin-tab-embed__frame"
-                    src={view().info?.path}
-                    title={view().info?.label}
-                    sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-                    ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
-                    onLoad={lifecycle.handlePluginThemeLoad}
-                  />
-                );
-              }}
+              {(_generation) => (
+                <Show when={readyFrame()?.identity} keyed>
+                  {(_identity) => {
+                    onCleanup(() => lifecycle.syncPluginThemeFrame(null));
+                    return (
+                      <iframe
+                        class="plugin-tab-embed__frame"
+                        src={readyFrame()?.src}
+                        srcdoc={readyFrame()?.srcdoc}
+                        title={view().info?.label}
+                        sandbox={readyFrame()?.sandbox}
+                        ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
+                        onLoad={lifecycle.handlePluginThemeLoad}
+                      />
+                    );
+                  }}
+                </Show>
+              )}
             </Show>
           </section>
         </ShellLayoutBoundary>
       </Match>
-      <Match when={view().mode === "loading"}>
+      <Match when={view().mode === "loading" || view().mode === "pending"}>
         <LoadingState />
+      </Match>
+      <Match when={view().mode === "load-error"}>
+        <PanelErrorState
+          title={t("pluginTabs.loadErrorTitle")}
+          subtitle={frameErrorMessage()}
+          actions={
+            <button
+              class="btn lazy-view-error__action"
+              type="button"
+              onClick={lifecycle.retryPluginFrame}
+            >
+              {t("common.retry")}
+            </button>
+          }
+        />
       </Match>
       <Match when={view().mode === "unavailable"}>
         <section class="card lazy-view-state" role="status">

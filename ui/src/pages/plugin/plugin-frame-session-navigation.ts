@@ -61,6 +61,8 @@ export function openPluginFrameSession(
     descriptor: GatewayControlUiPluginTab | undefined;
     authenticated: boolean;
     authenticatedAt: number;
+    /** A private core-document proof, never a field accepted from the iframe message. */
+    documentVerified?: boolean;
   },
 ) {
   const { context, element, frame, descriptor: info } = host;
@@ -74,7 +76,7 @@ export function openPluginFrameSession(
     !info?.path ||
     info.requiresGatewayAuth !== true ||
     !resolveControlUiPluginTabPathname(info.path) ||
-    frame.getAttribute("src") !== info.path ||
+    (frame.getAttribute("src") !== info.path && !host.documentVerified) ||
     context.gateway.snapshot.phase !== "connected" ||
     !context.gateway.snapshot.client ||
     !context.gateway.snapshot.hello?.auth ||

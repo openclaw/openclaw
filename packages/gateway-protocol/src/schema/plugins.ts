@@ -101,6 +101,7 @@ export const ControlUiPluginTabSchema = closedObject({
   requiresGatewayAuth: Type.Optional(Type.Boolean()),
   group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
   order: Type.Optional(Type.Number()),
+  sessionActions: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 export const ControlUiPluginWidgetKindSchema = closedObject({

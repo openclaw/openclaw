@@ -6,7 +6,7 @@ import {
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -55,6 +55,7 @@ async function mount(
     requiresGatewayAuth?: boolean;
     path?: string;
     boardFace?: "dashboard";
+    sessionActions?: string[];
     container?: HTMLElement;
   } = {},
 ) {
@@ -64,6 +65,7 @@ async function mount(
     label: "Example panel",
     path: options.path ?? pluginPath,
     requiresGatewayAuth: options.requiresGatewayAuth ?? true,
+    sessionActions: options.sessionActions,
   };
   const config = {
     assistantIdentity: {
@@ -179,6 +181,17 @@ async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
   // Vitest initializes its CDP handler lazily; finish that before listener and command RPCs race.
   await session.send("Page.enable");
   const ready = createDeferred();
+  const loaded = createDeferred();
+  const documentVerified = createDeferred();
+  let proofPort: MessagePort | undefined;
+  const onLoad = (event: Event) => {
+    if (event.target === view.querySelector("iframe")) {
+      loaded.resolve();
+      view.removeEventListener("load", onLoad, true);
+    }
+  };
+  view.addEventListener("load", onLoad, true);
+  dispose.push(() => view.removeEventListener("load", onLoad, true));
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
@@ -196,7 +209,19 @@ async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
   };
   const onReady = (event: MessageEvent<unknown>) => {
     const frame = view.querySelector("iframe");
+    if (frame && event.source === frame.contentWindow && event.ports.length === 2) {
+      proofPort = event.ports[1];
+    }
     if (frame && event.source === frame.contentWindow && event.data === "test-click-ready") {
+      // The connection is established: observe replies after the production listener,
+      // so awaiting this event also waits for the real navigation decision.
+      const onProof = (proof: MessageEvent) => {
+        if (proof.data?.type === "openclaw.pluginUi.documentVerified") {
+          documentVerified.resolve();
+        }
+      };
+      proofPort?.addEventListener("message", onProof);
+      dispose.push(() => proofPort?.removeEventListener("message", onProof));
       void cleanup().then(() => ready.resolve(), fail);
     }
   };
@@ -205,8 +230,11 @@ async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
     document.getElementById("open").onclick = () => parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
     addEventListener("message", event => {
       if (event.source === parent && event.data === "test-click") document.getElementById("open").click();
+      if (event.source === parent && event.data === "test-replace") location.href = "/plugins/example/replacement";
     });
-    parent.postMessage("test-click-ready", ${JSON.stringify(window.location.origin)});
+    const ready = () => parent.postMessage("test-click-ready", ${JSON.stringify(window.location.origin)});
+    if (window.openclawPluginUiBridge) window.openclawPluginUiBridge.connected.then(ready);
+    else ready();
   </script>`;
   const onRequest = ({ requestId }: { requestId: string }) => {
     void session
@@ -224,9 +252,8 @@ async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
   try {
     // Own the initial document; replacing srcdoc after mount races Vite's SPA fallback navigation.
     await session.send("Fetch.enable", {
-      patterns: [
-        { urlPattern: new URL(pluginPath, window.location.href).href, resourceType: "Document" },
-      ],
+      // Action-capable tabs fetch this HTML in the parent before rendering srcdoc.
+      patterns: [{ urlPattern: new URL(pluginPath, window.location.href).href }],
     });
     signal.throwIfAborted();
   } catch (error) {
@@ -234,7 +261,75 @@ async function prepareClickDocument(view: HTMLElement, signal: AbortSignal) {
     throw new Error("Could not prepare plugin click document", { cause: error });
   }
   signal.addEventListener("abort", onAbort, { once: true });
-  return { ready: ready.promise };
+  return {
+    ready: ready.promise,
+    loaded: loaded.promise,
+    documentVerified: documentVerified.promise,
+  };
+}
+
+async function prepareReplacementDocument(frame: HTMLIFrameElement, signal: AbortSignal) {
+  const session: CDPSession = cdp();
+  await session.send("Page.enable");
+  const replacementUrl = new URL("/plugins/example/replacement", window.location.href).href;
+  const imageUrl = new URL("/plugins/example/held-image", window.location.href).href;
+  const sent = createDeferred();
+  const heldImage = createDeferred<string>();
+  const loaded = createDeferred();
+  const onLoad = vi.fn(() => loaded.resolve());
+  const onMessage = (event: MessageEvent) => {
+    if (event.source === frame.contentWindow && event.data === "test-replacement-sent") {
+      sent.resolve();
+    }
+  };
+  const replacementHtml = `<img src="${imageUrl}"><script>
+    parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(window.location.origin)});
+    // Same-source window messages are FIFO: the host has handled the request at this barrier.
+    parent.postMessage("test-replacement-sent", ${JSON.stringify(window.location.origin)});
+  </script>`;
+  const onRequest = ({ requestId, request }: { requestId: string; request: { url: string } }) => {
+    if (request.url === imageUrl) {
+      heldImage.resolve(requestId);
+      return;
+    }
+    void session
+      .send("Fetch.fulfillRequest", {
+        requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
+        body: btoa(replacementHtml),
+      })
+      .catch((error: unknown) => sent.reject(error));
+  };
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      frame.removeEventListener("load", onLoad);
+      window.removeEventListener("message", onMessage);
+      session.off("Fetch.requestPaused", onRequest);
+      await session.send("Fetch.disable");
+    })());
+  dispose.push(cleanup);
+  frame.addEventListener("load", onLoad);
+  window.addEventListener("message", onMessage);
+  session.on("Fetch.requestPaused", onRequest);
+  await session.send("Fetch.enable", {
+    patterns: [{ urlPattern: replacementUrl }, { urlPattern: imageUrl }],
+  });
+  signal.throwIfAborted();
+  return {
+    sent: sent.promise,
+    heldImage: heldImage.promise,
+    onLoad,
+    release: async () => {
+      await session.send("Fetch.fulfillRequest", {
+        requestId: await withinTest(heldImage.promise, signal),
+        responseCode: 204,
+      });
+      await withinTest(loaded.promise, signal);
+      await cleanup();
+    },
+  };
 }
 
 describe("authenticated plugin-frame session navigation", () => {
@@ -276,6 +371,86 @@ describe("authenticated plugin-frame session navigation", () => {
       pathname: "/console/chat/research",
       search: "?__openclawSessionFacePreference=1",
     });
+  });
+
+  it("preserves legacy session navigation and the preferred dashboard for an action-capable srcdoc", async ({
+    signal,
+  }) => {
+    const container = document.createElement("div");
+    const clickDocument = await prepareClickDocument(container, signal);
+    const [fixture] = await Promise.all([
+      mount({ container, boardFace: "dashboard", sessionActions: ["save"] }),
+      clickDocument.ready,
+    ]);
+    expect(fixture.frame.hasAttribute("srcdoc")).toBe(true);
+    expect(fixture.frame.getAttribute("src")).toBeNull();
+    expect(fixture.frame.getAttribute("sandbox")).toBe("allow-scripts");
+    fixture.frame.contentWindow!.postMessage("test-click", "*");
+    await withinTest(clickDocument.documentVerified, signal);
+    expect(fixture.selectAgent).toHaveBeenCalledExactlyOnceWith("writer");
+    expect(fixture.setSessionKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
+    expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith("dashboard", {
+      pathname: "/console/dashboard/writer/subagent/11111111-2222-4333-8444-555555555555",
+      search: undefined,
+    });
+  });
+
+  it("rejects a replacement document's legacy request before its iframe load can revoke the bridge", async ({
+    signal,
+  }) => {
+    const container = document.createElement("div");
+    const clickDocument = await prepareClickDocument(container, signal);
+    const [fixture] = await Promise.all([
+      mount({ container, sessionActions: ["save"] }),
+      clickDocument.ready,
+      clickDocument.loaded,
+    ]);
+    const originalWindow = fixture.frame.contentWindow;
+    originalWindow!.postMessage("test-click", "*");
+    await withinTest(clickDocument.documentVerified, signal);
+    expect(fixture.navigate).toHaveBeenCalledOnce();
+    fixture.navigate.mockClear();
+    fixture.selectAgent.mockClear();
+    fixture.setSessionKey.mockClear();
+
+    const replacement = await prepareReplacementDocument(fixture.frame, signal);
+    originalWindow!.postMessage("test-replace", "*");
+    await withinTest(Promise.all([replacement.sent, replacement.heldImage]), signal);
+    expect(fixture.frame.contentWindow).toBe(originalWindow);
+    expect(replacement.onLoad).not.toHaveBeenCalled();
+    expect(fixture.navigate).not.toHaveBeenCalled();
+    await replacement.release();
+    expect(replacement.onLoad).toHaveBeenCalledOnce();
+    expect(fixture.navigate).not.toHaveBeenCalled();
+    expect(fixture.selectAgent).not.toHaveBeenCalled();
+    expect(fixture.setSessionKey).not.toHaveBeenCalled();
+  });
+
+  it("rejects a real document proof delivered after the gateway connection epoch retires", async ({
+    signal,
+  }) => {
+    const container = document.createElement("div");
+    const clickDocument = await prepareClickDocument(container, signal);
+    const [fixture] = await Promise.all([
+      mount({ container, sessionActions: ["save"] }),
+      clickDocument.ready,
+    ]);
+    const retireConnection = (event: MessageEvent) => {
+      if (event.source === fixture.frame.contentWindow && event.data?.type === message.type) {
+        // The request handler posts the proof synchronously; the reply is a later port task.
+        queueMicrotask(() => {
+          fixture.gateway.connectionRevision += 1;
+        });
+      }
+    };
+    window.addEventListener("message", retireConnection);
+    dispose.push(() => window.removeEventListener("message", retireConnection));
+    fixture.frame.contentWindow!.postMessage("test-click", "*");
+    await withinTest(clickDocument.documentVerified, signal);
+    expect(fixture.gateway.connectionRevision).toBe(2);
+    expect(fixture.navigate).not.toHaveBeenCalled();
+    expect(fixture.selectAgent).not.toHaveBeenCalled();
+    expect(fixture.setSessionKey).not.toHaveBeenCalled();
   });
 
   it("rejects other windows, wrong origins, response channels, and malformed requests", async () => {

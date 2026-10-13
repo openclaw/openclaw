@@ -129,6 +129,24 @@ describe("listControlUiPluginTabs", () => {
     });
   });
 
+  it("projects only the tab's explicit action and navigation capabilities", () => {
+    activateDescriptors([
+      {
+        pluginId: "logbook",
+        descriptor: tabDescriptor({
+          sessionActions: ["append", "export"],
+        }),
+      },
+    ]);
+
+    expect(listControlUiPluginTabs(["operator.admin"])).toEqual([
+      expect.objectContaining({
+        pluginId: "logbook",
+        sessionActions: ["append", "export"],
+      }),
+    ]);
+  });
+
   it("hides tabs whose required scopes are not granted", () => {
     activateDescriptors([
       {
