@@ -15,7 +15,7 @@ import { makeDatabasePortManifest } from "./database-port-recovery.test-support.
 
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
-  return { ...original, default: { ...original.default } };
+  return { ...original, default: { ...original } };
 });
 
 let stateDir: string;

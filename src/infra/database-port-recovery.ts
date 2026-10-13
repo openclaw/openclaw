@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { hasErrnoCode } from "./errno.js";
 
 const count = z.number().int().nonnegative();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -99,7 +100,7 @@ function readManifest(stateDir: string): DatabasePortManifest | undefined {
       flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
     });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw refusal(stateDir);
@@ -174,7 +175,7 @@ function ensurePrivateDirectory(directory: string): void {
     fs.mkdirSync(directory, { mode: 0o700 });
     syncDirectory(path.dirname(directory));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+    if (!hasErrnoCode(error, "EEXIST")) {
       throw error;
     }
   }
