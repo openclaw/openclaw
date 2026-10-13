@@ -107,6 +107,65 @@ describe("diagnostics-prometheus service", () => {
     }
   });
 
+  it("resolves RPC latency tails with bounded method-only scrape series", () => {
+    const metrics = createMetricsHarness();
+    const base = { type: "gateway.rpc" as const, method: "sessions.history" };
+    try {
+      for (const durationMs of [12, 24, 600, 1200, 2400, 4800, 9600, 24000, 30000, 600001]) {
+        metrics.record({ ...base, phase: "response", outcome: "ok", durationMs });
+        metrics.record({
+          ...base,
+          phase: "handler",
+          outcome: "returned",
+          durationMs,
+          admissionMs: durationMs,
+        });
+        metrics.record({
+          ...base,
+          phase: "dispatch",
+          outcome: "returned",
+          durationMs,
+          queueWaitMs: durationMs,
+          response: "sent",
+        });
+      }
+      const rendered = metrics.render();
+      for (const timing of ["first_response", "handler", "admission", "queue_wait"]) {
+        const name = `openclaw_gateway_rpc_${timing}_seconds`;
+        const lines = rendered.split("\n").filter((line) => line.startsWith(`${name}_`));
+        expect(lines).toHaveLength(44);
+        for (const [bound, count] of [
+          [0.01, 0],
+          [0.0125, 1],
+          [0.025, 2],
+          [0.6, 3],
+          [1.25, 4],
+          [2.5, 5],
+          [5, 6],
+          [10, 7],
+          [25, 8],
+          [30, 9],
+          [600, 9],
+          ["+Inf", 10],
+        ]) {
+          expect(lines).toContain(
+            `${name}_bucket{le="${bound}",method="sessions.history"} ${count}`,
+          );
+        }
+        expect(lines).toContain(`${name}_count{method="sessions.history"} 10`);
+        const bounds = lines
+          .filter((line) => line.startsWith(`${name}_bucket`))
+          .map((line) => Number(line.match(/le="([^"]+)"/)?.[1]))
+          .filter((bound) => bound >= 0.01 && bound <= 30);
+        for (let index = 1; index < bounds.length; index += 1) {
+          expect(bounds[index]! / bounds[index - 1]!).toBeLessThanOrEqual(4 / 3 + 1e-12);
+        }
+      }
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
     const metrics = createMetricsHarness();
     const event = {

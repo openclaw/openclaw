@@ -215,7 +215,11 @@ affects subsequent requests without a separate label cache.
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
 samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
-but expands into 19 scrape series (buckets, sum, and count). The response-size
+but expands into 44 scrape series (41 finite buckets, `+Inf`, sum, and count).
+The four timing histograms therefore use 176 scrape series per method, compared
+with 76 previously. Including request and exclusive-sample counters and both
+byte histograms gives 236 series per fully observed method (23,600 for 100
+methods), plus shared outcome totals. The response-size
 and signed heap-delta histograms expand into 20 and 38 series respectively; see
 [RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
 updating when the cap fills; unseen RPC or other operational samples are refused
@@ -223,6 +227,28 @@ and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
 coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
+The four RPC timing histograms use these finite upper bounds, in seconds:
+
+```text
+0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08,
+0.1, 0.125, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8,
+1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8,
+10, 12.5, 15, 20, 25, 30, 60, 120, 300, 600
+```
+
+Between 10 ms and 30 s, adjacent bounds differ by at most a factor of 4/3.
+Quantiles still interpolate within a bucket; they are estimates, not exact
+observations. For example, a 995 ms p99 in the previous layout could represent
+samples anywhere in the 500–1,000 ms bucket. The new layout splits that interval
+at 600 and 800 ms. Other duration histograms retain their existing layouts.
+The exporter uses classic Prometheus text histograms, not native histograms.
+
+All previous boundaries remain available for threshold alerts. During upgrades,
+keep targets with different bucket layouts separate for `histogram_quantile`,
+or filter to the old common `le` values before aggregation. Wait for a full
+query rate window after every target has upgraded before comparing quantiles
+using the new boundaries; do not mix old and new layouts in recording rules.
 
 ### HTTP cancellations
 
