@@ -1,4 +1,5 @@
 import { createMemo, Show } from "solid-js";
+import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
   pathForPluginSettings,
@@ -41,6 +42,7 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
     props.revision();
     return props.page;
   };
+  const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
     openPluginSettings: (pluginId: string | null) => {
       page().context.navigate("plugin-settings", {
@@ -110,20 +112,14 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
       ? ("plugins" as const)
       : ("plugin-settings" as const);
   const catalogSkillsSection = () => {
-    const catalog = page().state.catalogDetail?.result;
-    const version = catalog?.plugin.catalog.latestVersion;
-    return catalog && version && catalog.detail.skills.length
-      ? renderPluginSkillsSection(
-          catalog.detail.skills,
-          (skillName) =>
-            void page().skillPreview.open({
-              source: "catalog",
-              catalogId: catalog.plugin.id,
-              version,
-              skillName,
-            }),
-        )
-      : undefined;
+    const staticCatalog = page().state.catalogDetail?.result;
+    const version = staticCatalog?.plugin.catalog.latestVersion;
+    if (!staticCatalog || !version || !staticCatalog.detail.skills.length) {
+      return undefined;
+    }
+    const onOpen = (skillName: string) =>
+      onOpenSkill({ source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName });
+    return renderPluginSkillsSection(staticCatalog.detail.skills, onOpen);
   };
   const shared = createMemo(() => ({
     connected: page().gateway.connected,
@@ -200,14 +196,12 @@ export function PluginsPageView(props: { page: PluginsPageController; revision: 
         }
         skillsSection={
           skills().length
-            ? renderPluginSkillsSection(
-                skills(),
-                (skillName) =>
-                  void page().skillPreview.open({
-                    source: "installed",
-                    pluginId: detailProps.pluginId,
-                    skillName,
-                  }),
+            ? renderPluginSkillsSection(skills(), (skillName) =>
+                onOpenSkill({
+                  source: "installed",
+                  pluginId: detailProps.pluginId,
+                  skillName,
+                }),
               )
             : !components()
               ? catalogSkillsSection()

@@ -80,22 +80,22 @@ export function createSettingsStatus<T>(
       configProjection.read();
       return [
         client(),
+        configHash(),
         snapshot.phase,
         snapshot.hello,
         snapshot.hello?.auth,
-        configHash(),
         revision(),
       ] as const;
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  createEffect(key, ([currentClient, , , , hash], previous) => {
+  createEffect(key, ([currentClient, hash], previous) => {
     request?.abort();
     if (!currentClient) {
       if (previous) {
         setState("idle");
       }
-      return;
+      return undefined;
     }
     const controller = new AbortController();
     request = controller;
