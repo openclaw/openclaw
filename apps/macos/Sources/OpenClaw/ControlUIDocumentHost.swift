@@ -28,6 +28,8 @@ final class ControlUIDocumentHost {
     var hasLiveContent = false
     var isShowingFailurePage = false
     private(set) var pendingLoad: Task<Void, Never>?
+    /// The latest converted image paste; the next one waits for it to keep paste order.
+    var imagePasteDelivery: Task<Void, Never>?
     private var loadGeneration: UInt64 = 0
     var isAvailable: () -> Bool = { true }
     // A retained document may outlive its presentation while WebKit stops it.

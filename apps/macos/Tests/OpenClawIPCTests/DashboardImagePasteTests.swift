@@ -63,41 +63,47 @@ struct DashboardImagePasteTests {
     @Test func `paste gives the focused composer an HEIC screenshot as PNG and leaves other pastes to WebKit`()
         async throws
     {
-        let server = try await DashboardHTTPFixture.start(
-            html: Self.composerHTML, contentSecurityPolicy: "default-src 'self' 'unsafe-inline'")
-        defer { server.stop() }
-        let document = ControlUIDocumentHost(
-            url: server.url("/control/"), auth: .unauthenticated, websiteDataStore: .nonPersistent())
-        { _ in }
-        defer { document.webView.stopLoading() }
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-        document.webView.imagePasteboard = pasteboard
+        try await Self.withFocusedComposer { document, pasteboard in
+            // Content WebKit can paste keeps WebKit's own paste, which the page sees as a trusted event.
+            try Self.paste([.utf8PlainText: Data("fixture".utf8)], from: pasteboard, into: document.webView)
+            try await TestWait.state("WebKit paste") {
+                try await document.webView.evaluateJavaScript("window.pastes.length") as? Int == 1
+            }
+            #expect(try await document.webView.evaluateJavaScript("window.pastes[0].trusted") as? Bool == true)
 
-        document.load(server.url("/control/chat"))
-        try await TestWait.state("composer document") {
-            await (try? document.webView.evaluateJavaScript("typeof window.focusComposer")) as? String == "function"
+            try Self.paste([.heic: Self.heic], from: pasteboard, into: document.webView)
+            try await TestWait.state("converted paste") {
+                try await document.webView.evaluateJavaScript("typeof window.pastes[1]?.png") as? String == "string"
+            }
+            let pasted = try #require(
+                try await document.webView.evaluateJavaScript("window.pastes[1]") as? [String: Any])
+            #expect(pasted["trusted"] as? Bool == false)
+            #expect(pasted["target"] as? String == "composer")
+            #expect(pasted["files"] as? [String] == ["image.png image/png"])
+            let png = try #require((pasted["png"] as? String).flatMap { Data(base64Encoded: $0) })
+            #expect(try Self.imageFacts(png) == ImageFacts(type: UTType.png.identifier, width: 8, height: 6))
         }
-        try #require(try await document.webView.evaluateJavaScript("window.focusComposer()") as? Bool == true)
+    }
 
-        // Content WebKit can paste keeps WebKit's own paste, which the page sees as a trusted event.
-        try Self.paste([.utf8PlainText: Data("fixture".utf8)], from: pasteboard, into: document.webView)
-        try await TestWait.state("WebKit paste") {
-            try await document.webView.evaluateJavaScript("window.pastes.length") as? Int == 1
-        }
-        #expect(try await document.webView.evaluateJavaScript("window.pastes[0].trusted") as? Bool == true)
+    @Test func `a converted paste stays with the composer and route it was made in`() async throws {
+        try await Self.withFocusedComposer { document, pasteboard in
+            // Scripts reach the page in order: the paste's record, this route change, then delivery.
+            // The focused composer stays in place, as when the app switches conversations.
+            try Self.paste([.heic: Self.heic], from: pasteboard, into: document.webView)
+            _ = try await document.webView.evaluateJavaScript("history.pushState({}, '', '/control/chat/other'); true")
+            await document.imagePasteDelivery?.value
+            #expect(try await document.webView.evaluateJavaScript("window.pastes.length") as? Int == 0)
 
-        try Self.paste([.heic: Self.heic], from: pasteboard, into: document.webView)
-        try await TestWait.state("converted paste") {
-            try await document.webView.evaluateJavaScript("window.pastes.length") as? Int == 2
+            // Focus moving within the same route leaves the paste with the composer that received it.
+            try Self.paste([.heic: Self.heic], from: pasteboard, into: document.webView)
+            try #require(try await document.webView.evaluateJavaScript("window.focusField('other')") as? Bool == true)
+            await document.imagePasteDelivery?.value
+            let pasted = try #require(
+                try await document.webView.evaluateJavaScript("window.pastes") as? [[String: Any]])
+            #expect(pasted.count == 1)
+            #expect(pasted.first?["target"] as? String == "composer")
+            #expect(pasted.first?["files"] as? [String] == ["image.png image/png"])
         }
-        let pasted = try #require(
-            try await document.webView.evaluateJavaScript("window.pastes[1]") as? [String: Any])
-        #expect(pasted["trusted"] as? Bool == false)
-        #expect(pasted["target"] as? String == "composer")
-        #expect(pasted["files"] as? [String] == ["image.png image/png"])
-        let png = try #require((pasted["png"] as? String).flatMap { Data(base64Encoded: $0) })
-        #expect(try Self.imageFacts(png) == ImageFacts(type: UTType.png.identifier, width: 8, height: 6))
     }
 
     private struct ImageFacts: Equatable {
@@ -119,33 +125,58 @@ struct DashboardImagePasteTests {
 
     /// The composer sits in a shadow root, as custom elements can place it. WebKit's own paste
     /// reads the runner's clipboard, so the page records that trusted event without reading it.
+    /// Pastes are recorded when dispatched; the PNG bytes arrive later.
     private static let composerHTML = """
     <!doctype html><html><body><composer-fixture></composer-fixture><script>
     window.pastes = [];
     customElements.define('composer-fixture', class extends HTMLElement {
       constructor() {
         super();
-        this.attachShadow({mode: 'open'}).innerHTML = '<textarea id="composer"></textarea>';
-        this.shadowRoot.getElementById('composer').addEventListener('paste', async event => {
+        this.attachShadow({mode: 'open'}).innerHTML = '<textarea id="composer"></textarea><textarea id="other"></textarea>';
+        this.shadowRoot.addEventListener('paste', event => {
           if (event.isTrusted) {
             event.preventDefault();
             window.pastes.push({trusted: true});
             return;
           }
-          const target = event.composedPath()[0].id;
           const files = Array.from(event.clipboardData.items, item => item.getAsFile()).filter(Boolean);
-          const png = files[0] ? new Uint8Array(await files[0].arrayBuffer()).toBase64() : null;
-          window.pastes.push({trusted: false, target, files: files.map(file => `${file.name} ${file.type}`), png});
+          const paste = {trusted: false, target: event.composedPath()[0].id, files: files.map(file => `${file.name} ${file.type}`)};
+          window.pastes.push(paste);
+          files[0]?.arrayBuffer().then(buffer => { paste.png = new Uint8Array(buffer).toBase64(); });
         });
       }
     });
-    window.focusComposer = () => {
-      const composer = document.querySelector('composer-fixture').shadowRoot.getElementById('composer');
-      composer.focus();
-      return composer.getRootNode().activeElement === composer;
+    window.focusField = id => {
+      const field = document.querySelector('composer-fixture').shadowRoot.getElementById(id);
+      field.focus();
+      return field.getRootNode().activeElement === field;
     };
     </script></body></html>
     """
+
+    /// Runs `body` with the composer page loaded and its composer focused; the web view's
+    /// image check reads the given private pasteboard.
+    private static func withFocusedComposer(
+        _ body: @MainActor (ControlUIDocumentHost, NSPasteboard) async throws -> Void) async throws
+    {
+        let server = try await DashboardHTTPFixture.start(
+            html: self.composerHTML, contentSecurityPolicy: "default-src 'self' 'unsafe-inline'")
+        defer { server.stop() }
+        let document = ControlUIDocumentHost(
+            url: server.url("/control/"), auth: .unauthenticated, websiteDataStore: .nonPersistent())
+        { _ in }
+        defer { document.webView.stopLoading() }
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        document.webView.imagePasteboard = pasteboard
+
+        document.load(server.url("/control/chat"))
+        try await TestWait.state("composer document") {
+            await (try? document.webView.evaluateJavaScript("typeof window.focusField")) as? String == "function"
+        }
+        try #require(try await document.webView.evaluateJavaScript("window.focusField('composer')") as? Bool == true)
+        try await body(document, pasteboard)
+    }
 
     private static func item(_ representations: KeyValuePairs<UTType, Data>) -> NSPasteboardItem {
         let item = NSPasteboardItem()
