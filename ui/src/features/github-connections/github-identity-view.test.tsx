@@ -1,13 +1,10 @@
-import { nothing, render } from "lit";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { GitHubIdentityController } from "./github-identity-controller.ts";
-import { renderGitHubIdentity } from "./github-identity-view.ts";
-import { GitHubConnectionSetup } from "./github-identity-view.tsx";
+import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 const fallback = vi.fn(() => true);
@@ -87,34 +84,33 @@ describe("GitHub identity view", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
-  it("keeps the Lit caller's focused PAT field across same-controller redraws", async () => {
-    const owner = document.body.appendChild(document.createElement("section"));
+  it("keeps the focused PAT field across same-controller redraws", () => {
+    const [revision, setRevision] = createSignal(0);
     const onOpenConnections = vi.fn();
-    const controller = new GitHubIdentityController({ requestUpdate: () => redraw() });
+    const controller = new GitHubIdentityController({
+      requestUpdate: () => setRevision((value) => value + 1),
+    });
     controller.configurable = controller.patVisible = true;
-    const redraw = () => render(renderGitHubIdentity(controller, onOpenConnections), owner);
-    try {
-      redraw();
-      const bridge = owner.querySelector<SolidBridgeElement<object>>("openclaw-github-identity")!;
-      await bridge.updateComplete;
-      const input = owner.querySelector<HTMLInputElement>(".settings-secret input")!;
-      input.focus();
-      input.value = "synthetic-pat";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await bridge.updateComplete;
-      expect(controller.draft.token).toBe("synthetic-pat");
-      expect(owner.querySelector(".settings-secret input")).toBe(input);
-      expect(document.activeElement).toBe(input);
-      controller.busy = true;
-      redraw();
-      await bridge.updateComplete;
-      expect(input.disabled).toBe(true);
-      expect(input.value).toBe("synthetic-pat");
-      expect(owner.querySelector(".settings-secret input")).toBe(input);
-    } finally {
-      render(nothing, owner);
-      owner.remove();
-      await Promise.resolve();
-    }
+    const readController = () => {
+      revision();
+      return controller;
+    };
+    const view = mountSolid(() => (
+      <GitHubIdentity controller={readController()} onOpenConnections={onOpenConnections} />
+    ));
+    const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
+    input.focus();
+    input.value = "synthetic-pat";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(controller.draft.token).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    controller.busy = true;
+    setRevision((value) => value + 1);
+    flush();
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe("synthetic-pat");
+    expect(view.container.querySelector(".settings-secret input")).toBe(input);
   });
 });

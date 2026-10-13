@@ -407,6 +407,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/helpers/desktop-resize-real-fixture.test.ts",
   "src/agents/mcp-oauth-writes.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",
+  "src/secrets/job-egress.test.ts",
   "src/secrets/store/secret-store-config-ref.worker.test.ts",
   "src/secrets/store/secret-store-metadata.worker.test.ts",
   "src/secrets/store/secret-store.redaction.test.ts",

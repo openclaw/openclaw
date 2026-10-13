@@ -718,7 +718,7 @@ extensions/qa-lab/src/model-catalog.runtime.ts	2
 extensions/qa-lab/src/multipass.runtime.ts	4
 extensions/qa-lab/src/parity-shared.ts	1
 extensions/qa-lab/src/posix-process-group.ts	3
-extensions/qa-lab/src/providers/aimock/server.ts	3
+extensions/qa-lab/src/providers/aimock/server.ts	2
 extensions/qa-lab/src/providers/index.ts	1
 extensions/qa-lab/src/providers/live-config.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts	1
@@ -726,7 +726,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
-extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
+extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	5
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
 extensions/qa-lab/src/providers/mock-openai/server.ts	4
 extensions/qa-lab/src/qa-transport.ts	1

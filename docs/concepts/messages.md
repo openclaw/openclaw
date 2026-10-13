@@ -136,6 +136,8 @@ Channel plugins may preserve ordering, debounce input, and apply transport backp
 
 Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
+A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
+
 With the OpenClaw runtime, an assistant turn that errors or is aborted after producing partial text, without tool calls, appears as a short failure marker in the next model request. Its unfinished text is not replayed, and the stored failed turn stays unchanged. Empty and placeholder-only failures remain excluded; failed tool calls keep their existing pairing rules. The marker does not establish whether an earlier action completed.
 
 ## Streaming, chunking, and batching

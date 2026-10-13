@@ -306,6 +306,7 @@ src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
 src/agents/workspace-default.ts
 src/agents/workspace-dirs.ts
+src/agents/workspace-git.ts
 src/agents/workspace-state-identity.ts
 src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
@@ -1009,6 +1010,7 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
 src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts

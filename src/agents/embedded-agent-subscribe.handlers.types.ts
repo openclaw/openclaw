@@ -108,6 +108,7 @@ export type EmbeddedAgentSubscribeState = {
     finalMessageStart: number;
     lastAssistant: AssistantMessage;
     keptAnswer?: CompletedAssistantAnswer;
+    sourceReplyDeliveryState?: ReplyDeliveryState;
   }>;
   /** Latest response-ending answer to the current input. */
   inputAnswer?: CompletedAssistantAnswer;

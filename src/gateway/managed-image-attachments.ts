@@ -6,6 +6,7 @@ import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
@@ -20,6 +21,7 @@ import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../media/configured-max-bytes.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
@@ -98,7 +100,10 @@ import {
   readSessionMessagesWithSourceAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
+import {
+  iterateSessionTranscriptSourcePages,
+  SOURCE_PAGE_MAX_BYTES,
+} from "./session-transcript-source-pages.js";
 export {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
@@ -692,7 +697,8 @@ async function recordMatchesTranscriptMessage(
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
   const cacheKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
   if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
+    const index = cache.get(cacheKey);
+    return index === null ? "unavailable" : index?.has(refKey) ? "match" : "missing";
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
@@ -718,11 +724,11 @@ async function recordMatchesTranscriptMessage(
       );
       assertCurrent();
       cache?.set(cacheKey, index);
-      return index.has(refKey) ? "match" : "missing";
+      return index === null ? "unavailable" : index.has(refKey) ? "match" : "missing";
     },
   );
   if (result === null) {
-    cache?.set(cacheKey, null);
+    cache?.set(cacheKey, new Set());
   }
   return result ?? "missing";
 }
@@ -731,7 +737,7 @@ async function readManagedOutgoingAttachmentIndex(
   scope: SessionTranscriptReadScope,
   requestedMessageId: string,
   cleanup: boolean,
-): Promise<SessionManagedOutgoingAttachmentIndex> {
+): Promise<SessionManagedOutgoingAttachmentIndex | null> {
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
   // Cleanup also owns off-path branches because rewind/switch can expose them again;
@@ -743,19 +749,30 @@ async function readManagedOutgoingAttachmentIndex(
       })
     : [{ messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) }];
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
-  for await (const { messages } of pages) {
-    for (const message of messages) {
-      const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
-      if (typeof messageId !== "string" || !messageId) {
-        continue;
-      }
-      for (const ref of collectManagedOutgoingAttachmentRefs(
-        readAssistantDisplayContent(message),
-        scope.sessionKey,
-      )) {
-        index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+  try {
+    for await (const { messages } of pages) {
+      for (const message of messages) {
+        const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
+        if (typeof messageId !== "string" || !messageId) {
+          continue;
+        }
+        for (const ref of collectManagedOutgoingAttachmentRefs(
+          readAssistantDisplayContent(message),
+          scope.sessionKey,
+        )) {
+          index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+        }
       }
     }
+  } catch (error) {
+    if (!cleanup || extractErrorCode(error) !== "TRANSCRIPT_SOURCE_MESSAGE_TOO_LARGE") {
+      throw error;
+    }
+    // An incomplete scan cannot prove any attachment in this session is unreferenced.
+    createSubsystemLogger("media").warn(
+      `Retaining managed outgoing media for a session whose transcript exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+    );
+    return null;
   }
 
   return index;

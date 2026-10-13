@@ -587,6 +587,46 @@ Choice, ordered Score, and Boolean-probability batches. Retained handles reject
 after consumer retirement. See [decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for provider selection, lifecycle, failure handling, limits, and diagnostics.
 
+## Setup secret egress
+
+The private official-plugin entrypoint `openclaw/plugin-sdk/secret-egress-runtime`
+exports `withSetupSecretEgress(options, run)` alongside `withConfiguredModelEgress`.
+Both use the same worker-owned, revocable job grant lifecycle. Setup options
+require a job-owned `AbortSignal` and an explicit map of environment names to
+shared-store SecretRefs:
+
+```ts
+const { withSetupSecretEgress } = await import("openclaw/plugin-sdk/secret-egress-runtime");
+await withSetupSecretEgress(
+  {
+    signal: job.signal,
+    secrets: {
+      REGISTRY_TOKEN: { source: "store", provider: "default", id: "REGISTRY_TOKEN" },
+    },
+  },
+  async ({ remoteEnv, caBundle, hostEnv, revoke }) => {
+    await bridge.run({ remoteEnv, caBundle, hostEnv, revoke });
+  },
+);
+```
+
+The host bridge must keep `hostEnv` on the credential-owning host. It contains
+authenticated upstream proxy URLs and local CA paths. Only `remoteEnv` (sealed
+sentinels) and `caBundle` (public trust contents) may cross to the remote job;
+the bridge installs remote proxy and CA settings itself. Store values and their
+allowed hosts are selected together through the shared-state read worker, and
+only selected protected secrets are registered. Missing and agent-readable
+entries fail before the callback runs.
+
+Register process termination listeners inside the callback, after the grant's
+revocation listener is installed. Abort the job signal before termination, or
+call `revoke()` synchronously first. Retained credentials stop authorizing egress
+after cancellation, explicit revocation, callback settlement, or worker failure.
+The callback must join its process and bridge cleanup before returning. The
+helper then stops the worker and removes temporary CA files; it does not manage
+remote processes itself. This capability adds no profile keys or stored-data
+migration.
+
 <a id="api-runtime-tasks" />
 
 The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.

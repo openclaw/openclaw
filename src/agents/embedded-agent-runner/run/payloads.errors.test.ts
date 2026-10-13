@@ -356,9 +356,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it.each([true, undefined])(
-    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
-    (sourceReplyFinal) => {
+  it.each(
+    [true, undefined].flatMap((sourceReplyFinal) =>
+      ([undefined, "delivered"] as const).map((sourceReplyDeliveryState) => ({
+        sourceReplyFinal,
+        sourceReplyDeliveryState,
+      })),
+    ),
+  )(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=$sourceReplyFinal, canonical=$sourceReplyDeliveryState)",
+    ({ sourceReplyFinal, sourceReplyDeliveryState }) => {
       const payloads = buildPayloads({
         lastAssistant: makeAssistant({
           stopReason: "error",
@@ -367,6 +374,7 @@ describe("buildEmbeddedRunPayloads", () => {
         }),
         didSendViaMessagingTool: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState,
         messagingToolSentTargets: [
           {
             tool: "message",
@@ -381,6 +389,37 @@ describe("buildEmbeddedRunPayloads", () => {
       expect(payloads).toEqual([]);
     },
   );
+
+  it("keeps a sealed input's completion separate from the current input's failure", () => {
+    const earlier = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Do not repeat the completed answer." }],
+    });
+    const payloads = buildPayloads({
+      sourceReplyDeliveryMode: "automatic",
+      sourceReplyDeliveryState: "missing",
+      didDeliverSourceReplyViaMessageTool: false,
+      assistantTexts: ["Do not repeat the completed answer."],
+      answerSegments: [
+        {
+          textEnd: 1,
+          messageEnd: 1,
+          finalMessageStart: 1,
+          lastAssistant: earlier,
+          sourceReplyDeliveryState: "delivered",
+        },
+      ],
+      messagingToolSourceReplyPayloads: [{ text: "Completed answer.", sourceReplyFinal: true }],
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        content: [],
+        errorMessage: "Current input failed.",
+      }),
+    });
+    expect(payloads).toEqual([
+      expect.objectContaining({ text: "Completed answer." }),
+      expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true }),
+    ]);
+  });
 
   it("preserves the rejection message without the response envelope", () => {
     const rawError =
