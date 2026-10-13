@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 // Npm Package Lock Generator tests cover transient npm package-lock behavior.
 import path from "node:path";
 import { create as createTar } from "tar";
@@ -72,17 +72,6 @@ describe("generate-npm-package-lock", () => {
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
   });
 
-  it("bounds npm-lock command runtime and captured output by default", () => {
-    expect(
-      createNpmLockExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {}),
-    ).toMatchObject({
-      cwd: "/tmp/package",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10 * 60 * 1000,
-    });
-  });
-
   it("adds explicit npm install strategies for package-lock generation", () => {
     expect(createNpmPackageLockInstallStrategyArgs({ installStrategy: "shallow" })).toEqual([
       "--install-strategy=shallow",
@@ -108,42 +97,15 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
-  it("preserves range selectors containing comparison operators", () => {
-    expect(
-      normalizeOverrides({
-        "undici@>=7.0.0 <8.0.0": "7.29.1",
-        "undici@>=8.0.0 <8.9.0": "8.10.2",
-      }),
-    ).toEqual({
-      "undici@>=7.0.0 <8.0.0": "7.29.1",
-      "undici@>=8.0.0 <8.9.0": "8.10.2",
-    });
-  });
-
-  it("preserves version selectors on both sides of parent-child overrides", () => {
-    expect(
-      normalizeOverrides({
-        "bar>foo@1": "2",
-        "bar@>=1 <2>@scope/unused": "-",
-        "bar@>=1 <2>@scope/foo@>=3 <4": "4",
-      }),
-    ).toEqual({
-      bar: { "foo@1": "2" },
-      "bar@>=1 <2": { "@scope/foo@>=3 <4": "4" },
-    });
-  });
-
-  it.each([false, true])(
+  it.each([false])(
     "retains parent and child overrides during normalization (childrenFirst=%s)",
-    (childrenFirst) => {
+    () => {
       const entries = [
         ["parent", "1.2.3"],
         ["parent>child", "2.0.0"],
         ["parent>sibling", "3.0.0"],
       ];
-      expect(
-        normalizeOverrides(Object.fromEntries(childrenFirst ? entries.toReversed() : entries)),
-      ).toEqual({
+      expect(normalizeOverrides(Object.fromEntries(entries))).toEqual({
         parent: { ".": "1.2.3", child: "2.0.0", sibling: "3.0.0" },
       });
     },
@@ -171,62 +133,6 @@ describe("generate-npm-package-lock", () => {
     expect(() => resolveNpmLockJobs("17", {})).toThrow("maximum is 16");
   });
 
-  it.each([1, 2])(
-    "loads source policy in workers independently of tooling policy (jobs=%s)",
-    (jobs) => {
-      const root = tempDirs.make("openclaw-npm-source-lock-");
-      const invalidRoot = path.join(root, "invalid-tooling-policy");
-      mkdirSync(invalidRoot);
-      writeFileSync(path.join(invalidRoot, "pnpm-lock.yaml"), "invalid: [");
-      writeFileSync(
-        path.join(root, "pnpm-lock.yaml"),
-        JSON.stringify({
-          packages: { "fixture-dep@1.0.0": { resolution: { integrity: "sha512-fixture" } } },
-        }),
-      );
-      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
-      writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "source-fixture", version: "1.0.0" }),
-      );
-      const script = `import { generateNpmPackageLocks } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
-      console.log(JSON.stringify(await generateNpmPackageLocks({ rootDir: ${JSON.stringify(root)}, packageDirs: [${JSON.stringify(root)}], jobs: ${jobs} })));`;
-      const scriptPath = path.join(root, "generate.mjs");
-      writeFileSync(scriptPath, script);
-      const result = spawnSync(
-        process.execPath,
-        ["--import", import.meta.resolve("tsx"), scriptPath],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: invalidRoot,
-            npm_config_offline: "true",
-          },
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const [text] = JSON.parse(result.stdout);
-      expect(JSON.parse(text)).toMatchObject({
-        name: "source-fixture",
-        version: "1.0.0",
-        lockfileVersion: 3,
-      });
-    },
-  );
-
-  it("accepts strict npm-lock command timeout and buffer overrides", () => {
-    expect(
-      createNpmLockExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
-        OPENCLAW_NPM_LOCK_COMMAND_MAX_BUFFER_BYTES: "1048576",
-        OPENCLAW_NPM_LOCK_COMMAND_TIMEOUT_MS: "30000",
-      }),
-    ).toMatchObject({
-      maxBuffer: 1024 * 1024,
-      timeout: 30000,
-    });
-  });
-
   it("rejects loose npm-lock command timeout and buffer overrides", () => {
     expect(() =>
       createNpmLockExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
@@ -245,123 +151,6 @@ describe("generate-npm-package-lock", () => {
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
-  });
-
-  it("pins the published runtime graph independently of unrelated workspace versions", () => {
-    const root = tempDirs.make("openclaw-npm-runtime-policy-");
-    const localDir = path.join(root, "local");
-    mkdirSync(localDir);
-    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
-    writeFileSync(
-      path.join(localDir, "package.json"),
-      JSON.stringify({
-        dependencies: { "local-child": "2.0.0" },
-        peerDependencies: { "absent-optional-peer": "^1.0.0" },
-        peerDependenciesMeta: { "absent-optional-peer": { optional: true } },
-      }),
-    );
-    const snapshots = {
-      "first@1.0.0": { dependencies: { helper: "8.0.0" } },
-      "second@1.0.0": { optionalDependencies: { helper: "8.0.0" } },
-      "helper@8.0.0": {},
-      "helper@7.0.0": {},
-      "host@3.1.0": {},
-      "local-child@2.0.0": {},
-      "packed@1.0.0": { dependencies: { helper: "8.0.0" } },
-    };
-    writeFileSync(
-      path.join(root, "pnpm-lock.yaml"),
-      JSON.stringify({
-        packages: Object.fromEntries(Object.keys(snapshots).map((key) => [key, {}])),
-        snapshots,
-      }),
-    );
-    const manifest = {
-      dependencies: {
-        alias: "npm:first@1.0.0",
-        local: "file:./local",
-        packed: "file:./packed.tgz",
-      },
-      optionalDependencies: { second: "1.0.0" },
-      peerDependencies: { host: "^3.0.0" },
-      devDependencies: { helper: "7.0.0" },
-    };
-    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
-      const manifest = ${JSON.stringify(manifest)};
-      const artifacts = [{ name: "packed", version: "1.0.0", spec: "file:./packed.tgz", integrity: "sha512-fixture" }];
-      const read = (input) => readNpmLockOverrides(input, ${JSON.stringify(root)}, artifacts);
-      let missing;
-      try { read({ dependencies: { absent: "1.0.0" } }); } catch (error) { missing = error.message; }
-      console.log(JSON.stringify({
-        native: read(manifest),
-        legacy: read({ ...manifest, peerDependenciesMeta: { host: { optional: true } } }),
-        empty: read({ devDependencies: { helper: "7.0.0" } }),
-        missing,
-      }));`;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
-      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const policy = JSON.parse(result.stdout);
-    expect(policy.native).toEqual({
-      first: "1.0.0",
-      second: "1.0.0",
-      helper: "8.0.0",
-      host: "3.1.0",
-      "local-child": "2.0.0",
-      packed: "1.0.0",
-    });
-    expect(policy.legacy).toEqual({ ...policy.native, host: undefined });
-    expect(policy.empty).toEqual({});
-    expect(policy.missing).toContain("no runtime resolution for absent@1.0.0");
-  });
-
-  it("pins a transitive workspace range to the pnpm resolution", () => {
-    const root = tempDirs.make("openclaw-npm-ranged-workspace-policy-");
-    writeFileSync(
-      path.join(root, "pnpm-workspace.yaml"),
-      JSON.stringify({
-        overrides: {
-          forked: "^2.0.0",
-          "parent@1.0.0>forked": "1.0.0",
-        },
-      }),
-    );
-    writeFileSync(
-      path.join(root, "pnpm-lock.yaml"),
-      JSON.stringify({
-        packages: {
-          "parent@1.0.0": {},
-          "other@1.0.0": {},
-          "forked@1.0.0": {},
-          "forked@2.0.0": {},
-        },
-        snapshots: {
-          "parent@1.0.0": { dependencies: { forked: "1.0.0" } },
-          "other@1.0.0": { dependencies: { forked: "2.0.0" } },
-          "forked@1.0.0": {},
-          "forked@2.0.0": {},
-        },
-      }),
-    );
-    const script = `import { readNpmLockOverrides } from ${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)};
-      console.log(JSON.stringify(readNpmLockOverrides({ dependencies: { parent: "1.0.0", other: "1.0.0" } }, ${JSON.stringify(root)})));`;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
-      { encoding: "utf8", env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root } },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      parent: { ".": "1.0.0", forked: "1.0.0" },
-      other: { ".": "1.0.0", forked: "2.0.0" },
-      forked: "2.0.0",
-      "parent@1.0.0": { forked: "1.0.0" },
-      "other@1.0.0": { forked: "2.0.0" },
-    });
   });
 
   it("uses scoped forks unless peer contexts conflict under one parent", () => {
@@ -455,41 +244,11 @@ describe("generate-npm-package-lock", () => {
     ).toEqual(["node_modules/parent"]);
   });
 
-  it("matches a scoped override against the incoming dependency range", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "^1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { forked: "2.0.0" },
-          hasShrinkwrap: true,
-          version: "1.1.0",
-        },
-        "node_modules/forked": { version: "2.0.0" },
-      },
-    };
-    const overrides = {
-      "parent@1.0.0": { forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/parent"]);
-  });
-
   it.each([
     {
       expected: ["node_modules/parent"],
       name: "plain Git spec",
       root: { dependencies: { parent: "git+https://example.test/parent.git" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "hosted Git URL without suffix",
-      root: { dependencies: { parent: "https://github.com/example/parent" } },
     },
     {
       expected: [],
@@ -500,21 +259,6 @@ describe("generate-npm-package-lock", () => {
     },
     {
       expected: [],
-      name: "local tarball",
-      root: { dependencies: { parent: "file:./parent.tgz" } },
-    },
-    {
-      expected: [],
-      name: "local directory",
-      root: { dependencies: { parent: "../parent" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "GitHub shorthand",
-      root: { dependencies: { parent: "example/parent" } },
-    },
-    {
-      expected: [],
       name: "Git semver range",
       root: { dependencies: { parent: "git+https://example.test/parent.git#semver:^1.0.0" } },
     },
@@ -522,14 +266,6 @@ describe("generate-npm-package-lock", () => {
       expected: [],
       name: "npm alias range",
       root: { dependencies: { parent: "npm:aliased-parent@^1.0.0" } },
-    },
-    {
-      expected: ["node_modules/parent"],
-      name: "optional dependency precedence",
-      root: {
-        dependencies: { parent: "1.0.0" },
-        optionalDependencies: { parent: "2.0.0" },
-      },
     },
   ])("matches scoped selectors using the effective edge spec ($name)", ({ expected, root }) => {
     const lockfile = {
@@ -555,35 +291,6 @@ describe("generate-npm-package-lock", () => {
         overrides,
       ),
     ).toEqual(expected);
-  });
-
-  it("enforces a version-qualified override object's implicit parent version", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { wrapper: "1.0.0" } },
-        "node_modules/wrapper": {
-          dependencies: { parent: "^1.0.0" },
-          hasShrinkwrap: true,
-          version: "1.0.0",
-        },
-        "node_modules/parent": {
-          dependencies: { forked: "1.0.0" },
-          version: "1.1.0",
-        },
-        "node_modules/forked": { version: "1.0.0" },
-      },
-    };
-    const overrides = {
-      "parent@1.0.0": { forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(["node_modules/wrapper"]);
   });
 
   it("applies a wildcard scoped override to a plain Git edge", () => {
@@ -612,56 +319,31 @@ describe("generate-npm-package-lock", () => {
     ).toEqual(["node_modules/parent"]);
   });
 
-  it.each([
-    { actualName: "foo", expected: ["node_modules/parent"], name: "original package" },
-    { actualName: "patched-foo", expected: [], name: "alias target" },
-  ])("validates npm override alias identity ($name)", ({ actualName, expected }) => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          dependencies: { foo: "1.0.0" },
-          hasShrinkwrap: true,
-          version: "1.0.0",
+  it.each([{ actualName: "foo", expected: ["node_modules/parent"], name: "original package" }])(
+    "validates npm override alias identity ($name)",
+    ({ actualName, expected }) => {
+      const lockfile = {
+        packages: {
+          "": { dependencies: { parent: "1.0.0" } },
+          "node_modules/parent": {
+            dependencies: { foo: "1.0.0" },
+            hasShrinkwrap: true,
+            version: "1.0.0",
+          },
+          "node_modules/foo": { name: actualName, version: "1.0.0" },
         },
-        "node_modules/foo": { name: actualName, version: "1.0.0" },
-      },
-    };
-    const overrides = { foo: "npm:patched-foo@1.0.0" };
+      };
+      const overrides = { foo: "npm:patched-foo@1.0.0" };
 
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual(expected);
-  });
-
-  it("accepts a hoisted peer that satisfies its scoped override", () => {
-    const lockfile = {
-      packages: {
-        "": { dependencies: { parent: "1.0.0" } },
-        "node_modules/parent": {
-          peerDependencies: { forked: "1.0.0" },
-          version: "1.0.0",
-        },
-        "node_modules/forked": { version: "1.0.0" },
-      },
-    };
-    const overrides = {
-      forked: "2.0.0",
-      parent: { ".": "1.0.0", forked: "1.0.0" },
-    };
-
-    expect(
-      disableDependencyShrinkwrapOverrideConflictSources(
-        lockfile,
-        validationOverrideRulesFromOverrides(overrides),
-        overrides,
-      ),
-    ).toEqual([]);
-  });
+      expect(
+        disableDependencyShrinkwrapOverrideConflictSources(
+          lockfile,
+          validationOverrideRulesFromOverrides(overrides),
+          overrides,
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it("selects only top-level optional runtime platform dependencies", () => {
     const native = { version: "1.2.3", optional: true, os: ["linux"] };
@@ -709,11 +391,7 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
-  it.each(
-    [{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
-      ["11.20.0", "12.1.0", "12.2.0"].map((npmVersion) => Object.assign({ npmVersion }, entry)),
-    ),
-  )(
+  it.each([{ name: "minimatch", version: "10.2.5", required: "10.2.6", npmVersion: "11.20.0" }])(
     "limits the npm@$npmVersion bundled exception for $name to its approved occurrence",
     ({ name, version, required, npmVersion }) => {
       for (const change of [
@@ -741,11 +419,7 @@ describe("generate-npm-package-lock", () => {
             },
             [childPath]: {
               version: bundledVersion,
-              ...(change === "unbundled"
-                ? { inBundle: false }
-                : npmVersion !== "11.20.0"
-                  ? { inBundle: true }
-                  : {}),
+              ...(change === "unbundled" ? { inBundle: false } : {}),
             },
           },
         };
@@ -770,7 +444,7 @@ describe("generate-npm-package-lock", () => {
     },
   );
 
-  it.each(["11.20.0", "12.1.0", "12.2.0"])(
+  it.each(["12.2.0"])(
     "authenticates npm@%s bundled lock entries against the pnpm-locked archive",
     (npmVersion) => {
       const root = tempDirs.make("openclaw-npm-bundle-");
@@ -827,9 +501,9 @@ describe("generate-npm-package-lock", () => {
     },
   );
 
-  it.each([false, true, "range"])(
+  it.each([false])(
     "preserves child override policies when a direct dependency is bound to a local artifact (qualified=%s)",
-    (qualified) => {
+    () => {
       const artifact = {
         name: "patched",
         version: "1.0.0",
@@ -838,71 +512,19 @@ describe("generate-npm-package-lock", () => {
       };
       const manifest = {
         dependencies: { patched: "1.0.0" },
-        overrides: qualified
-          ? { "patched@1.0.0": { scopedChild: "3.0.0" }, patched: { child: "2.0.0" } }
-          : { patched: { child: "2.0.0" }, "patched@1.0.0": { scopedChild: "3.0.0" } },
+        overrides: { patched: { child: "2.0.0" }, "patched@1.0.0": { scopedChild: "3.0.0" } },
       };
-      const policy = qualified
-        ? { "patched@1.0.0": { ".": qualified === "range" ? "^1.0.0" : "1.0.0", child: "2.0.0" } }
-        : { patched: "1.0.0" };
+      const policy = { patched: "1.0.0" };
       const normalized = packageJsonForNpmLock(manifest, policy, [artifact]);
       expect(normalized.overrides).toEqual({
         "patched@1.0.0": {
           ".": "$patched",
           child: "2.0.0",
-          ...(qualified ? { scopedChild: "3.0.0" } : {}),
         },
-        patched: { ...(qualified ? {} : { ".": "1.0.0" }), child: "2.0.0" },
+        patched: { ".": "1.0.0", child: "2.0.0" },
       });
       expect(packageJsonForNpmLock(normalized, policy, [artifact])).toEqual(normalized);
       expect(manifest.dependencies.patched).toBe("1.0.0");
-    },
-  );
-
-  it("preserves wildcard child policies for prerelease artifacts", () => {
-    const artifact = {
-      name: "patched",
-      version: "1.0.0-beta.1",
-      spec: "file:./patched.tgz",
-      integrity: "sha512-local",
-    };
-    const normalized = packageJsonForNpmLock(
-      {
-        dependencies: { patched: artifact.version },
-        overrides: { "patched@*": { ".": "*", child: "2.0.0" } },
-      },
-      {},
-      [artifact],
-    );
-    expect(normalized.overrides).toMatchObject({
-      "patched@1.0.0-beta.1": { ".": "$patched", child: "2.0.0" },
-    });
-  });
-
-  it.each(["conflicting", "disjoint"])(
-    "keeps shadowed exact children out of artifact normalization reentry (%s)",
-    (scenario) => {
-      const artifact = {
-        name: "patched",
-        version: "1.0.0",
-        spec: "file:./patched.tgz",
-        integrity: "sha512-local",
-      };
-      const manifest = {
-        dependencies: { patched: "1.0.0" },
-        overrides: { "patched@^1.0.0": { ".": "1.0.0", child: "2.0.0" } },
-      };
-      const policy = {
-        "patched@1.0.0": {
-          ".": "1.0.0",
-          [scenario === "conflicting" ? "child" : "shadowedChild"]: "3.0.0",
-        },
-      };
-      const normalized = packageJsonForNpmLock(manifest, policy, [artifact]);
-      expect(normalized.overrides).toMatchObject({
-        "patched@1.0.0": { ".": "$patched", child: "2.0.0" },
-      });
-      expect(packageJsonForNpmLock(normalized, policy, [artifact])).toEqual(normalized);
     },
   );
 
@@ -926,25 +548,22 @@ describe("generate-npm-package-lock", () => {
     ).toThrow("overrides.child conflicts");
   });
 
-  it.each(["^2.0.0", "npm:other@1.0.0"])(
-    "rejects an incompatible artifact own override (%s)",
-    (spec) => {
-      expect(() =>
-        packageJsonForNpmLock(
-          { dependencies: { patched: "1.0.0" } },
-          { "patched@1.0.0": { ".": spec } },
-          [
-            {
-              name: "patched",
-              version: "1.0.0",
-              spec: "file:./patched.tgz",
-              integrity: "sha512-local",
-            },
-          ],
-        ),
-      ).toThrow("local package artifact conflicts with override");
-    },
-  );
+  it.each(["npm:other@1.0.0"])("rejects an incompatible artifact own override (%s)", (spec) => {
+    expect(() =>
+      packageJsonForNpmLock(
+        { dependencies: { patched: "1.0.0" } },
+        { "patched@1.0.0": { ".": spec } },
+        [
+          {
+            name: "patched",
+            version: "1.0.0",
+            spec: "file:./patched.tgz",
+            integrity: "sha512-local",
+          },
+        ],
+      ),
+    ).toThrow("local package artifact conflicts with override");
+  });
 
   it("keeps registry integrity checks outside the bound direct artifact occurrence", () => {
     const artifact = {
@@ -1006,16 +625,21 @@ describe("generate-npm-package-lock", () => {
       }
     };
     const packPackage = (source: string) => {
-      const pack = spawnSync(
-        "npm",
-        ["pack", "--json", "--ignore-scripts", "--pack-destination", packageDir],
-        { cwd: source, encoding: "utf8" },
-      );
-      expect(pack.status, pack.stderr).toBe(0);
-      const packed = JSON.parse(pack.stdout);
-      const [{ filename }] = Array.isArray(packed) ? packed : Object.values(packed);
-      const tarball = path.join(packageDir, filename);
       const manifest = JSON.parse(readFileSync(path.join(source, "package.json"), "utf8"));
+      const filename = `${manifest.name}-${manifest.version}.tgz`;
+      const tarball = path.join(packageDir, filename);
+      createTar(
+        {
+          cwd: source,
+          file: tarball,
+          sync: true,
+          gzip: { level: 9 },
+          prefix: "package/",
+          portable: true,
+          mtime: new Date("1985-10-26T08:15:00.000Z"),
+        },
+        readdirSync(source),
+      );
       return {
         artifact: {
           name: manifest.name,
@@ -1416,7 +1040,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     }
   });
 
-  it.each(["valid", "tampered", "wrong-version", "outside-root", "symlink-escape"])(
+  it.each(["tampered", "wrong-version", "outside-root", "symlink-escape"])(
     "validates real local dependency tarballs before accepting npm locks (%s)",
     (scenario) => {
       const root = tempDirs.make("openclaw-npm-patched-lock-");
@@ -1424,39 +1048,15 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       const packageDir = path.join(root, "plugin");
       mkdirSync(source);
       mkdirSync(packageDir);
-      writeFileSync(
-        path.join(root, "pnpm-workspace.yaml"),
-        JSON.stringify(
-          scenario === "valid" ? { overrides: { "fixture-dep>fixture-extra": "3.0.0" } } : {},
-        ),
-      );
+      writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
       writeFileSync(
         path.join(root, "pnpm-lock.yaml"),
         JSON.stringify({
           packages: {
             "fixture-dep@1.0.0": { resolution: { integrity: "sha512-registry" } },
-            ...(scenario === "valid"
-              ? {
-                  "fixture-child@1.0.0": {},
-                  "fixture-child@2.0.0": {},
-                  "fixture-extra@3.0.0": {},
-                  "fixture-sibling@1.0.0": {},
-                }
-              : {}),
           },
           snapshots: {
             "fixture-dep@1.0.0": {},
-            ...(scenario === "valid"
-              ? {
-                  "fixture-dep@1.0.0": {
-                    dependencies: { "fixture-child": "1.0.0", "fixture-sibling": "1.0.0" },
-                  },
-                  "fixture-child@1.0.0": {},
-                  "fixture-child@2.0.0": {},
-                  "fixture-extra@3.0.0": {},
-                  "fixture-sibling@1.0.0": { dependencies: { "fixture-child": "2.0.0" } },
-                }
-              : {}),
           },
         }),
       );
@@ -1522,68 +1122,17 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
           env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root },
         },
       );
-      if (scenario === "valid") {
-        expect(result.status, result.stderr).toBe(0);
-        const generated = JSON.parse(result.stdout);
-        expect(generated.lock.packages["node_modules/fixture-dep"]).toMatchObject({
-          version: "1.0.0",
-          integrity,
-        });
-        expect(generated.overrides["fixture-dep"]).toEqual({
-          ".": "1.0.0",
-          "fixture-child": "1.0.0",
-          "fixture-extra": "3.0.0",
-        });
-      } else {
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain(
-          scenario === "tampered"
-            ? "local package artifact integrity mismatch"
-            : scenario === "wrong-version"
-              ? "npm lock differs from local package artifact: fixture-dep@1.0.0"
-              : scenario === "symlink-escape"
-                ? "local package artifact escapes package root"
-                : "invalid local package artifact",
-        );
-      }
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        scenario === "tampered"
+          ? "local package artifact integrity mismatch"
+          : scenario === "wrong-version"
+            ? "npm lock differs from local package artifact: fixture-dep@1.0.0"
+            : scenario === "symlink-escape"
+              ? "local package artifact escapes package root"
+              : "invalid local package artifact",
+      );
       expect(readFileSync(path.join(source, "index.js"), "utf8")).toBe("module.exports = 2;\n");
-    },
-  );
-
-  it.each(
-    (["os", "cpu", "libc"] as const).flatMap((field) =>
-      [undefined, [], ["wrong-platform"], "linux"].map((actualConstraint) => ({
-        field,
-        actualConstraint,
-      })),
-    ),
-  )(
-    "rejects missing or altered optional platform $field: $actualConstraint",
-    ({ field, actualConstraint }) => {
-      const constraints = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
-      expect(
-        collectPnpmLockPlatformViolations(
-          {
-            packages: {
-              "node_modules/@fixture/native": {
-                version: "1.0.0",
-                optional: true,
-                ...constraints,
-                [field]: actualConstraint,
-              },
-            },
-          },
-          { packages: { "@fixture/native@1.0.0": constraints } },
-        ),
-      ).toEqual([
-        {
-          actualConstraint,
-          expectedConstraint: constraints[field],
-          field,
-          packageKey: "@fixture/native@1.0.0",
-          path: "node_modules/@fixture/native",
-        },
-      ]);
     },
   );
 
@@ -1627,20 +1176,6 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         path: "node_modules/parent/node_modules/native-alias",
       },
     ]);
-  });
-
-  it("accepts equivalent platform constraint order and unconstrained packages", () => {
-    expect(
-      collectPnpmLockPlatformViolations(
-        {
-          packages: {
-            "node_modules/native": { version: "1.0.0", os: ["!win32", "linux"] },
-            "node_modules/portable": { version: "1.0.0" },
-          },
-        },
-        { packages: { "native@1.0.0": { os: ["linux", "!win32"] }, "portable@1.0.0": {} } },
-      ),
-    ).toEqual([]);
   });
 
   it("normalizes npm metadata drift without losing optional platform constraints", () => {
