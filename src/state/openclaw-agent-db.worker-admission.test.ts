@@ -223,7 +223,7 @@ it("adopts worker admission after a retained reader observes an already-revalida
   const foreign = openNodeSqliteDatabase(database.path);
   foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
   foreign.close();
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
   const observeReader = vi.fn(() => {
     expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
@@ -339,7 +339,7 @@ it("publishes freshly verified proof to a previously admitted alias after stale 
   const aliasPath = path.join(options.env.OPENCLAW_STATE_DIR, "alias.sqlite");
   fs.symlinkSync(canonical.path, aliasPath);
   const alias = openOpenClawAgentDatabase({ ...options, path: aliasPath });
-  closeCachedOpenClawAgentDatabase(alias, { eviction: true });
+  closeCachedOpenClawAgentDatabase(alias);
   const staleLease = claimOpenClawAgentDatabaseLease({ ...options, path: canonical.path });
   openOpenClawStateDatabase({ env: options.env })
     .db.prepare("UPDATE agent_database_leases SET owner_start_time=-1 WHERE lease_id=?")
@@ -443,7 +443,7 @@ it.each([
       fs.symlinkSync(database.path, acquisitionPath);
     }
     if (!change.startsWith("warm-")) {
-      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      closeCachedOpenClawAgentDatabase(database);
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
     if (change === "foreign-missing-index") {
@@ -531,7 +531,7 @@ it.each([
           "ALTER TABLE auth_profile_state RENAME COLUMN state_json TO drifted_state_json",
         );
       } else if (retainedExecution) {
-        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        closeCachedOpenClawAgentDatabase(database);
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }

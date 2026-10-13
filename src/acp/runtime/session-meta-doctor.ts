@@ -51,6 +51,7 @@ import { legacyAcpSessionKeyCandidates } from "./session-meta-migration-keys.js"
 import type { AcpSessionRow } from "./session-meta-read.types.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
+import { bindAcpSessionIdentity } from "./session-meta-write.kernel.js";
 
 type DoctorAcpScope = { config: OpenClawConfig; env: NodeJS.ProcessEnv; pluginId: string };
 
@@ -407,7 +408,8 @@ export function updateAcpSessionIdentityForDoctor(
 ): void {
   authority.assertCurrent();
   const { claim } = input;
-  if (claim.meta.backend !== scope.pluginId || !claim.meta.identity) {
+  const identity = claim.meta.identity;
+  if (claim.meta.backend !== scope.pluginId || !identity) {
     throw new Error("ACP identity repair requires a matching backend claim and existing identity");
   }
   const key = buildAcpDatabaseSessionKey(claim.sessionKey, claim.agentId);
@@ -437,8 +439,8 @@ export function updateAcpSessionIdentityForDoctor(
         upsertAcpSessionMetaRow(database.db, {
           ...row,
           runtime_session_name: input.runtimeSessionName,
-          identity_json: JSON.stringify({
-            ...claim.meta.identity,
+          ...bindAcpSessionIdentity({
+            ...identity,
             acpxRecordId: input.acpxRecordId,
           }),
         });

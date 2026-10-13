@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -13,6 +16,91 @@ vi.mock("../session-utils-store-worker.js", () => ({
 }));
 
 describe("agent admission session ownership", () => {
+  it.for(["other session", "same session"])(
+    "orders marker admission against pending replay for %s",
+    async (replay, { signal }) => {
+      const sessionKey = "agent:main:dashboard:acceptance-marker";
+      const replayKey = replay === "same session" ? sessionKey : "agent:main:dashboard:recovery";
+      const scope = `agent-admission-replay-${replay}.sqlite`;
+      const replayEntered = createDeferred();
+      const releaseReplay = createDeferred();
+      const replayAdmission = beginSessionWorkAdmission({
+        scope,
+        identities: [replayKey],
+        storeWriterIdentities: [replayKey],
+        signal,
+        assertAllowed: async () => {
+          replayEntered.resolve();
+          await releaseReplay.promise;
+        },
+      });
+      let entry: SessionEntry | undefined = { sessionId: "marker", updatedAt: 1 };
+      readEntry.mockReset().mockResolvedValue({ entry });
+      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const io = createAgentTurnIo(vi.fn());
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const runId = `marker-${replay}`;
+      const agentDedupeKeys = [runId];
+      const dedupeLifecycle = createAgentDedupeLifecycle({
+        cfg: {},
+        request: { message: "marker", idempotencyKey: runId },
+        runId,
+        lifecycleGeneration,
+        agentDedupeKeys,
+        suppressVisibleSessionEffects: false,
+        context,
+        io,
+      });
+      const controller = createAgentAdmissionController({
+        runId,
+        lifecycleGeneration,
+        agentDedupeKeys,
+        context,
+        io,
+        dedupeLifecycle,
+        getRequestedSessionKey: () => sessionKey,
+        getResolvedSessionKey: () => sessionKey,
+        getResolvedSessionId: () => "marker",
+        getSessionEntry: () => entry,
+        setSessionEntry: (current) => {
+          entry = current;
+        },
+        getResolvedSessionAgentId: () => "main",
+        getAgentId: () => "main",
+        getSessionPersisted: () => true,
+        getSupersededSessionId: () => undefined,
+        setAdmittedSessionId: () => {},
+      });
+      let marker: Promise<void> | undefined;
+      try {
+        await withinTest(replayEntered.promise, signal);
+        marker = controller.acquire(scope);
+        if (replay === "same session") {
+          await withinTest(
+            runExclusiveSessionStoreWrite(scope, async () => {}, {
+              identities: ["agent:main:dashboard:independent"],
+              signal,
+            }),
+            signal,
+          );
+          expect(readEntry).not.toHaveBeenCalled();
+        } else {
+          await withinTest(marker, signal);
+          expect(readEntry).toHaveBeenCalledOnce();
+        }
+      } finally {
+        releaseReplay.resolve();
+        await Promise.allSettled([
+          replayAdmission.then((lease) => lease.release()),
+          ...(marker ? [marker] : []),
+        ]);
+        controller.release();
+      }
+      await expect(marker).resolves.toBeUndefined();
+      expect(readEntry).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "refreshes after acquiring the lifecycle lease and keeps committed state (expected=%s)",
     async (expected) => {

@@ -635,7 +635,7 @@ On an OpenClaw Chat send, the submitted text and attachments appear immediately 
 
 If the model catalog is still loading, session creation stops waiting after a shared 20-second catalog deadline and reports that the session was not created. Retry shortly; your draft remains available. Closing the requesting connection or losing its authority also ends a pending catalog wait.
 
-Starting a suggested task keeps its instructions visible through acceptance, with **Task started** and **Open session** after confirmation. Interrupted acceptance remains visible, and Retry checks the same task. Skill Workshop revisions carry their submitted instructions into chat while history loads.
+Starting a suggested task immediately removes its card without switching sessions or changing your draft. The card stays hidden after confirmation. If session creation fails or acceptance is interrupted or unconfirmed, the card reappears with its original instructions and recovery controls. **Retry** checks the same task and preserves the selected launch mode. Skill Workshop revisions carry their submitted instructions into chat while history loads.
 
 Attributed submissions show your avatar immediately, in the same position as the chat transcript. Opening the created session focuses the composer quietly; the attention cue is reserved for navigation that prefills a draft.
 

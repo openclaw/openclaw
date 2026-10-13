@@ -446,6 +446,14 @@ try {
     process.stderr.write(`MARKER_ADMISSION_PENDING agent=${String(error.details.agentId)}\n`);
     process.stdout.write("RETRYABLE_ADMISSION_PENDING");
     process.exitCode = 76;
+  } else if (method === "agent" && isGatewayTransportError(error) && error.kind === "timeout") {
+    process.stderr.write("MARKER_DISPATCH_TIMEOUT reconciliation=same-idempotency-key\n");
+    process.stdout.write("RETRYABLE_DISPATCH_TIMEOUT");
+    process.exitCode = 77;
+  } else if (method === "system.info" && isGatewayTransportError(error) &&
+    (error.kind === "timeout" || [undefined, 1006, 1012].includes(error.code))) {
+    process.stdout.write("RETRYABLE_READINESS_TRANSPORT");
+    process.exitCode = 78;
   } else {
     // Only a read of an acknowledged run may recover transport uncertainty.
     if (method !== "agent.wait" || !isGatewayTransportError(error) ||
@@ -1125,9 +1133,10 @@ read_probe() {
 	local endpoint="$1" remaining response
 	remaining=$((verification_deadline - SECONDS))
 	((remaining > 0)) || return 1
+	if [[ -n "${2:-}" ]] && ((remaining > $2)); then remaining="$2"; fi
 	response="$(bounded "$remaining" "$curl_bin" --silent --show-error \
 		--connect-timeout "$remaining" --max-time "$remaining" --write-out $'\n%{http_code}' \
-		"http://127.0.0.1:$gateway_port/$endpoint")" || return 1
+		"http://127.0.0.1:$gateway_port/$endpoint")" || return "$?"
 	[[ "$response" == *$'\n'* ]] || return 1
 	probe_body="${response%$'\n'*}"
 	probe_status="${response##*$'\n'}"
@@ -1238,6 +1247,53 @@ process.stdout.write(processInfo.processInstanceId);
 	return 0
 }
 
+wait_for_marker_readiness() {
+	local release="$1" scope="$2" startup_json startup_status readiness_state
+	local remaining timeout_ms observed_process pause probe_exit
+	while :; do
+		verification_step marker.readiness-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-budget test "$remaining" -gt 0 || return 1
+		readiness_state=RECOVERING
+		probe_exit=0
+		verification_step marker.startupz read_probe startupz 10 || probe_exit=$?
+		if ((probe_exit == 0)); then
+			startup_json="$probe_body"; startup_status="$probe_status"
+			verification_step marker.readyz read_probe readyz 10 || probe_exit=$?
+			if ((probe_exit == 0)); then
+				readiness_state="$(verification_step marker.readiness proof marker-readiness "$startup_json" "$startup_status" "$probe_body" "$probe_status")" || return 1
+			fi
+		fi
+		# curl connection/timeout and the outer process deadline report no snapshot.
+		if ((probe_exit != 0)); then
+			[[ "$probe_exit" == 7 || "$probe_exit" == 28 || "$probe_exit" == 124 ]] || return "$probe_exit"
+		fi
+		case "$readiness_state" in
+		READY)
+			timeout_ms=$(((verification_deadline - SECONDS) * 1000)); ((timeout_ms <= 10000)) || timeout_ms=10000
+			verification_step marker.readiness-rpc-budget test "$timeout_ms" -gt 0 || return 1
+			probe_exit=0
+			observed_process="$(verification_step marker.readiness-rpc run_marker_rpc "$release" system.info '{}' "$timeout_ms")" || probe_exit=$?
+			if ((probe_exit == 0)); then
+				PROCESS_JSON="$observed_process" EXPECTED_PID="$verified_pid" EXPECTED_INSTANCE="$verified_instance" verification_step marker.readiness-process "$node_bin" -e '
+const p=JSON.parse(process.env.PROCESS_JSON);
+if(p.pid!==Number(process.env.EXPECTED_PID)||p.processInstanceId!==process.env.EXPECTED_INSTANCE)process.exit(2);
+' || return 1
+				verification_step marker.readiness-generation-after recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+				return 0
+			fi
+			[[ "$probe_exit" == 78 && "$observed_process" == RETRYABLE_READINESS_TRANSPORT ]] || return "$probe_exit"
+			;;
+		RECOVERING) ;;
+		*) return 1 ;;
+		esac
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-pause-budget test "$remaining" -gt 0 || return 1
+		pause=3; ((pause <= remaining)) || pause="$remaining"
+		verification_step marker.readiness-pause bounded "$remaining" sleep "$pause" || return 1
+	done
+}
+
 verify_marker() {
 	local release="$1" scope="${2:-system}"
 	local marker session approvals_before approvals_after reply expected_model payload run_id terminal_state
@@ -1251,10 +1307,11 @@ verify_marker() {
 		fail 'verification session already has approval history'
 		return 1
 	}
+	wait_for_marker_readiness "$release" "$scope" || return 1
 	remaining=$((verification_deadline - SECONDS))
 	verification_step marker.run-budget test "$remaining" -gt 0 || return 1
 	# Native ACK plus same-run observations keep proof independent of one long-lived
-	# response socket. Never redispatch a run when acknowledgment or observation fails.
+	# response socket; the native idempotency key also reconciles a lost ACK.
 	payload="$(MARKER="$marker" SESSION="$session" REMAINING="$remaining" "$node_bin" -e '
 const session=process.env.SESSION,agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
 process.stdout.write(JSON.stringify({agentId,sessionId:session,
@@ -1262,26 +1319,31 @@ process.stdout.write(JSON.stringify({agentId,sessionId:session,
   message:`Output only this exact string, byte-for-byte, with no prefix or suffix: ${process.env.MARKER}`,
   timeout:Number(process.env.REMAINING),idempotencyKey:require("node:crypto").randomUUID()}));
 ')" || return 1
-	# Readiness probes can pass while startup still inspects an agent store (the listener
-	# serves before store validation). That refusal is pre-dispatch, so the identical
-	# payload is re-sent until the agent admits it or the verification budget ends.
+	# Native idempotency owns uncertain dispatch: reconcile only with the identical
+	# payload and live readiness, never mint another run or renew this deadline.
 	while :; do
 		timeout_ms=$((remaining * 1000)); ((timeout_ms <= 60000)) || timeout_ms=60000
 		observation_exit=0
 		reply="$(verification_step marker.run run_marker_rpc "$release" agent "$payload" "$timeout_ms")" || observation_exit=$?
 		((observation_exit == 0)) && break
-		[[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] || return "$observation_exit"
+		{ [[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] ||
+			[[ "$observation_exit" == 77 && "$reply" == RETRYABLE_DISPATCH_TIMEOUT ]]; } || return "$observation_exit"
 		verification_step marker.admission-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
-		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required\n' >&2
+		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required exit=%s\n' "$observation_exit" >&2
 		remaining=$((verification_deadline - SECONDS))
 		verification_step marker.admission-budget test "$remaining" -gt 3 || return 1
 		verification_step marker.admission-pause bounded "$remaining" sleep 3 || return 1
+		wait_for_marker_readiness "$release" "$scope" || return 1
 		remaining=$((verification_deadline - SECONDS))
 	done
-	run_id="$(REPLY_JSON="$reply" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
+	run_id="$(REPLY_JSON="$reply" REQUEST_JSON="$payload" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
 const reply=JSON.parse(process.env.REPLY_JSON),agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
-if(reply.status!=="accepted"||typeof reply.runId!=="string"||!reply.runId.trim()||reply.agentId!==agentId||
-  reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)process.exit(2);
+if(reply.runId!==JSON.parse(process.env.REQUEST_JSON).idempotencyKey)process.exit(2);
+// Native replay can acknowledge an in-flight reservation or return its terminal cache.
+if(!["accepted","in_flight","ok"].includes(reply.status)||
+  (reply.agentId!==undefined&&reply.agentId!==agentId)||
+  (reply.sessionKey!==undefined&&reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)||
+  (reply.status==="accepted"&&(reply.agentId!==agentId||reply.sessionKey===undefined)))process.exit(2);
 process.stdout.write(reply.runId);
 ')" || return 1
 	expected_model="$(POLICY_JSON="$policy_identity" verification_step marker.expected-model "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.POLICY_JSON).model)')" || return 1

@@ -63,6 +63,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The existing-store Bun regression launches this source fixture directly by path.
+  "src/infra/sqlite-existing-database.bun.test-support.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.

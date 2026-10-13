@@ -233,6 +233,9 @@ Opt into automatic resets globally, then override them per chat type or channel:
 When a Gateway restart interrupts an admitted turn, including one still waiting
 in the queue or preparing to execute, OpenClaw tries to continue the existing
 session automatically. Shutdown records recovery before canceling queued work.
+If restart cancellation finishes a collected run before that record commits,
+shutdown retains its recovery custody unless the session or run owner changes.
+Skipped sessions are logged with a reason, including when other sessions recover.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
@@ -254,6 +257,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+A restart-aborted embedded response retains its already-streamed text as an
+interrupted assistant message when the transcript writer is still available.
+Unfinished tool calls in that response are discarded before persistence.
 A completed reply or a later user message closes that turn to replay.
 
 For authenticated operator turns, recovery revalidates the original caller's

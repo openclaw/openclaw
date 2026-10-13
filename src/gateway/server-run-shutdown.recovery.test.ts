@@ -7,9 +7,13 @@ import {
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -56,6 +60,128 @@ beforeAll(async () => {
 afterAll(async () => {
   rotateAgentEventLifecycleGeneration();
   await state?.cleanup();
+});
+
+it.each([
+  "before planning",
+  "before commit",
+  "user abort",
+  "replacement",
+  "newer run",
+  "reset",
+  "non-main",
+  "completed",
+] as const)("revalidates collected shutdown recovery custody after %s", async (releaseAt) => {
+  const sessionKey = `agent:main:dashboard:released-${releaseAt}`;
+  const sessionId = `released-${releaseAt}`;
+  const runId = `${sessionId}-run`;
+  const target = { storePath, sessionKey };
+  await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
+  const resolveGatewayContext = () => undefined;
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [sessionKey, sessionId],
+    resolveGatewayContext,
+    assertAllowed: () => {},
+  });
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionKey,
+    sessionId,
+    timeoutMs: 60_000,
+  });
+  const shouldMark = releaseAt === "before planning" || releaseAt === "before commit";
+  if (releaseAt !== "user abort") {
+    registration.controller.abort(createAgentRunRestartAbortError());
+  }
+  const release = () => {
+    registration.cleanup();
+    admission.release();
+    expect(chatAbortControllers.has(runId)).toBe(false);
+    expect(admission.isActive()).toBe(false);
+  };
+  const apply = sessionAccessor.applySessionEntryReplacements;
+  const replacementSpy = vi.spyOn(sessionAccessor, "applySessionEntryReplacements");
+  if (releaseAt === "before commit") {
+    replacementSpy.mockImplementationOnce((params) =>
+      apply({
+        ...params,
+        update: async (entries) => {
+          const prepared = await params.update(entries);
+          release();
+          return prepared;
+        },
+      }),
+    );
+  }
+  const harness = createAgentEventTestHarness();
+  let replacement: ReturnType<typeof registerChatAbortController> | undefined;
+  try {
+    await prepareGatewayRunShutdown({
+      resolveGatewayContext,
+      restart: true,
+      timeoutMs: 0,
+      warnings: [],
+      getPendingReplyCount: () => 0,
+      chatAbortControllers,
+      chatQueuedTurns: new Map(),
+      chatRunState: harness.chatRunState,
+      agentRunSeq: harness.agentRunSeq,
+      removeChatRun: () => undefined,
+      broadcast: harness.broadcast,
+      nodeSendToSession: harness.nodeSendToSession,
+      markMainSessionsAbortedForRestart: async (params) => {
+        if (releaseAt === "user abort") {
+          registration.controller.abort(createAgentRunDirectAbortError());
+        }
+        if (releaseAt === "completed" && registration.registered) {
+          registration.entry.projectSessionTerminalPersisted = true;
+        }
+        if (releaseAt !== "before commit") {
+          release();
+        }
+        if (releaseAt === "replacement" || releaseAt === "newer run") {
+          replacement = registerChatAbortController({
+            chatAbortControllers,
+            runId: releaseAt === "newer run" ? "newer-run" : runId,
+            sessionKey,
+            sessionId,
+            timeoutMs: 60_000,
+          });
+        }
+        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "non-main") {
+          await replaceSessionEntry(target, {
+            sessionId: releaseAt === "reset" ? "reset-session" : sessionId,
+            lifecycleRunId: releaseAt === "newer run" ? "newer-run" : runId,
+            restartRecoveryDeliveryRunId: runId,
+            updatedAt: Date.now(),
+            ...(releaseAt === "non-main" ? { spawnDepth: 1 } : {}),
+          });
+        }
+        await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+      },
+    });
+    const saved = loadSessionEntry(target);
+    if (shouldMark) {
+      expect(saved).toMatchObject({
+        status: "interrupted",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: expect.any(String) },
+        restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
+      });
+    } else {
+      expect(saved?.mainRestartRecovery).toBeUndefined();
+      expect(saved?.abortedLastRun).not.toBe(true);
+    }
+  } finally {
+    replacementSpy.mockRestore();
+    registration.cleanup();
+    replacement?.cleanup();
+    admission.release();
+    await harness.handler.dispose();
+  }
 });
 
 it.each(["admission", "queue", "delegated"] as const)(

@@ -33,9 +33,9 @@ function legacyReceiptDatabase() {
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
     INSERT INTO cron_run_receipts (
-      receipt_id, store_key, job_id, config_revision, agent_id, status,
+      cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, status,
       owner_pid, owner_start_time, started_at_ms
-    ) VALUES ('legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
+    ) VALUES (1, 'legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
     PRAGMA user_version = 19;
     UPDATE schema_meta SET schema_version = 19;
   `);

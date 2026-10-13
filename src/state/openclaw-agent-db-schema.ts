@@ -171,8 +171,10 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   const startedAt = performance.now();
   const deferredReason = processDeath
     ? "process-death"
-    : deferUnverifiedIntegrity && !verification && diagnostics?.integrityGateReason === "no-proof"
-      ? "no-proof"
+    : deferUnverifiedIntegrity &&
+        ((!verification && diagnostics?.integrityGateReason === "no-proof") ||
+          diagnostics?.integrityGateReason === "dirty-receipt")
+      ? diagnostics.integrityGateReason
       : undefined;
   const deferredRefusal = deferredReason
     ? migrationPending || hasPendingCurrentVersionMigration
@@ -233,7 +235,9 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       diagnostics.because =
         deferredReason === "process-death"
           ? "same-boot-dead-owner-wal-recovered"
-          : "native-wal-without-verification";
+          : deferredReason === "dirty-receipt"
+            ? "native-wal-checkpoint-incomplete"
+            : "native-wal-without-verification";
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
     }
   } else if (

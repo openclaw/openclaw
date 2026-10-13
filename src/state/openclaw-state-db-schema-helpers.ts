@@ -16,7 +16,7 @@ export function tableHasColumn(db: DatabaseSync, tableName: string, columnName: 
   return readTableColumns(db, tableName).has(columnName);
 }
 
-function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
+export function readTableColumns(db: DatabaseSync, tableName: string): Set<string> {
   const schema = getAdmittedSqliteSchemaFacts(db);
   const sql = schema?.tableSql.get(tableName);
   if (

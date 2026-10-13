@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
@@ -7,11 +8,13 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
@@ -32,8 +35,14 @@ import {
 } from "../../admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { attachInternalToolResultAcknowledgement } from "../../runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
+import {
+  createAssistant,
+  createTestSession,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionMetadataCommittedError } from "../../sessions/session-manager-metadata-error.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -194,6 +203,105 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it.each([
+    { existing: false, text: "Already streamed answer" },
+    { existing: true, text: "Already streamed answer" },
+    { existing: true, text: "" },
+    { existing: true, text: "Already streamed answer", closeAdmission: true },
+  ])(
+    "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission)",
+    async ({ existing, text, closeAdmission }) => {
+      await withInitialWriter(
+        async ({ manager, controller, target, transcript, admission }) =>
+          withOwnedSessionTranscriptWrites(transcript.ownedTranscriptWriteContext, async () => {
+            const { session } = await createTestSession({
+              sessionManager: manager,
+              withSessionWriteSettlement: (write) =>
+                transcript.transcriptLifecycle.withTranscriptWrite(write),
+            });
+            const reason = createAgentRunRestartAbortError();
+            session.agent.streamFn = (_model, _context, options) => {
+              const stream = createAssistantMessageEventStream();
+              const output = createAssistant(testModel, []);
+              options?.signal?.addEventListener(
+                "abort",
+                () => {
+                  Object.assign(output, {
+                    stopReason: "aborted",
+                    errorCode: "OPENCLAW_RESTART_ABORT",
+                    errorMessage: reason.message,
+                  });
+                  stream.push({ type: "error", reason: "aborted", error: output });
+                  stream.end();
+                },
+                { once: true },
+              );
+              queueMicrotask(() => {
+                stream.push({ type: "start", partial: output });
+                if (text) {
+                  output.content.push({ type: "text", text });
+                  output.content.push({
+                    type: "toolCall",
+                    id: "unfinished",
+                    name: "read",
+                    arguments: {},
+                    async: true,
+                  });
+                  stream.push({
+                    type: "text_delta",
+                    contentIndex: 0,
+                    delta: text,
+                    partial: output,
+                  });
+                }
+              });
+              return stream;
+            };
+            session.subscribe((event) => {
+              if (
+                ((text && event.type === "message_update") ||
+                  (!text && event.type === "message_start")) &&
+                event.message.role === "assistant"
+              ) {
+                if (closeAdmission) {
+                  admission.close();
+                }
+                controller.abort(reason);
+                session.agent.abort(reason);
+              }
+            });
+            try {
+              // The canceled run may reject after its terminal row; storage is the contract here.
+              await Promise.allSettled([
+                session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              ]);
+              const assistants = loadTranscriptEventsSync(target).flatMap((entry) =>
+                isIndexedSessionEntry(entry) &&
+                entry.type === "message" &&
+                entry.message.role === "assistant"
+                  ? [entry.message]
+                  : [],
+              );
+              expect(assistants).toHaveLength(closeAdmission ? 0 : 1);
+              if (closeAdmission) {
+                return;
+              }
+              expect(assistants[0]).toMatchObject({
+                stopReason: "aborted",
+                errorCode: "OPENCLAW_RESTART_ABORT",
+                content: text ? [{ type: "text", text }] : [],
+              });
+              expect(assistants[0]?.content.some((part) => part.type === "toolCall")).toBe(false);
+              await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow();
+            } finally {
+              session.dispose();
+            }
+          }),
+        { existing, outsideTranscriptWrite: true },
+      );
+    },
+  );
+
   it.each([
     { existing: false, incognito: false },
     { existing: true, incognito: false },

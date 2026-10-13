@@ -440,7 +440,7 @@ describe("SQLite historical session disk budget", () => {
     const removeArchive = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
       if (args[0] === archivePath) {
         expect(cachedDatabase.db.isOpen).toBe(true);
-        closeCachedOpenClawAgentDatabase(cachedDatabase, { eviction: true });
+        closeCachedOpenClawAgentDatabase(cachedDatabase);
         expect(cachedDatabase.db.isOpen).toBe(false);
       }
       return await rm(...args);
