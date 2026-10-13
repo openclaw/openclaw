@@ -154,6 +154,11 @@ retains the physical database's completed validation facts for later opens in th
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
 
+The shared-state reader pool keeps its first worker warm for the normal handle
+idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+Retirement uses the pool's existing task and native-resource settlement so an
+active read or retained lease is not interrupted.
+
 Canonical auth reads pass a compact projection of the live owner's schema facts
 (user version and the two auth table classifications) to the isolated child. The
 child reads current credential rows through its bounded native reader pool without
