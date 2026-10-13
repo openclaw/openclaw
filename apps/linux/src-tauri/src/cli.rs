@@ -74,7 +74,23 @@ impl OpenClawCli {
             return Ok(Self::new(managed, home));
         }
 
-        Ok(Self::new(PathBuf::from(DEFAULT_EXECUTABLE), home))
+        let cli = Self::new(PathBuf::from(DEFAULT_EXECUTABLE), home);
+        #[cfg(windows)]
+        let cli = {
+            let executable = env::split_paths(&cli.command_path()?)
+                .flat_map(|directory| {
+                    [
+                        directory.join("openclaw.exe"),
+                        directory.join("openclaw.cmd"),
+                    ]
+                })
+                .find(|candidate| candidate.is_file());
+            Self {
+                executable: executable.unwrap_or(cli.executable),
+                ..cli
+            }
+        };
+        Ok(cli)
     }
 
     fn new(executable: PathBuf, openclaw_home: PathBuf) -> Self {
@@ -275,6 +291,25 @@ pub(crate) fn managed_launcher(prefix: &Path) -> PathBuf {
     } else {
         "bin/openclaw"
     })
+}
+
+#[cfg(windows)]
+pub(crate) fn ordinary_windows_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut parts = path.components();
+    match parts.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(letter) => {
+                PathBuf::from(format!("{}:\\", char::from(letter))).join(parts.as_path())
+            }
+            Prefix::VerbatimUNC(server, share) => PathBuf::from(r"\\")
+                .join(server)
+                .join(share)
+                .join(parts.as_path()),
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
 }
 
 struct ChromeSetupOutput {

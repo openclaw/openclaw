@@ -31,19 +31,23 @@ afterEach(() => vi.restoreAllMocks());
 it.each([
   {
     stage: "registration",
-    responses: ["timeout", "found", "found"],
+    responses: ["timeout", "found", "found", "found", "found", "found"],
     recovered: true,
   },
   {
     stage: "runtime",
-    responses: ["found", "timeout", "found", "found"],
+    responses: ["found", "found", "timeout", "found", "found", "found", "found", "found"],
     recovered: true,
   },
   { stage: "registration", responses: ["timeout", "timeout"], recovered: false },
-  { stage: "runtime", responses: ["found", "timeout", "found", "timeout"], recovered: false },
+  {
+    stage: "runtime",
+    responses: ["found", "found", "timeout", "found", "found", "timeout"],
+    recovered: false,
+  },
   {
     stage: "command then runtime",
-    responses: ["timeout", "found", "timeout"],
+    responses: ["timeout", "found", "found", "timeout"],
     recovered: false,
   },
   { stage: "unavailable", responses: ["unavailable"], recovered: false },
@@ -131,9 +135,9 @@ it.each([
       expect(inspected.serviceMutationSkipMessage).toContain(
         scenario.stage === "unavailable"
           ? "Task Scheduler check failed (exit 2)."
-          : scenario.stage === "command then runtime" || scenario.stage === "runtime"
-            ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
-            : "Task Scheduler check timed out after 47000 ms.",
+          : scenario.stage === "registration"
+            ? "Task Scheduler check timed out after 47000 ms."
+            : "Scheduled Task check timed out after 47000 ms (ETIMEDOUT).",
       );
       if (scenario.stage === "registration" || scenario.stage === "unavailable") {
         expect(inspected.serviceUpdateVerdict).toMatchObject({

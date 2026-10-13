@@ -10,6 +10,9 @@ const dashboardSource = readFileSync(new URL("../apps/linux/ui/main.js", import.
 function fakeElement() {
   const classes = new Set(["hidden"]);
   const listeners = new Map<string, () => unknown>();
+  const options = new Map(
+    ["stable", "beta", "dev"].map((value) => [`[value="${value}"]`, { disabled: false }]),
+  );
   return {
     className: "",
     classList: {
@@ -34,6 +37,9 @@ function fakeElement() {
       assert.ok(listener);
       return listener();
     },
+    querySelector(selector: string) {
+      return options.get(selector) ?? null;
+    },
     append() {},
     removeAttribute() {},
     replaceChildren() {},
@@ -45,6 +51,10 @@ async function mountDashboard(
   search: string,
   openReleasePage = () => Promise.resolve(),
   bootstrap = { phase: "connected", setupError: undefined as string | undefined },
+  localSetup?: {
+    bootstrap: (args?: Record<string, unknown>) => unknown;
+    install: () => unknown;
+  },
 ) {
   const elements = new Map<string, ReturnType<typeof fakeElement>>();
   const invoked: string[] = [];
@@ -61,18 +71,24 @@ async function mountDashboard(
   const window = {
     __TAURI__: {
       core: {
-        invoke(command: string) {
+        async invoke(command: string, args?: Record<string, unknown>) {
           invoked.push(command);
           if (command === "discover_gateways") {
-            return Promise.resolve([]);
+            return [];
           }
           if (command === "open_release_page") {
             return openReleasePage();
           }
           if (command === "bootstrap") {
-            return Promise.resolve(bootstrap);
+            return localSetup ? localSetup.bootstrap(args) : bootstrap;
           }
-          return Promise.resolve({ phase: "connected" });
+          if (command === "install_cli" && localSetup) {
+            return localSetup.install();
+          }
+          if (command === "build_info") {
+            return { platform: "windows", releaseBuild: true };
+          }
+          return { phase: "connected" };
         },
       },
       event: {
@@ -122,6 +138,87 @@ test("automatic setup failure returns to Gateway choices with the native error",
   assert.equal(invoked.includes("install_cli"), false);
   assert.equal(invoked.includes("connect_remote_gateway"), false);
 });
+
+test.each(["automatic", "explicit"])(
+  "%s setup retries observe the installed Gateway after a dashboard failure",
+  async (setup) => {
+    let installs = setup === "automatic" ? 1 : 0;
+    let observations = 0;
+    const failure = "OpenClaw is installed, but connecting to the Gateway failed: fetch timed out.";
+    const { element, invoked } = await mountDashboard("", undefined, undefined, {
+      bootstrap(args) {
+        if (args?.explicitLocal) {
+          observations += 1;
+          return { phase: "connected" };
+        }
+        return { phase: "missingCli", setupError: setup === "automatic" ? failure : undefined };
+      },
+      install() {
+        installs += 1;
+        throw new Error(failure);
+      },
+    });
+    if (setup === "automatic") {
+      assert.equal(element("#connection-choices").classList.contains("hidden"), false);
+      element("#connection-remote").click();
+      assert.equal(element("#remote-details").classList.contains("hidden"), false);
+      element("#connection-local").click();
+    } else {
+      element("#welcome-continue").click();
+      element("#setup-continue").click();
+      await yieldToDashboard();
+      assert.equal(element("#description").textContent, failure);
+      assert.equal(element("#action-controls").classList.contains("hidden"), false);
+    }
+    element(setup === "automatic" ? "#setup-continue" : "#primary-action").click();
+    await yieldToDashboard();
+    assert.equal(observations, 1);
+    assert.equal(installs, 1);
+    assert.equal(invoked.includes("gateway_action"), false);
+  },
+);
+
+test.each(["automatic", "explicit"])(
+  "%s early setup failure retains an explicit installation action after retry",
+  async (setup) => {
+    let installs = setup === "automatic" ? 1 : 0;
+    let observations = 0;
+    const { element } = await mountDashboard("", undefined, undefined, {
+      bootstrap(args) {
+        if (args?.explicitLocal) {
+          observations += 1;
+          throw new Error("The CLI is unavailable. Install OpenClaw to continue.");
+        }
+        return {
+          phase: "missingCli",
+          setupError: setup === "automatic" ? "Bundled runtime unavailable." : undefined,
+        };
+      },
+      install() {
+        installs += 1;
+        if (installs === 1) {
+          throw new Error("Bundled runtime unavailable.");
+        }
+        return { phase: "connected" };
+      },
+    });
+    if (setup === "explicit") {
+      element("#welcome-continue").click();
+      element("#setup-continue").click();
+      await yieldToDashboard();
+    }
+    element(setup === "automatic" ? "#setup-continue" : "#primary-action").click();
+    await yieldToDashboard();
+    assert.equal(observations, 1);
+    assert.equal(installs, 1);
+    assert.equal(element("#install-controls").classList.contains("hidden"), false);
+    assert.equal(element("#install-button").disabled, false);
+    element("#install-button").click();
+    await yieldToDashboard();
+    assert.equal(installs, 2);
+    assert.equal(element("#log-status").textContent, "COMPLETE");
+  },
+);
 
 test("missing CLI mode offers installation without retrying bootstrap", async () => {
   const { element, invoked } = await mountDashboard("?mode=missingCli");
@@ -423,11 +520,18 @@ test.each(
       }
 
       await actions.continueLocalSetup();
+      for (const value of ["stable", "beta", "dev"]) {
+        const option = elements.get("#channel")?.querySelector(`[value="${value}"]`);
+        assert.ok(option);
+        assert.equal(option.disabled, platform === "windows" && value === "dev");
+      }
       assert.equal(
         elements.get("#install-hint")?.textContent,
         externalService
           ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-          : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+          : platform === "windows"
+            ? "Installs Stable or Beta in ~/.openclaw. Development requires an existing source CLI."
+            : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
       );
       if (phase === "unconfigured") {
         assert.deepEqual(

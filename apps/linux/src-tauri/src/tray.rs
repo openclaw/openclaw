@@ -27,7 +27,7 @@ const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const ADOPT_RUNTIME_ID: &str = "adopt-bundled-runtime";
 const QUIT_ID: &str = "quit";
 
@@ -44,8 +44,8 @@ pub struct TrayHandles {
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
-    #[cfg(target_os = "linux")]
-    runtime_action: MenuItem<tauri::Wry>,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    runtime_action: Option<MenuItem<tauri::Wry>>,
 }
 
 struct StatusLine {
@@ -115,12 +115,12 @@ impl TrayHandles {
         }
         drop(status_line);
         self.refresh_status(self._tray.app_handle());
-        #[cfg(target_os = "linux")]
-        {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if let Some(item) = &self.runtime_action {
             let current = crate::bundled_runtime::expected_bun_path().ok();
             let enabled =
                 snapshot.installed && current.is_some() && snapshot.runtime_path != current;
-            let item = self.runtime_action.clone();
+            let item = item.clone();
             let _ = self._tray.app_handle().run_on_main_thread(move || {
                 let _ = item.set_enabled(enabled);
             });
@@ -227,10 +227,18 @@ pub fn build(
         menu_builder
     };
     let menu_builder = menu_builder.separator().items(&[&start, &stop, &restart]);
-    #[cfg(target_os = "linux")]
-    let runtime_action = disabled_item(ADOPT_RUNTIME_ID, "Use bundled runtime…")?;
-    #[cfg(target_os = "linux")]
-    let menu_builder = menu_builder.item(&runtime_action);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let runtime_action = if cfg!(target_os = "linux") || crate::bundled_runtime::available() {
+        Some(disabled_item(ADOPT_RUNTIME_ID, "Use bundled runtime…")?)
+    } else {
+        None
+    };
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let menu_builder = if let Some(item) = &runtime_action {
+        menu_builder.item(item)
+    } else {
+        menu_builder
+    };
     let menu = menu_builder
         .separator()
         .text(QUIT_ID, "Quit OpenClaw")
@@ -317,7 +325,7 @@ pub fn build(
         start,
         stop,
         restart,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         runtime_action,
     })
 }
@@ -429,16 +437,26 @@ fn handle_menu(
             };
             app.state::<GatewayOperationQueue>().submit_action(action);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         ADOPT_RUNTIME_ID => confirm_runtime_action(app),
         _ => {}
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
+    show_runtime_message(app, error, MessageDialogKind::Error);
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn show_runtime_notice(app: &AppHandle, notice: &str) {
+    show_runtime_message(app, notice, MessageDialogKind::Info);
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn show_runtime_message(app: &AppHandle, message: &str, kind: MessageDialogKind) {
     let current_app = app.clone();
-    let error = error.to_owned();
+    let message = message.to_owned();
     let _ = app.run_on_main_thread(move || {
         if current_app.state::<DesktopState>().is_quitting() {
             return;
@@ -446,14 +464,14 @@ pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
         show_window(&current_app);
         current_app
             .dialog()
-            .message(error)
+            .message(message)
             .title("Use bundled runtime")
-            .kind(MessageDialogKind::Error)
+            .kind(kind)
             .show(|_| {});
     });
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn confirm_runtime_action(app: &AppHandle) {
     use tauri_plugin_dialog::MessageDialogButtons;
     let current_app = app.clone();
@@ -477,8 +495,16 @@ fn confirm_runtime_action(app: &AppHandle) {
                 return;
             }
         };
+        let elevation = match action.observation.requires_elevation() {
+            Ok(true) => "\n\nWindows administrator approval is required to update this Gateway's Scheduled Task registration. Only the OpenClaw CLI will run as administrator. Cancelling approval leaves this action without any service changes.",
+            Ok(false) => "",
+            Err(error) => {
+                show_runtime_error(&current_app, &error);
+                return;
+            }
+        };
         let message = format!(
-            "Current runtime: {}\n\nUse this app's bundled Bun runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
+            "Current runtime: {}\n\nUse this app's bundled Bun runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.{elevation}",
             action.observation.current_runtime(),
         );
         let dialog_app = current_app.clone();

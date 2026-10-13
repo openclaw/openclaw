@@ -165,6 +165,59 @@ it.each([
   },
 );
 
+it("retains interruption samples and late completion after earlier output fills the log budget", () => {
+  const f = fixture();
+  const padding = Array(160)
+    .fill("Routine earlier output " + "x".repeat(200))
+    .join("\n");
+  fs.writeFileSync(
+    path.join(f.artifacts, "update.err"),
+    `early marker\n${padding}\nFinishing update: package backup cleanup token=${secret}\n`,
+  );
+  fs.writeFileSync(
+    path.join(f.artifacts, "update-interruption.log"),
+    "Update interruption diagnostics (last observed child tree):\npid=123 ppid=12 role=updater state=S wait=do_epoll_wait syscall=232\nsubphase unknown; progress unknown\n",
+  );
+  write(path.join(f.artifacts, "update.json"), {
+    status: "ok",
+    mode: "npm",
+    after: { version: "2026.9.8", buildId: "fixture-candidate" },
+    steps: [
+      { name: "candidate-doctor", exitCode: 0, warnings: [padding] },
+      { name: "finalize:doctor-lint", exitCode: 0 },
+    ],
+    run: {
+      status: "completed",
+      phase: "verifying",
+      finishedAtMs: 1700000000000,
+      privateConfig: privateBody,
+      verification: {
+        runningVersion: "2026.9.8",
+        runningBuildId: "fixture-candidate",
+        pid: 456,
+        readyz: true,
+        settled: true,
+        privateResponse: privateBody,
+      },
+    },
+  });
+  const report = capture(f);
+  expect(report.exitStatus).toBe(1);
+  expect(report.logs["update-interruption.log"]).toContain("pid=123 ppid=12 role=updater");
+  expect(report.logs["update.err"]).toContain("early marker");
+  expect(report.logs["update.err.tail"]).toContain("Finishing update: package backup cleanup");
+  expect(report.logs["update.err.tail"]).not.toContain("early marker");
+  expect(report.logs["update.json"]).toContain(
+    "Reported update completion before outer command failure (not process exit proof)",
+  );
+  expect(report.logs["update.json"]).toContain('"finishedAtMs": 1700000000000');
+  expect(report.logs["update.json"]).toContain('"readyz": true');
+  expect(report.logs["update.json"]).toContain('"name": "finalize:doctor-lint"');
+  for (const name of ["update-interruption.log", "update.err", "update.err.tail", "update.json"]) {
+    expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
+  }
+});
+
 it("returns only redacted failure coordinates after safe publication", () => {
   const f = fixture();
   vi.stubEnv("GITHUB_ACTIONS", "true");

@@ -309,9 +309,10 @@ describe("native service command inspection", () => {
           expect(state.runtime?.missingUnit).not.toBe(true);
           expect(state.runtime?.inspectionFailure).toBeUndefined();
         }
-        expect(native.scheduler).toHaveBeenCalledTimes(3);
+        const nativeQueries = condition === "absent" ? 4 : 6;
+        expect(native.scheduler).toHaveBeenCalledTimes(nativeQueries);
         expect(run).not.toHaveBeenCalled();
-        expect(now).toBe(401);
+        expect(now).toBe((nativeQueries + 1) * 100.25);
         for (const allowance of schedulerAllowances) {
           expect(allowance.timeout).toBe(explicit ? Math.floor(allowance.remaining) : 60_000);
           expect(allowance.timeout).toBeGreaterThan(0);

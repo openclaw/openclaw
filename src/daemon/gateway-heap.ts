@@ -118,10 +118,14 @@ function parseHeapControls(tokens: readonly string[]): string[] {
 export function resolveGatewayHeapNodeOptions(
   existingNodeOptions: string | undefined,
   runtime: GatewayDaemonRuntime = "node",
+  programArguments: readonly string[] = [],
 ): string {
   // Keep the durable service value heap-only. Ambient or adjacent startup flags
   // must not reopen the NODE_OPTIONS preload/debug boundary.
-  const controls = parseHeapControls(parseNodeOptionsEnvVar(existingNodeOptions) ?? []).join(" ");
+  const controls = parseHeapControls([
+    ...(parseNodeOptionsEnvVar(existingNodeOptions) ?? []),
+    ...readServiceHeapExecArgv(programArguments),
+  ]).join(" ");
   if (controls || runtime !== "bun") {
     return controls;
   }

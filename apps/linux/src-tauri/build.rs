@@ -1,6 +1,7 @@
 fn main() {
     link_macos_swift_runtime();
     prepare_runtime_manifest();
+    prepare_release_policy();
     // Cargo builds do not require Node; this is the same literal include used by
     // scripts/lib/standalone-installers.mjs, with no candidate code execution.
     let installer = include_str!("../../../scripts/install-cli.sh").replace(
@@ -34,6 +35,16 @@ fn main() {
             .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("Tauri build configuration should be valid");
+}
+
+fn prepare_release_policy() {
+    println!("cargo:rerun-if-changed=../release-policy.json");
+    let policy: serde_json::Value = serde_json::from_str(include_str!("../release-policy.json"))
+        .expect("desktop release policy");
+    let windows = policy["windowsPublication"]
+        .as_bool()
+        .expect("boolean Windows publication policy");
+    println!("cargo:rustc-env=OPENCLAW_WINDOWS_PUBLICATION_ENABLED={windows}");
 }
 
 fn prepare_runtime_manifest() {

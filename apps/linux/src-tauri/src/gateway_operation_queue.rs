@@ -16,7 +16,7 @@ pub(crate) enum GatewayOperation {
     },
     RetryRemote,
     Install(InstallChannel),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     Runtime(crate::RuntimeAction),
     Action(GatewayAction),
     RecoverRemote {
@@ -26,7 +26,7 @@ pub(crate) enum GatewayOperation {
 
 pub(crate) enum GatewayOperationError {
     Action(String),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     Runtime(String),
 }
 
@@ -59,13 +59,13 @@ impl GatewayOperationQueue {
                     {
                         continue;
                     }
-                    #[cfg(target_os = "linux")]
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
                     let runtime_action = matches!(&request.operation, GatewayOperation::Runtime(_));
                     let result = sink(request.operation, request.selection);
                     if let Some(reply) = request.reply {
                         let _ = reply.send(result);
                     } else if let Err(error) = result {
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", target_os = "windows"))]
                         if runtime_action {
                             show_error(GatewayOperationError::Runtime(error));
                             continue;
@@ -108,7 +108,7 @@ impl GatewayOperationQueue {
         self.submit_detached(GatewayOperation::Action(action));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub(crate) fn submit_runtime(&self, action: crate::RuntimeAction) {
         self.submit_detached(GatewayOperation::Runtime(action));
     }

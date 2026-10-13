@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { Script } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { runLinuxAppChannel } from "../../scripts/linux-app-channel.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -620,7 +621,6 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
         ? [
             `OpenClaw-${version}-darwin-aarch64.dmg`,
             `OpenClaw-${version}-darwin-aarch64.app.tar.gz`,
-            `OpenClaw-${version}-windows-x86_64.exe`,
           ]
         : []),
     ];
@@ -658,10 +658,6 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
               signature,
               url: `https://github.com/openclaw/openclaw/releases/download/${releaseTag}/OpenClaw-${version}-darwin-aarch64.app.tar.gz`,
             },
-            "windows-x86_64": {
-              signature,
-              url: `https://github.com/openclaw/openclaw/releases/download/${releaseTag}/OpenClaw-${version}-windows-x86_64.exe`,
-            },
           },
         }),
       );
@@ -685,6 +681,7 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
     releaseTag = tag,
     latest?: string,
     publicOnly = false,
+    verifiedWindowsSha256?: string | null,
   ) => {
     const args = [mode, "--tag", releaseTag, "--source-sha", sourceSha(releaseTag)];
     args.push("--tooling-sha", toolingSha);
@@ -736,6 +733,13 @@ function fixture(workflowRef = toolingRef, desktop = false, windows = false) {
     }
     if (mode === "publish") {
       args.push("--desktop-test", String(desktop), "--windows", String(windows));
+      if ((desktop || windows) && verifiedWindowsSha256 !== null) {
+        const installer = `OpenClaw-${releaseTag.slice(1)}-windows-x86_64.exe`;
+        args.push(
+          "--windows-installer-sha256",
+          verifiedWindowsSha256 ?? hash(Buffer.from(`fixture bytes: ${installer}\n`)),
+        );
+      }
       if (!publicOnly) {
         args.push("--assets", inputs(releaseTag), "--signature", signaturePath);
       }
@@ -979,31 +983,14 @@ it("rejects a retired alpha workflow even when finalizing a stable tag", () => {
   expect(f.mutations()).toEqual([]);
 });
 
-it("publishes Windows with regular Linux bundles and reuses its immutable bytes", () => {
-  const f = fixture(toolingRef, false, true);
-  succeeded(f.run("publish"));
-  expect(f.bytes("windows-stable", "latest-windows.json")).toEqual(
-    f.bytes(tag, "latest-windows.json"),
-  );
-  const metadata = JSON.parse(f.bytes("windows-stable", "latest-windows.json").toString());
-  expect(Object.keys(metadata.platforms)).toEqual(["windows-x86_64"]);
-  expect(metadata.platforms["windows-x86_64"].url).toBe(
-    `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${tag.slice(1)}-windows-x86_64.exe`,
-  );
-  expect(f.state().releases.some((release) => release.tag_name === "desktop-test")).toBe(false);
-  const writes = f.mutations().length;
-  succeeded(f.run("publish", tag, undefined, true));
-  expect(f.mutations()).toHaveLength(writes);
-});
-
-it("rejects an invalid Windows updater signature before publishing bundles", () => {
-  const f = fixture(toolingRef, false, true);
-  f.update((state) => {
-    state.verifierRejectSuffix = ".exe";
-  });
-  failed(f.run("publish"), "fixture signature verification refused");
-  expect(f.mutations()).toEqual([]);
-});
+it.each([false, true])(
+  "refuses Windows publication before any write (publicOnly=%s)",
+  (publicOnly) => {
+    const f = fixture(toolingRef, false, true);
+    failed(f.run("publish", tag, undefined, publicOnly), "Windows desktop publication is disabled");
+    expect(f.mutations()).toEqual([]);
+  },
+);
 
 it("publishes opt-in desktop metadata only after successful Linux and legacy readback", () => {
   const f = fixture(toolingRef, true);
@@ -1020,6 +1007,77 @@ it("publishes opt-in desktop metadata only after successful Linux and legacy rea
   expect(legacy).toBeGreaterThanOrEqual(0);
   expect(create).toBeGreaterThan(legacy);
   expect(releaseFrom(f.state(), "desktop-test").source).toBe(sourceSha(tag));
+  const metadata = JSON.parse(f.bytes("desktop-test", "latest-desktop-test.json").toString());
+  expect(Object.keys(metadata.platforms)).toEqual(["darwin-aarch64"]);
+  expect(releaseFrom(f.state(), tag).assets.some((entry) => entry.name.includes("windows"))).toBe(
+    false,
+  );
+});
+
+it("recovers the macOS channel from historical mixed bundles without changing immutable assets", () => {
+  const f = fixture(toolingRef, true);
+  succeeded(f.run("publish"));
+  f.update((state) => {
+    const release = releaseFrom(state, tag);
+    const readMetadata = (name: string) =>
+      JSON.parse(
+        Buffer.from(
+          expectDefined(
+            release.assets.find((entry) => entry.name === name),
+            name,
+          ).bytes,
+          "base64",
+        ).toString(),
+      );
+    const windowsName = `OpenClaw-${tag.slice(1)}-windows-x86_64.exe`;
+    replaceAsset(state, tag, windowsName, Buffer.from(`historical bytes: ${windowsName}\n`));
+    const bundleAssets = release.assets.filter(
+      (entry) => !entry.name.endsWith(".json") && entry.name !== "SHA256SUMS.linux-app.txt",
+    );
+    replaceAsset(
+      state,
+      tag,
+      "SHA256SUMS.linux-app.txt",
+      Buffer.from(
+        bundleAssets
+          .map((entry) => `${hash(Buffer.from(entry.bytes, "base64"))}  ./${entry.name}`)
+          .toSorted()
+          .join("\n") + "\n",
+      ),
+    );
+    const desktop = readMetadata("latest-desktop-test.json");
+    desktop.platforms["windows-x86_64"] = { signature, url: downloadUrl(tag, windowsName) };
+    const desktopBytes = Buffer.from(JSON.stringify(desktop));
+    replaceAsset(state, tag, "latest-desktop-test.json", desktopBytes);
+    replaceAsset(state, "desktop-test", "latest-desktop-test.json", desktopBytes);
+    const manifestName = `OpenClaw-${tag.slice(1)}-linux.json`;
+    const linux = readMetadata(manifestName);
+    linux.linuxPublication.assets = release.assets
+      .filter((entry) => !entry.name.endsWith(".json"))
+      .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        size: entry.size,
+        sha256: hash(Buffer.from(entry.bytes, "base64")),
+      }));
+    const linuxBytes = Buffer.from(`${JSON.stringify(linux, null, 2)}\n`);
+    replaceAsset(state, tag, manifestName, linuxBytes);
+    replaceAsset(state, tag, "latest.json", linuxBytes);
+    replaceAsset(state, channel, "latest.json", linuxBytes);
+    state.calls = [];
+  });
+  const originalAssets = releaseFrom(f.state(), tag).assets;
+  succeeded(f.run("publish", tag, undefined, true, null));
+  expect(releaseFrom(f.state(), tag).assets).toEqual(originalAssets);
+  expect(
+    Object.keys(
+      JSON.parse(f.bytes("desktop-test", "latest-desktop-test.json").toString()).platforms,
+    ),
+  ).toEqual(["darwin-aarch64"]);
+  expect(f.mutations().filter((call) => call.tag === tag || call.tag === "windows-stable")).toEqual(
+    [],
+  );
 });
 
 it.each(["newer channel", "revoked before delete", "revoked after delete"])(

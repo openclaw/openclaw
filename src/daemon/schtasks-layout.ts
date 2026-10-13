@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
@@ -369,6 +371,36 @@ async function readWindowsTaskCommand(
       (registered && !directExecutable) || startupEntryPath !== undefined
         ? await captureLaunchers(options?.onLauncherContent)
         : undefined;
+    const assertRegistrationCurrent = async (source?: { path: string; content: string }) => {
+      if (!registered && !launchers) {
+        return;
+      }
+      if (
+        (launchers && !isDeepStrictEqual(await captureLaunchers(), launchers)) ||
+        (source && (await readTaskFile(source.path, deadline)) !== source.content)
+      ) {
+        throw new Error("Task launcher changed during inspection");
+      }
+      assertInspectionDeadline();
+      if (!registered) {
+        return;
+      }
+      const current = probeScheduledTaskState(taskName, remainingTimeout());
+      if (current.status === "unknown") {
+        throw new ScheduledTaskInspectionError(current);
+      }
+      assertInspectionDeadline();
+      if (
+        current.status !== registered.status ||
+        (registered.status === "found" &&
+          (current.status !== "found" ||
+            normalizeWindowsTaskIdentity(current.taskPath ?? "") !==
+              normalizeWindowsTaskIdentity(registered.taskPath ?? "") ||
+            !isDeepStrictEqual(current.actions, registered.actions)))
+      ) {
+        throw new Error("Scheduled Task registration changed during inspection");
+      }
+    };
     if (directExecutable) {
       assertStaticTaskPath(action.path);
       const argumentsText = action.arguments.trim();
@@ -381,7 +413,7 @@ async function readWindowsTaskCommand(
       ) {
         throw new Error("Scheduled Task executable arguments cannot be inspected");
       }
-      assertInspectionDeadline();
+      await assertRegistrationCurrent();
       const command = {
         programArguments: [action.path, ...splitArgsPreservingQuotes(argumentsText)],
         ...(action.workingDirectory ? { workingDirectory: action.workingDirectory } : {}),
@@ -390,7 +422,7 @@ async function readWindowsTaskCommand(
       return command;
     }
     if (launchers?.length === 0) {
-      assertInspectionDeadline();
+      await assertRegistrationCurrent();
       return null;
     }
     const scriptPath = launchers?.[0]?.scriptPath ?? resolveTaskScriptPath(env);
@@ -462,7 +494,7 @@ async function readWindowsTaskCommand(
     if (requireEffective && programArguments.length === 0) {
       throw new Error("Missing Scheduled Task command");
     }
-    assertInspectionDeadline();
+    await assertRegistrationCurrent({ path: scriptPath, content });
     assertCommandProfile({ programArguments, environment });
     if (
       (registered || startupEntryPath !== undefined) &&
@@ -565,6 +597,26 @@ function createLauncherScriptLines(
   return lines;
 }
 
+export function resolveTaskScriptEnvironment(
+  environment?: GatewayServiceEnv,
+): Record<string, string> {
+  const rendered: Record<string, string> = {};
+  for (const [key, value] of Object.entries(filterStringRecord(environment) ?? {})) {
+    // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+    if (
+      (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+      key.toUpperCase() === "PATH" ||
+      // This preference chooses the launcher at install time. Persisting it
+      // would overwrite the live WScript marker inherited by the supervisor.
+      key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
+    ) {
+      continue;
+    }
+    rendered[key] = value;
+  }
+  return rendered;
+}
+
 export function buildTaskScript({
   description,
   programArguments,
@@ -575,21 +627,8 @@ export function buildTaskScript({
   if (workingDirectory) {
     lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
-  if (environment) {
-    for (const [key, value] of Object.entries(environment)) {
-      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
-      if (
-        value === undefined ||
-        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
-        key.toUpperCase() === "PATH" ||
-        // This preference chooses the launcher at install time. Persisting it
-        // would overwrite the live WScript marker inherited by the supervisor.
-        key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
-      ) {
-        continue;
-      }
-      lines.push(renderCmdSetAssignment(key, value));
-    }
+  for (const [key, value] of Object.entries(resolveTaskScriptEnvironment(environment))) {
+    lines.push(renderCmdSetAssignment(key, value));
   }
   let commandArguments = programArguments;
   if (environment?.OPENCLAW_SERVICE_KIND === "gateway") {

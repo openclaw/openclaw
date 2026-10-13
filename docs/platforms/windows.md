@@ -15,38 +15,113 @@ app-owned WSL Gateway. Terminal users can use the PowerShell installer or WSL2.
 
 ## Recommended desktop app: OpenClaw
 
-Download the **Windows x64 NSIS installer** named
-`OpenClaw-<version>-windows-x86_64.exe` from the
-[OpenClaw releases page](https://github.com/openclaw/openclaw/releases).
-Run it, then launch **OpenClaw** from the Start menu. Windows uses WebView2 to
-show the Control UI; the installer provisions WebView2 when necessary.
+Windows desktop publication is disabled. Regular OpenClaw releases do not
+publish a Windows Tauri installer or updater feed. Maintainer signing rehearsals
+produce temporary Actions artifacts for qualification, not public downloads.
+Windows Hub and the native CLI below remain available.
+
+For an explicitly provided qualification installer, run it and launch **OpenClaw**
+from the Start menu. Windows uses WebView2 to show the Control UI; the installer
+provisions WebView2 when necessary.
 
 ### First launch and local Gateway
 
-Choose local setup to install the matching OpenClaw CLI and start its Gateway.
+On a fresh install with no saved OpenClaw configuration or Gateway profiles,
+the app starts local setup automatically and opens the Control UI's onboarding.
+It installs the matching OpenClaw CLI and starts its Gateway.
 The app uses its private Bun runtime and package manager; system Node.js and npm
 are not required. Gateway installation, startup, status, and recovery remain
 owned by `openclaw gateway`, including Scheduled Task and Startup-folder support.
 Closing the window keeps the app in the tray; the local Gateway has its own
 service lifecycle.
 
+Existing configurations and saved connections keep their current startup
+behavior. If automatic setup fails, the app shows the error alongside local and
+remote setup choices so you can retry or connect elsewhere.
+
 **Local setup requires a signed Windows Bun runtime in the app's pinned release.**
-If an older app reports “This app does not include a signed Windows Gateway
-runtime,” update to an app release with the signed Windows runtime or connect
-to a remote Gateway. Installing system Node.js does not change the
+If the app reports “This app does not include a signed Windows Gateway
+runtime,” use a qualification build containing the signed Windows runtime or
+connect to a remote Gateway. Installing system Node.js does not change the
 bundled runtime's admission policy. Remote connections continue to work.
 
 Use connection settings when you already have a Gateway. Enter its URL and token
 or password, or choose an SSH connection. The app opens that Gateway's Control UI.
-The desktop updater verifies Tauri signatures independently of Windows
-Authenticode. Installer Authenticode signing is separately enabled by the
-release owner; Windows may show an unknown-publisher warning for an unsigned
-installer.
+Windows desktop update checks and installer activation are disabled.
+Replacing the app manually preserves the existing Gateway
+and runtime until explicit adoption. Signing rehearsals verify the installer’s
+Foundation Authenticode signature and the bundled Bun’s separate signature;
+they do not sign the enclosed app executable or uninstaller.
+
+### Bundled runtime adoption
+
+The shared OpenClaw Bun release pin includes Authenticode-signed Windows x64
+and ARM64 artifacts from the OpenClaw Foundation. Each app architecture uses
+its matching artifact; ARM64 never falls back to x64. The app verifies the
+release identity, signer metadata, and archive and executable hashes before
+bundling the runtime. Unsigned and test-only runtimes are not admitted.
+
+Existing Gateways keep their runtime across startup, reconnects, Quit, and app
+updates. Choose **Use bundled runtime…** and confirm the displayed current
+runtime to change one. The canonical CLI checks the captured runtime pin and
+service definition under its native service lock. Paused, changed, or
+unverifiable services refuse without automatic migration. The app does not
+implement a separate rollback; the service owner retains its backup and
+recovery behavior.
+
+Fresh setup stays unelevated. When Windows uses a per-user Startup registration,
+later adoption keeps that registration kind and does not request UAC. The
+Windows service owner verifies the launcher files and the absence of a
+Scheduled Task, stops the owned process, publishes the replacement command,
+and checks Gateway readiness before committing the runtime pin. Failed
+publication or startup restores the previous command and running state.
+
+An existing managed Gateway Scheduled Task requires administrator rights to
+replace its boot-trigger registration. The confirmation explains the
+administrator request. The app elevates only the installed canonical CLI,
+with one UAC request when needed; an already-elevated app does not request UAC
+again. The CLI rechecks the captured pin, completes the stop, replace, and start
+transaction, verifies Gateway health, and exits. There is no resident elevated
+helper, stored credential, or automatic migration on startup or update.
+
+Cancelling UAC leaves the Gateway unchanged. An account without an administrator
+token does not receive a credential prompt. Both outcomes show the exact
+PowerShell command to run manually with administrator approval for the same
+Windows account. If the pin or definition changes while approval is pending,
+the CLI refuses the stale action and preserves the newer selection. Choosing
+an already-selected bundled runtime does not reinstall it.
+
+If installation succeeds but health verification fails, the app reports the
+Gateway as installed but unverified. Run `openclaw gateway status --deep` before
+retrying.
+
+The app materializes verified `bun.exe` bytes into an immutable directory under
+its account state directory, normally
+`%USERPROFILE%\.openclaw\tools\desktop-runtime\<tag>-<manifest-hash>\bin\bun.exe`.
+A file lock serializes publication, reparse points are rejected, and staged
+files are flushed and closed before a rename within the same directory.
+Published runtime directories are never overwritten or automatically removed,
+including those still referenced by a running service. Windows can keep
+executable files open; the service owner stops the old process before changing
+its service registration.
+
+The fork release verifies a valid timestamped signature with subject
+`CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US`
+before generating executable and archive hashes. Authenticode establishes
+publisher identity and file integrity; it does not promise SmartScreen
+reputation or a warning-free first launch. The app and installer have their
+own signing requirements.
+
+For complete uninstall, quit the companion and run the canonical uninstaller
+using Node and a CLI package outside the state directory, as in the
+[independent npx uninstall flow](/install/uninstall). A Windows CLI cannot remove
+its own open runtime image from that directory; the uninstaller reports partial
+cleanup rather than claiming success.
 
 ### Desktop app troubleshooting
 
-- **Signed runtime unavailable:** update the desktop app after a Windows-enabled
-  runtime release, or use a remote Gateway. Linux, macOS, and unsigned test
+- **Signed runtime unavailable:** use a qualification build containing the signed
+  Windows runtime, or connect to a remote Gateway. Linux, macOS, and unsigned test
   binaries are never substituted for a Windows release runtime.
 - **Download or installation failed:** check your internet connection and proxy,
   then retry local setup. The error panel retains the installer diagnostics.

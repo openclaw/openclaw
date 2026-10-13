@@ -26,6 +26,7 @@ import {
   expectNoNoteContaining,
 } from "./doctor-gateway-services.native.test-support.js";
 import { registerDoctorGatewayTokenRepairTests } from "./doctor-gateway-services.tokens.test-support.js";
+import { registerDoctorWindowsServiceTests } from "./doctor-gateway-services.windows.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { formatServiceRepairDeferredNote } from "./doctor-service-repair-policy.js";
 
@@ -390,6 +391,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   );
 
   registerDoctorRuntimePinTests({ mocks, runRepair, createRecommendedServiceAudit });
+  registerDoctorWindowsServiceTests(runRepair);
 
   it("migrates an unsupported Bun Gateway service to supported system Node", async () => {
     const bunPath = "/home/test/.bun/bin/bun";

@@ -24,6 +24,14 @@ const WINDOWS_UPDATE_ENDPOINT: &str =
     "https://github.com/openclaw/openclaw/releases/download/windows-stable/latest-windows.json";
 const AUTO_CHECK_DELAY: Duration = Duration::from_secs(3);
 
+fn publication_enabled() -> bool {
+    publication_enabled_for_windows(cfg!(target_os = "windows"))
+}
+
+fn publication_enabled_for_windows(windows: bool) -> bool {
+    !windows || env!("OPENCLAW_WINDOWS_PUBLICATION_ENABLED") == "true"
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn calendar_release_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     // Keep recognition and safe integer bounds aligned with scripts/lib/release-version.mjs.
@@ -285,6 +293,9 @@ struct UpdateError {
 }
 
 pub fn schedule_auto_check(app: AppHandle) {
+    if !publication_enabled() {
+        return;
+    }
     let state = app.state::<UpdaterState>();
     if state.auto_check_started.swap(true, Ordering::AcqRel) {
         return;
@@ -320,6 +331,9 @@ pub fn relaunch(app: AppHandle) {
 
 #[tauri::command]
 pub fn open_release_page(app: AppHandle) -> Result<(), String> {
+    if !publication_enabled() {
+        return Err("Windows desktop releases are not published yet".into());
+    }
     app.opener()
         .open_url(RELEASE_URL, None::<&str>)
         .map_err(|error| format!("Could not open release page: {error}"))
@@ -330,6 +344,9 @@ pub(crate) fn perform_action(app: &AppHandle) {
 }
 
 fn activate(app: &AppHandle, relaunch: bool) {
+    if !publication_enabled() {
+        return;
+    }
     let action = app
         .state::<UpdaterState>()
         .lifecycle()
@@ -367,6 +384,17 @@ fn activate(app: &AppHandle, relaunch: bool) {
 // progress/ready/errors always surface, since the user has been told an update
 // is coming.
 async fn run_check(app: AppHandle, manual: bool) {
+    if !publication_enabled() {
+        deliver_result(
+            &app,
+            manual,
+            TerminalResultKind::NotAvailable,
+            NOT_AVAILABLE_EVENT,
+            (),
+            "Windows desktop updates are not enabled for this build",
+        );
+        return;
+    }
     let manual_pending = Arc::clone(&app.state::<UpdaterState>().manual_pending);
     if manual {
         manual_pending.store(true, Ordering::Release);
@@ -659,6 +687,11 @@ fn manual_notification_body(version: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unpublished_windows_builds_never_enable_the_updater() {
+        assert!(!super::publication_enabled_for_windows(true));
+        assert!(super::publication_enabled_for_windows(false));
+    }
     use super::*;
 
     #[derive(serde::Deserialize)]

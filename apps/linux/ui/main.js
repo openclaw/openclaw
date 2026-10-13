@@ -65,6 +65,7 @@ let discoveryPending = false;
 let discoverySignature = null;
 let firstRunBuild = null;
 let firstRunPhase = null;
+let localSetupFailed = false;
 let selectedConnection = "local";
 let remoteTransport = "direct";
 let remoteConnectionPending = false;
@@ -94,7 +95,10 @@ function render({
   elements.installHint.textContent =
     firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
+      : firstRunBuild?.platform === "windows"
+        ? "Installs Stable or Beta in ~/.openclaw. Development requires an existing source CLI."
+        : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
+  elements.channel.querySelector('[value="dev"]').disabled = firstRunBuild?.platform === "windows";
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -301,9 +305,10 @@ async function connect(action) {
       firstRunPhase = snapshot.phase;
       firstRunBuild = await invoke("build_info").catch(() => null);
       if (firstRunBuild?.releaseBuild === false) {
-        elements.channel.value = "dev";
+        elements.channel.value = firstRunBuild.platform === "windows" ? "stable" : "dev";
       }
       if (snapshot.setupError) {
+        localSetupFailed = true;
         renderConnectionChoices(snapshot.setupError);
       } else {
         renderWelcome();
@@ -397,7 +402,7 @@ function syncRemoteAuthentication() {
 }
 
 async function continueLocalSetup() {
-  if (firstRunPhase === "unconfigured") {
+  if (firstRunPhase === "unconfigured" || localSetupFailed) {
     render({
       activity:
         firstRunBuild?.platform === "freebsd"
@@ -410,7 +415,7 @@ async function continueLocalSetup() {
     try {
       await invoke("bootstrap", { explicitLocal: true });
     } catch (error) {
-      renderRetry(friendlyError(error));
+      renderRetry(friendlyError(error), continueLocalSetup);
     }
     return;
   }
@@ -419,7 +424,9 @@ async function continueLocalSetup() {
       description:
         firstRunBuild?.platform === "freebsd"
           ? "Install a compatible system Node.js and npm before installing the CLI. Then start your Gateway with the package service or openclaw gateway run."
-          : "This development build works best with a matching OpenClaw release channel.",
+          : firstRunBuild?.platform === "windows"
+            ? "Choose Stable or Beta. To use a development checkout, install its CLI separately and connect to its Gateway."
+            : "This development build works best with a matching OpenClaw release channel.",
       eyebrow: "FIRST-RUN SETUP",
       showInstall: true,
       title: "Choose a release channel",
@@ -605,22 +612,28 @@ async function install() {
     elements.logStatus.textContent = "COMPLETE";
   } catch (error) {
     const message = friendlyError(error);
+    // Setup may have installed the service before dashboard readiness failed.
+    localSetupFailed = true;
     elements.logStatus.textContent = "FAILED";
     appendLog(message);
-    render({
-      description: message,
-      dot: "error",
-      eyebrow: "SETUP ISSUE",
-      showInstall: true,
-      title: "OpenClaw needs attention",
-    });
+    renderAction(
+      {
+        actionLabel: "Try again",
+        description: message,
+        dot: "error",
+        eyebrow: "SETUP ISSUE",
+        showInstall: true,
+        title: "OpenClaw needs attention",
+      },
+      continueLocalSetup,
+    );
   } finally {
     elements.installButton.disabled = false;
     elements.channel.disabled = false;
   }
 }
 
-function renderRetry(message) {
+function renderRetry(message, retry = connect) {
   show(elements.logWrap, false);
   renderAction(
     {
@@ -633,7 +646,7 @@ function renderRetry(message) {
       showInstall: true,
       title: "OpenClaw needs attention",
     },
-    connect,
+    retry,
   );
 }
 

@@ -27,7 +27,7 @@ type DaemonHintItem = {
   text: string;
 };
 
-type DaemonActionResponse = {
+export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
@@ -77,6 +77,7 @@ export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
   definitionBackup?: () => GatewayServiceDefinitionBackupReceipt | undefined;
+  resultSink?: (response: DaemonActionResponse) => void;
 }) {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
@@ -97,6 +98,8 @@ export function createDaemonActionContext(params: {
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     };
     const rebind = currentGatewayServiceRebindReceipt();
+    // The desktop receipt must be durable before fail() exits the process.
+    params.resultSink?.(payloadWithContext);
     defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.

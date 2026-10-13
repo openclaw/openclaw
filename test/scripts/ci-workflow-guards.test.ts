@@ -6468,22 +6468,38 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
       }),
     ).toBe(alreadyPublished !== "true");
   }
-  for (const [alreadyPublished, build, signing, expected] of [
-    ["true", "skipped", "skipped", true],
-    ["false", "success", "success", true],
-    ["false", "success", "failure", false],
-    ["false", "skipped", "skipped", false],
+  for (const [alreadyPublished, build, signing, windowsSigning, expected] of [
+    ["true", "skipped", "skipped", "success", true],
+    ["false", "success", "success", "success", true],
+    ["false", "success", "failure", "success", false],
+    ["false", "skipped", "skipped", "success", false],
+    ...["true", "false"].flatMap((published) =>
+      ["failure", "skipped", "cancelled"].map((result) => [
+        published,
+        "success",
+        "success",
+        result,
+        false,
+      ]),
+    ),
   ]) {
     expect(
       runInNewContext(linux.jobs.publish.if.replace(/^\$\{\{|\}\}$/gu, ""), {
         always: () => true,
+        github: { event_name: "workflow_run" },
         needs: {
           validate_release: {
-            outputs: { already_published: alreadyPublished, desktop_test_bundles: "false" },
+            result: "success",
+            outputs: {
+              already_published: alreadyPublished,
+              desktop_test_bundles: "false",
+              windows_publication: "true",
+            },
           },
           build_linux: { result: build },
           sign_linux: { result: signing },
           build_windows: { result: build },
+          sign_windows: { result: windowsSigning },
           sign_desktop: { result: signing },
         },
       }),
@@ -6524,6 +6540,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
     expect(
       runInNewContext(linux.jobs.mirror_legacy.if.slice(3, -2), {
         github: { repository: "openclaw/openclaw", event_name },
+        inputs: { operation: "mirror" },
       }),
     ).toBe(event_name === "workflow_dispatch");
   }
@@ -6629,6 +6646,167 @@ it("reports stale Linux release requests before selected code runs", () => {
   }
 });
 
+it("keeps Windows rehearsal artifacts isolated from release and feed publication", () => {
+  const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
+  const policy = JSON.parse(readFileSync("apps/linux/release-policy.json", "utf8"));
+  expect(policy.windowsPublication).toBe(false);
+  const admission = workflow.jobs.validate_windows_rehearsal;
+  for (const [event_name, repository, ref, operation, expected] of [
+    ["workflow_dispatch", "openclaw/openclaw", "refs/heads/main", "windows-rehearsal", true],
+    ["workflow_dispatch", "openclaw/openclaw", "refs/heads/topic", "windows-rehearsal", false],
+    ["workflow_dispatch", "untrusted/openclaw", "refs/heads/main", "windows-rehearsal", false],
+    ["pull_request", "openclaw/openclaw", "refs/heads/main", "windows-rehearsal", false],
+    ["workflow_dispatch", "openclaw/openclaw", "refs/heads/main", "mirror", false],
+  ]) {
+    expect(
+      runInNewContext(admission.if.slice(3, -2), {
+        github: { event_name, repository, ref },
+        inputs: { operation },
+      }),
+    ).toBe(expected);
+  }
+  const rehearsalContext = {
+    github: {
+      event_name: "workflow_dispatch",
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+    },
+    inputs: { operation: "windows-rehearsal" },
+  };
+  expect(runInNewContext(workflow.jobs.validate_release.if, rehearsalContext)).toBe(false);
+  expect(runInNewContext(workflow.jobs.mirror_legacy.if.slice(3, -2), rehearsalContext)).toBe(
+    false,
+  );
+  expect(
+    runInNewContext(workflow.jobs.publish.if.slice(3, -2), {
+      ...rehearsalContext,
+      always: () => true,
+    }),
+  ).toBe(false);
+  for (const desktop of ["false", "true"]) {
+    const needs = {
+      validate_release: {
+        result: "success",
+        outputs: {
+          windows_publication: "false",
+          already_published: "false",
+          desktop_test_bundles: desktop,
+        },
+      },
+      build_linux: { result: "success" },
+      sign_linux: { result: "success" },
+      build_windows: { result: "skipped" },
+      sign_windows: { result: "skipped" },
+      build_macos: { result: desktop === "true" ? "success" : "skipped" },
+      sign_desktop: { result: desktop === "true" ? "success" : "skipped" },
+    };
+    expect(runInNewContext(workflow.jobs.build_windows.if.slice(3, -2), { needs })).toBe(false);
+    expect(
+      runInNewContext(workflow.jobs.sign_windows.if.slice(3, -2), {
+        ...rehearsalContext,
+        always: () => true,
+        needs,
+      }),
+    ).toBe(false);
+    expect(
+      runInNewContext(workflow.jobs.sign_desktop.if.slice(3, -2), {
+        always: () => true,
+        needs,
+      }),
+    ).toBe(desktop === "true");
+    expect(
+      runInNewContext(workflow.jobs.publish.if.slice(3, -2), {
+        github: { event_name: "workflow_run" },
+        always: () => true,
+        needs,
+      }),
+    ).toBe(true);
+  }
+  const build = workflow.jobs.build_windows_rehearsal;
+  const signer = workflow.jobs.sign_windows_rehearsal;
+  expect(build.needs).toBe("validate_windows_rehearsal");
+  expect(build.strategy.matrix.include).toEqual([
+    { arch: "x64", runner: "windows-2025", target: "x86_64-pc-windows-msvc" },
+    { arch: "arm64", runner: "windows-11-arm", target: "aarch64-pc-windows-msvc" },
+  ]);
+  expect(signer.needs).toEqual(["validate_windows_rehearsal", "build_windows_rehearsal"]);
+  expect(signer.environment).toBe("release-signing");
+  expect(signer.permissions).toEqual({ contents: "read", "id-token": "write" });
+  expect(build.permissions).toEqual({ contents: "read" });
+  expect(JSON.stringify(build)).not.toContain("${{ secrets.");
+  expect(JSON.stringify(signer)).not.toContain("actions/checkout");
+  for (const job of [admission, build, signer]) {
+    expect(JSON.stringify(job)).not.toMatch(
+      /contents.{0,8}write|workflows.{0,8}write|TAURI_SIGNING_PRIVATE_KEY/u,
+    );
+    const steps = job.steps as WorkflowStep[];
+    for (const step of steps) {
+      expect(step.run ?? "").not.toMatch(/gh\s+(?:release|api|workflow)|git\s+(?:push|tag)/u);
+      if (step.uses?.startsWith("actions/upload-artifact@")) {
+        expect(step.with?.["retention-days"]).toBe(3);
+      }
+    }
+  }
+  const signerSteps = signer.steps as WorkflowStep[];
+  const inspect = signerSteps.findIndex(
+    ({ name }) => name === "Verify installer and bundled signed Bun before signing",
+  );
+  expect(inspect).toBeGreaterThan(0);
+  expect(inspect).toBeLessThan(signerSteps.findIndex(({ name }) => name === "Azure OIDC login"));
+  expect(signerSteps[inspect]?.run).toContain("$env:EXPECTED_BUN_SHA256");
+  expect(signerSteps[inspect]?.run).toContain("Get-AuthenticodeSignature");
+  const proofWorkflow = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const proofSteps = Object.values(proofWorkflow.jobs).flatMap(
+    (job) => (job as { steps?: WorkflowStep[] }).steps ?? [],
+  );
+  const proofBuild = expectDefined(
+    proofSteps.find(({ name }) => name === "Build Windows installer without publishing"),
+    "Windows proof package build",
+  );
+  expect(proofBuild.run).toContain("Get-Content ../../../package.json");
+  expect(proofBuild.run).toContain("version = $version");
+  expect(proofBuild.run).toContain("createUpdaterArtifacts = $false");
+  expect(proofBuild.run).toContain("--config $config");
+
+  const admit = expectDefined(
+    (admission.steps as WorkflowStep[]).find(({ id }) => id === "admit"),
+    "rehearsal admission",
+  );
+  const root = tempDirs.make("openclaw-rehearsal-admission-");
+  mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+  writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.10.2" }));
+  const pin = {
+    artifacts: Object.fromEntries(
+      ["x64", "arm64"].map((arch) => [
+        `windows-${arch}`,
+        { authenticodeSigned: true, testOnly: false, executableSha256: "a".repeat(64) },
+      ]),
+    ),
+  };
+  const output = path.join(root, "output");
+  for (const [sourceMatches, signed, expected] of [
+    [true, true, 0],
+    [false, true, 1],
+    [true, false, 1],
+  ]) {
+    pin.artifacts["windows-arm64"]!.authenticodeSigned = Boolean(signed);
+    writeFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), JSON.stringify(pin));
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["-c", admit.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SOURCE_SHA: "a".repeat(40),
+        WORKFLOW_SHA: (sourceMatches ? "a" : "b").repeat(40),
+        GITHUB_OUTPUT: output,
+      },
+    });
+    expect(result.status, result.stderr).toBe(expected);
+    expect(readFileSync(output, "utf8").includes("bun_arm64_sha256=")).toBe(expected === 0);
+  }
+});
+
 it("isolates release credentials and verifies trusted AppImage and signing tools", () => {
   const pinned = {
     name: "Prepare Git owner",
@@ -6715,7 +6893,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
-      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
+      "apps/linux/src-tauri/tauri.conf.json\napps/linux/release-policy.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
   });
   const tooling = linuxSteps.find(({ name }) => name === "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({
@@ -6918,30 +7096,85 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(azureSigning.uses).toBe(
     "azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82",
   );
-  for (const [enabled, result, expected] of [
-    ["true", "success", true],
-    ["true", "failure", false],
-    ["false", "success", false],
+  expect(azureSigning.with).toMatchObject({
+    endpoint: "https://eus.codesigning.azure.net/",
+    "signing-account-name": "openclaw",
+    "certificate-profile-name": "openclaw",
+    "file-digest": "SHA256",
+    "timestamp-rfc3161": "http://timestamp.acs.microsoft.com",
+    "timestamp-digest": "SHA256",
+  });
+  expect(JSON.stringify(linux)).not.toContain("OPENCLAW_RELEASE_WINDOWS_SIGNED");
+  for (const [repository, ref, result, expected] of [
+    ["openclaw/openclaw", "refs/heads/main", "success", true],
+    ["openclaw/openclaw", "refs/heads/main", "failure", false],
+    ["openclaw/openclaw", "refs/pull/123/merge", "success", false],
+    ["openclaw/openclaw", "refs/heads/topic", "success", false],
+    ["untrusted/openclaw", "refs/heads/main", "success", false],
   ]) {
     expect(
       runInNewContext(windowsSigner.if.replace(/^\$\{\{|\}\}$/gu, ""), {
-        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
-        needs: { build_windows: { result } },
+        always: () => true,
+        github: { repository, ref },
+        needs: {
+          build_windows: { result },
+          validate_release: {
+            result: "success",
+            outputs: { already_published: "false", windows_publication: "true" },
+          },
+        },
       }),
     ).toBe(expected);
   }
-  for (const [enabled, signed, expected] of [
-    ["true", "failure", false],
-    ["true", "skipped", false],
-    ["true", "success", true],
-    ["false", "skipped", true],
+  expect(
+    runInNewContext(windowsSigner.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+      always: () => true,
+      github: { repository: "openclaw/openclaw", ref: "refs/heads/main" },
+      needs: {
+        build_windows: { result: "skipped" },
+        validate_release: {
+          result: "success",
+          outputs: { already_published: "true", windows_publication: "true" },
+        },
+      },
+    }),
+  ).toBe(true);
+  const windowsSigningSteps = windowsSigner.steps as WorkflowStep[];
+  const windowsBuildSteps = linux.jobs.build_windows.steps as WorkflowStep[];
+  expect(
+    windowsBuildSteps.find(({ name }) => name === "Verify and stage unsigned Windows bundle")?.run,
+  ).toContain("$installer.VersionInfo.ProductVersion -cne $version");
+  expect(
+    windowsSigningSteps.find(({ name }) => name === "Validate Windows signing input")?.run,
+  ).toContain("$files[0].VersionInfo.ProductVersion -cne $version");
+  expect(JSON.stringify([windowsBuildSteps, windowsSigningSteps])).not.toContain(
+    "ProductVersion.StartsWith",
+  );
+  expect(windowsSigningSteps.find(({ name }) => name === "Azure OIDC login")?.if).toBe(
+    "${{ needs.build_windows.result == 'success' }}",
+  );
+  expect(windowsSigningSteps.find(({ name }) => name === "Sign Windows installer")?.if).toBe(
+    "${{ needs.build_windows.result == 'success' }}",
+  );
+  expect(
+    windowsSigningSteps.find(
+      ({ name }) => name === "Download previously published Windows installer",
+    )?.if,
+  ).toBe("${{ needs.validate_release.outputs.already_published == 'true' }}");
+  for (const [signed, expected] of [
+    ["failure", false],
+    ["skipped", false],
+    ["cancelled", false],
+    ["success", true],
   ]) {
     expect(
       runInNewContext(linux.jobs.sign_desktop.if.replace(/^\$\{\{|\}\}$/gu, ""), {
         always: () => true,
-        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
         needs: {
-          validate_release: { outputs: { desktop_test_bundles: "false" } },
+          validate_release: {
+            result: "success",
+            outputs: { desktop_test_bundles: "false", windows_publication: "true" },
+          },
           build_windows: { result: "success" },
           sign_windows: { result: signed },
         },
@@ -6961,7 +7194,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     desktopSigningSteps
       .map(({ uses }) => uses)
       .filter((uses): uses is string => uses !== undefined),
-  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
   expect(desktopSigningSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
   const desktopSigningBodies = desktopSigningSteps.map(({ run }) => run ?? "").join("\n");
   expect(desktopSigningBodies).not.toMatch(
@@ -6976,28 +7209,21 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: "dist/signing-input/macos",
   });
   expect(
-    desktopSigningSteps.find(({ name }) => name === "Download finalized Windows updater installer")
-      ?.with,
+    desktopSigningSteps.find(
+      ({ name }) => name === "Download Authenticode-signed Windows updater installer",
+    )?.with,
   ).toEqual({
-    "artifact-ids": "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
+    "artifact-ids": "${{ needs.sign_windows.outputs.signed_installer_artifact_id }}",
     path: "dist/signing-input/windows",
   });
-  for (const enabled of ["true", "false"]) {
-    const downloads = desktopSigningSteps.filter((step) =>
-      step.name?.endsWith("Windows updater installer"),
-    );
-    const selected = downloads.filter((step) =>
-      runInNewContext((step.if ?? "").replace(/^\$\{\{|\}\}$/gu, ""), {
-        vars: { OPENCLAW_RELEASE_WINDOWS_SIGNED: enabled },
-      }),
-    );
-    expect(selected).toHaveLength(1);
-    expect(selected[0]?.with?.["artifact-ids"]).toBe(
-      enabled === "true"
-        ? "${{ needs.sign_windows.outputs.signed_installer_artifact_id }}"
-        : "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
-    );
-  }
+  expect(
+    desktopSigningSteps.filter((step) => step.name?.endsWith("Windows updater installer")),
+  ).toHaveLength(1);
+  expect(
+    desktopSigningSteps.find(
+      ({ name }) => name === "Download Authenticode-signed Windows updater installer",
+    )?.if,
+  ).toBe("${{ needs.validate_release.outputs.windows_publication == 'true' }}");
   const signDesktop = expectDefined(
     desktopSigningSteps.find(({ name }) => name === "Sign finalized desktop updater bundles"),
     "desktop updater signing step",
@@ -7023,8 +7249,10 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
 
   expect(linux.jobs.publish.needs).toContain("sign_linux");
   expect(linux.jobs.publish.needs).toContain("sign_desktop");
+  expect(linux.jobs.publish.needs).toContain("sign_windows");
   expect(linux.jobs.publish.if).toContain("needs.sign_linux.result == 'success'");
   expect(linux.jobs.publish.if).toContain("needs.sign_desktop.result == 'success'");
+  expect(linux.jobs.publish.if).toContain("needs.sign_windows.result == 'success'");
   expect(linux.jobs.publish.if).not.toContain("inputs.");
   expect(
     (linux.jobs.publish.steps as WorkflowStep[]).find(
@@ -7064,6 +7292,12 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
         name === "Publish immutable bundles, canonical Linux channel, and legacy mirror",
     ),
     "Linux publication owner",
+  );
+  expect(publishLinuxMetadata.env?.WINDOWS_INSTALLER_SHA256).toBe(
+    "${{ needs.sign_windows.outputs.installer_sha256 }}",
+  );
+  expect(publishLinuxMetadata.run).toContain(
+    '--windows-installer-sha256 "$WINDOWS_INSTALLER_SHA256"',
   );
   expect(publishLinuxMetadata.run).toContain(
     '--assets dist/release --signature "dist/input/linux/signatures/OpenClaw-${RELEASE_TAG#v}-amd64.AppImage.sig"',
@@ -7633,6 +7867,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
           PATH: tools.path,
           RELEASE_TAG: "v2026.8.2",
           DESKTOP_TEST_BUNDLES: String(desktop),
+          WINDOWS_PUBLICATION: "true",
           RUNNER_TEMP: root,
           TAG_SHA: "a".repeat(40),
           MINISIGN_BINARY_SHA256: tools.minisignBinarySha256,

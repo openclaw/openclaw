@@ -242,6 +242,63 @@ pub enum NavigationEvent {
     Failed,
 }
 
+#[cfg(target_os = "linux")]
+fn navigation_failure_requires_recovery(error: &webkit2gtk::glib::Error) -> bool {
+    // Match WebKitGTK's default handler for interrupted or externally handled loads.
+    !error.matches(webkit2gtk::NetworkError::Cancelled)
+        && !error.matches(webkit2gtk::PluginError::WillHandleLoad)
+        && !error.matches(webkit2gtk::PolicyError::FrameLoadInterruptedByPolicyChange)
+}
+
+#[cfg(all(target_os = "linux", test))]
+mod linux_navigation_tests {
+    use super::navigation_failure_requires_recovery;
+    use webkit2gtk::glib::Error;
+
+    #[test]
+    fn only_webkit_handled_navigation_errors_avoid_gateway_recovery() {
+        for (error, recovery) in [
+            (
+                Error::new(webkit2gtk::NetworkError::Cancelled, "synthetic"),
+                false,
+            ),
+            (
+                Error::new(webkit2gtk::PluginError::WillHandleLoad, "synthetic"),
+                false,
+            ),
+            (
+                Error::new(
+                    webkit2gtk::PolicyError::FrameLoadInterruptedByPolicyChange,
+                    "synthetic",
+                ),
+                false,
+            ),
+            (
+                Error::new(webkit2gtk::NetworkError::Transport, "synthetic"),
+                true,
+            ),
+            (
+                Error::new(webkit2gtk::PolicyError::CannotShowUri, "synthetic"),
+                true,
+            ),
+            (
+                Error::new(webkit2gtk::PluginError::CannotLoadPlugin, "synthetic"),
+                true,
+            ),
+            (
+                Error::new(gtk::gio::IOErrorEnum::TimedOut, "synthetic"),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                navigation_failure_requires_recovery(&error),
+                recovery,
+                "{error:?}"
+            );
+        }
+    }
+}
+
 pub async fn observe_navigation_events(
     webview: &Webview,
     changed: impl Fn(NavigationEvent) + Send + Sync + 'static,
@@ -320,15 +377,25 @@ pub async fn observe_navigation_events(
                     }
                     _ => {}
                 });
-            platform.inner().connect_load_failed(move |_, _, _, error| {
-                // WebKit emits Finished after failure, including cancellation.
-                failed.set(Some(true));
-                if !error.matches(webkit2gtk::NetworkError::Cancelled) {
-                    changed(NavigationEvent::Failed);
-                }
-                // Preserve WebKit's default error-page handling.
-                false
-            });
+            platform
+                .inner()
+                .connect_load_failed(move |_, stage, _, error| {
+                    // WebKit emits Finished after failure, including cancellation.
+                    failed.set(Some(true));
+                    if navigation_failure_requires_recovery(error) {
+                        use webkit2gtk::glib::translate::ToGlibPtr;
+                        let raw: *const webkit2gtk::glib::ffi::GError = error.to_glib_none().0;
+                        // GLib 0.18 has no numeric accessor; this pointer borrows the live error.
+                        let code = unsafe { (*raw).code };
+                        eprintln!(
+                            "Gateway navigation failed: stage={stage:?} domain={} code={code}",
+                            error.domain().as_str()
+                        );
+                        changed(NavigationEvent::Failed);
+                    }
+                    // Preserve WebKit's default error-page handling.
+                    false
+                });
         }
         #[cfg(target_os = "macos")]
         unsafe {

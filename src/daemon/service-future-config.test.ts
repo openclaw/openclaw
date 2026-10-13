@@ -8,6 +8,7 @@ import * as startupPreflight from "../commands/startup-config-preflight.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import * as configObservation from "../config/io.observe.js";
 import { isVerbose, setVerbose } from "../globals.js";
+import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveNodeService } from "./node-service.js";
@@ -41,6 +42,7 @@ it.each([
     const observation = vi.spyOn(configObservation, "observeConfigSnapshot");
     const preflight = vi.spyOn(startupPreflight, "runStartupConfigPreflight");
     try {
+      vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(tempHome);
       await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(
         configPath,

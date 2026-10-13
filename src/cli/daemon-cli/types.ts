@@ -17,6 +17,7 @@ export type DaemonInstallOptions = {
   runtime?: string;
   runtimePath?: string;
   expectedRuntimePin?: string;
+  desktopRuntimeReceipt?: string;
   restoreServiceCli?: string;
   token?: string;
   wrapper?: string;

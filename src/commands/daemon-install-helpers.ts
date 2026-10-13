@@ -27,7 +27,11 @@ import {
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "../daemon/service-managed-env.js";
-import { mergeServicePath } from "../daemon/service-path-policy.js";
+import {
+  mergeServicePath,
+  preserveServiceAccountHome,
+  preserveServiceTmpDir,
+} from "../daemon/service-path-policy.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -522,6 +526,8 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
     includeRawKeys: true,
   });
+  preserveServiceTmpDir(plan.environment, params.existingEnvironment, params.platform);
+  preserveServiceAccountHome(plan.environment, params.existingEnvironment, params.platform);
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
@@ -630,6 +636,8 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
       ?.NODE_OPTIONS,
+    existingProgramArguments: resolveManagedGatewayServiceCommand(params.existingCommand)
+      ?.programArguments,
     launchdLabel:
       platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)

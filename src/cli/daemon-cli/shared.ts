@@ -20,9 +20,15 @@ export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 export function createDaemonInstallActionContext(
   jsonFlag: unknown,
   definitionBackup?: Parameters<typeof createDaemonActionContext>[0]["definitionBackup"],
+  resultSink?: Parameters<typeof createDaemonActionContext>[0]["resultSink"],
 ) {
   const json = Boolean(jsonFlag);
-  const context = createDaemonActionContext({ action: "install", json, definitionBackup });
+  const context = createDaemonActionContext({
+    action: "install",
+    json,
+    definitionBackup,
+    resultSink,
+  });
   return {
     json,
     ...context,

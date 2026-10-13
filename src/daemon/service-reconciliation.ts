@@ -71,6 +71,7 @@ export async function reconcileGatewayServiceDefinition(params: {
       inspect: async () => {
         const current = await resolveGatewayService().readCommand(params.env, {
           requireEffective: true,
+          ...(process.platform === "win32" ? { requireLoaded: true } : {}),
         });
         assertCurrent();
         if (!isDeepStrictEqual(current, command)) {
@@ -87,6 +88,7 @@ export async function reconcileGatewayServiceDefinition(params: {
           const state = await readGatewayServiceState(resolveGatewayService(), {
             env: params.env,
             requireEffective: true,
+            ...(process.platform === "win32" ? { requireLoadedCommand: true } : {}),
           });
           assertCurrent();
           if (!isDeepStrictEqual(state.command, command)) {
@@ -157,12 +159,25 @@ export async function reconcileGatewayServiceDefinition(params: {
       );
     });
     return await settleGatewayServiceRebind(assertCurrent, async () => {
+      let nativeRecovery:
+        | ((restoreDefinition: () => Promise<boolean>) => Promise<boolean>)
+        | undefined;
       let recoveryResult: boolean | undefined;
       let recoveryError: unknown;
       try {
         return await withGatewayServiceInstallationRecovery(
           async () => {
-            await params.install({ ...transaction.hooks, preservePolicy });
+            await params.install({
+              ...transaction.hooks,
+              preservePolicy,
+              registerNativeRecovery: (recover) => {
+                assertCurrent();
+                if (nativeRecovery) {
+                  throw new Error("Native service recovery was already captured.");
+                }
+                nativeRecovery = recover;
+              },
+            });
             assertCurrent();
             const receipt = await transaction.finish();
             warn(
@@ -172,8 +187,15 @@ export async function reconcileGatewayServiceDefinition(params: {
           },
           async () => {
             try {
-              recoveryResult = await transaction.compensate();
-              return recoveryResult;
+              const recovered = await (nativeRecovery
+                ? nativeRecovery(() => transaction.compensate())
+                : transaction.compensate());
+              if (nativeRecovery) {
+                // Native recovery restores enablement after definition compensation.
+                await transaction.finish();
+              }
+              recoveryResult = recovered;
+              return recovered;
             } catch (error) {
               recoveryError = error;
               throw error;

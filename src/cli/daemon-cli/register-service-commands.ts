@@ -117,6 +117,9 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
     )
     .addOption(
+      new Option("--desktop-runtime-receipt <json>", "Private desktop runtime result").hideHelp(),
+    )
+    .addOption(
       new Option(
         "--restore-service-cli <json>",
         "Restore the service onto a retained OpenClaw CLI",
@@ -129,6 +132,9 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--json", "Output JSON", false)
     .addOption(updateExecutorOption())
     .action(async (cmdOpts, command) => {
+      if (cmdOpts.desktopRuntimeReceipt !== undefined && cmdOpts.updateExecutor !== undefined) {
+        throw new Error("Desktop runtime results cannot be used with the update executor.");
+      }
       await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
         const { runDaemonInstall } = await import("./install.runtime.js");
         await runDaemonInstall(resolveInstallOptions(cmdOpts, command));

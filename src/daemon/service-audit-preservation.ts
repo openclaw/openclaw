@@ -1,7 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
-import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
+import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import type {
   GatewayServiceCommand,
   GatewayServiceExpectedCommand,
@@ -10,7 +11,11 @@ import type {
 import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "./service-managed-env.js";
 import { normalizeServicePathEntry } from "./service-path-policy.js";
-import { resolveManagedGatewayServiceCommand, type GatewayServiceEnv } from "./service-types.js";
+import {
+  hasGatewayServiceEnvironmentOverride,
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceEnv,
+} from "./service-types.js";
 
 export function serviceDefinitionPreserved(
   key: string,
@@ -75,7 +80,6 @@ function preservedArguments(argv: readonly string[]): string[] | undefined {
           !arg.startsWith("--port=") &&
           (args[index - 1] !== "--port" || arg.startsWith("--")),
       ),
-    ...readServiceHeapExecArgv(argv),
   ];
 }
 
@@ -129,11 +133,31 @@ export function auditGatewayInstallPreservation(
         command?.sourcePath,
       ),
     );
+  const normalize = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
+  const optionsOverridden = hasGatewayServiceEnvironmentOverride(command, ["NODE_OPTIONS"], {
+    normalizeKey: normalize,
+  });
+  const heap = (target: GatewayServiceExpectedCommand) =>
+    resolveGatewayHeapNodeOptions(
+      resolveEnvironmentValue(
+        optionsOverridden ? command?.environment : target.environment,
+        "NODE_OPTIONS",
+        platform,
+      ),
+      "node",
+      target.programArguments,
+    )
+      .split(" ")
+      .filter(Boolean);
+  // Runtime changes can move heap controls between argv and the managed environment.
+  // A retained operator environment override still wins over the generated environment.
+  const expectedHeap = new Set(heap(expected));
   if (
     !retains(
       preservedArguments(current.programArguments),
       preservedArguments(expected.programArguments),
-    )
+    ) ||
+    heap(current).some((control) => !expectedHeap.has(control))
   ) {
     unknown("ProgramArguments");
   }
@@ -145,7 +169,6 @@ export function auditGatewayInstallPreservation(
   ) {
     unknown("WorkingDirectory");
   }
-  const normalize = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const next = new Map(
     Object.entries(expected.environment ?? {}).map(([key, value]) => [normalize(key), value]),
   );

@@ -1,9 +1,49 @@
 import "./service-definition-backup.mocks.test-support.js";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { escapeXml } from "../shared/xml.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
+import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
+import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { fixture, native } from "./service-definition-backup.test-support.js";
+
+const nativeWindows = process.platform === "win32";
+const { execFileUtf8: nativeExecFile } =
+  await vi.importActual<typeof import("./exec-file.js")>("./exec-file.js");
+
+it.each([true, false])("checks retained task authors by SID (same account: %s)", async (same) => {
+  const f = await fixture("win32");
+  f.env.USERDOMAIN = "WORKGROUP";
+  const sid = "S-1-5-21-1-2-3-1001";
+  const alias = "FIXTURE\\operator";
+  const xml = buildScheduledTaskXml({
+    taskDescription: "OpenClaw Gateway",
+    taskUser: "operator",
+    launchPath: f.sourcePath,
+  })
+    .replaceAll("<UserId>operator</UserId>", `<UserId>${sid}</UserId>`)
+    .replace("</RegistrationInfo>", `<Author>${alias}</Author></RegistrationInfo>`);
+  f.setTask(xml);
+  native.identity.mockClear();
+  native.identity.mockImplementation(async (_executable, args) => {
+    const encoded = /FromBase64String\('([^']+)'\)/u.exec(args.join(" "))?.[1];
+    const name = Buffer.from(encoded!, "base64").toString();
+    return {
+      code: 0,
+      stderr: "",
+      termination: "exit",
+      stdout: name === "operator" || same ? sid : "S-1-5-21-9-9-9-1001",
+    };
+  });
+  const findings: ServiceDefinitionDrift[] = [];
+  await auditScheduledTaskDefinition(f.env, findings, 10_000, f.command);
+  expect(findings.filter(({ kind }) => kind === "unknown-edit")).toEqual(
+    same ? [] : [expect.objectContaining({ key: "RegistrationInfo.Author" })],
+  );
+  expect(native.identity).toHaveBeenCalledTimes(2);
+  expect(f.task()).toBe(xml);
+});
 
 // Task Scheduler may omit these default-valued fields when exporting a registered task.
 function omitDefaults(xml: string): string {
@@ -177,5 +217,104 @@ it.each([
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
     expect(f.task()).toBe(xml);
     expect(native.task.mock.calls.every(([args]) => args[0] === "/Query")).toBe(true);
+  },
+);
+
+it.each([
+  { trigger: "FIXTURE\\operator", rejected: false },
+  { trigger: "OTHER\\operator", rejected: true },
+  { trigger: "unresolved", rejected: true },
+  { trigger: "", rejected: true },
+])(
+  "compares the logon account by SID without broadening its scope: $trigger",
+  async ({ trigger, rejected }) => {
+    const f = await fixture("win32");
+    f.env.USERDOMAIN = "WORKGROUP";
+    let taskUser = "operator";
+    let installedTrigger = trigger;
+    let sid = "S-1-5-21-1-2-3-1001";
+    if (nativeWindows && !rejected) {
+      const identity = await nativeExecFile(
+        getWindowsPowerShellExePath(),
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$ErrorActionPreference='Stop'; $identity=[Security.Principal.WindowsIdentity]::GetCurrent(); $bytes=[Text.Encoding]::UTF8.GetBytes((@{ name=$identity.Name; sid=$identity.User.Value; major=$PSVersionTable.PSVersion.Major } | ConvertTo-Json -Compress)); [Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)",
+        ],
+        { timeout: 60_000 },
+      );
+      expect(identity.code, identity.stderr).toBe(0);
+      const account: { name: string; sid: string; major: number } = JSON.parse(identity.stdout);
+      expect(account).toMatchObject({
+        name: expect.stringContaining("\\"),
+        sid: expect.stringMatching(/^S-1-[\d-]+$/u),
+        major: 5,
+      });
+      taskUser = account.name.slice(account.name.lastIndexOf("\\") + 1);
+      f.env.USERNAME = taskUser;
+      installedTrigger = account.name;
+      sid = account.sid;
+      native.identity.mockImplementation(nativeExecFile);
+    }
+    const original = buildScheduledTaskXml({
+      taskDescription: "OpenClaw Gateway",
+      taskUser,
+      launchPath: f.sourcePath,
+    });
+    f.setTask(
+      original
+        .replaceAll(/<UserId>[^<]*<\/UserId>/gu, `<UserId>${sid}</UserId>`)
+        .replace(
+          `<UserId>${sid}</UserId>`,
+          installedTrigger ? `<UserId>${escapeXml(installedTrigger)}</UserId>` : "",
+        ),
+    );
+    if (!nativeWindows || rejected) {
+      native.identity.mockImplementation(async (_executable, args) => {
+        const encoded = /FromBase64String\('([^']+)'\)/u.exec(args.join(" "))?.[1];
+        if (!encoded) {
+          throw new Error("Missing native account lookup");
+        }
+        const decoded = Buffer.from(encoded, "base64").toString();
+        const names: string[] = decoded.startsWith("[") ? JSON.parse(decoded) : [decoded];
+        return {
+          code: 0,
+          stderr: "",
+          termination: "exit",
+          stdout: names
+            .map((name) =>
+              name === "operator" || name === "FIXTURE\\operator"
+                ? sid
+                : name === "OTHER\\operator"
+                  ? "S-1-5-21-9-9-9-1001"
+                  : "-",
+            )
+            .join("\n"),
+        };
+      });
+    }
+    const findings: ServiceDefinitionDrift[] = [];
+    await auditScheduledTaskDefinition(f.env, findings);
+    expect(findings.filter((finding) => finding.kind === "unknown-edit")).toEqual(
+      rejected ? [expect.objectContaining({ key: "Triggers.LogonTrigger.UserId" })] : [],
+    );
+    if (!rejected) {
+      const missingTriggerIdentity = original.replace(
+        `<UserId>${escapeXml(taskUser)}</UserId>`,
+        "",
+      );
+      const verification: ServiceDefinitionDrift[] = [];
+      await auditScheduledTaskDefinition(
+        f.env,
+        verification,
+        undefined,
+        undefined,
+        missingTriggerIdentity,
+      );
+      expect(verification).toContainEqual(
+        expect.objectContaining({ key: "Triggers.LogonTrigger.UserId", kind: "unknown-edit" }),
+      );
+    }
   },
 );

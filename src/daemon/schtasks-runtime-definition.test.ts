@@ -249,6 +249,20 @@ it("reports the process matching the installed command, excluding its task super
   expect(await readScheduledTaskRuntime({})).toMatchObject({ status: "running", pid: 43 });
 });
 
+it("rejects a matching process if its registered command changes during inspection", async () => {
+  native.changed = "present";
+  native.processes = [
+    {
+      ProcessId: 42,
+      CommandLine: ["C:\\runtime-a\\node.exe", ...native.command.slice(1)].join(" "),
+    },
+  ];
+  const runtime = await readScheduledTaskRuntime({});
+  expect(runtime.status).toBe("unknown");
+  expect(runtime.pid).toBeUndefined();
+  expect(runtime.inspectionFailure?.detail).toContain("changed during runtime inspection");
+});
+
 it.each([3])("keeps a surviving supervisor without its child unknown (task %s)", async (state) => {
   native.state = state;
   native.processes = [

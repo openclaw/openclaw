@@ -97,41 +97,64 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([{ parent: "daemon", option: "--restore-service-cli" }])(
-    "defers $parent install startup until $option is checked",
-    async ({ parent, option }) => {
-      const program = new Command().name("openclaw");
-      addGatewayServiceCommands(program.command(parent));
-      registerPreActionHooks(program, "9.9.9-test");
-      const previousArgv = process.argv;
-      const previousTitle = process.title;
-      const previousVerbose = isVerbose();
-      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
-      process.argv = [
-        "node",
-        "openclaw",
-        parent,
-        "install",
-        "--json",
-        option,
-        JSON.stringify({ revision: "observed-pin", definition: null }),
-      ];
-      try {
-        await withConsoleLogsRoutedToStderrForJson(
-          process.argv,
-          () => program.parseAsync(process.argv),
-          { restoreChanges: true },
-        );
-      } finally {
-        process.argv = previousArgv;
-        process.title = previousTitle;
-        setVerbose(previousVerbose);
-        startupEnv.restore();
-      }
-      expect(ensureConfigReady).not.toHaveBeenCalled();
-      expect(runDaemonInstall).toHaveBeenCalledOnce();
-    },
-  );
+  it("forwards the private desktop receipt and excludes the update executor", async () => {
+    const program = new Command();
+    createGatewayParentLikeCommand(program);
+    const receipt = JSON.stringify({ path: "C:\\profile\\result.json", nonce: "fixture" });
+    await program.parseAsync(["gateway", "install", "--desktop-runtime-receipt", receipt], {
+      from: "user",
+    });
+    expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+      desktopRuntimeReceipt: receipt,
+    });
+    const install = program.commands[0]?.commands.find((command) => command.name() === "install");
+    expect(install?.helpInformation()).not.toContain("--desktop-runtime-receipt");
+    runDaemonInstall.mockClear();
+    await expect(
+      program.parseAsync(
+        ["gateway", "install", "--desktop-runtime-receipt", receipt, "--update-executor", "run"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("cannot be used with the update executor");
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { parent: "daemon", option: "--restore-service-cli" },
+    { parent: "gateway", option: "--desktop-runtime-receipt" },
+    { parent: "daemon", option: "--desktop-runtime-receipt" },
+  ])("defers $parent install startup until $option is checked", async ({ parent, option }) => {
+    const program = new Command().name("openclaw");
+    addGatewayServiceCommands(program.command(parent));
+    registerPreActionHooks(program, "9.9.9-test");
+    const previousArgv = process.argv;
+    const previousTitle = process.title;
+    const previousVerbose = isVerbose();
+    const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+    process.argv = [
+      "node",
+      "openclaw",
+      parent,
+      "install",
+      "--json",
+      option,
+      JSON.stringify({ revision: "observed-pin", definition: null }),
+    ];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        () => program.parseAsync(process.argv),
+        { restoreChanges: true },
+      );
+    } finally {
+      process.argv = previousArgv;
+      process.title = previousTitle;
+      setVerbose(previousVerbose);
+      startupEnv.restore();
+    }
+    expect(ensureConfigReady).not.toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { parent: "gateway", action: "install" },

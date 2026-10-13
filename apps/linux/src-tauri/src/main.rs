@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 mod bundled_runtime;
 mod chrome_setup;
@@ -42,6 +47,8 @@ mod window_chrome;
 mod window_chrome_linux;
 #[cfg(target_os = "macos")]
 mod window_chrome_macos;
+#[cfg(windows)]
+mod windows_elevation;
 
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
@@ -64,7 +71,7 @@ use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) struct RuntimeAction {
     cli: OpenClawCli,
     observation: runtime_action::Observation,
@@ -1016,7 +1023,7 @@ impl DesktopState {
                 .selection_is_current(selection)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn runtime_action(
         &self,
         app: &AppHandle,
@@ -1032,12 +1039,23 @@ impl DesktopState {
             return Err("Select the local Gateway before changing its runtime.".into());
         }
         let runtime = bundled_runtime::seed(app)?;
-        runtime_action::activate(&action.cli, &runtime, &action.observation, &|| {
-            self.runtime_operation_is_current(app, selection)
-        })?;
+        let outcome =
+            runtime_action::activate(&action.cli, &runtime, &action.observation, &|| {
+                self.runtime_operation_is_current(app, selection)
+            })?;
+        if let runtime_action::Activation::Unchanged(message) = outcome {
+            tray::show_runtime_notice(app, &message);
+            return gateway::status(&action.cli);
+        }
         let snapshot = gateway::status(&action.cli)?;
         let ready = gateway::dashboard(&action.cli, snapshot)?;
-        self.finish_local_connection(app, action.cli, ready)
+        let snapshot = self.finish_local_connection(app, action.cli, ready)?;
+        #[cfg(windows)]
+        tray::show_runtime_notice(
+            app,
+            "The Gateway is healthy on this app's bundled Bun runtime.",
+        );
+        Ok(snapshot)
     }
 
     fn finish_local_connection(
@@ -3454,7 +3472,7 @@ fn main() {
                 GatewayOperation::Install(channel) => {
                     operation_state.install_cli(&operation_app, channel, selection)
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 GatewayOperation::Runtime(action) => {
                     operation_state.runtime_action(&operation_app, action, selection)
                 }
@@ -3467,7 +3485,7 @@ fn main() {
             },
             move |error| match error {
                 GatewayOperationError::Action(_) => error_state.show_error(&error_app),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 GatewayOperationError::Runtime(error) => {
                     tray::show_runtime_error(&error_app, &error)
                 }

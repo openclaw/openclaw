@@ -42,6 +42,35 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("readScheduledTaskCommand", () => {
+  it("rejects an executable action changed during registration inspection", async () => {
+    const taskName = "\\Custom\\Gateway";
+    const task = {
+      taskPath: taskName,
+      state: 4,
+      actions: [
+        {
+          type: 0,
+          path: "C:\\OpenClaw\\openclaw.exe",
+          arguments: "gateway run",
+          workingDirectory: "C:\\OpenClaw",
+        },
+      ],
+    };
+    spawnSync.mockReturnValueOnce({ status: 0, stdout: JSON.stringify(task) }).mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({
+        ...task,
+        actions: [{ ...task.actions[0], path: "C:\\Other\\openclaw.exe" }],
+      }),
+    });
+    await expect(
+      readScheduledTaskCommand(
+        { OPENCLAW_WINDOWS_TASK_NAME: taskName },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).rejects.toThrow("Effective Scheduled Task service command could not be inspected");
+  });
+
   it.each([
     {
       path: "C:\\OpenClaw\\openclaw.exe",
@@ -368,6 +397,34 @@ describe("readScheduledTaskCommand", () => {
     });
     await run(env, files);
   }
+
+  it.each(["source", "launcher"] as const)(
+    "rejects a Startup %s changed after its command was read",
+    async (changed) => {
+      await withWindowsLauncherFiles(async (env, files) => {
+        const scriptPath = resolveTaskScriptPath(env);
+        const startupPath = resolveStartupEntryPaths(env)[0]!;
+        files.set(startupPath, buildStartupLauncherScript({ scriptPath }));
+        spawnSync.mockReturnValue({ status: 1, stdout: "-2147024894", stderr: "" });
+        await expect(
+          readScheduledTaskCommand(env, {
+            requireEffective: true,
+            requireLoaded: true,
+            onLauncherContent: (_contents, pathname) => {
+              if (pathname === scriptPath) {
+                files.set(
+                  changed === "source" ? scriptPath : startupPath,
+                  changed === "source"
+                    ? "@echo off\r\nnode different.js\r\n"
+                    : buildStartupLauncherScript({ scriptPath: "C:\\Other\\gateway.cmd" }),
+                );
+              }
+            },
+          }),
+        ).rejects.toThrow("Effective Scheduled Task service command could not be inspected");
+      });
+    },
+  );
 
   it.each([false, true])(
     "uses Startup fallback only after proven registration absence (installed: %s)",

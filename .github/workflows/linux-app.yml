@@ -380,9 +380,17 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
-    name: Test Windows desktop
-    # Match the regular Windows installer build runner.
-    runs-on: windows-2022
+    name: Test Windows desktop (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - runner: windows-2022
+            arch: x64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -394,7 +402,13 @@ jobs:
           submodules: false
 
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+
+      - name: Verify native Windows architecture
+        shell: pwsh
+        run: |
+          $actual = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($actual -ne '${{ matrix.arch }}') { throw "Expected ${{ matrix.arch }} Windows, got $actual" }
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -409,26 +423,49 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          key: windows-app-${{ matrix.target }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
           restore-keys: |
-            windows-app-${{ runner.os }}-
+            windows-app-${{ matrix.target }}-
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+        run: cargo +stable test --locked --target ${{ matrix.target }} --test native_keep_awake native_power_lifecycle -- --nocapture
 
       - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop
+        run: cargo +stable test --locked --target ${{ matrix.target }} --bin openclaw-desktop
 
       - name: Build Windows installer without publishing
         working-directory: apps/linux/src-tauri
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: pwsh
+        run: |
+          $version = (Get-Content ../../../package.json -Raw | ConvertFrom-Json).version
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Missing package version for the Windows proof installer' }
+          $config = Join-Path $env:RUNNER_TEMP 'windows-desktop-proof.json'
+          @{ version = $version; bundle = @{ createUpdaterArtifacts = $false } } | ConvertTo-Json -Compress | Set-Content -LiteralPath $config -Encoding utf8
+          pnpm dlx @tauri-apps/cli@2.11.4 build --target ${{ matrix.target }} --bundles nsis --config $config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload Windows installer
+      - name: Verify Windows GUI executable and signed runtime
+        shell: pwsh
+        run: |
+          $app = [System.IO.File]::ReadAllBytes('apps/linux/src-tauri/target/${{ matrix.target }}/release/openclaw-desktop.exe')
+          if ($app.Length -lt 64) { throw 'Windows app has no PE header' }
+          $pe = [System.BitConverter]::ToInt32($app, 0x3c)
+          if ($pe -lt 0 -or $pe -gt ($app.Length - 94) -or [System.BitConverter]::ToUInt32($app, $pe) -ne 0x4550) { throw 'Windows app has an invalid PE header' }
+          if ([System.BitConverter]::ToUInt16($app, $pe + 92) -ne 2) { throw 'Windows release app must use the GUI subsystem' }
+          $pin = Get-Content scripts/lib/openclaw-bun.json -Raw | ConvertFrom-Json
+          $entry = $pin.artifacts.'windows-${{ matrix.arch }}'
+          if ($entry.authenticodeSigned -ne $true -or $entry.testOnly -ne $false) { throw 'Windows runtime pin is not signed production metadata' }
+          $runtime = 'apps/linux/src-tauri/target/desktop-runtime/bin/bun.exe'
+          if ((Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.executableSha256) { throw 'Bundled Windows runtime differs from the shared pin' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $runtime
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -cne 'CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US' -or -not $signature.TimeStamperCertificate) { throw 'Bundled Windows runtime lacks a valid timestamped Foundation signature' }
+
+      - name: Upload unsigned Windows proof installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openclaw-windows-desktop
+          name: openclaw-windows-desktop-${{ matrix.arch }}
           retention-days: 14
           if-no-files-found: error
-          path: apps/linux/src-tauri/target/release/bundle/nsis/*.exe
+          path: apps/linux/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe

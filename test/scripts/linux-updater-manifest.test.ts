@@ -602,77 +602,97 @@ it.each(uploadAuthorityCases)(
   },
 );
 
-it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
-  "checks the actual same-tag legacy selector and REST identities (%s)",
-  (kind) => {
-    const remote = fixture();
-    remote.update((state) => {
-      const source = completeRelease("2026.9.4");
-      const checksumBytes = expectDefined(source.checksums, "checksums");
-      const proof = {
-        schemaVersion: 1,
-        releaseId: 42,
-        sourceSha,
-        toolingSha,
-        channelSha: sourceSha,
-        publicKeySha256: "d".repeat(64),
-        assets: [
-          ...source.assets.map((name, index) => ({
-            id: index + 1,
-            name,
-            size: 1024,
-            sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
-          })),
-          {
-            id: 3,
-            name: "SHA256SUMS.linux-app.txt",
-            size: Buffer.byteLength(checksumBytes),
-            sha256: createHash("sha256").update(checksumBytes).digest("hex"),
-          },
-        ],
-      };
-      source.immutable = manifest("2026.9.4", { linuxPublication: proof });
-      source.manifest =
-        kind === "missing" ? undefined : kind === "older" ? manifest("2026.9.3") : source.immutable;
-      if (kind === "replaced-release") {
-        source.restId = 43;
-      }
-      if (kind === "replaced-asset") {
-        source.assetIds = { "OpenClaw-2026.9.4-amd64.AppImage": 99 };
-      }
-      state.releases["v2026.9.4"] = source;
-      state.releases["linux-stable"] = {
-        isDraft: false,
-        isPrerelease: true,
-        assets: [],
-        manifest: source.immutable,
-      };
-    });
-    const result = remote.run("status", "v2026.9.4");
-    if (kind === "replaced-release" || kind === "replaced-asset") {
-      expect(result.status).toBe(1);
-      expect(result.evidence.state).toBe("failed");
-      const dispatch = remote.dispatch();
-      expect(dispatch.status).toBe(1);
-      expect(remote.read().uploads).toBe(0);
-      expect(remote.read().requests ?? []).toEqual([]);
-      return;
+it.each([
+  "current",
+  "missing",
+  "older",
+  "replaced-release",
+  "replaced-asset",
+  "macos-only",
+  "windows-only",
+  "desktop",
+])("checks the actual same-tag legacy selector and REST identities (%s)", (kind) => {
+  const remote = fixture();
+  remote.update((state) => {
+    const source = completeRelease("2026.9.4");
+    const extraAssets =
+      kind === "macos-only" || kind === "desktop"
+        ? ["OpenClaw-2026.9.4-darwin-aarch64.dmg", "OpenClaw-2026.9.4-darwin-aarch64.app.tar.gz"]
+        : [];
+    if (kind === "windows-only" || kind === "desktop") {
+      extraAssets.push("OpenClaw-2026.9.4-windows-x86_64.exe");
     }
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.evidence).toMatchObject({
-      assetsComplete: true,
-      needsUpdaterPublication: kind !== "current",
-      needsChannelPublication: false,
-    });
+    for (const name of extraAssets) {
+      source.assets.push(name);
+      const digest = createHash("sha256").update(name).digest("hex");
+      expectDefined(source.digests, "asset digests")[name] = `sha256:${digest}`;
+      source.checksums += `${digest}  ./${name}\n`;
+    }
+    const checksumBytes = expectDefined(source.checksums, "checksums");
+    source.assetIds = { "SHA256SUMS.linux-app.txt": source.assets.length + 1 };
+    const proof = {
+      schemaVersion: 1,
+      releaseId: 42,
+      sourceSha,
+      toolingSha,
+      channelSha: sourceSha,
+      publicKeySha256: "d".repeat(64),
+      assets: [
+        ...source.assets.map((name, index) => ({
+          id: index + 1,
+          name,
+          size: 1024,
+          sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
+        })),
+        {
+          id: source.assets.length + 1,
+          name: "SHA256SUMS.linux-app.txt",
+          size: Buffer.byteLength(checksumBytes),
+          sha256: createHash("sha256").update(checksumBytes).digest("hex"),
+        },
+      ],
+    };
+    source.immutable = manifest("2026.9.4", { linuxPublication: proof });
+    source.manifest =
+      kind === "missing" ? undefined : kind === "older" ? manifest("2026.9.3") : source.immutable;
+    if (kind === "replaced-release") {
+      source.restId = 43;
+    }
+    if (kind === "replaced-asset") {
+      source.assetIds["OpenClaw-2026.9.4-amd64.AppImage"] = 99;
+    }
+    state.releases["v2026.9.4"] = source;
+    state.releases["linux-stable"] = {
+      isDraft: false,
+      isPrerelease: true,
+      assets: [],
+      manifest: source.immutable,
+    };
+  });
+  const result = remote.run("status", "v2026.9.4");
+  if (kind === "replaced-release" || kind === "replaced-asset") {
+    expect(result.status).toBe(1);
+    expect(result.evidence.state).toBe("failed");
     const dispatch = remote.dispatch();
-    expect(dispatch.status, dispatch.stderr).toBe(0);
-    expect(dispatch.evidence.state).toBe(
-      kind === "current" ? "published-assets-reused" : "request-dispatched",
-    );
+    expect(dispatch.status).toBe(1);
     expect(remote.read().uploads).toBe(0);
-    expect(remote.read().requests ?? []).toHaveLength(kind === "current" ? 0 : 1);
-  },
-);
+    expect(remote.read().requests ?? []).toEqual([]);
+    return;
+  }
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.evidence).toMatchObject({
+    assetsComplete: true,
+    needsUpdaterPublication: kind === "missing" || kind === "older",
+    needsChannelPublication: false,
+  });
+  const dispatch = remote.dispatch();
+  expect(dispatch.status, dispatch.stderr).toBe(0);
+  expect(dispatch.evidence.state).toBe(
+    kind === "missing" || kind === "older" ? "request-dispatched" : "published-assets-reused",
+  );
+  expect(remote.read().uploads).toBe(0);
+  expect(remote.read().requests ?? []).toHaveLength(kind === "missing" || kind === "older" ? 1 : 0);
+});
 
 it.each(["same-tag", "missing", "older", "newer"])(
   "reports whether complete Linux assets need propagation into a %s latest manifest",

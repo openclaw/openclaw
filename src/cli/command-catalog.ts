@@ -24,7 +24,9 @@ const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
 
 const serviceInstallStartupPolicy: CliCommandCatalogEntry["policy"] = {
   configGuard: ({ options }) =>
-    options?.expectedRuntimePin !== undefined || options?.restoreServiceCli !== undefined
+    options?.expectedRuntimePin !== undefined ||
+    options?.restoreServiceCli !== undefined ||
+    options?.desktopRuntimeReceipt !== undefined
       ? "defer"
       : "run",
   networkProxy: "bypass",

@@ -32,6 +32,7 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { readScheduledTaskDefinitionMutationCapability } from "./service-audit-schtasks.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
@@ -282,6 +283,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
     isEnabled: isScheduledTaskEnabled,
+    readDefinitionMutationCapability: ({ env, environment, timeoutMs }) =>
+      readScheduledTaskDefinitionMutationCapability(env ?? process.env, { environment, timeoutMs }),
     readCommand: readScheduledTaskCommand,
     readRuntime: readScheduledTaskRuntime,
   },

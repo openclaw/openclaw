@@ -36,6 +36,18 @@ const METADATA_LIMIT = 1024 * 1024;
 const BUNDLE_LIMIT = 2 * 1024 * 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
+let windowsPublication;
+
+function windowsPublicationEnabled() {
+  if (windowsPublication === undefined) {
+    const policy = JSON.parse(
+      readFileSync(new URL("../apps/linux/release-policy.json", import.meta.url), "utf8"),
+    );
+    assert.equal(typeof policy.windowsPublication, "boolean", "Invalid Windows publication policy");
+    windowsPublication = policy.windowsPublication;
+  }
+  return windowsPublication;
+}
 let commandOverride;
 let reportOverride;
 
@@ -482,7 +494,7 @@ function parseManifest(bytes, publicKey) {
     "Linux publication trust root changed",
   );
   assert(
-    Array.isArray(proof.assets) && [3, 4, 6].includes(proof.assets.length),
+    Array.isArray(proof.assets) && [3, 4, 5, 6].includes(proof.assets.length),
     "Incomplete publication asset identity",
   );
   const expected = [
@@ -491,9 +503,11 @@ function parseManifest(bytes, publicKey) {
     names.checksums,
     ...(proof.assets.length === 6
       ? names.desktop
-      : proof.assets.length === 4
-        ? [names.windows]
-        : []),
+      : proof.assets.length === 5
+        ? names.desktop.slice(0, 2)
+        : proof.assets.length === 4
+          ? [names.windows]
+          : []),
   ].toSorted();
   assert.deepEqual(
     proof.assets.map((entry) => entry.name).toSorted(),
@@ -880,7 +894,8 @@ function finalizeCore(github, options) {
   };
 }
 
-function publishDesktopChannel(github, options, directory, windows = false) {
+function publishDesktopChannel(github, options, manifestPath, windows = false) {
+  assert(!windows || windowsPublicationEnabled(), "Windows desktop publication is disabled");
   const tag = windows ? "windows-stable" : "desktop-test";
   const name = windows ? "latest-windows.json" : "latest-desktop-test.json";
   const version = releaseVersion(options.tag);
@@ -925,9 +940,7 @@ function publishDesktopChannel(github, options, directory, windows = false) {
       return { state: "kept-newer-channel", version: current };
     }
   }
-  github.upload(channel, source, name, join(directory, name), true, () =>
-    github.unchanged(channel, source),
-  );
+  github.upload(channel, source, name, manifestPath, true, () => github.unchanged(channel, source));
   return { state: "published", version };
 }
 
@@ -945,12 +958,18 @@ function publicInputs(github, release, publicKey, desktop, windows) {
   assert(checksumAsset, "Public Linux checksum asset is missing");
   const checksumPath = github.publicAsset(release, checksumAsset);
   const rows = readFileSync(checksumPath, "utf8").trimEnd().split("\n");
-  const hasDesktop = rows.length === 5;
-  const hasWindows = hasDesktop || rows.length === 3;
+  const hasDesktop = rows.length === 4 || rows.length === 5;
+  const hasWindows = rows.length === 5 || rows.length === 3;
   const expected = [
     names.appimage,
     names.deb,
-    ...(hasDesktop ? names.desktop : hasWindows ? [names.windows] : []),
+    ...(hasDesktop
+      ? hasWindows
+        ? names.desktop
+        : names.desktop.slice(0, 2)
+      : hasWindows
+        ? [names.windows]
+        : []),
   ].toSorted();
   assert.deepEqual(
     rows
@@ -1007,18 +1026,22 @@ function publish(github, options, publicKey) {
   assert.equal(github.source(options.tag), options["source-sha"], "Linux release source mismatch");
   const desktop = options["desktop-test"] === "true";
   const windows = options.windows === "true";
+  assert(!windows || windowsPublicationEnabled(), "Windows desktop publication is disabled");
   // Idempotent native requests can finish channel publication from the exact
   // public bundles. They do not require or rebuild discarded runner artifacts.
   const retainedInputs = options.assets
     ? null
     : publicInputs(github, release, publicKey, desktop, windows);
   const directory = retainedInputs?.directory ?? resolve(options.assets);
+  const desktopIncludesWindows = retainedInputs
+    ? retainedInputs.hasWindows
+    : windowsPublicationEnabled();
   const expected = [
     names.appimage,
     names.deb,
     names.checksums,
     ...(retainedInputs?.hasDesktop || desktop
-      ? names.desktop
+      ? names.desktop.slice(0, desktopIncludesWindows ? 3 : 2)
       : retainedInputs?.hasWindows || windows
         ? [names.windows]
         : []),
@@ -1041,6 +1064,22 @@ function publish(github, options, publicKey) {
     );
     return { name, path, size: stat.size, sha256: fileDigest(path) };
   });
+  const windowsInstaller = inputs.find((entry) => entry.name === names.windows);
+  assert(
+    !windowsInstaller || retainedInputs || windowsPublicationEnabled(),
+    "Windows desktop publication is disabled",
+  );
+  if (windowsInstaller && (windows || (desktop && windowsPublicationEnabled()))) {
+    assert(
+      /^[a-f0-9]{64}$/u.test(options["windows-installer-sha256"] ?? ""),
+      "Windows publication requires the Authenticode-verified installer digest",
+    );
+    assert.equal(
+      windowsInstaller.sha256,
+      options["windows-installer-sha256"],
+      "Windows installer differs from Authenticode-verified bytes",
+    );
+  }
   const checksums = inputs
     .filter((entry) => entry.name !== names.checksums)
     .map((entry) => `${entry.sha256}  ./${entry.name}`)
@@ -1066,6 +1105,7 @@ function publish(github, options, publicKey) {
   verifySignature(names.appimage);
 
   const desktopMetadata = [];
+  let desktopChannelManifest = join(directory, "latest-desktop-test.json");
   for (const [enabled, metadataName, platforms] of [
     [windows, "latest-windows.json", [["windows-x86_64", names.windows]]],
     [
@@ -1073,7 +1113,7 @@ function publish(github, options, publicKey) {
       "latest-desktop-test.json",
       [
         ["darwin-aarch64", names.desktop[1]],
-        ["windows-x86_64", names.windows],
+        ...(windowsPublicationEnabled() ? [["windows-x86_64", names.windows]] : []),
       ],
     ],
   ]) {
@@ -1082,10 +1122,17 @@ function publish(github, options, publicKey) {
     }
     const metadataPath = join(directory, metadataName);
     const candidate = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const historicalMixed =
+      metadataName === "latest-desktop-test.json" &&
+      retainedInputs?.hasWindows &&
+      !windowsPublicationEnabled();
     assert.equal(candidate.version, version, "Desktop manifest version mismatch");
     assert.deepEqual(
       Object.keys(candidate.platforms).toSorted(),
-      platforms.map(([platform]) => platform).toSorted(),
+      [
+        ...platforms.map(([platform]) => platform),
+        ...(historicalMixed ? ["windows-x86_64"] : []),
+      ].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
       "Unexpected desktop platforms",
     );
     const previous = github.metadata(
@@ -1115,6 +1162,25 @@ function publish(github, options, publicKey) {
     if (previous) {
       // Retain the published timestamp/notes and verified signature on identical-bundle replay.
       writeFileSync(metadataPath, previous);
+    }
+    if (historicalMixed) {
+      // Historical release metadata stays immutable; the enabled channel only
+      // projects its verified macOS target, without republishing Windows.
+      desktopChannelManifest = github.temp("macos-channel.json");
+      writeFileSync(
+        desktopChannelManifest,
+        `${JSON.stringify(
+          {
+            ...retained,
+            platforms: Object.fromEntries(
+              platforms.map(([platform]) => [platform, retained.platforms[platform]]),
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+        { flag: "wx" },
+      );
     }
     desktopMetadata.push([metadataName, metadataPath]);
   }
@@ -1292,9 +1358,11 @@ function publish(github, options, publicKey) {
     );
   }
   const legacy = mirror(github, publicKey);
-  const desktopChannel = desktop ? publishDesktopChannel(github, options, directory) : undefined;
+  const desktopChannel = desktop
+    ? publishDesktopChannel(github, options, desktopChannelManifest)
+    : undefined;
   const windowsChannel = windows
-    ? publishDesktopChannel(github, options, directory, true)
+    ? publishDesktopChannel(github, options, join(directory, "latest-windows.json"), true)
     : undefined;
   return {
     state: comparison < 0 ? "kept-newer-channel" : "published",
@@ -1328,6 +1396,7 @@ function main(args = process.argv.slice(2)) {
         "public-key-config",
         "desktop-test",
         "windows",
+        "windows-installer-sha256",
         "latest",
       ].map((name) => [name, { type: "string" }]),
     ),

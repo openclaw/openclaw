@@ -17,7 +17,7 @@ fn health_accepts_the_service_owners_ordinary_windows_runtime_path() {
             "loaded": true, "targetRole": "target",
             "runtime": {"status": "running", "pid": 4100},
             "command": {"programArguments": [&ordinary]},
-            "runtimeIntent": {"pin": {"runtime": "bun", "path": &ordinary}}
+            "runtimeIntent": {"status": "known", "revision": "synthetic-pin", "definition": "synthetic-task", "pin": {"runtime": "bun", "path": &ordinary}}
         },
         "gateway": {"port": 19815},
         "port": {"port": 19815, "status": "busy", "listeners": [{"pid": 4100}]},

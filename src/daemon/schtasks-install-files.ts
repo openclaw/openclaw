@@ -6,7 +6,6 @@ import {
   readScheduledTaskDefinition,
   restoreScheduledTaskDefinition,
   resumeScheduledTaskAutoStartAfterUpdate,
-  setScheduledTaskXmlEnabled,
   suspendScheduledTaskAutoStartForUpdate,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -22,6 +21,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { matchesScheduledTaskDefinition, setScheduledTaskXmlEnabled } from "./schtasks-xml.js";
 import {
   matchesServiceFilePublication,
   publishServiceFile,
@@ -37,6 +37,7 @@ type TaskFile = { path: string; contents: Buffer };
 export type ScheduledTaskFileRecovery = {
   assertPublished: () => Promise<void>;
   restore: () => Promise<boolean>;
+  restoresRegistration?: true;
 };
 type TaskFileState = NonNullable<Awaited<ReturnType<typeof readServiceFileState>>>;
 type TaskFileSnapshot = TaskFile & {
@@ -92,15 +93,9 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   let changed = false;
   let unsettled = false;
   let stoppedProcess = false;
-  // Disabling is our only allowed registration change during settlement.
-  const withoutEnabled = (xml: string | null) =>
-    xml === null ? null : setScheduledTaskXmlEnabled(xml, false);
   const assertReceipt = async (disabled = false) => {
     const current = unsettled ? null : await readXml();
-    if (
-      unsettled ||
-      (disabled ? withoutEnabled(current) !== withoutEnabled(receipt) : current !== receipt)
-    ) {
+    if (unsettled || !matchesScheduledTaskDefinition(current, receipt, disabled)) {
       throw new Error(`Scheduled Task ${taskName} registration ownership could not be verified.`);
     }
   };
@@ -168,15 +163,24 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           throw new Error(`Could not remove replacement Scheduled Task ${taskName}.`);
         }
       } else {
-        if (changed) {
-          await restoreScheduledTaskDefinition({
-            env,
-            xml: original,
-            beforeWrite: () => assertReceipt(true),
-            assertCurrent: assertGatewayServiceUpdateCurrent,
-          });
+        if (files.restoresRegistration) {
+          // Central compensation already restored the admitted files and task XML.
+          const restored = await readXml();
+          if (!matchesScheduledTaskDefinition(restored, original, true)) {
+            throw new Error(`Scheduled Task ${taskName} original registration was not restored.`);
+          }
+          receipt = restored;
+        } else {
+          if (changed) {
+            await restoreScheduledTaskDefinition({
+              env,
+              xml: original,
+              beforeWrite: () => assertReceipt(true),
+              assertCurrent: assertGatewayServiceUpdateCurrent,
+            });
+          }
+          receipt = setScheduledTaskXmlEnabled(original, false);
         }
-        receipt = setScheduledTaskXmlEnabled(original, false);
         await assertReceipt();
         // Definition restoration preserves settlement's disabled state; policy is owned here.
         if (wasEnabled) {

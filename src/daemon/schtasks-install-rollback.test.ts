@@ -8,6 +8,7 @@ import {
   buildTaskScript,
   encodeWindowsLauncherScript,
   readScheduledTaskCommand,
+  resolveTaskName,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
@@ -23,6 +24,8 @@ const native = vi.hoisted(() => ({
   runtime: vi.fn<typeof import("./schtasks-runtime.js").resolveFallbackRuntime>(),
   running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
   stop: vi.fn<typeof import("./schtasks-control.js").stopRegisteredScheduledTask>(),
+  ready:
+    vi.fn<typeof import("../cli/daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness>(),
 }));
 vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
 vi.mock("./schtasks-control.js", async (original) => ({
@@ -50,6 +53,14 @@ vi.mock("./schtasks-runtime.js", async (original) => ({
   resolveFallbackRuntime: native.runtime,
   waitForScheduledTaskRunningEvidence: native.running,
 }));
+vi.mock("../cli/daemon-cli/restart-health-probe.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health-probe.js")>()),
+  waitForGatewayHttpReadiness: native.ready,
+}));
+// mock-isolation: Readiness must not load the developer's config into this synthetic service.
+vi.mock("../config/io.runtime.js", () => ({
+  createConfigIO: () => ({ readBestEffortConfig: async () => ({}) }),
+}));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const originalXml =
@@ -61,6 +72,7 @@ beforeEach(() => {
   native.runtime.mockReset().mockResolvedValue({ status: "stopped" });
   native.running.mockReset().mockResolvedValue(true);
   native.stop.mockReset().mockResolvedValue(false);
+  native.ready.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -296,12 +308,41 @@ it.each(["stopped", "running", "unknown"] as const)(
   "uses admitted stopped-state evidence without reacquiring update custody (%s)",
   async (evidence) => {
     const { args, scriptPath, original } = await fixture(true);
+    args.programArguments = [
+      "C:\\Synthetic\\node.exe",
+      "/prefix-b/openclaw/dist/index.js",
+      "gateway",
+      "--port",
+      "19341",
+    ];
     native.probe.mockReturnValue({
       status: "found",
       state: evidence === "running" ? 4 : 3,
       enabled: true,
     });
     native.runtime.mockResolvedValue({ status: evidence === "unknown" ? "unknown" : "stopped" });
+    native.run.mockImplementation(async () => {
+      const executable = args.programArguments[0];
+      if (!executable) {
+        throw new Error("The synthetic task requires an executable.");
+      }
+      native.probe.mockReturnValue({
+        status: "found",
+        state: 4,
+        enabled: true,
+        taskPath: resolveTaskName(args.env),
+        actions: [
+          {
+            type: 0,
+            path: executable,
+            arguments: args.programArguments.slice(1).join(" "),
+            workingDirectory: "",
+          },
+        ],
+      });
+      native.runtime.mockResolvedValue({ status: "running", pid: 1234 });
+      return "scheduled-task";
+    });
     native.stop.mockImplementation(async () => {
       expect(await fs.readFile(scriptPath)).toEqual(original);
       if (evidence !== "running") {
@@ -322,11 +363,13 @@ it.each(["stopped", "running", "unknown"] as const)(
       await expect(install).rejects.toThrow("Stopped-state ownership cannot be acquired");
       expect(await fs.readFile(scriptPath)).toEqual(original);
       expect(native.run).not.toHaveBeenCalled();
+      expect(native.ready).not.toHaveBeenCalled();
     } else {
       await install;
       expect(await fs.readFile(scriptPath)).not.toEqual(original);
       expect(native.stop).toHaveBeenCalledTimes(evidence === "running" ? 1 : 0);
       expect(native.run).toHaveBeenCalledOnce();
+      expect(native.ready).toHaveBeenCalledWith(expect.objectContaining({ port: 19341 }));
     }
   },
 );

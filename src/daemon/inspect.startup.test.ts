@@ -448,12 +448,15 @@ describe("Windows Startup service inventory", () => {
       now += 50_000;
       return [task];
     });
-    vi.mocked(taskProbe.probeScheduledTaskState).mockImplementation(() => {
-      now += 9_999.5;
+    vi.mocked(taskProbe.probeScheduledTaskState).mockImplementation((_name, timeoutMs) => {
+      expect(timeoutMs).toBe(70_000 - now);
+      // Initial registration and its recheck share the same remaining inventory budget.
+      now += 4_999.75;
       return { status: "found", ...task };
     });
     const inventory = await findExtraGatewayServices(environment(), { deep: true });
     expect(now).toBe(69_999.5);
+    expect(taskProbe.probeScheduledTaskState).toHaveBeenCalledTimes(2);
     expect(inventory.services).toEqual([
       expect.objectContaining({ label: taskName, detail: expect.stringMatching(/^task:/) }),
     ]);

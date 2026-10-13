@@ -83,9 +83,10 @@ The Linux companion shares one Bun fork pin with the native macOS app and CI.
 Runtime admission, SQLite safety checks, and the fork's disabled implicit package
 auto-install remain enabled. macOS Tauri test builds keep their existing runtime
 behavior; the native macOS app owns its separate bundled runtime. Windows Tauri
-test builds retain their existing runtime until a signed Windows fork is
-available; an unsigned dry-run is not shippable. See
-[Bun compatibility](/install/bun-compatibility).
+builds enable bundled-runtime setup and the same explicit action only after a
+signed, non-test Windows fork artifact is admitted. Unsigned artifacts are not
+eligible for bundled-runtime setup. See [Windows bundled-runtime adoption](/platforms/windows#bundled-runtime-adoption)
+and [Bun compatibility](/install/bun-compatibility).
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
@@ -183,7 +184,7 @@ Startup and app updates never change an existing Gateway service or runtime pin.
 After an app update, the current service keeps its existing runtime until you
 choose **Use bundled runtime…** again. Immutable app runtime directories are
 retained, so updates never remove a runtime referenced by a service. These actions
-are Linux-only; macOS Tauri keeps its existing behavior, separate from the
+are available on Linux and Windows; macOS Tauri keeps its existing behavior, separate from the
 [native macOS app](/platforms/mac/bundled-gateway).
 
 ### Desktop sharing
