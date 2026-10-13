@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
@@ -101,86 +100,69 @@ export async function publishMemorySource(params: {
     );
   }
   return run(async (scope) => {
-    const operation = randomUUID();
-    const { header, rows } = memoryPublicationHeader(replacement);
-    await scope.execute({ type: "stage.start", input: { operation, header, rows } });
+    const header = memoryPublicationHeader(replacement);
+    await scope.execute({ type: "stage.start", input: { header } });
     for (const fragments of memoryPublicationBatches(replacement)) {
-      await scope.execute({ type: "stage.append", input: { operation, fragments } });
+      await scope.execute({ type: "stage.append", input: { fragments } });
     }
     const result = await retry(
-      () => scope.execute({ type: "source.replace", input: { operation, state: state() } }),
+      () => scope.execute({ type: "source.replace", input: { state: state() } }),
       prepare,
     );
     assertPublished?.();
     // Thrown failures close through the host owner; another command could hide the write outcome.
     if (result === undefined) {
-      await scope.execute({ type: "stage.discard", input: { operation } });
+      await scope.execute({ type: "stage.discard", input: undefined });
     }
     return result;
   });
 }
 
-/** The committing worker checks the captured revision before retaining vectors. */
+/** Cache entries are content-addressed; the worker excludes forgotten sessions. */
 export async function publishMemoryEmbeddingCache(params: {
   scope: PublicationScope;
   mutation: MemoryEmbeddingCacheMutation;
-  prepareRevision: () => number | undefined;
-  invalidate: () => void;
+  prepare: () => boolean;
   retry: PublicationRetry;
 }): Promise<boolean | undefined> {
-  const { scope, mutation, prepareRevision, invalidate, retry } = params;
-  const expectedRevision = prepareRevision();
-  if (expectedRevision === undefined) {
+  const { scope, mutation, prepare, retry } = params;
+  if (!prepare()) {
     return undefined;
   }
-  const prepare = async () => prepareRevision() !== undefined;
+  const prepareRetry = async () => prepare();
   if (mutation.kind === "clear") {
-    try {
-      return await retry(
-        () =>
-          scope.execute({
-            type: "cache.clear",
-            input: { identities: mutation.identities, expectedRevision },
-          }),
-        prepare,
-      );
-    } finally {
-      // The vector-space conflict is already known, even if clearing loses its reply.
-      invalidate();
-    }
+    return await retry(
+      () =>
+        scope.execute({
+          type: "cache.clear",
+          input: { identities: mutation.identities },
+        }),
+      prepareRetry,
+    );
   }
   if (memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)) {
-    const current = await retry(
+    return await retry(
       () =>
         scope.execute({
           type: "cache.write.inline",
-          input: { header: mutation.header, entries: mutation.entries, expectedRevision },
+          input: { header: mutation.header, entries: mutation.entries },
         }),
-      prepare,
+      prepareRetry,
     );
-    if (current === false) {
-      invalidate();
-    }
-    return current;
   }
-  const operation = randomUUID();
   await scope.execute({
     type: "cache.stage.start",
-    input: { operation, header: mutation.header, rows: mutation.entries.length },
+    input: { header: mutation.header },
   });
   for (const fragments of memoryEmbeddingCacheBatches(mutation.entries)) {
-    await scope.execute({ type: "stage.append", input: { operation, fragments } });
+    await scope.execute({ type: "stage.append", input: { fragments } });
   }
   const current = await retry(
-    () => scope.execute({ type: "cache.write", input: { operation, expectedRevision } }),
-    prepare,
+    () => scope.execute({ type: "cache.write", input: undefined }),
+    prepareRetry,
   );
   if (current === undefined) {
-    await scope.execute({ type: "stage.discard", input: { operation } });
-  }
-  if (current === false) {
-    // Publish generation invalidation before releasing this writer turn.
-    invalidate();
+    await scope.execute({ type: "stage.discard", input: undefined });
   }
   return current;
 }

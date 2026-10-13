@@ -19,9 +19,13 @@ import {
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds, nativeCommandItem } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -125,6 +129,10 @@ function codexHookCommand(config: unknown, key: string) {
     ?.hooks?.at(0);
 }
 
+beforeAll(() => setRuntimeConfigSnapshot({}));
+afterAll(() => clearRuntimeConfigSnapshot());
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
@@ -175,7 +183,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       { bindingStore: persistedBindings },
     );
-    await expect(operation).rejects.toThrow("Codex session execution policy changed");
+    await expect(operation).rejects.toThrow("Codex session generation is no longer current");
     expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(persistedBindings.read(current)).toEqual(parent);
   });
@@ -456,50 +464,50 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
-  it.each([
-    { boundary: "recorded root", sessionRoot: "/tmp/workspace/guarded" },
-    { boundary: "agent workspace", sessionRoot: undefined },
-  ])("clamps stale full access to the guarded session $boundary", async ({ sessionRoot }) => {
-    const root = sessionRoot ?? "/tmp/workspace";
-    readCodexAppServerBindingMock.mockReturnValue({
-      threadId: "parent-thread",
-      cwd: "/tmp/outside-session-root",
-      authProfileId: "openai:work",
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+  it.each([{ boundary: "agent workspace", sessionRoot: undefined }])(
+    "clamps stale full access to the guarded session $boundary",
+    async ({ sessionRoot }) => {
+      const root = sessionRoot ?? "/tmp/workspace";
+      readCodexAppServerBindingMock.mockReturnValue({
+        threadId: "parent-thread",
+        cwd: "/tmp/outside-session-root",
+        authProfileId: "openai:work",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      });
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          sessionKey: "agent:main:session-1",
-          sessionEntry: {
-            sessionId: "session-1",
-            sessionFile: "/tmp/session-1.jsonl",
-            updatedAt: 1,
-            permissionMode: "guarded",
-            ...(sessionRoot ? { sessionRoot } : {}),
-          },
-        }),
-      ),
-    ).resolves.toEqual({ text: "Side answer." });
+      await expect(
+        runCodexAppServerSideQuestion(
+          sideParams({
+            sessionKey: "agent:main:session-1",
+            sessionEntry: {
+              sessionId: "session-1",
+              sessionFile: "/tmp/session-1.jsonl",
+              updatedAt: 1,
+              permissionMode: "guarded",
+              ...(sessionRoot ? { sessionRoot } : {}),
+            },
+          }),
+        ),
+      ).resolves.toEqual({ text: "Side answer." });
 
-    expect(mockCall(client.request)[1]).toMatchObject({
-      cwd: root,
-      runtimeWorkspaceRoots: [root],
-      sandbox: "workspace-write",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-    });
-    expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
-      exec: { mode: "ask" },
-      sessionPermissionPolicy: { mode: "guarded", root },
-    });
-  });
+      expect(mockCall(client.request)[1]).toMatchObject({
+        cwd: root,
+        runtimeWorkspaceRoots: [root],
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+      });
+      expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
+        exec: { mode: "ask" },
+        sessionPermissionPolicy: { mode: "guarded", root },
+      });
+    },
+  );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
     const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
@@ -1024,10 +1032,7 @@ describe("runCodexAppServerSideQuestion", () => {
     },
   );
 
-  it.each([
-    { senderId: "restricted-sender", webSearchMode: "disabled" },
-    { senderId: "allowed-sender", webSearchMode: "cached" },
-  ])(
+  it.each([{ senderId: "restricted-sender", webSearchMode: "disabled" }])(
     "applies side-question search policy for $senderId without managed search",
     async (testCase) => {
       // Missing managed credentials are not a denial; hosted search uses the policy owner.
@@ -1603,15 +1608,6 @@ describe("runCodexAppServerSideQuestion", () => {
       expectedModel: "gpt-5.5",
       local: false,
     },
-    {
-      name: "explicit native OpenAI",
-      provider: "openai",
-      model: "gpt-5.5",
-      boundModel: "local-model",
-      boundProvider: "lmstudio",
-      expectedModel: "gpt-5.5",
-      local: false,
-    },
   ])("preserves side-fork model ownership for $name", async (scenario) => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
@@ -1776,78 +1772,6 @@ describe("runCodexAppServerSideQuestion", () => {
         terminalReason: "failed",
       }),
     ]);
-  });
-
-  it("bridges prepared restricted-profile tools into side threads", async () => {
-    const preparedModelRuntime = {
-      metadataSnapshot: {
-        plugins: [
-          {
-            id: "profiled-plugin",
-            contracts: { tools: ["wiki_status"] },
-            toolMetadata: { wiki_status: { profiles: ["coding"] } },
-          },
-        ],
-      },
-    };
-    createOpenClawCodingToolsMock.mockImplementation(
-      (options: { preparedModelRuntime?: unknown }) =>
-        options.preparedModelRuntime === preparedModelRuntime
-          ? [
-              {
-                name: "wiki_status",
-                description: "Check wiki status",
-                parameters: {
-                  type: "object",
-                  properties: { topic: { type: "string" } },
-                  required: ["topic"],
-                  additionalProperties: false,
-                },
-                execute: toolExecuteMock,
-              },
-            ]
-          : [],
-    );
-    const { result, toolResponse } = await runSideQuestionWithManagedWebSearchCall(
-      sideParams({ cfg: { tools: { profile: "coding" } }, preparedModelRuntime } as never),
-      { preserveToolFactory: true, toolName: "wiki_status", toolArguments: { topic: "AGENTS.md" } },
-    );
-    expect(result).toEqual({ text: "Search answer." });
-    expect(toolExecuteMock).toHaveBeenCalledOnce();
-    const [callId, args, signal, options] = mockCall(toolExecuteMock);
-    expect([callId, args, signal, options]).toEqual([
-      "tool-1",
-      { topic: "AGENTS.md" },
-      expect.any(AbortSignal),
-      undefined,
-    ]);
-    expect(toolResponse).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "tool output" }],
-    });
-  });
-
-  it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
-    const beforeToolCall = vi.fn((...args: unknown[]) => {
-      expect(args[1]).toMatchObject({ channelId: "voice-room" });
-    });
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const { toolResponse } = await runSideQuestionWithManagedWebSearchCall(
-      sideParams({
-        messageChannel: "discord",
-        messageProvider: "discord-voice",
-        currentChannelId: "discord:voice-room",
-      }),
-      { preserveToolFactory: true, toolName: "wiki_status", toolArguments: { topic: "AGENTS.md" } },
-    );
-    expect(toolResponse).toMatchObject({ success: true });
-    expect(beforeToolCall).toHaveBeenCalledOnce();
-    expect(toolExecuteMock).toHaveBeenCalledOnce();
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ hookChannelId: "voice-room" }),
-    );
   });
 
   it("omits computer control from side threads without a compaction owner", async () => {

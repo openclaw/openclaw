@@ -36,6 +36,7 @@ import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
@@ -45,7 +46,10 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import {
+  assertSessionTranscriptHot,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
   restoreSessionColdTranscript,
@@ -57,9 +61,9 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
@@ -589,7 +593,26 @@ describe("cold transcript storage workers", () => {
       historicalId,
     );
     const events = loadTranscriptEventsSync(fixture.scope);
+    assertSessionTranscriptHot(fixture.database(), historicalId);
+    const hotPlan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(fixture.scope.storePath),
+      archiveTranscript: false,
+      database: openOpenClawAgentDatabase(fixture.options),
+      referencedSessionIds: new Set(),
+      sessionId: historicalId,
+    });
+    expect(hotPlan).not.toBeNull();
+    const preparedDeletion = await archiveWorkers.materializeSessionStateDeletePlans([hotPlan!]);
     await archiveFixture(fixture);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => deleteMaterializedSessionStatePlans(database, preparedDeletion),
+        fixture.options,
+      ),
+    ).toEqual([]);
+    expect(() => assertSessionTranscriptHot(fixture.database(), historicalId)).toThrow(
+      expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
+    );
     expect(readTranscriptStatsSync(fixture.scope)).toEqual(stats);
     expect(
       readTranscriptContextVersionInTransaction({ db: fixture.database() }, historicalId),
@@ -616,6 +639,7 @@ describe("cold transcript storage workers", () => {
     } finally {
       hostSql.restore();
     }
+    assertSessionTranscriptHot(fixture.database(), historicalId);
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 
@@ -645,7 +669,10 @@ describe("cold transcript storage workers", () => {
           db.insertInto("transcript_events").values({
             session_id: sessionId,
             seq: 0,
-            event_json: JSON.stringify({ type: "session", id: sessionId }),
+            ...prepareTranscriptPayload(
+              database,
+              JSON.stringify({ type: "session", id: sessionId }),
+            ),
             created_at: 0,
           }),
         );
@@ -702,6 +729,23 @@ describe("cold transcript storage workers", () => {
       try {
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
+        expect(
+          readOnly()
+            .prepare(`SELECT navigation_type, navigation_custom_type, navigation_display,
+              message_role, navigation_last_type, navigation_last_custom_type, navigation_valid
+              FROM transcript_events WHERE session_id = ? ORDER BY seq`)
+            .all(historicalId),
+        ).toEqual(
+          [null, "user", "assistant"].map((role) => ({
+            navigation_type: role === null ? "session" : "message",
+            navigation_custom_type: null,
+            navigation_display: 0,
+            message_role: role,
+            navigation_last_type: role === null ? "session" : "message",
+            navigation_last_custom_type: null,
+            navigation_valid: 1,
+          })),
+        );
         expect(
           readOnly()
             .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m

@@ -2,6 +2,8 @@ import type { SessionsListParams } from "../../packages/gateway-protocol/src/ind
 import {
   SESSION_DASHBOARD_ROW_FIELDS,
   SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+  shareSessionRowFacts,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -73,16 +75,29 @@ type Publication = {
     { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection; selectedAt?: number }
   >;
 };
-type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => Publication;
+type PublicationView = () => Publication;
 
 const publications = new WeakMap<
   SessionRowProjection,
   {
-    context: SessionRowReadView["state"]["rowContext"];
     revision: object;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
+const sharedLists = new WeakMap<
+  GatewaySessionRow[],
+  ReturnType<typeof shareSessionRowFacts<GatewaySessionRow>>
+>();
+
+export function shareSidebarSessionRows(rows: GatewaySessionRow[]) {
+  let shared = sharedLists.get(rows);
+  if (!shared) {
+    shared = freezeJsonSnapshot(shareSessionRowFacts(rows));
+    registerSerializedJsonArray(shared.sessions, shared.sessions.map(serializeSessionRow));
+    sharedLists.set(rows, shared);
+  }
+  return shared;
+}
 
 /** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
 export function serializeSessionRow(row: GatewaySessionRow): string {
@@ -100,12 +115,11 @@ export function prepareSessionRowPublication(
   now: number,
   read: SessionRowReadView = projection,
 ) {
-  const view: PublicationView = (context) => {
+  const view: PublicationView = () => {
     const revision = projection.state.revision;
     let publication = publications.get(projection);
     if (!publication) {
       publication = {
-        context,
         revision,
         rows: new WeakMap(),
         lists: new Map(),
@@ -113,14 +127,16 @@ export function prepareSessionRowPublication(
       publications.set(projection, publication);
       const { lists } = publication;
       projection.onSelectionChange(() => lists.clear());
-      projection.onFactsChange(() => {
+      projection.onFactsChange((change) => {
+        if (change.kind === "reset") {
+          lists.clear();
+        }
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of lists.values()) {
           list.rows = undefined;
         }
       });
-    } else if (publication.context !== context || publication.revision !== revision) {
-      publication.context = context;
+    } else if (publication.revision !== revision) {
       publication.revision = revision;
       publication.lists.clear();
     }
@@ -144,7 +160,7 @@ export function prepareProjectedSessionPresentation(
     client === undefined
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
-  const publicationState = publication?.(rowContext);
+  const publicationState = publication?.();
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };
@@ -408,13 +424,15 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "dashboard") {
+    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
+      const fields =
+        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
       for (const field of Object.keys(row)) {
-        if (!SESSION_DASHBOARD_ROW_FIELDS.has(field)) {
+        if (!fields.has(field)) {
           Reflect.deleteProperty(row, field);
         }
       }
-      row.rowMode = "dashboard";
+      row.rowMode = options.rowMode;
     } else if (options.rowMode === "compact") {
       for (const field of SESSION_ROW_DETAIL_FIELDS) {
         delete row[field];

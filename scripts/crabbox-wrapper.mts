@@ -1448,7 +1448,7 @@ function replaceRunPayload(invocation: CommandInvocation, payload: string[]) {
 
 function renderRunShellCommand(invocation: CommandInvocation, join = shellJoin) {
   return invocation.options.has("shell") && invocation.commandArgs.length === 1
-    ? invocation.commandArgs[0]
+    ? (invocation.commandArgs[0] ?? "")
     : join(invocation.commandArgs);
 }
 
@@ -3658,7 +3658,11 @@ function injectFullCheckoutLeaseReclaim(commandArgs: string[]) {
   return normalizedArgs;
 }
 
-function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
+function injectRemoteTestboxCi(
+  commandArgs: string[],
+  providerName: string,
+  sourceBootstrap: string,
+) {
   if (commandArgs[0] !== "run" || canonicalProviderName(providerName) !== "blacksmith-testbox") {
     return commandArgs;
   }
@@ -3668,7 +3672,7 @@ function injectRemoteTestboxCi(commandArgs: string[], providerName: string) {
   }
   return replaceRunCommandWithShell(
     invocation,
-    `export CI=true; ${renderRunShellCommand(invocation)}`,
+    `export CI=true; ${sourceBootstrap ? `${sourceBootstrap} || exit $?; ` : ""}exec node scripts/crabbox-remote-redact.mjs -- bash -c ${shellQuote(renderRunShellCommand(invocation))}`,
   );
 }
 
@@ -3722,6 +3726,7 @@ async function applyRunTransforms(
         transformedArgs = replaceRunScript(invocation, scriptPath);
       } else if (
         invocation.start >= 0 &&
+        !testboxWorkspace &&
         !isAwsMacosRemoteTarget(transformedArgs, options.provider)
       ) {
         transformedArgs = replaceRunCommandWithShell(
@@ -3751,7 +3756,7 @@ async function applyRunTransforms(
       options.provider,
     );
     return {
-      args: injectRemoteTestboxCi(transformedArgs, options.provider),
+      args: injectRemoteTestboxCi(transformedArgs, options.provider, sourceBootstrap),
       wsl2ScriptBootstrap: {
         ...wsl2ScriptBootstrap,
         cleanup() {

@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -63,7 +64,7 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("Keep this Research draft");
-      await page.getByRole("button", { name: "Open split view", exact: true }).click();
+      await selectChatLayoutAction(page, "Open split view");
       await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
       expect(await page.locator("[data-unbound-pane-id]").count()).toBe(0);
       await expect.poll(() => composer.first().inputValue()).toBe("Keep this Research draft");
@@ -232,7 +233,7 @@ suite.define(() => {
         );
         await page.goto(`${suite.server.baseUrl}chat/main`);
         await waitForCommittedChatRoute(page);
-        await cells.last().getByRole("button", { name: "Close pane", exact: true }).click();
+        await selectChatLayoutAction(cells.last(), "Close pane");
         await expect.poll(() => cells.count()).toBe(1);
         expect(await cells.first().locator("openclaw-chat-pane").count()).toBe(0);
         expect(await cells.first().textContent()).toContain("Choose a conversation");

@@ -507,6 +507,7 @@ async function collectSessionIngestionBatches(params: {
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
     const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
+      config: params.cfg,
       includeRetainedSqlite: true,
     });
     const forgottenSessionIds = await findForgottenMemorySessionIds({
@@ -521,7 +522,7 @@ async function collectSessionIngestionBatches(params: {
         selectedSources.push(source);
       }
     }
-    const excludedReasons = sessionExclusionReasons(
+    const excludedReasons = await sessionExclusionReasons(
       selectedSources,
       params.admissionPolicy,
       forgottenSessionIds,

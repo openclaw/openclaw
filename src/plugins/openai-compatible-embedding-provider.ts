@@ -24,7 +24,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
   EmbeddingInput,
@@ -58,7 +58,7 @@ type OpenAICompatibleEmbeddingClient = {
 };
 
 type ConfiguredEmbeddingProvider = Partial<
-  Pick<ModelProviderConfig, "api" | "baseUrl" | "apiKey" | "headers" | "localService">
+  Pick<ModelProviderConfig, "api" | "baseUrl" | "apiKey" | "headers" | "localService" | "request">
 >;
 
 type ResolvedConfiguredEmbeddingProvider = {
@@ -196,7 +196,7 @@ async function resolveConfiguredProviderApiKey(params: {
   if (!agentDir) {
     return apiKey;
   }
-  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+  const { resolveScopedAuthProfileStoreAsync, resolveProviderEntryApiKeyAuth } =
     await import("../agents/model-auth-provider.js");
   const authParams = {
     provider: params.providerId,
@@ -204,7 +204,7 @@ async function resolveConfiguredProviderApiKey(params: {
     cfg: params.options.config,
     agentDir,
   };
-  const store = resolveScopedAuthProfileStore(authParams);
+  const store = await resolveScopedAuthProfileStoreAsync(authParams);
   // Only explicit profile bindings enter model auth. General discovery would
   // replace literal/runtime-resolved keys with unrelated profile or env credentials.
   const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
@@ -400,8 +400,11 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
   // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
-  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
-    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+  const {
+    embeddingProviderOwnsDestination,
+    resolveEmbeddingEndpointUrl,
+    resolveEmbeddingProviderSsrFPolicy,
+  } = await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
@@ -432,7 +435,12 @@ async function createOpenAICompatibleEmbeddingClient(
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: providerId,
+      api: configuredProvider?.api ?? "openai-completions",
+      baseUrl,
+      allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
+    }),
     model,
     ...(configuredProvider?.localService && !remoteBaseUrl
       ? {

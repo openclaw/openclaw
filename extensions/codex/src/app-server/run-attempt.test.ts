@@ -59,6 +59,7 @@ import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -254,18 +255,20 @@ async function buildCodexTurnContextForTest(
     tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = buildThreadStartParams(params, {
-    cwd: workspaceDir,
-    dynamicTools,
-    appServer: resolveCodexAppServerRuntimeOptions({}),
-    developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
-    refreshableInstructions: [
-      workspaceBootstrapContext.personaInstructions,
-      workspaceBootstrapContext.memoryInstructions,
-    ]
-      .filter(Boolean)
-      .join("\n\n"),
-  }).developerInstructions;
+  const threadDeveloperInstructions = (
+    await buildThreadStartParams(params, {
+      cwd: workspaceDir,
+      dynamicTools,
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      developerInstructions: buildDeveloperInstructions(params, { dynamicTools }),
+      refreshableInstructions: [
+        workspaceBootstrapContext.personaInstructions,
+        workspaceBootstrapContext.memoryInstructions,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    })
+  ).developerInstructions;
   assert(typeof threadDeveloperInstructions === "string");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
@@ -275,7 +278,7 @@ async function buildCodexTurnContextForTest(
     params.prompt,
     openClawPromptContext,
   );
-  const turnStartParams = buildTurnStartParams(params, {
+  const turnStartParams = await buildTurnStartParams(params, {
     threadId: "thread-1",
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
@@ -338,7 +341,9 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   if (!sandboxSessionKey) {
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+    nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+  });
   const dynamicTools = await buildDynamicTools({
     params,
     resolvedWorkspace: workspaceDir,
@@ -942,7 +947,9 @@ describe("runCodexAppServerAttempt", () => {
       backendId: "codex-test-sandbox",
       workspaceAccess: "rw",
     } as never;
-    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+    const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
+      nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, { sandbox }),
+    });
     const dynamicTools = await buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
@@ -1054,7 +1061,12 @@ describe("runCodexAppServerAttempt", () => {
       const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
         params,
         sandbox as never,
-        { sandboxExecServerEnabled: true },
+        {
+          sandboxExecServerEnabled: true,
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox: sandbox as never,
+          }),
+        },
       );
       const dynamicTools = await buildDynamicTools({
         params,
@@ -1094,7 +1106,7 @@ describe("runCodexAppServerAttempt", () => {
         userMcpServersEnabled: nativeToolSurfaceEnabled,
         environmentSelection,
       });
-      const turnParams = buildTurnStartParams(params, {
+      const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",
         cwd: environment.cwd,
         appServer,
@@ -2418,7 +2430,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(inputText).toContain("Inspect the completed tool evidence, then delegate analysis.");
       expect(inputText).toContain("[Subagent Task]");
       expect(inputText).not.toContain("private-input-fixture.txt");
-      expect(inputText).not.toContain("sk-1234567890abcdef");
+      expect(inputText.includes("sk-1234567890abcdef")).toBe(preserve);
       if (preserve) {
         expect(inputText).toContain("COBALT-ORCHID-7429");
         expect(inputText).not.toContain("[content omitted]");

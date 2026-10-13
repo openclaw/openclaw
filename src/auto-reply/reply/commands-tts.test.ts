@@ -17,13 +17,13 @@ const ttsMocks = vi.hoisted(() => ({
   getLastTtsAttempt: vi.fn(),
   getTtsMaxLength: vi.fn(),
   getTtsPersona: vi.fn(),
-  getTtsProvider: vi.fn(),
+  getTtsProviderAsync: vi.fn(),
   isSummarizationEnabled: vi.fn(),
   isTtsEnabled: vi.fn(),
-  isTtsProviderConfigured: vi.fn(),
+  isTtsProviderConfiguredAsync: vi.fn(),
   listTtsPersonas: vi.fn(),
   resolveTtsConfig: vi.fn(),
-  resolveTtsPrefsPath: vi.fn(),
+  resolveTtsPrefsPathAsync: vi.fn(),
   setLastTtsAttempt: vi.fn(),
   setSummarizationEnabled: vi.fn(),
   setTtsEnabled: vi.fn(),
@@ -101,11 +101,11 @@ describe("handleTtsCommands status fallback reporting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ttsMocks.resolveTtsConfig.mockReturnValue({});
-    ttsMocks.resolveTtsPrefsPath.mockReturnValue("/tmp/tts-prefs.json");
+    ttsMocks.resolveTtsPrefsPathAsync.mockResolvedValue("/tmp/tts-prefs.json");
     ttsMocks.isTtsEnabled.mockReturnValue(true);
-    ttsMocks.getTtsProvider.mockReturnValue(PRIMARY_TTS_PROVIDER);
+    ttsMocks.getTtsProviderAsync.mockReturnValue(PRIMARY_TTS_PROVIDER);
     ttsMocks.getTtsPersona.mockReturnValue(undefined);
-    ttsMocks.isTtsProviderConfigured.mockReturnValue(true);
+    ttsMocks.isTtsProviderConfiguredAsync.mockReturnValue(true);
     ttsMocks.getTtsMaxLength.mockReturnValue(1500);
     ttsMocks.isSummarizationEnabled.mockReturnValue(true);
     ttsMocks.getLastTtsAttempt.mockReturnValue(undefined);

@@ -395,18 +395,21 @@ export async function withSessionEntriesFromStoresInWorker<T>(
 ): Promise<T> {
   const originalInputs = [...inputs];
   const capturedInputs: SessionEntryWorkerRead[] = originalInputs.map((input) => {
-    const captured = {
+    const captured: SessionEntryWorkerRead = {
+      ...input,
       env: cloneEnvWithPlatformSemantics(input.env ?? process.env),
       snapshotFields: input.snapshotFields?.slice(),
       preparedSource: input.preparedSource && { ...input.preparedSource },
     };
-    if (!input.selection) {
-      return { ...input, ...captured, sessionKeys: [...input.sessionKeys] };
+    if (captured.selection) {
+      captured.selection =
+        captured.selection.kind === "children"
+          ? { ...captured.selection, parentSessionKeys: [...captured.selection.parentSessionKeys] }
+          : { ...captured.selection };
+    } else {
+      captured.sessionKeys = [...captured.sessionKeys];
     }
-    if (input.projection === "list") {
-      return { ...input, ...captured, selection: { ...input.selection } };
-    }
-    return { ...input, ...captured, selection: { ...input.selection } };
+    return captured;
   });
   if (options?.ordered) {
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
@@ -603,6 +606,7 @@ export async function withSessionStoreReaderInWorker<T>(
             reader.assertCurrent();
             continuation?.assertCurrent();
             route.assertCurrent();
+            // Discovery can yield before writable admission; retain its selected physical source.
             if (sourceIdentity?.key.startsWith("file:")) {
               assertExistingDatabaseIdentity(
                 database.path,
@@ -637,11 +641,6 @@ export async function withSessionStoreReaderInWorker<T>(
       const assertPreparedCurrent = () => {
         preparedSource.assertCurrent();
         assertSessionStoreReadCandidate(preparedSource.path, candidates);
-        assertExistingDatabaseIdentity(
-          preparedSource.path,
-          `file:${preparedSource.databaseIdentity}`,
-          preparedSource.databaseBirthtime,
-        );
       };
       assertPreparedCurrent();
       result = await readDatabase(

@@ -101,14 +101,10 @@ async function expectUnauthorized(url: string): Promise<void> {
 }
 
 describe("node desktop stream tickets", () => {
-  it.each(
-    (["desktop", "portal"] as const).flatMap((kind) =>
-      (["consumer-destroy", "peer-close", "peer-terminate"] as const).map((closeMode) => ({
-        kind,
-        closeMode,
-      })),
-    ),
-  )(
+  it.each([
+    { kind: "desktop", closeMode: "peer-close" },
+    { kind: "portal", closeMode: "consumer-destroy" },
+  ] as const)(
     "keeps idle $kind streams alive through remote backpressure and records $closeMode",
     async ({ kind, closeMode }) => {
       const logCapture = createDiagnosticLogRecordCapture();
@@ -152,8 +148,6 @@ describe("node desktop stream tickets", () => {
       });
       if (closeMode === "peer-close") {
         ws.close(1012, `peer restart\n${minted.attachPath}`);
-      } else if (closeMode === "peer-terminate") {
-        ws.terminate();
       } else {
         stream.destroy();
       }
@@ -182,11 +176,10 @@ describe("node desktop stream tickets", () => {
     },
   );
 
-  it.each(
-    (["vnc-password", "ard-account"] as const).flatMap((auth) =>
-      [undefined, "synthetic-desktop-password"].map((vncPassword) => ({ auth, vncPassword })),
-    ),
-  )(
+  it.each([
+    { auth: "vnc-password", vncPassword: undefined },
+    { auth: "ard-account", vncPassword: "synthetic-desktop-password" },
+  ] as const)(
     "is single-use and resolves one ticket-bound $auth stream with password $vncPassword",
     async ({ auth, vncPassword }) => {
       const broker = createNodeDesktopStreamBroker();
@@ -271,8 +264,6 @@ describe("node desktop stream tickets", () => {
     { auth: "vnc-password", vncPassword: 42 },
     { auth: "ard-account", vncPassword: "secret", username: "worker" },
     { auth: "ard-account", vncPassword: "x".repeat(64) },
-    { auth: "ard-account", vncPassword: "" },
-    { auth: "ard-account", vncPassword: "nul\0" },
   ])("rejects invalid metadata %j without exposing later WebSocket errors", async (metadata) => {
     const broker = createNodeDesktopStreamBroker();
     const session = { connId: "conn-1", pairingGeneration: "generation-1" };

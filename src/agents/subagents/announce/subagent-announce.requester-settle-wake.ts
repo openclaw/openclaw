@@ -18,6 +18,7 @@ import {
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
+import { isQuietSubagentRestartContinuation } from "../registry/subagent-recovery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
@@ -40,7 +41,7 @@ import {
   finalizeRequesterFinalAttachment,
   transferRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
-import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { isPermanentAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
@@ -264,6 +265,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const { isGatewayClosed, claim: acquireBatch } = claim;
   batchClaim = claim;
+  let requesterCurrent: Awaited<ReturnType<typeof captureRequesterSessionEntryCurrent>> | undefined;
 
   try {
     // Scheduling is per child, but every replay of this frozen wave is one input.
@@ -362,13 +364,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (hasUnsettledDescendants && !(await deferBatch())) {
       return false;
     }
-    const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
+    const interruptedContinuations = settledBatch.filter(isQuietSubagentRestartContinuation);
+    const requiredSettled = settledBatch.filter(
+      (entry) =>
+        entry.expectsCompletionMessage === true || interruptedContinuations.includes(entry),
+    );
     // A yielded batch owns a rearm generation even when its child settles later.
     // Otherwise a delivered single child clears the batch before its requester wakes.
     const requesterYieldedAfterDelivery =
       selectedState.afterRequesterYield === true ||
       (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
-    const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    const requesterDepth = await getSubagentDepthFromSessionStoreInWorker(requesterSessionKey, {
       cfg,
       agentId: requesterAgentId,
     });
@@ -381,6 +387,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
           !requesterYieldedAfterDelivery) ||
         (!requesterYieldedAfterDelivery &&
+          interruptedContinuations.length === 0 &&
           !hasRequesterCompletionCohort(currentSettledEntry) &&
           requesterDepth >= 1))
     ) {
@@ -388,10 +395,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
 
-    const readRequesterCurrent = captureRequesterSessionEntryCurrent(
+    requesterCurrent = await captureRequesterSessionEntryCurrent(
       requesterSessionKey,
       requesterAgentId,
     );
+    const { readCurrent: readRequesterCurrent } = requesterCurrent;
     const requester = await loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
     const requesterEntry = requester.entry;
     if (!hasUsableSessionEntry(requesterEntry)) {
@@ -723,6 +731,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     );
     return false;
   } finally {
+    requesterCurrent?.release();
     claim.release();
   }
 }

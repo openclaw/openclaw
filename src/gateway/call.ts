@@ -26,7 +26,6 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -87,11 +86,13 @@ import {
 } from "./method-scopes.js";
 import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js";
 import {
-  GatewayTransportError,
   type GatewayTransportErrorKind,
   createGatewayCloseTransportError,
   createGatewayTimeoutTransportError,
   isGatewayTransportError,
+  createGatewayUnreachableTransportError,
+  firstGatewayErrorLine,
+  isGatewayUnreachableSocketError,
 } from "./transport-error.js";
 export type { GatewayConnectionDetails };
 export {
@@ -125,6 +126,8 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
+    /** Continue a multi-request operation on this exact authenticated connection. */
+    onResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
     clientDisplayName?: string;
     clientVersion?: string;
     platform?: string;
@@ -212,27 +215,6 @@ export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
 };
-
-function firstGatewayErrorLine(message: string): string {
-  return message.split("\n", 1)[0]?.trim() || message;
-}
-
-// Connection-establishment failures where "start the gateway" is the actionable
-// next step; protocol/auth failures keep their own richer messages.
-const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
-  "ECONNREFUSED",
-  // RST during connect/handshake: the port is not serving a working gateway.
-  "ECONNRESET",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-]);
-
-function isGatewayUnreachableSocketError(error: Error): boolean {
-  const code = extractErrorCodeOrErrno(error);
-  return code !== undefined && GATEWAY_UNREACHABLE_SOCKET_CODES.has(code);
-}
 
 export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
   if (!isGatewayTransportError(value)) {
@@ -548,24 +530,6 @@ function ensureRemoteModeUrlConfigured(params: {
 
 export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
-/** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
-function createGatewayUnreachableTransportError(params: {
-  cause: Error;
-  connectionDetails: GatewayConnectionDetails;
-}): GatewayTransportError {
-  const code = extractErrorCodeOrErrno(params.cause);
-  return new GatewayTransportError({
-    kind: "closed",
-    reason: firstGatewayErrorLine(params.cause.message),
-    connectionDetails: params.connectionDetails,
-    message: [
-      `Gateway not reachable at ${projectGatewayUrlForDiagnostics(params.connectionDetails.url)}${code ? ` (${code})` : ""}.`,
-      "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
-      params.connectionDetails.message,
-    ].join("\n"),
-  });
-}
-
 function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);
 }
@@ -758,6 +722,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     }
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let responseWork: Promise<void> | undefined;
     const startAbort = new AbortController();
     let primaryRequestStarted = false;
     let suppressedPreHelloCleanCloses = 0;
@@ -777,7 +742,13 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
           resolve(value as T);
         }
       };
-      void stopGatewayClient(client).finally(complete);
+      const response = responseWork;
+      const stopped = stopGatewayClient(client);
+      if (response) {
+        void Promise.allSettled([stopped, response]).then(complete);
+      } else {
+        void stopped.then(complete, complete);
+      }
     };
     const stop = (err?: Error, value?: T) => {
       if (settled) {
@@ -877,6 +848,13 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
               signal: opts.signal,
               onAccepted: opts.onAccepted,
             });
+            if (opts.onResponse) {
+              const onResponse = opts.onResponse;
+              responseWork = Promise.resolve().then(() =>
+                onResponse(client.request.bind(client), startAbort.signal),
+              );
+              await responseWork;
+            }
             stop(undefined, result);
           } catch (err) {
             if (settled || dispatchGeneration !== connectionGeneration) {

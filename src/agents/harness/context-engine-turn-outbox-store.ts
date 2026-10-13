@@ -1,4 +1,8 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import {
+  getSessionActorStorageBinding,
+  type SessionActorStorageBinding,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
@@ -14,8 +18,9 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { openMemoryContextEngineTurnOutboxStore } from "./context-engine-turn-outbox-memory.js";
 import type {
-  ContextEngineTurnOutboxStore,
+  ContextEngineTurnOutboxWorkerStore,
   ContextEngineTurnOutboxWorkerOperations,
 } from "./context-engine-turn-outbox.js";
 
@@ -61,30 +66,12 @@ async function runContextEngineTurnOutboxCommand(
   }
 }
 
-/** The durable context-engine turn outbox of one agent database, executed in its worker. */
-export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
-  Readonly<{
-    [
-      Type in
-        | "prepareRun"
-        | "enqueueIntent"
-        | "acceptIntent"
-        | "publishClosedTurn"
-        | "discardIntent"
-    ]: (
-      input: ContextEngineTurnOutboxWorkerOperations[Type]["input"],
-    ) => Promise<
-      ContextEngineTurnOutboxWorkerOperations[Type]["output"] extends undefined
-        ? void
-        : ContextEngineTurnOutboxWorkerOperations[Type]["output"]
-    >;
-  }>;
-
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;
   path: string;
   sessionKey?: string;
   sessionId?: string;
+  sessionActor?: SessionActorStorageBinding;
   incognito?: {
     actor: IncognitoSessionActor;
     authority: IncognitoSessionAuthority;
@@ -92,6 +79,10 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
     sessionId: string;
   };
 }): ContextEngineTurnOutboxWorkerStore {
+  const memory = getSessionActorStorageBinding({ ...target, storePath: target.path });
+  if (memory) {
+    return openMemoryContextEngineTurnOutboxStore(memory);
+  }
   const captured = { ...target };
   const binding =
     target.incognito ??

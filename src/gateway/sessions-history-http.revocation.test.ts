@@ -1,6 +1,10 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, get, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 class FixtureState {
@@ -100,11 +104,13 @@ vi.mock("./http-utils.js", () => ({
   },
 }));
 
+// mock-isolation: HTTP history fixtures control visibility and target replacement during awaited reads.
 vi.mock("./session-sharing.js", () => ({
-  createSessionListEntryFilter: ({ client }: { client: unknown }) =>
-    client ? () => fixture.visible : undefined,
+  prepareProjectedSessionSharing: ({ client }: { client: unknown }) => ({
+    entryFilter: client ? () => fixture.visible : undefined,
+  }),
   resolveSessionSharingTarget: () => ({
-    canonicalKey: "agent:main",
+    canonicalKey: "agent:main:main",
     agentId: "main",
     entry: {
       sessionId: fixture.sessionId,
@@ -115,14 +121,32 @@ vi.mock("./session-sharing.js", () => ({
   }),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  resolveGatewaySessionStoreTargetWithStore: () => ({
-    storePath: "/tmp",
-    storeKeys: ["agent:main"],
-    canonicalKey: "agent:main",
-    agentId: "main",
-    store: {},
+// mock-isolation: Revocation tests retain synthetic mutation facts without admitting a physical store.
+vi.mock("./session-sharing-preparation.js", () => ({
+  prepareSessionMutationFacts: async () => ({
+    storageTarget: { agentId: "main", canonicalKey: "agent:main:main", storePath: "/tmp" },
+    prepareRead: () => undefined,
+    readCurrent: () => ({
+      target: {
+        agentId: "main",
+        canonicalKey: "agent:main:main",
+        storeKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
+        storePath: "/tmp",
+        entry: {
+          sessionId: fixture.sessionId,
+          lifecycleRevision: fixture.lifecycleRevision,
+          sessionStartedAt: fixture.sessionStartedAt,
+        },
+      },
+      membership: new Set<string>(),
+    }),
+    release() {},
   }),
+}));
+
+// mock-isolation: History fixtures resolve synthetic transcript paths and current entries without disk lookup.
+vi.mock("./session-utils.js", () => ({
   resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     lifecycleRevision: fixture.lifecycleRevision,
@@ -183,7 +207,7 @@ const guestProfile = {
   hasAvatar: false,
   updatedAt: 1,
 };
-const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
+const SESSION_HISTORY_URL = "/sessions/agent%3Amain%3Amain/history";
 const SESSION_FILE = "/tmp/session-1.jsonl";
 const TRUSTED_PROXY_STARTUP_OPTIONS = {
   auth: { mode: "trusted-proxy" } as never,
@@ -354,7 +378,7 @@ function emitTranscriptTextUpdate(
     target: {
       agentId: "main",
       sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionKey: "agent:main:main",
       storePath: "/tmp",
     },
     lifecycleRevision: "before-reset",
@@ -372,8 +396,11 @@ async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
   expect(res.writes.join("")).not.toContain(text);
 }
 
+beforeEach(() => setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig }));
+
 afterEach(() => {
   fixture = new FixtureState();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session history SSE auth revocation", () => {
@@ -575,6 +602,7 @@ describe("session history SSE auth revocation", () => {
     const { res } = await openStream();
 
     fixture.gatewayConfig = {};
+    setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
     emitTranscriptTextUpdate("stale-proxy event");
 
@@ -586,6 +614,7 @@ describe("session history SSE auth revocation", () => {
 
     fixture.authChecks = 0;
     fixture.gatewayConfig = {};
+    setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
     emitTranscriptTextUpdate("other session", {
       sessionFile: "/tmp/other-session.jsonl",

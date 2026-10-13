@@ -1,5 +1,6 @@
 import { parseControlUiSessionPath } from "@openclaw/session-url-contract/parse";
 import { afterEach, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -15,6 +16,7 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 it("resolves only current public instances before choosing a URL candidate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const privateKey = "agent:main:dashboard:12345678-bbbb-4000-8000-000000000002";
     const scope = { agentId: "main", sessionKey: key };

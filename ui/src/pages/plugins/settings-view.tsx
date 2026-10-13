@@ -17,8 +17,8 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
+import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import "../../plugins/control-ui-contributions.ts";
 import { renderArtTile } from "./consent-dialog.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
@@ -308,7 +308,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
       ) : (
         <>
           <div id="plugin-settings-advanced" class="settings-stack">
-            <openclaw-plugin-manager />
+            <PluginManager />
             <SettingsSection
               title={t("pluginsPage.advanced")}
               description={t("pluginsPage.advancedDescription")}
@@ -365,14 +365,14 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
             })
           }
         />
-        <wa-tab-panel
+        <div
           id="plugin-settings-panel"
-          name={props.tab}
-          prop:active={true}
+          role="tabpanel"
+          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}
-        </wa-tab-panel>
+        </div>
       </div>
     </SettingsPage>
   );

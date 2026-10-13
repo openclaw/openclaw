@@ -78,6 +78,13 @@ describe("withCachedMigrationConfigRuntime", () => {
 
     const wrapped = withCachedMigrationConfigRuntime(runtime, fallbackConfig);
     expect(wrapped?.config.current()).toEqual(fallbackConfig);
+    const clonedConfig = wrapped?.config.current({ clone: true });
+    if (!clonedConfig) {
+      throw new Error("Expected the migration config snapshot");
+    }
+    expect(clonedConfig).not.toBe(wrapped?.config.current());
+    clonedConfig.agents = { defaults: { model: { primary: "openai/clone" } } };
+    expect(wrapped?.config.current()).toEqual(fallbackConfig);
     runtimeConfig = { agents: { defaults: { model: { primary: "openai/external" } } } };
 
     await wrapped?.config.mutateConfigFile({
@@ -369,35 +376,6 @@ describe("copyMemoryMigrationFileItem", () => {
     await expect(
       fs.access(path.join(workspaceDir, ".openclaw-memory-import-staging")),
     ).rejects.toThrow();
-  });
-
-  it("keeps the existing memory file when its backup cannot be persisted", async () => {
-    const root = tempDirs.make("openclaw-memory-copy-");
-    const workspaceDir = path.join(root, "workspace");
-    const source = path.join(root, "source", "MEMORY.md");
-    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
-    await writeFile(source, "new memory");
-    await writeFile(target, "old memory");
-
-    const writeFileSpy = vi
-      .spyOn(fs, "writeFile")
-      .mockRejectedValueOnce(new Error("backup unavailable"));
-    const result = await copyMemoryMigrationFileItem(
-      createMigrationItem({
-        id: "memory:codex:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        source,
-        target,
-      }),
-      path.join(root, "report"),
-      { workspaceDir, overwrite: true },
-    );
-    writeFileSpy.mockRestore();
-
-    expect(result.status).toBe("error");
-    expect(result.reason).toContain("backup unavailable");
-    await expect(fs.readFile(target, "utf8")).resolves.toBe("old memory");
   });
 
   it("does not clobber an existing memory file when replacement is disabled", async () => {

@@ -247,7 +247,6 @@ export async function resolveEmbeddedRunTerminal(input: {
   const intentionalTerminalCompletion =
     !terminalAborted &&
     !terminalTimedOut &&
-    payloadCount === 0 &&
     resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.

@@ -1,7 +1,4 @@
-import {
-  ensureSystemPromptCacheBoundary,
-  splitSystemPromptRelocatableBoundary,
-} from "@openclaw/ai/internal/shared";
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -64,7 +61,7 @@ import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-ref
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { isSetupCredentialAccessible } from "../auth-profiles/setup-access.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runtime.js";
 import { resolveRuntimeAuthProfileAgentDir } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -301,7 +298,7 @@ async function prepareCliRunContextWithinReadFence(
     workspaceDir,
     cwd,
   });
-  const toolPolicy = resolveCliRuntimeToolPolicy({
+  const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
     policySessionKey,
     policyAgentId,
@@ -362,10 +359,10 @@ async function prepareCliRunContextWithinReadFence(
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
-  const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) => {
+  const loadScopedAuthStore = (options: { profileId?: string } = {}) => {
     params.assertCurrent?.();
-    return loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: options.readOnly ?? true,
+    return loadAuthProfileStoreForRuntimeAsync(agentDir, {
+      readOnly: true,
       profileId: options.profileId,
       externalCli: externalCliDiscoveryForProviderAuth({
         cfg: params.config,
@@ -375,12 +372,12 @@ async function prepareCliRunContextWithinReadFence(
     });
   };
   if (effectiveAuthProfileId) {
-    authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
-    authStore = loadScopedAuthStore();
+    authStore = await loadScopedAuthStore();
     effectiveAuthProfileId =
       resolveAuthProfileOrder({
         cfg: params.config,
@@ -436,10 +433,10 @@ async function prepareCliRunContextWithinReadFence(
         agentDir,
       });
     };
-    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
+    const selectedAuthStore = await loadScopedAuthStore({ profileId: authProfileId });
     const resolvedAuth = await resolveApiKeyForProfile({
       cfg: params.config,
-      store: writableAuthStore,
+      store: selectedAuthStore,
       profileId: authProfileId,
       agentDir,
       // Claude's selected profile is an account boundary. Never refresh or
@@ -450,13 +447,13 @@ async function prepareCliRunContextWithinReadFence(
     if (backendAuthPolicy.strictSelectedProfile && resolvedAuth?.profileId !== authProfileId) {
       throw profileResolutionError(
         resolvedAuth?.provider ??
-          writableAuthStore.profiles[authProfileId]?.provider ??
+          selectedAuthStore.profiles[authProfileId]?.provider ??
           params.provider,
         resolvedAuth?.profileId,
       );
     }
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
-    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
+    authStore = await loadScopedAuthStore({ profileId: resolvedAuthProfileId });
     authCredential = resolvedAuth?.credential ?? authStore.profiles[resolvedAuthProfileId];
     if (
       backendAuthPolicy?.strictSelectedProfile &&
@@ -783,7 +780,7 @@ async function prepareCliRunContextWithinReadFence(
   const mcpToolAuth = mcpContextBase
     ? {
         ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
-        store: authStore ?? loadScopedAuthStore(),
+        store: authStore ?? (await loadScopedAuthStore()),
       }
     : undefined;
   params.assertCurrent?.();
@@ -1055,7 +1052,7 @@ async function prepareCliRunContextWithinReadFence(
       rawLoopbackServerConfig && backendResolved.bundleMcpMode === "claude-config-file"
         ? applyClaudeManagedMcpTimeout(rawLoopbackServerConfig)
         : rawLoopbackServerConfig;
-    const nativeMcpCapabilityProfile = mcp.resolveCliNativeMcpPolicy(params, {
+    const nativeMcpCapabilityProfile = await mcp.resolveCliNativeMcpPolicy(params, {
       config: runConfig,
       policySessionKey,
       policyAgentId,
@@ -1189,7 +1186,7 @@ async function prepareCliRunContextWithinReadFence(
       skipLocalCredential: skipLocalCredentialEpoch,
     });
     const authBindingFingerprint = params.onSuccessfulAuthBinding
-      ? resolveCliAuthBindingFingerprint({
+      ? await resolveCliAuthBindingFingerprint({
           provider: params.provider,
           config: runConfig,
           agentDir,
@@ -1442,13 +1439,14 @@ async function prepareCliRunContextWithinReadFence(
           modelDisplay,
           agentId: sessionAgentId,
           systemPrompt: builtSystemPrompt,
+          openClawMcpToolNames: systemAgentMcpConfig
+            ? ["openclaw"]
+            : bundleMcpEnabled
+              ? projectedTools.map((tool) => tool.name)
+              : [],
         }) ?? builtSystemPrompt)
       : builtSystemPrompt;
-    const turnRuntimeFacts =
-      params.runtimeFactsInTurn && !skipsTurnPreparation
-        ? splitSystemPromptRelocatableBoundary(transformedSystemPrompt)
-        : undefined;
-    let systemPrompt = turnRuntimeFacts?.remainingPrompt ?? transformedSystemPrompt;
+    let systemPrompt = transformedSystemPrompt;
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = (params = await admitCliRunParams(params, workspaceResolution.agentId));
@@ -1512,6 +1510,8 @@ async function prepareCliRunContextWithinReadFence(
         prompt: preparedPrompt,
         systemPrompt,
         privateContext: executionTarget.kind === "plugin",
+        backendId: backendResolved.id,
+        runtimeFactsInTurn: params.runtimeFactsInTurn,
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
@@ -1530,11 +1530,7 @@ async function prepareCliRunContextWithinReadFence(
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
-        context: [
-          turnRuntimeFacts?.relocatable,
-          promptBuildHookResult?.appendContext,
-          authorizedPromptBuildResult?.appendContext,
-        ],
+        context: [promptBuildHookResult?.appendContext, authorizedPromptBuildResult?.appendContext],
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();

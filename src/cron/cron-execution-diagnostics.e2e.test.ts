@@ -176,13 +176,15 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
         status: "skipped",
         provider: "ollama",
         model: "diagnostic-model",
-        error: expect.stringContaining("unavailable"),
+        error: expect.stringContaining(
+          "Start the local provider or correct its configured endpoint",
+        ),
         diagnostics: {
           entries: expect.arrayContaining([
             expect.objectContaining({
               source: "model-preflight",
               severity: "warn",
-              message: expect.stringContaining("unavailable"),
+              message: expect.stringContaining("the local provider preflight failed"),
             }),
           ]),
         },

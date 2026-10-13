@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/macos-titlebar-controls.runtime.ts";
+import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import "./app-host.ts";
@@ -257,12 +258,14 @@ describe("OpenClaw native shell", () => {
     shell.navDrawerOpen = false;
     shell.routeState = { routeId: "appearance" };
     const container = document.body.appendChild(document.createElement("div"));
-    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const shadow = container.attachShadow({ mode: "open" });
+    const modal = shadow.appendChild(document.createElement("openclaw-modal-dialog"));
     const cancel = modal.appendChild(document.createElement("button"));
 
     try {
-      const { dialog } = await getRenderedModalDialog(container);
+      const { dialog } = await getRenderedModalDialog(shadow);
       expect(dialog.open).toBe(true);
+      expect(dialog.getRootNode()).toBe(shadow);
       expect(document.querySelector("dialog[open]")).toBeNull();
       cancel.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
       const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });

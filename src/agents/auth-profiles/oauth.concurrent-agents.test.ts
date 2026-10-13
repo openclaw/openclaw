@@ -35,7 +35,11 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
+import {
+  ensureAuthProfileStore,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+  saveAuthProfileStore,
+} from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -184,6 +188,19 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           profileId,
         }),
       ).toBeUndefined();
+      const [copiedOwner, independentOwner, portableOwner] = await Promise.all(
+        subAgents
+          .slice(1)
+          .map((agentDir) =>
+            work.track(() =>
+              resolvePersistedAuthProfileOwnerAgentDirAsync({ agentDir, profileId }),
+            ),
+          ),
+      );
+      expect(copiedOwner).toBeUndefined();
+      expect(independentOwner).toBe(subAgents[2]);
+      // A portable copy is not fenced, but its matching refresh generation still reads main.
+      expect(portableOwner).toBeUndefined();
       expect(callCount).toBe(1);
       for (const agentDir of subAgents.slice(0, 2)) {
         const fenced = read(agentDir);

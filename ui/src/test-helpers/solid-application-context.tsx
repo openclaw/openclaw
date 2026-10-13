@@ -9,7 +9,7 @@ export { createApplicationGateway } from "./application-context-fixtures.ts";
 export function createSolidApplicationContextProvider(initial: ApplicationContext) {
   const [context, setContext] = createSignal(normalizeApplicationContext(initial));
   return {
-    setContext(value: ApplicationContext) {
+    setContext(this: void, value: ApplicationContext) {
       setContext(normalizeApplicationContext(value));
     },
     wrapper(this: void, props: { children: JSX.Element }) {

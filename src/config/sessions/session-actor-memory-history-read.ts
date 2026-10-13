@@ -2,6 +2,7 @@ import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-bud
 import { readSessionActorMemoryAnchors } from "./session-actor-memory-history-anchors.js";
 import {
   readSessionActorMemoryContext,
+  readSessionActorMemoryContextMessages,
   selectSessionActorMemoryAdmittedWindow,
 } from "./session-actor-memory-history-context.js";
 import type {
@@ -76,6 +77,8 @@ export function readSessionActorMemoryHistoryQuery(
       }
       return readSessionActorMemoryHistory(window, query.input.limits);
     }
+    case "session.history.context-messages":
+      return readSessionActorMemoryContextMessages(window);
     case "session.history.context":
       return readSessionActorMemoryContext(window, scope, query.input.through, query.input.limits);
     case "session.history.raw-delta":
@@ -89,6 +92,11 @@ export function readSessionActorMemoryHistoryQuery(
     case "session.history.recent":
       return readSessionActorMemoryProjection(window, readScope, {
         kind: "recent",
+        ...query.input,
+      });
+    case "session.history.recent-text":
+      return readSessionActorMemoryProjection(window, readScope, {
+        kind: "recent-text",
         ...query.input,
       });
     case "session.history.page":

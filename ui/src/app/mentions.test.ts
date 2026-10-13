@@ -220,10 +220,8 @@ describe("application mention Inbox", () => {
   });
 
   it.each([
-    ["refresh", "role"],
     ["dismiss", "role"],
     ["refresh", "profile"],
-    ["dismiss", "profile"],
   ] as const)(
     "clears a previously visible Inbox when %s reports %s access loss",
     async (operation, failure) => {

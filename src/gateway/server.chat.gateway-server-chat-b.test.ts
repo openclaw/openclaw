@@ -104,6 +104,7 @@ import {
   type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -248,6 +249,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
 }
 
 async function withDirectChatSession(
@@ -5217,7 +5219,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
+  test("chat.history waits for a dirty projection to rebuild", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
@@ -5227,7 +5229,7 @@ describe("gateway server chat", () => {
         resolveSqliteTranscriptScope(makeMainSessionScope(testState.sessionStorePath)),
       );
       const database = openOpenClawAgentDatabase(databaseOptions);
-      // Keep the writer-held rebuild pending until the real RPC observes its dirty state.
+      // Release the writer so the history worker can rebuild the marked projection.
       await runExclusiveSqliteSessionWrite(
         databaseOptions,
         async () => {
@@ -5237,14 +5239,10 @@ describe("gateway server chat", () => {
             )
             .run("sess-main");
           expect(marked.changes).toBe(1);
-          const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-          expect(rebuilding.ok).toBe(false);
-          expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
         },
         "sessions.transcript-index.preflight",
       );
 
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
       const ready = await rpcReq<{ messages?: unknown[] }>(
         ws,
         "chat.history",

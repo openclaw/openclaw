@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import {
-  COMMAND_PALETTE_SHORTCUT,
+  COMMAND_PALETTE_SHORTCUTS,
   createKeyboardShortcutMatcher,
 } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
@@ -44,7 +44,7 @@ function buildSandboxShortcutBridgeHtml(): string {
   const HTMLElementType=HTMLElement;
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
-  const combo=${JSON.stringify(COMMAND_PALETTE_SHORTCUT)};
+  const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
   const matcher=(${createKeyboardShortcutMatcher.toString()})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
@@ -66,7 +66,12 @@ function buildSandboxShortcutBridgeHtml(): string {
     if(!nonce||!event.isTrusted||apply(preventedGetter,event,[])||apply(repeatGetter,event,[]))return;
     const snapshot=create(null);
     for(let index=0;index<fields.length;index++)snapshot[fields[index]]=apply(getters[index],event,[]);
-    if(!matcher.matchesKeyboardShortcut(combo,snapshot,applePlatform,matcher.resolveAsciiShortcutKey(snapshot)))return;
+    const asciiKey=matcher.resolveAsciiShortcutKey(snapshot);
+    let matched=false;
+    for(let index=0;index<combos.length;index++){
+      if(matcher.matchesKeyboardShortcut(combos[index],snapshot,applePlatform,asciiKey)){matched=true;break;}
+    }
+    if(!matched)return;
     const target=apply(path,event,[])[0];
     returnFocus=target instanceof HTMLElementType?target:null;
     apply(prevent,event,[]);

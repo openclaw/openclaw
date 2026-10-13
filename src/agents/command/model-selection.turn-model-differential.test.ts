@@ -62,8 +62,10 @@ vi.mock("../auth-profiles/order.js", () => ({
 vi.mock("../auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(async () => undefined),
 }));
+// mock-isolation: Selection fixtures have no auth profiles and must not discover host accounts.
 vi.mock("../auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
+  ensureAuthProfileStoreAsync: () => ({ profiles: {} }),
 }));
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
@@ -148,14 +150,6 @@ vi.mock("./model-ref.js", () => ({
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
       : { provider: defaultProvider, model: raw };
   },
-}));
-vi.mock("./runtime-loaders.js", () => ({
-  loadTranscriptResolveRuntime: async () => ({
-    resolveSessionTranscriptFile: async (params: { sessionEntry?: SessionEntry }) => ({
-      sessionEntry: params.sessionEntry,
-      sessionFile: "/tmp/turn-model-session.jsonl",
-    }),
-  }),
 }));
 
 const { resolveEmbeddedModelSelection } = await import("./model-selection.js");

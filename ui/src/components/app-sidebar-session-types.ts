@@ -277,21 +277,6 @@ export type SidebarSessionOwnerFilter = {
 };
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
-export function resolveSidebarSessionsScrollState(
-  element: HTMLElement,
-): SidebarSessionsScrollState {
-  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-  if (maxScrollTop <= 1) {
-    return "none";
-  }
-  if (element.scrollTop <= 1) {
-    return "top";
-  }
-  if (element.scrollTop >= maxScrollTop - 1) {
-    return "bottom";
-  }
-  return "middle";
-}
 export type SidebarSectionDropTarget = {
   sectionId: string;
   position: "before" | "after";

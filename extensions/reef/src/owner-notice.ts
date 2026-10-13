@@ -2,6 +2,7 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { mergeReefRejectionNotice } from "./trust-store-format.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
@@ -111,7 +112,7 @@ export class ReefReceiptNotifier {
         for (const rejection of recovered) {
           this.applyState(
             state,
-            this.mergeStates(this.snapshotState(state), rejection.reservedNotice!),
+            mergeReefRejectionNotice(this.snapshotState(state), rejection.reservedNotice!),
           );
         }
         this.rememberPeerState(peer, state);
@@ -180,7 +181,7 @@ export class ReefReceiptNotifier {
     resendBlocked: boolean,
   ): ReefNoticePlan {
     if (reserved) {
-      const state = this.mergeStates(previous, reserved);
+      const state = mergeReefRejectionNotice(previous, reserved);
       return {
         notice: this.buildNotice(rejection, false),
         state,
@@ -323,21 +324,6 @@ export class ReefReceiptNotifier {
     } else {
       target.lastResendAt = state.lastResendAt;
     }
-  }
-
-  private mergeStates(
-    current: ReefRejectionNoticeState | undefined,
-    persisted: ReefRejectionNoticeState,
-  ): ReefRejectionNoticeState {
-    const hasResendAt = current?.lastResendAt !== undefined || persisted.lastResendAt !== undefined;
-    return {
-      lastRejectionAt: Math.max(current?.lastRejectionAt ?? 0, persisted.lastRejectionAt),
-      ...(hasResendAt
-        ? {
-            lastResendAt: Math.max(current?.lastResendAt ?? 0, persisted.lastResendAt ?? 0),
-          }
-        : {}),
-    };
   }
 
   private buildNotice(rejection: ReefDeliveryRejection, allowResend: boolean): ReefRejectionNotice {

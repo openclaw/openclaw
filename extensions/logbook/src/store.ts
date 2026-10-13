@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { openEngineWorkerStore } from "openclaw/plugin-sdk/database-engine-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/file-access-runtime";
-import {
-  openSqliteWorkerStore,
-  SqliteWorkerError,
-  type SqliteWorkerStore,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { SqliteWorkerError, type SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { acquireLogbookFrameIo } from "./frame-io.js";
 import type {
   LogbookBatchInput,
@@ -29,11 +26,14 @@ export class LogbookStore {
       throw new Error("Logbook data directory is required");
     }
     const root = await canonicalPathFromExistingAncestor(path.resolve(dataDir));
-    const worker = await openSqliteWorkerStore<LogbookOperations>({
-      moduleUrl: workerModuleUrl,
-      databasePath: path.join(dataDir, "logbook.sqlite"),
-      input: { dataDir: root },
-    });
+    const worker = await openEngineWorkerStore<LogbookOperations>(
+      {
+        moduleUrl: workerModuleUrl,
+        databasePath: path.join(dataDir, "logbook.sqlite"),
+        input: { dataDir: root },
+      },
+      undefined,
+    );
     return new LogbookStore(dataDir, worker, acquireLogbookFrameIo(root));
   }
 

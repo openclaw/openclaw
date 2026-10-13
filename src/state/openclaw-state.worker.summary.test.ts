@@ -288,16 +288,16 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(first).add(second);
-    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
+    await first[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     await second[SQLITE_WORKER_PREPARE_COMMAND]?.(operation);
     expect(
       runWithSqliteWorkerStateContext(context, () =>
         first.execute({
-          type: "plugins.metadata.read",
-          input: { selector: "bundled-discovery", artifactPreservingReadOnly: false },
+          type: "claws.install-schema-versions",
+          input: { artifactPreservingReadOnly: false },
         }),
       ),
-    ).toBeUndefined();
+    ).toEqual([]);
     expect(readFileSync(databasePath)).toEqual(initialBytes);
 
     const scope = "tests/health-native-borrow";
@@ -370,7 +370,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
       }),
     );
     backends.add(reopened);
-    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("plugins.metadata.read");
+    await reopened[SQLITE_WORKER_PREPARE_COMMAND]?.("claws.install-schema-versions");
     const reopenedDatabase = openOpenClawStateDatabase();
     if (operation === "config.health.patch") {
       expect(readConfigHealthStateInDatabase(reopenedDatabase.db)).toMatchObject({

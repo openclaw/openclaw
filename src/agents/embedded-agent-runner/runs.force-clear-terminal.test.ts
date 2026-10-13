@@ -87,7 +87,8 @@ describe("force-clear terminal state persistence", () => {
   it("defers followups until the old owner settles", async () => {
     // Keep owner ordering independent of the wall-clock drain deadline.
     vi.useFakeTimers({ toFake: ["Date"] });
-    const handle = createRunHandle(),
+    const cancelled = createDeferredCore();
+    const handle = createRunHandle({ abort: () => cancelled.resolve() }),
       operation = startReply(handle);
     const observed: boolean[] = [];
     runAfterReplyOperationClear(operation, () => {
@@ -96,6 +97,7 @@ describe("force-clear terminal state persistence", () => {
     const recovery = forceClear(100);
     expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
     expect(observed).toEqual([]);
+    await cancelled.promise;
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
     let settled = false;
     void recovery.then(() => {

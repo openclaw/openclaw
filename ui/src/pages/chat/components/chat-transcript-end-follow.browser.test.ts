@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
@@ -73,8 +74,12 @@ afterEach(() => {
   expect(browserErrors).toEqual([]);
 });
 
-async function mountEndFollowFixture() {
+async function mountEndFollowFixture(savedOffset?: number) {
   await page.viewport(1200, 900);
+  saveChatSessionScrollPosition("end-follow-browser", "agent:main:end-follow", {
+    scrollTop: savedOffset ?? 0,
+    anchorToEnd: savedOffset === undefined,
+  });
   const host = new EndFollowFixture();
   fixture = host;
   host.style.cssText = "display: block; width: 800px";
@@ -104,6 +109,38 @@ async function commitTask(host: EndFollowFixture, change: () => void) {
     }, 0);
   });
 }
+
+it("paints a saved reader only after its measured range and offset commit together", async () => {
+  const visible: Array<{ top: number; height: number }> = [];
+  let frame = 0;
+  const frames = new Promise<void>((resolve) => {
+    let count = 0;
+    const sample = () => {
+      const thread = fixture?.querySelector<HTMLElement>(".chat-thread");
+      const extent = thread?.querySelector<HTMLElement>(".chat-thread-inner--virtual");
+      if (thread && extent && getComputedStyle(extent).visibility !== "hidden") {
+        visible.push({ top: thread.scrollTop, height: extent.offsetHeight });
+      }
+      if (++count < 24 || visible.length === 0) {
+        frame = requestAnimationFrame(sample);
+      } else {
+        resolve();
+      }
+    };
+    frame = requestAnimationFrame(sample);
+  });
+  try {
+    await mountEndFollowFixture(400);
+    await frames;
+    expect(visible.length).toBeGreaterThan(0);
+    expect(
+      visible.every(({ top, height }) => top === 400 && height === 1300),
+      JSON.stringify(visible),
+    ).toBe(true);
+  } finally {
+    cancelAnimationFrame(frame);
+  }
+});
 
 it.each(["requested", "smooth no-op", "native observation"] as const)(
   "preserves the %s end through same-key row measurement growth",
@@ -363,8 +400,9 @@ it.each([
       host.transcript.scrollToEnd({ behavior });
       await expect.poll(distance).toBe(0);
     } else {
-      thread.scrollTop = 0;
-      await settleFrames();
+      await new Promise<void>((resolve) => {
+        host.transcript.scrollToOffset(0, () => resolve());
+      });
       let arrived = false;
       const stop = subscribeTranscriptScroll(thread, (event) => {
         if (event.type === "offset" && event.scrolling && distance() === 0) {

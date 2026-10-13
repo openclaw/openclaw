@@ -117,6 +117,8 @@ is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
     sessions: {
       // "self" | "tree" | "agent" | "all"
       visibility: "all",
+      // Opt in to sessions_send targets in threads/topics (default false)
+      allowThreadTargets: false,
     },
   },
 }
@@ -173,7 +175,7 @@ Controls inline attachment support for `sessions_spawn`.
     - Sandboxed children receive only their session-owned attachments read-only at `/openclaw/attachments/<uuid>/`. Attachment-bearing agent-scoped sessions use a dedicated runtime so sibling guests cannot inherit the projection. Shared-scope sandboxes and backends without read-only resource projection reject attachment-bearing spawns before staging.
     - Unsandboxed children receive the absolute Gateway-owned path and can read it through workspace-scoped file/media tools.
     - ACP attachments are image-only and forwarded inline to the ACP runtime after the same file count, per-file byte, and total byte limits pass.
-    - Attachment content is automatically redacted from transcript persistence.
+    - Inline attachment bytes are omitted from transcript persistence; this is binary-payload handling, not secret masking.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
     - Subagent attachment file permissions are `0700` for directories and `0600` for files.
     - Subagent cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.

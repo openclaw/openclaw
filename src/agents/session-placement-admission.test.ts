@@ -1,6 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  resetCommandLane,
+} from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
 import { closeAdmittedRunDelegatedAuthority } from "./admitted-run-context.js";
@@ -40,11 +48,16 @@ const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = 
   runLocal,
 ) => await runLocal();
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
   settleRequesterAfterSessionSpawns.mockReset();
   settleRequesterAfterSessionSpawns.mockResolvedValue(true);
+  clearRuntimeConfigSnapshot();
 });
 
 describe("captured compaction placement owner", () => {
@@ -252,7 +265,14 @@ describe("local turn placement admission", () => {
       rotateAgentEventLifecycleGeneration();
     }
     try {
-      gate.resolve();
+      if (stage === "queued" && change === "cancelled") {
+        expect(getCommandLaneSnapshot(resolveSessionLane("agent:main:fenced"))).toMatchObject({
+          activeCount: 1,
+          queuedCount: 0,
+        });
+      } else {
+        gate.resolve();
+      }
       expect(await result).toMatchObject({
         name: change === "cancelled" ? "Error" : "AbortError",
       });
@@ -282,7 +302,7 @@ describe("local turn placement admission", () => {
             sessionKey: "agent:main:main",
             runId: "run-1",
           });
-          expect(params).toBe(activeParams);
+          expect(params).toEqual({ ...activeParams, abortSignal: expect.any(AbortSignal) });
           const result = await runLocal();
           events.push("release");
           return result;

@@ -1,17 +1,27 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
-import * as sessionStore from "../session-utils-store.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
+import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
+import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
@@ -22,20 +32,30 @@ const dispatchTestMocks = vi.hoisted(() => ({
   resolveTarget: vi.fn(),
 }));
 
+const sessionTargets = new WeakMap<GatewaySessionStoreTargetWithStore, Promise<string>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanup();
+  });
+});
+afterEach(() => clearRuntimeConfigSnapshot());
+
 export function getDispatchTestMocks() {
   return dispatchTestMocks;
 }
 
 beforeEach(() => {
-  vi.spyOn(sessionStore, "loadGatewaySessionEntryReadOnly").mockImplementation(
-    (key, opts, cfg = getRuntimeConfig()) => {
-      const target = dispatchTestMocks.resolveTarget({
-        cfg,
-        key,
-        ...opts,
-        exactRead: true,
-        readOnly: true,
-      });
+  vi.spyOn(sessionStoreLookup, "resolveGatewaySessionStoreTargetWithStore").mockImplementation(
+    (params) => dispatchTestMocks.resolveTarget(params),
+  );
+  vi.spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(
+    async (params) => {
+      params.assertActive?.();
+      const cfg = params.cfg ?? getRuntimeConfig();
+      const target = await dispatchTestMocks.resolveTarget({ ...params, cfg });
       const match = findCanonicalStoreMatch(target.store, target.storeKeys);
       return {
         ...target,
@@ -63,7 +83,31 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    resolveGatewaySessionStoreTargetWithStore: dispatchTestMocks.resolveTarget,
+    resolveGatewaySessionStoreTargetInWorker: async (
+      params: Parameters<typeof actual.resolveGatewaySessionStoreTargetInWorker>[0],
+    ) => {
+      const target: GatewaySessionStoreTargetWithStore =
+        await dispatchTestMocks.resolveTarget(params);
+      if (!params.onSelected || target.capturedReadSource) {
+        return target;
+      }
+      let prepared = sessionTargets.get(target);
+      if (!prepared) {
+        prepared = (async () => {
+          const storePath = path.join(tempDirs.make("openclaw-dispatch-session-"), "sessions.json");
+          for (const [sessionKey, entry] of Object.entries(target.store)) {
+            await replaceSessionEntry({ agentId: target.agentId, storePath, sessionKey }, entry);
+          }
+          return storePath;
+        })();
+        sessionTargets.set(target, prepared);
+      }
+      // Workspace admission retains the real worker's publication and physical source.
+      return actual.resolveGatewaySessionStoreTargetInWorker({
+        ...params,
+        cfg: { ...params.cfg, session: { ...params.cfg.session, store: await prepared } },
+      });
+    },
   };
 });
 
@@ -178,7 +222,7 @@ export function makeDispatchTestContext(
       return { available: true, node };
     });
   }
-  return {
+  const context = {
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -214,6 +258,8 @@ export function makeDispatchTestContext(
     ...overrides,
     workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
+  setRuntimeConfigSnapshot(context.getRuntimeConfig());
+  return context;
 }
 
 export async function invokeSessionDispatch(

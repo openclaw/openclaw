@@ -335,6 +335,17 @@ place, and a running Gateway can otherwise try to load core or plugin files
 mid-swap. Restart the Gateway after the package manager finishes so it picks up
 the new install.
 
+On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
+30-second baseline package-fingerprint budget before replacing any files. It
+then reports `Package rollback verification timed out` and
+`retained package tree changed` even when the installed tree is unchanged.
+A newer candidate cannot repair the updater already running. After creating a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
+stop the Gateway and use its existing package manager to install the target
+release manually. Run `openclaw doctor --fix`, refresh the service with
+`openclaw gateway install --force`, then start and verify the Gateway.
+Published OpenClaw 2026.9.5 and later include the baseline-timeout fallback.
+
 Gateways with installation-replacement detection also check the installed build
 on their maintenance tick. If the running and installed builds differ, the
 Gateway records the replacement, stops accepting new work, and gives active work
@@ -427,7 +438,10 @@ or when the invoking package is orphaned or not the only active OpenClaw
 install there.
 
 pnpm 12 retains the `global/v11` layout; the layout number does not need to match
-the pnpm CLI major version.
+the pnpm CLI major version. New or repaired Gateway service definitions use the
+active project hash link, so the saved command survives pnpm replacing its
+versioned project directory. Ownership detection also recognizes commands that
+already point inside a project's `.pnpm` directory.
 Staged pnpm updates isolate both the global project and its launchers. OpenClaw
 sets the staging bin through CLI configuration for pnpm 10/11 and child-process
 environment configuration for pnpm 12, then verifies both destinations before

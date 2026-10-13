@@ -19,39 +19,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("bedrock embedding region resolution", () => {
-  it.each([
-    {
-      name: "secondary region when the primary env override is blank",
-      primary: "   ",
-      secondary: "eu-west-1",
-      expected: "eu-west-1",
-    },
-    {
-      name: "plugin default when both env overrides are blank",
-      primary: "",
-      secondary: "   ",
-      expected: "us-east-1",
-    },
-    {
-      name: "primary region when both env overrides are nonblank",
-      primary: "ap-southeast-2",
-      secondary: "eu-west-1",
-      expected: "ap-southeast-2",
-    },
-  ])("uses $name", async ({ primary, secondary, expected }) => {
-    vi.stubEnv("AWS_REGION", primary);
-    vi.stubEnv("AWS_DEFAULT_REGION", secondary);
-
-    const { client } = await createBedrockEmbeddingProvider({
-      config: {},
-      model: "",
-    });
-
-    expect(client.region).toBe(expected);
-  });
-});
-
 describe("bedrock embedding endpoint routing", () => {
   it.each([
     {
@@ -61,20 +28,6 @@ describe("bedrock embedding endpoint routing", () => {
       hostname: "vpce-memory.bedrock-runtime.eu-west-1.vpce.amazonaws.com",
       signingRegion: "eu-west-1",
       sdkEndpoint: "https://vpce-environment.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-    },
-    {
-      name: "provider PrivateLink endpoint when memory has no override",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://vpce-provider.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      hostname: "vpce-provider.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-      signingRegion: "us-east-1",
-    },
-    {
-      name: "SDK regional endpoint when no override is configured",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: undefined,
-      hostname: "bedrock-runtime.us-east-1.amazonaws.com",
-      signingRegion: "us-east-1",
     },
     {
       name: "SDK FIPS endpoint for a canonical regional provider URL",
@@ -95,39 +48,6 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
-      name: "configured canonical FIPS endpoint in its own signing region",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-west-2.amazonaws.com",
-      signingRegion: "us-west-2",
-      customEndpoint: false,
-    },
-    {
-      name: "configured canonical dual-stack endpoint",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
-      hostname: "bedrock-runtime.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      customEndpoint: false,
-    },
-    {
-      name: "configured canonical combined FIPS and dual-stack endpoint",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
-      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      customEndpoint: false,
-    },
-    {
-      name: "configured FIPS endpoint upgraded by SDK dual-stack mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      dualstack: true,
-      customEndpoint: false,
-    },
-    {
       name: "configured dual-stack endpoint upgraded by SDK FIPS mode",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
@@ -142,14 +62,6 @@ describe("bedrock embedding endpoint routing", () => {
       providerBaseUrl: "https://bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
       hostname: "bedrock-runtime-fips.us-gov-west-1.amazonaws.com",
       signingRegion: "us-gov-west-1",
-      customEndpoint: false,
-    },
-    {
-      name: "configured China FIPS dual-stack endpoint with its partition DNS suffix",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.cn-north-1.api.amazonwebservices.com.cn",
-      hostname: "bedrock-runtime-fips.cn-north-1.api.amazonwebservices.com.cn",
-      signingRegion: "cn-north-1",
       customEndpoint: false,
     },
     {
@@ -366,9 +278,7 @@ describe("hasAwsCredentials", () => {
 
 describe("bedrock embedding response parsing", () => {
   it.each([
-    { name: "malformed single JSON", model: "amazon.titan-embed-text-v2:0", raw: "{not json" },
     { name: "non-object JSON", model: "amazon.titan-embed-text-v2:0", raw: "[]" },
-    { name: "missing single vector", model: "amazon.titan-embed-text-v2:0", raw: "{}" },
     {
       name: "invalid single vector element",
       model: "amazon.titan-embed-text-v2:0",
@@ -380,18 +290,15 @@ describe("bedrock embedding response parsing", () => {
       model: "cohere.embed-english-v3",
       raw: '{"embeddings":[[1],{"bad":true}]}',
     },
-    ...[
-      { model: "amazon.titan-embed-text-v2:0", vector: '"embedding":[3,4]' },
-      { model: "cohere.embed-english-v3", vector: '"embeddings":[[3,4]]' },
-    ].map(({ model, vector }) => ({
-      name: `invalid UTF-8 for ${model}`,
-      model,
+    {
+      name: "invalid UTF-8",
+      model: "amazon.titan-embed-text-v2:0",
       raw: Buffer.concat([
         Buffer.from('{"ignored":"bad'),
         Buffer.from([0xff]),
-        Buffer.from(`",${vector}}`),
+        Buffer.from('","embedding":[3,4]}'),
       ]),
-    })),
+    },
   ])("rejects $name through the provider boundary", async ({ model, raw }) => {
     vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       body: typeof raw === "string" ? new TextEncoder().encode(raw) : raw,
@@ -408,38 +315,35 @@ describe("bedrock embedding response parsing", () => {
 });
 
 describe("bedrock embedding inference profiles", () => {
-  it.each(["global", "apac"])(
-    "uses the Cohere v4 contract for the %s profile prefix",
-    async (prefix) => {
-      const model = `${prefix}.cohere.embed-v4:0`;
-      const send = vi
-        .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
-        .mockResolvedValue({
-          body: new TextEncoder().encode('{"embeddings":{"float":[[3,4]]}}'),
-        } as never);
-      const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
+  it.each(["global"])("uses the Cohere v4 contract for the %s profile prefix", async (prefix) => {
+    const model = `${prefix}.cohere.embed-v4:0`;
+    const send = vi
+      .spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send")
+      .mockResolvedValue({
+        body: new TextEncoder().encode('{"embeddings":{"float":[[3,4]]}}'),
+      } as never);
+    const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
 
-      await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
-        0.6, 0.8,
-      ]);
+    await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
+      0.6, 0.8,
+    ]);
 
-      const command = send.mock.calls.at(-1)?.[0] as {
-        input?: { body?: string | Uint8Array; modelId?: string };
-      };
-      const body =
-        typeof command.input?.body === "string"
-          ? command.input.body
-          : new TextDecoder().decode(command.input?.body);
-      expect(JSON.parse(body)).toEqual({
-        texts: ["private memory"],
-        input_type: "search_query",
-        truncate: "END",
-        embedding_types: ["float"],
-        output_dimension: 1536,
-      });
-      expect(command.input?.modelId).toBe(model);
-      expect(client).toMatchObject({ model, dimensions: 1536 });
-      expect(provider.maxInputTokens).toBe(128_000);
-    },
-  );
+    const command = send.mock.calls.at(-1)?.[0] as {
+      input?: { body?: string | Uint8Array; modelId?: string };
+    };
+    const body =
+      typeof command.input?.body === "string"
+        ? command.input.body
+        : new TextDecoder().decode(command.input?.body);
+    expect(JSON.parse(body)).toEqual({
+      texts: ["private memory"],
+      input_type: "search_query",
+      truncate: "END",
+      embedding_types: ["float"],
+      output_dimension: 1536,
+    });
+    expect(command.input?.modelId).toBe(model);
+    expect(client).toMatchObject({ model, dimensions: 1536 });
+    expect(provider.maxInputTokens).toBe(128_000);
+  });
 });

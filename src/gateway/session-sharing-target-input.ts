@@ -13,7 +13,10 @@ import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
-import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  type SessionMutationTarget,
+} from "./session-mutation-authorization-error.js";
 import {
   resolveChatSendSessionKey,
   resolveRequestedSessionAgentId,
@@ -24,7 +27,7 @@ import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
-export function resolveChatSendAuthorizationTarget(
+function resolveChatSendAuthorizationTarget(
   cfg: OpenClawConfig,
   target: SessionMutationTarget,
 ): Result<SessionMutationTarget, ErrorShape> {
@@ -36,6 +39,33 @@ export function resolveChatSendAuthorizationTarget(
         sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
       })
     : err(agent.error);
+}
+
+/** Match mutation guards with the normalized identity captured at admission. */
+export function resolveSessionMutationGuardTarget<T extends SessionMutationTarget>(
+  method: string,
+  cfg: OpenClawConfig,
+  targetRef: SessionMutationTarget,
+  targets: readonly T[],
+) {
+  let target: SessionMutationTarget = {
+    sessionKey: normalizeOptionalString(targetRef.sessionKey) ?? targetRef.sessionKey,
+    agentId: normalizeOptionalString(targetRef.agentId),
+  };
+  if (method === "chat.send") {
+    const normalized = resolveChatSendAuthorizationTarget(cfg, target);
+    if (!normalized.ok) {
+      throw new SessionMutationAuthorizationChangedError(normalized.error);
+    }
+    target = normalized.value;
+  }
+  return {
+    target,
+    expected: targets.find(
+      (candidate) =>
+        candidate.sessionKey === target.sessionKey && candidate.agentId === target.agentId,
+    ),
+  };
 }
 
 /** Authorization selects the same chat target without rewriting the raw request's replay aliases. */

@@ -1,5 +1,4 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -17,7 +16,14 @@ type SessionRuntimeOwnershipReadParams = {
   sessionKey?: string;
   storePath?: string;
   sessionEntry?: Partial<
-    Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
+    Pick<
+      SessionEntry,
+      | "sessionId"
+      | "previousSessionId"
+      | "agentHarnessId"
+      | "modelSelectionLocked"
+      | "pluginOwnerId"
+    >
   >;
   assertCurrent?: () => void;
   /** Caller retains the fresh row through the ownership invocation. */
@@ -147,10 +153,8 @@ export function readSessionRuntimeOwnership(
             assertCurrent();
             return current?.sessionId === sessionId ? current.previousSessionId : undefined;
           }
-          const scope = previousSessionReadScope(params);
-          const current = scope ? loadSessionEntryReadOnly(scope) : undefined;
-          assertCurrent();
-          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
+          // The synchronous compatibility hook consumes the row its caller already prepared.
+          return params.sessionEntry?.previousSessionId;
         },
         assertCurrent,
       }),

@@ -363,7 +363,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillsPrompt: testCase.skillsPrompt,
       });
       const description = sessionTool("exec").description;
-      expect(description.includes("await skills.list()")).toBe(testCase.available);
+      const guidance = {
+        toolSchemaDirectoryPrompt: expect.stringContaining("await skills.list()"),
+      };
+      if (testCase.available) {
+        expect(hoisted.embeddedSystemPromptInputs.at(-1)).toMatchObject(guidance);
+      } else {
+        expect(hoisted.embeddedSystemPromptInputs.at(-1)).not.toMatchObject(guidance);
+      }
       if (testCase.label === "unrestricted") {
         foregroundDescription = description;
       } else if (testCase.label === "skill read denied") {

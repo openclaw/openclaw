@@ -27,7 +27,7 @@ import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
-  resolveAgentHarnessNativeToolPolicyRestricted,
+  prepareAgentHarnessNativeToolPolicyRestricted,
 } from "../../harness/execution-environment.js";
 import { getRegisteredAgentHarness } from "../../harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
@@ -158,7 +158,6 @@ async function prepareNativeSessionRuntime(
       const prepared = await reader.withRead(
         {
           sessionKeys: [admission.sessionKey],
-          lifecycleSessionKey: admission.sessionKey,
           snapshotFields: [],
         },
         assertCallerCurrent,
@@ -176,7 +175,6 @@ async function prepareNativeSessionRuntime(
       {
         agentId: sessionAgentId,
         sessionKeys: [admission.sessionKey],
-        lifecycleSessionKey: admission.sessionKey,
         storePath: admission.storePath,
         includeAuthorization: true,
         snapshotFields: [],
@@ -256,15 +254,18 @@ export async function resolveEmbeddedRunModelSetup(params: {
 }) {
   const runParams = params.runParams;
   const operatorAuthority = readRunOperatorAuthority(runParams);
-  const hookSelection = await resolveHookModelSelection({
-    prompt: runParams.prompt,
-    attachments: buildBeforeModelResolveAttachments(runParams.images),
-    provider: params.provider,
-    modelId: params.modelId,
-    modelSelectionLocked: runParams.modelSelectionLocked,
-    hookRunner: params.hookRunner,
-    hookContext: params.hookContext,
-  });
+  const hookSelection =
+    runParams.resolvedModelSelection ??
+    (await resolveHookModelSelection({
+      prompt: runParams.prompt,
+      awaitSessionDiffBaseline: runParams.awaitSessionDiffBaseline,
+      attachments: buildBeforeModelResolveAttachments(runParams.images),
+      provider: params.provider,
+      modelId: params.modelId,
+      modelSelectionLocked: runParams.modelSelectionLocked,
+      hookRunner: params.hookRunner,
+      hookContext: params.hookContext,
+    }));
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
   let provider = hookSelection.provider;
@@ -341,14 +342,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
           agentHarnessId: runParams.agentHarnessId,
           agentHarnessRuntimeOverride: runParams.agentHarnessRuntimeOverride,
         });
-  const nativePermissionsConsented = assertAgentHarnessExecutionEnvironment(
+  const nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
     agentHarness,
     runParams,
   );
   if (agentHarness.executionEnvironment === "host-only" && !nativePermissionsConsented) {
     assertPluginHarnessConversationToolPolicySupport(
       agentHarness,
-      resolveAgentHarnessNativeToolPolicyRestricted(
+      await prepareAgentHarnessNativeToolPolicyRestricted(
         { ...runParams, provider, modelId },
         agentHarness,
       ),

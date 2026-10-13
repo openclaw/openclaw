@@ -44,7 +44,7 @@ import {
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
@@ -74,7 +74,6 @@ import {
   parseAgentCommandModelRef,
 } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
-import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export async function resolveEmbeddedModelSelection(params: {
@@ -426,7 +425,7 @@ export async function resolveEmbeddedModelSelection(params: {
       metadataSnapshot: params.pluginsEnabled ? params.manifestMetadataSnapshot : { plugins: [] },
     });
     const agentDir = resolveAgentDir(params.cfg, params.sessionAgentId);
-    const store = ensureAuthProfileStore(agentDir, {
+    const store = await ensureAuthProfileStoreAsync(agentDir, {
       profileId: authProfileId,
       config: params.cfg,
       allowKeychainPrompt: false,
@@ -607,20 +606,12 @@ export async function resolveEmbeddedModelSelection(params: {
     };
   }
 
-  const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
   assertOperatorModelAllowed(operatorAuthority, { provider, model });
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
-  const hasKeyedSessionStore = Boolean(params.sessionStore && params.sessionKey);
-  const resolvedSessionFile = await resolveSessionTranscriptFile({
-    sessionKey: params.sessionKey ?? params.sessionId,
-    sessionStore:
-      hasKeyedSessionStore && !params.suppressVisibleSessionEffects
-        ? params.sessionStore
-        : undefined,
-    sessionEntry,
-  });
-  const sessionFile = resolvedSessionFile.sessionFile;
-  sessionEntry = resolvedSessionFile.sessionEntry;
+  const sessionFile = params.sessionKey ?? params.sessionId;
+  if (params.sessionKey && !params.suppressVisibleSessionEffects) {
+    sessionEntry ??= params.sessionStore?.[params.sessionKey];
+  }
 
   return {
     sessionEntry,

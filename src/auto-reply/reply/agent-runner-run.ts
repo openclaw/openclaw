@@ -286,8 +286,9 @@ export async function runReplyAgent(
   }
 
   const toolResultOptions = {
-    sessionKey,
-    storePath,
+    getVerboseLevel: () =>
+      (sessionKey ? activeSessionStore?.[sessionKey]?.verboseLevel : undefined) ??
+      activeSessionEntry?.verboseLevel,
     resolvedVerboseLevel,
     verboseLevelOverride: followupRun.run.verboseLevelOverride,
   };
@@ -440,7 +441,7 @@ export async function runReplyAgent(
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
     releaseAdmissionTicket();
-    const queuedBehindActiveRun = isRunActive?.() === true;
+    const queuedBehindActiveRun = (await isRunActive?.()) === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -620,6 +621,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    prepareCompletionCleanup: prepareRestartClaimCleanup,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -657,6 +659,7 @@ export async function runReplyAgent(
       blockReplyPipeline,
       cfg,
       checkpointBeforeAgentReply,
+      prepareRestartClaimCleanup,
       resolveVisibleReplyDelivery,
       activeIsNewSession: isNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -672,9 +675,7 @@ export async function runReplyAgent(
       returnWithQueuedFollowupDrain,
       runFollowupTurn,
       sendDirectCompactionNotice,
-      onCompactionNoticePayload: (payload) => {
-        pendingCompactionNotices.push(payload);
-      },
+      onCompactionNoticePayload: (payload) => pendingCompactionNotices.push(payload),
       setActiveSessionEntry: (entry) => {
         activeSessionEntry = entry;
       },

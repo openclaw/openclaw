@@ -123,9 +123,9 @@ describe("google music generation provider", () => {
     expectExplicitMusicGenerationCapabilities(buildGoogleMusicGenerationProvider());
   });
 
-  it("advertises Gemini music generation with a config-only Google API key", () => {
+  it("advertises Gemini music generation with a config-only Google API key", async () => {
     expect(
-      buildGoogleMusicGenerationProvider().isConfigured?.({
+      await buildGoogleMusicGenerationProvider().isConfiguredAsync?.({
         cfg: {
           models: {
             providers: {

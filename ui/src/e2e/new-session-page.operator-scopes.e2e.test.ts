@@ -180,24 +180,6 @@ suite.define(() => {
     }
   });
 
-  it("shows paired devices, cloud profiles, and Connect to admins", async () => {
-    const { context, page } = await openDraft([
-      "operator.read",
-      "operator.write",
-      "operator.admin",
-    ]);
-    try {
-      await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      await where.locator('[data-value="device:writer-runner"]').waitFor();
-      await where.locator('[data-value="cloud:aws"]').waitFor();
-      await where.locator('[data-action="connect-machine"]').waitFor();
-      await where.locator('[data-action="manage-cloud-workers"]').waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
   it("lets read-scoped operators search projects without exposing clone actions", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

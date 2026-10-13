@@ -17,6 +17,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   captureIncognitoSessionOperation,
   captureIncognitoSessionSource,
@@ -28,6 +29,20 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function lookupSessionGoalOperation(
   options: SessionAccessScope & SessionGoalOperationLookup,
 ): Promise<SessionGoalOperationResult | undefined> {
+  const memory = getSessionActorStorageBinding(options);
+  if (memory) {
+    return memory.actor.storage!.read(
+      {
+        type: "session.goal.receipt",
+        input: {
+          sessionKey: memory.actor.target.sessionKey,
+          expectedSessionId: options.expectedSessionId,
+          operation: options.operation,
+        },
+      },
+      memory.authority,
+    );
+  }
   const captured = {
     ...options,
     ...(options.storePath ? { storePath: path.resolve(options.storePath) } : {}),

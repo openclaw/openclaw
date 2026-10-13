@@ -2,7 +2,9 @@
 
 export {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 export { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
@@ -14,6 +16,7 @@ export {
   getApiKeyForModelCore,
   hasAvailableAuthForProvider,
   resolveModelAuthMode,
+  resolveModelAuthModeAsync,
 } from "./model-auth-model.js";
 export type { ModelAuthMode } from "./model-auth-model.js";
 export {

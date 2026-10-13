@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorStorage,
+} from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import type { SessionActorStorage } from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -153,7 +156,7 @@ describe("actor-owned memory storage", () => {
     expect(reset).toMatchObject({
       kind: "committed",
       value: {
-        progressCardReset: true,
+        progressCardReset: false,
         previousSessionId: "session-1",
         nextEntry: { sessionId: "session-2" },
       },

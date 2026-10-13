@@ -152,7 +152,7 @@ it.each(["participant", "owner"] as const)(
       database.db,
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
-        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+        if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
           return null;
         }
         if (sql.includes('"age_namespaces"')) {

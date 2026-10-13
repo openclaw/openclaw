@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChannelsStatusSnapshot } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -569,6 +570,14 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
         methodResponses: {
+          "channels.status": {
+            ts: 0,
+            channelOrder: ["telegram"],
+            channelLabels: { telegram: "Telegram" },
+            channels: { telegram: { configured: true, running: true, connected: true } },
+            channelAccounts: { telegram: [] },
+            channelDefaultAccountId: {},
+          } satisfies ChannelsStatusSnapshot,
           "openclaw.chat": {
             sessionId: "e2e-onboarding-custodian",
             reply: "Let's finish setup.",

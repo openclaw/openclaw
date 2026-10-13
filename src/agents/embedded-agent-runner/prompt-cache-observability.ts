@@ -13,11 +13,7 @@ import { log } from "./logger.js";
 import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
-type PromptHistoryRewriteReason =
-  | "compaction"
-  | "pruning"
-  | "runtimeContextCarrier"
-  | "imageCleanup";
+type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
 type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; sessionKey?: string };
 
 export type { PromptCacheChange };
@@ -673,6 +669,14 @@ export function completePromptCacheObservation(
         previousCacheRead,
         cacheRead,
         changes,
+        ...(previousProviderPrompt?.wire || params.providerPrompt?.wire
+          ? {
+              requests: {
+                previous: previousProviderPrompt?.wire,
+                current: params.providerPrompt?.wire,
+              },
+            }
+          : {}),
         ...(params.providerPrompt
           ? {
               providerPrefix: describeProviderPrefix(previousProviderPrompt, params.providerPrompt),

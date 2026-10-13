@@ -7,6 +7,11 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../../scripts/lib/local-build-metadata-paths.mts";
+import { createConfigIO } from "../../../src/config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.ts";
 import type { SessionToolOverrides } from "../../../src/config/sessions/session-tool-overrides.ts";
 import {
@@ -224,22 +229,31 @@ for (const globallyEnabled of [false, true]) {
       instance = owner;
       try {
         expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
-        for (const scenario of scenarios) {
-          // A persisted legacy true is read directly; current sessions.patch normalizes it away.
-          const entry = await upsertSessionEntryCore(
-            {
-              agentId: "main",
-              sessionKey: `agent:main:websearch-${scenario.name}`,
-              env: owner.env,
-            },
-            {
-              sessionId: `websearch-${scenario.name}`,
-              updatedAt: Date.now(),
-              label: `Synthetic web search ${scenario.name}`,
-              toolOverrides: scenario.overrides,
-            },
-          );
-          expect(entry?.toolOverrides).toEqual(scenario.overrides);
+        const config = await createConfigIO({
+          env: owner.env,
+          configPath: owner.state.configPath,
+        }).loadConfigAsync();
+        setRuntimeConfigSnapshot(config);
+        try {
+          for (const scenario of scenarios) {
+            // A persisted legacy true is read directly; current sessions.patch normalizes it away.
+            const entry = await upsertSessionEntryCore(
+              {
+                agentId: "main",
+                sessionKey: `agent:main:websearch-${scenario.name}`,
+                env: owner.env,
+              },
+              {
+                sessionId: `websearch-${scenario.name}`,
+                updatedAt: Date.now(),
+                label: `Synthetic web search ${scenario.name}`,
+                toolOverrides: scenario.overrides,
+              },
+            );
+            expect(entry?.toolOverrides).toEqual(scenario.overrides);
+          }
+        } finally {
+          clearRuntimeConfigSnapshot();
         }
         await owner.startGateway();
         return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };

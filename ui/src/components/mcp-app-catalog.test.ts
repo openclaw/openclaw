@@ -1,11 +1,10 @@
-import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "../pages/apps/apps-page.ts";
+import "../pages/apps/apps-page.tsx";
 import "./mcp-app-catalog.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
@@ -254,7 +253,10 @@ describe("app launch catalog", () => {
       const describeSession = vi.fn(async () => ({
         session: exists ? { key: "agent:main:main" } : null,
       }));
-      const element = document.createElement("openclaw-apps-page") as LitElement;
+      // SAFETY: the registered Apps page exposes its render-completion promise.
+      const element = document.createElement("openclaw-apps-page") as HTMLElement & {
+        readonly updateComplete: Promise<boolean>;
+      };
       const provider = createApplicationContextProvider({
         gateway: {
           snapshot: {

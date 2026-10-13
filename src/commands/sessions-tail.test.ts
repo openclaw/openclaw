@@ -22,8 +22,14 @@ const mocks = vi.hoisted(() => ({
   callGatewayFromCliWithTransport: vi.fn(),
 }));
 
+// mock-isolation: Session-tail fixtures select synthetic Gateway settings without reading operator state.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.getRuntimeConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
+    async () =>
+      mocks.getRuntimeConfig(...args),
 }));
 
 // mock-isolation: Exercise CLI selection without connecting to an operator Gateway.
@@ -113,7 +119,7 @@ describe("sessionsTailCommand", () => {
     );
   }
 
-  it("renders compact redacted progress lines", async () => {
+  it("renders compact progress lines with tool arguments", async () => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
     await appendEvents([
@@ -121,6 +127,11 @@ describe("sessionsTailCommand", () => {
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
         data: { name: "bash", arguments: { command: "echo SECRET" } },
+      }),
+      makeEvent({
+        type: "tool.call",
+        ts: "2026-05-18T12:04:19.000Z",
+        data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
       }),
       makeEvent({
         type: "tool.result",
@@ -140,12 +151,12 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("12:04:18Z");
     expect(output).toContain("tool.call");
-    expect(output).toContain("bash {...redacted...}");
+    expect(output).toContain('bash {"command":"echo SECRET"}');
+    expect(output).toContain('read {"path":".env","expression":"API_TOKEN = computeToken()"}');
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
     expect(output).toContain("model.completed");
     expect(output).toContain("openai/gpt-5.2 done");
-    expect(output).not.toContain("SECRET");
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([

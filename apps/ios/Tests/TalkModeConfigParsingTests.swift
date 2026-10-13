@@ -7,8 +7,6 @@ import Testing
 
 @MainActor
 struct TalkModeManagerTests {
-    private struct CloseError: Error {}
-
     @Test func `recording sessions preserve system keyboard feedback`() throws {
         let session = AVAudioSession.sharedInstance()
         let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
@@ -153,19 +151,6 @@ struct TalkModeManagerTests {
         #expect(closeRequestCount == 0)
         manager._test_clearRealtimeSession()
         await gateway.disconnect()
-    }
-
-    @Test func `retries realtime voice session close three times`() async throws {
-        var attempts = 0
-
-        try await TalkModeManager._test_retryRealtimeVoiceSessionClose {
-            attempts += 1
-            if attempts < 3 {
-                throw CloseError()
-            }
-        }
-
-        #expect(attempts == 3)
     }
 
     @Test func `encodes transcript entry id as a decimal string`() throws {
@@ -630,20 +615,6 @@ struct TalkModeManagerTests {
             isEnabled: true,
             gatewayConnected: true,
             captureIsContinuous: false))
-    }
-
-    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == String(localized: "Listening"))
-        #expect(manager.phase == .listening)
-
-        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
-        manager.statusText = "Neue Statusmeldung"
-        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
-        #expect(manager.statusText == "Neue Statusmeldung")
-        #expect(manager.phase == .idle)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {

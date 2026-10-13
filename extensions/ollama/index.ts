@@ -1,7 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -15,7 +14,6 @@ import {
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
   type ProviderPlugin,
-  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
@@ -45,6 +43,7 @@ import {
 import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
+  getUnlistedOllamaConfiguredModelIds,
   isLocalOllamaBaseUrl,
   readOllamaStringValue,
   resolveOllamaDiscoveryResult,
@@ -52,6 +51,7 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
   createLazyOllamaNodeInferenceTool,
@@ -82,6 +82,7 @@ import {
 } from "./src/stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./src/stream-contract.js";
 import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js";
+import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
@@ -99,13 +100,6 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
 };
 
-const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
-  id: OLLAMA_PROVIDER_ID,
-  capabilities: ["image"],
-  describeImage: undefined,
-  describeImages: undefined,
-};
-
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
   try {
     const { isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");
@@ -117,15 +111,6 @@ async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<voi
   } catch {
     // Advisory-only startup checks must not break provider registration.
   }
-}
-
-function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
-  return {
-    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
-      sanitizeToolCallIds: false,
-    }),
-    sanitizeToolCallIds: false,
-  };
 }
 
 function matchesOllamaContextOverflowError(errorMessage: string): boolean {
@@ -655,7 +640,13 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     },
     buildReplayPolicy: ({ modelApi }) =>
       modelApi === "ollama"
-        ? buildNativeOllamaReplayPolicy()
+        ? {
+            ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+              sanitizeToolCallIds: false,
+              dropReasoningFromHistory: false,
+            }),
+            sanitizeToolCallIds: false,
+          }
         : buildOpenAICompatibleReplayPolicy(modelApi),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: resolveOllamaThinkingProfile,
@@ -758,6 +749,7 @@ export default definePluginEntry({
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
+      ...createOllamaUsageHooks(),
       auth: [
         {
           id: "local",
@@ -841,6 +833,7 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "late",
+        getUnlistedConfiguredModelIds: getUnlistedOllamaConfiguredModelIds,
         run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,

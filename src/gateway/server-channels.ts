@@ -836,6 +836,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (startCancelled()) {
                 return;
               }
+              log.info(
+                `[${id}] starting account (reason: ${optsValue.reason ?? (optsValue.manual ? "manual" : "requested")})`,
+              );
               const runStartAccount = async () => {
                 const startedAt = Date.now();
                 try {
@@ -947,6 +950,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 releaseTask();
                 try {
                   await startChannelInternal(channelId, id, {
+                    reason: "stop-recovery",
                     preserveManualStop: true,
                   });
                 } catch {
@@ -983,6 +987,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 releaseTask();
                 await startChannelInternal(channelId, id, {
+                  reason: "auto-restart",
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
@@ -1354,6 +1359,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             try {
               await measureStartup(`channels.${plugin.id}.start`, () =>
                 startChannelInternal(plugin.id, undefined, {
+                  reason: "startup",
                   ...startOptions,
                   ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
                 }),
@@ -1380,7 +1386,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     signal: opts.scheduler.signal,
     isClosing: opts.isClosing,
     // Resuming deferred autostart preserves explicit operator stops.
-    startChannels: () => startChannelsWithOptions({ preserveManualStop: true }),
+    startChannels: () =>
+      startChannelsWithOptions({ reason: "autostart-recovery", preserveManualStop: true }),
   });
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

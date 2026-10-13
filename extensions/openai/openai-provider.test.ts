@@ -104,9 +104,10 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   ).provider;
 }
 
+// mock-isolation: Catalog tests supply synthetic credentials and account metadata.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
-  resolveProviderAuthProfileMetadata: mocks.resolveProviderAuthProfileMetadata,
+  resolveProviderAuthProfileMetadataAsync: mocks.resolveProviderAuthProfileMetadata,
 }));
 
 async function runWrappedPayloadCase(params: {

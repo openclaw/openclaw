@@ -1,3 +1,4 @@
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { callGateway } from "./call.js";
 import type {
@@ -13,6 +14,14 @@ type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions 
 };
 
 let activeRuntime: { runtime: GatewayRecoveryRuntime } | undefined;
+
+function lifecycleUnavailable(method: string): Error {
+  const message = `Gateway instance lifecycle dispatch unavailable for ${method}`;
+  // Losing a read-only observer is not evidence that its agent run failed.
+  return method === "agent.wait"
+    ? new GatewayClientRequestError({ code: "UNAVAILABLE", message, retryable: true })
+    : new Error(message);
+}
 
 /** Registers the recovery principal owned by the latest process-global Gateway instance. */
 export function registerGatewayRecoveryRuntime(runtime: GatewayRecoveryRuntime): () => void {
@@ -44,7 +53,7 @@ export async function dispatchGatewayLifecycleMethod<T = unknown>(
     ? resolveGatewayContext()?.recoveryRuntime
     : getGatewayRecoveryRuntime();
   if (!runtime) {
-    throw new Error(`Gateway instance lifecycle dispatch unavailable for ${method}`);
+    throw lifecycleUnavailable(method);
   }
   return await runtime.dispatchAgent<T>(agentParams, timeoutMs, dispatchOptions);
 }
@@ -61,7 +70,7 @@ export function bindGatewayLifecycleRequest(
   return async <T>(request: Parameters<typeof callGateway>[0]): Promise<T> => {
     const assertCurrent = () => {
       if (hosted && (!runtime || (resolver && resolver() !== context))) {
-        throw new Error(`Gateway instance lifecycle dispatch unavailable for ${request.method}`);
+        throw lifecycleUnavailable(request.method);
       }
       request.assertDispatchCurrent?.();
     };
@@ -71,7 +80,7 @@ export function bindGatewayLifecycleRequest(
       return await callGateway<T>(request);
     }
     if (!runtime) {
-      throw new Error(`Gateway instance lifecycle dispatch unavailable for ${request.method}`);
+      throw lifecycleUnavailable(request.method);
     }
     const timeoutMs = request.timeoutMs === null ? undefined : (request.timeoutMs ?? 10_000);
     let result: T;

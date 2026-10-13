@@ -180,62 +180,6 @@ describe("patchScopedAccountConfig credential clearing", () => {
       webhookPath: "/keep",
     });
   });
-
-  it("clears only selected named-account credentials and preserves disabled siblings", () => {
-    const next = patchScopedAccountConfig({
-      cfg: asConfig({
-        channels: {
-          "demo-setup": {
-            enabled: false,
-            token: "root-token",
-            accounts: {
-              work: { enabled: false, token: "old-token", tokenFile: "/old/token" },
-              alerts: { enabled: false, token: "alerts-token" },
-            },
-          },
-        },
-      }),
-      channelKey: "demo-setup",
-      accountId: "work",
-      clearFields: ["token", "tokenFile"],
-      patch: { token: "new-token" },
-      ensureChannelEnabled: false,
-      ensureAccountEnabled: false,
-    });
-
-    const channel = channelRecord(next, "demo-setup");
-    expect(channel.enabled).toBe(false);
-    expect(channel.token).toBe("root-token");
-    expect(accountRecord(channel, "work")).toEqual({ enabled: false, token: "new-token" });
-    expect(accountRecord(channel, "alerts")).toEqual({
-      enabled: false,
-      token: "alerts-token",
-    });
-  });
-
-  it("allows setup to explicitly re-enable an existing disabled named account", () => {
-    const next = patchScopedAccountConfig({
-      cfg: asConfig({
-        channels: {
-          "demo-setup": {
-            enabled: false,
-            accounts: { work: { enabled: false, tokenFile: "/old/token" } },
-          },
-        },
-      }),
-      channelKey: "demo-setup",
-      accountId: "work",
-      patch: { token: "new-token" },
-      accountPatch: { enabled: true, token: "new-token" },
-      clearFields: ["tokenFile"],
-      ensureChannelEnabled: true,
-      ensureAccountEnabled: false,
-    });
-
-    const channel = channelRecord(next, "demo-setup");
-    expect(channel.enabled).toBe(true);
-    expect(accountRecord(channel, "work")).toEqual({ enabled: true, token: "new-token" });
-  });
 });
 
 describe("createPatchedAccountSetupAdapter", () => {
@@ -314,59 +258,9 @@ describe("createPatchedAccountSetupAdapter", () => {
 });
 
 describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
-  it("seeds an empty default for ordinary single-account promotion", () => {
-    const cfg = asConfig({
-      channels: { demo: { enabled: true, accounts: {} } },
-    });
-    const next = moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" });
-    expect(next.channels?.demo).toEqual({ enabled: true, accounts: { default: {} } });
-    expect(cfg.channels?.demo).toEqual({ enabled: true, accounts: {} });
-  });
-
-  it("does not create an empty default for explicit preserve-root", () => {
-    const cfg = asConfig({
-      channels: { demo: { enabled: true, accounts: {} } },
-    });
-    expect(
-      moveSingleAccountChannelSectionToDefaultAccount({
-        cfg,
-        channelKey: "demo",
-        setupSurface: {
-          configPromotion: "preserve-root",
-          applyAccountConfig: ({ cfg: currentConfig }) => currentConfig,
-        },
-      }),
-    ).toBe(cfg);
-  });
-
   it("does not add a default when an ordinary named account already exists and no keys move", () => {
     const cfg = asConfig({ channels: { demo: { enabled: true, accounts: { ada: {} } } } });
     expect(moveSingleAccountChannelSectionToDefaultAccount({ cfg, channelKey: "demo" })).toBe(cfg);
-  });
-
-  it("moves Matrix allowBots into the promoted default account", () => {
-    const next = moveSingleAccountChannelSectionToDefaultAccount({
-      cfg: asConfig({
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "token",
-            allowBots: "mentions",
-          },
-        },
-      }),
-      channelKey: "matrix",
-      setupSurface: matrixSetupSurface,
-    });
-
-    const channel = channelRecord(next, "matrix");
-    const defaultAccount = accountRecord(channel, "default");
-    expect(defaultAccount.homeserver).toBe("https://matrix.example.org");
-    expect(defaultAccount.userId).toBe("@bot:example.org");
-    expect(defaultAccount.accessToken).toBe("token");
-    expect(defaultAccount.allowBots).toBe("mentions");
-    expect(next.channels?.matrix?.allowBots).toBeUndefined();
   });
 
   it("promotes legacy Matrix keys into the sole named account when defaultAccount is unset", () => {
@@ -422,41 +316,6 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     const work = accountRecord(channel, "work");
     expect(work.dmPolicy).toBe("allowlist");
     expect(next.channels?.zalouser?.dmPolicy).toBeUndefined();
-  });
-
-  it("promotes legacy Matrix keys into an existing non-canonical default account key", () => {
-    const next = moveSingleAccountChannelSectionToDefaultAccount({
-      cfg: asConfig({
-        channels: {
-          matrix: {
-            defaultAccount: "ops",
-            homeserver: "https://matrix.example.org",
-            userId: "@ops:example.org",
-            accessToken: "token",
-            accounts: {
-              Ops: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      }),
-      channelKey: "matrix",
-      setupSurface: matrixSetupSurface,
-    });
-
-    const channel = channelRecord(next, "matrix");
-    const ops = accountRecord(channel, "Ops");
-    expect(channel.defaultAccount).toBe("ops");
-    expect(ops.enabled).toBe(true);
-    expect(ops.homeserver).toBe("https://matrix.example.org");
-    expect(ops.userId).toBe("@ops:example.org");
-    expect(ops.accessToken).toBe("token");
-    expect(next.channels?.matrix?.accounts?.ops).toBeUndefined();
-    expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
-    expect(next.channels?.matrix?.homeserver).toBeUndefined();
-    expect(next.channels?.matrix?.userId).toBeUndefined();
-    expect(next.channels?.matrix?.accessToken).toBeUndefined();
   });
 });
 

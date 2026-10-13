@@ -47,6 +47,14 @@ Localhost, LAN, and custom endpoints stay unchanged, including cloud models
 served through a signed-in local Ollama daemon. Other provider keys also stay
 unchanged. Doctor does not infer hosted routing from a model name.
 
+An explicit `remote.baseUrl` on a provider/model route is checked independently:
+local or custom memory embedding endpoints keep `ollama` even when chat moves
+to `ollama-cloud`. Empty endpoints continue to inherit the chat provider's route.
+Per-agent `agents.entries.<id>.memory.search` overrides resolve provider, model,
+and endpoint independently against `memory.search`. Doctor preserves that
+effective route, adding an explicit per-agent provider or model only when moving
+the shared defaults would otherwise change it.
+
 Both providers use `OLLAMA_API_KEY`, so environment-backed URLs, credentials, and
 SecretRefs keep their authored references without a credential-store migration.
 Doctor leaves saved `ollama` auth profiles untouched; if the key exists only in
@@ -108,6 +116,9 @@ format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired together with its Doctor checks.
 When Doctor refuses a retired input, it names an intermediate release to upgrade
 through before retrying. Retirement must leave persisted source data untouched.
+Doctor checks retired runtime files and referenced OAuth sidecars before entering
+repair maintenance or preparing database migrations. A refusal leaves the database
+schemas and running Gateway unchanged, so the intermediate upgrade remains usable.
 
 Except for the deferred readers recorded below, legacy normalization belongs to
 Doctor and migration owners, with the existing backup and verification flow.

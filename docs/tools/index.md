@@ -148,6 +148,15 @@ model does not receive that tool's schema for the turn. A run can lose tools
 because of global config, per-agent config, channel policy, provider
 restrictions, sandbox rules, channel/runtime policy, or plugin availability.
 
+The `message` tool also narrows its action list and parameters to the current
+channel and the channels in the agent's [route bindings](/concepts/agent-bindings).
+Multi-channel agents keep the union of those channels' declared actions and
+capabilities. Local sessions without channel bindings and scheduled runs retain
+configured-channel discovery. This reduces prompt overhead without a new setting;
+bindings select what the schema advertises, while normal delivery permissions
+still govern execution. Unchanged bindings and capabilities produce stable schema
+bytes regardless of plugin registration order.
+
 OpenClaw exposes one semantic image inspection capability named `view_image`.
 When the active harness supplies its own loader, OpenClaw suppresses its
 duplicate. Otherwise, the OpenClaw-provided implementation accepts `path` for

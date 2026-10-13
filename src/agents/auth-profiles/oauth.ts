@@ -49,8 +49,10 @@ import {
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
-import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
+import {
+  loadAuthProfileStoreForRuntimeAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
+} from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
@@ -79,19 +81,22 @@ type ResolveApiKeyForProfileResult = {
   profileId: string;
   profileType: AuthProfileCredential["type"];
   credential?: AuthProfileCredential;
+  /** Personal authority survives preparation; null retains the shared/agent store contract. */
+  readCurrentCredential: (() => AuthProfileCredential | undefined) | null;
 };
 
 function buildApiKeyProfileResult(
-  params: ResolveApiKeyForProfileResult,
+  params: Omit<ResolveApiKeyForProfileResult, "readCurrentCredential"> &
+    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">>,
 ): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "credential"] as const) {
+  for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
-      value: params[key],
+      value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
     });
   }
@@ -220,6 +225,7 @@ async function resolveOAuthProfileAccess(
         profileId: params.profileId,
         profileType: credential.type,
         credential: resolved.credential,
+        readCurrentCredential: personalStore?.readCurrentCredential,
       })
     : null;
 }
@@ -409,6 +415,7 @@ async function resolveApiKeyForProfileOwned(
       email: cred.email,
       profileId,
       profileType: cred.type,
+      readCurrentCredential: personalStore?.readCurrentCredential,
     });
   }
 
@@ -427,11 +434,15 @@ async function resolveApiKeyForProfileOwned(
         ? error.getRefreshedStore()
         : personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
-      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      const ownerAgentDir = await resolvePersistedAuthProfileOwnerAgentDirAsync({
         agentDir: params.agentDir,
         profileId,
       });
@@ -467,7 +478,11 @@ async function resolveApiKeyForProfileOwned(
       if (clearedLastGood) {
         refreshedStore = personalStore
           ? await personalStore.read()
-          : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
+          : await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
+              profileId,
+              readOnly: true,
+              allowKeychainPrompt: false,
+            });
       }
     }
     const fallbackProfileId =

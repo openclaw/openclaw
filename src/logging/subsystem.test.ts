@@ -11,6 +11,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
+import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
@@ -357,7 +358,7 @@ describe("createSubsystemLogger().isEnabled", () => {
   });
 
   it.each(["part/", "/", "1234/"])(
-    "getLogger.info retains malformed credential masking after %s",
+    "log tail masks raw malformed credentials after %s",
     async (prefix) => {
       const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
       const file = logPathTracker.nextPath();
@@ -366,8 +367,11 @@ describe("createSubsystemLogger().isEnabled", () => {
       await testApi.flushFileLogQueueForTests();
 
       const written = fs.readFileSync(file, "utf8");
-      expect(written).not.toContain(secret);
-      expect(written).toContain("@bucket");
+      expect(written).toContain(secret);
+      const tail = await readConfiguredLogTail();
+      expect(tail.lines).toHaveLength(1);
+      expect(tail.lines[0]).not.toContain(secret);
+      expect(tail.lines[0]).toContain("@bucket");
     },
   );
 

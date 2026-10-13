@@ -109,7 +109,11 @@ export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
       title={label()}
     >
       <Show
-        when={owner()!.identity?.type === "agent" || avatar()?.kind === "profile"}
+        when={
+          owner()!.identity?.type === "agent" ||
+          owner()!.identity?.type === "profile" ||
+          avatar()?.kind === "profile"
+        }
         fallback={<span class="session-owner-chip__initials">{initials()}</span>}
       >
         <SessionOwnerAvatar owner={{ ...owner()!, id: owner()!.id! }} />
