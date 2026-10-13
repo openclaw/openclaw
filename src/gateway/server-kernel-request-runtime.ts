@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
+import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
@@ -102,6 +104,27 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     }
     if (projection) {
       projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+      if (
+        shouldUseGatewayOwnerProfile({
+          role: "operator",
+          authMethod: runtime.getResolvedAuth().mode,
+          rolesConfigured: Boolean(getRuntimeConfig().gateway?.roles),
+        })
+      ) {
+        try {
+          await startupTrace.measure("gateway.owner-profile", async () => {
+            const [{ ensureCanonicalGatewayOwnerProfile }, { resolveHostAccountName }] =
+              await Promise.all([
+                import("../state/user-profile-writes.js"),
+                import("../infra/host-account-name.js"),
+              ]);
+            // Projection owns the admitted catalog; first connect consumes its committed owner.
+            await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName);
+          });
+        } catch (error) {
+          log.warn(`Gateway owner profile preparation failed: ${formatErrorMessage(error)}`);
+        }
+      }
       // The initial roster must be usable before reconnecting clients can issue lists.
       await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {

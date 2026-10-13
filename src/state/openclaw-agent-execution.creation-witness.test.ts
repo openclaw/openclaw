@@ -12,10 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -32,31 +29,12 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 import {
   agentCreationWitnessTempDirs as tempDirs,
   createAgentCreationWitnessFixture as fixture,
+  createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
-
-function source(
-  beforeGrant: (request: SqliteWorkerAdmissionRequest) => void = () => {},
-): AgentDatabaseRequestExecutionSource {
-  return {
-    assertCurrent() {},
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          beforeGrant(request);
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Creation witness fixture lost admission");
-          }
-        }, binding.attachment),
-      });
-    },
-  };
-}
 
 function transcriptPublication(sessionKey: string, sessionId: string) {
   return [

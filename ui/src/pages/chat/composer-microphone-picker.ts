@@ -1,5 +1,6 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
@@ -29,16 +30,18 @@ export class ComposerMicrophonePicker {
   constructor(private readonly requestUpdate: () => void) {}
 
   syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
-    if (client === this.catalogClient && connected === this.catalogConnected) {
+    const canRead = hasOperatorReadAccess(client?.auth ?? null);
+    const catalogConnected = connected && canRead;
+    if (client === this.catalogClient && catalogConnected === this.catalogConnected) {
       return;
     }
     window.removeEventListener("focus", this.refreshOnFocus);
     this.catalogClient = client;
-    this.catalogConnected = connected;
+    this.catalogConnected = catalogConnected;
     this.catalogRequest++;
-    if (!client || !connected) {
-      this.realtimeStatus = "unknown";
-      this.dictationStatus = "unknown";
+    if (!client || !catalogConnected) {
+      this.realtimeStatus = canRead ? "unknown" : "unavailable";
+      this.dictationStatus = canRead ? "unknown" : "unavailable";
       return;
     }
     window.addEventListener("focus", this.refreshOnFocus);
@@ -119,7 +122,7 @@ export class ComposerMicrophonePicker {
 
   private loadCatalog(notify = true): void {
     const client = this.catalogClient;
-    if (!client || !this.catalogConnected) {
+    if (!client || !this.catalogConnected || !hasOperatorReadAccess(client.auth)) {
       return;
     }
     const request = ++this.catalogRequest;

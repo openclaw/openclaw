@@ -61,6 +61,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
+  // The team-shaped fixture README invokes this measurement CLI by path.
+  "scripts/perf/team-shape-measure.ts",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.

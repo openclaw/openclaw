@@ -573,7 +573,7 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito actor composition remains internal and inactive.",
+      "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito sessions use the internal memory actor.",
   },
   {
     code: "memory-session-released-signatures",
@@ -592,11 +592,11 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.contract.test.ts",
-      "src/state/openclaw-agent-execution-incognito.memory.test.ts",
+      "src/config/sessions/session-actor-memory-corpus.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Released Memory readers retain their argument and return contracts while incognito actor sources remain internal and inactive. Storage and update behavior are unchanged.",
+      "Released Memory readers retain their argument and return contracts while incognito reads use the internal memory actor. Durable storage and update behavior are unchanged.",
   },
   {
     code: "transcript-strict-sync-message-preparation",

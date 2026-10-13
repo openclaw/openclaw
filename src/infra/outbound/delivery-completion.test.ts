@@ -187,13 +187,18 @@ describe("pending-final delivery completion", () => {
     ).resolves.toMatchObject({ transition: { kind: "rejected", reason: "stale_revision" } });
   });
 
-  it("settles native incognito custody on its retained memory owner", async () => {
+  it("settles incognito custody on its retained memory owner", async () => {
+    const incognitoKey = "agent:main:dashboard:incognito-delivery";
     const nativePath = resolveIncognitoOpenClawAgentSqlitePath({
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: tmpDir },
     });
-    const scope = { sessionKey, storePath: nativePath, env: { OPENCLAW_STATE_DIR: tmpDir } };
-    const nativeCompletion = { ...completion, storePath: nativePath };
+    const scope = {
+      sessionKey: incognitoKey,
+      storePath: nativePath,
+      env: { OPENCLAW_STATE_DIR: tmpDir },
+    };
+    const nativeCompletion = { ...completion, sessionKey: incognitoKey, storePath: nativePath };
     try {
       await replaceSessionEntry(scope, {
         sessionId: completion.sessionId,

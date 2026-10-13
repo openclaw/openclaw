@@ -37,11 +37,11 @@ import * as configEnv from "../config-env-vars.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
-  readCommittedSessionEntryCache,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,

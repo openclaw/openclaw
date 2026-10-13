@@ -24,8 +24,10 @@ sits directly below the avatar, separated from navigation by a divider. It stays
 the same place in Pages, Sessions, and Online, even when the list is collapsed.
 It opens New session for the selected agent; in team mode, choose an agent from
 its menu first. Command-palette search sits below the three view buttons.
-Click the selected view again to collapse or expand its list, or press ⌘B on
-Mac or Ctrl+B on Windows/Linux. Selecting a different view opens its list.
+Click the selected view again to collapse its list, or press ⌘B on
+Mac or Ctrl+B on Windows/Linux. While the list is hidden, none of the three view
+buttons is selected; click any view to open its list. Selecting a different view
+while the list is open switches directly to that view.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 On desktop, opening Home or a pinned session, page, plugin, or person collapses

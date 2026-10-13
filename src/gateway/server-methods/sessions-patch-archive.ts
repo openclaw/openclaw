@@ -130,11 +130,19 @@ const archivePolicyFields = [
 export async function prepareSessionPatchArchive(
   params: SessionPatchArchiveParams,
 ): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
-  const metadata = captureSessionEntryMetadataRead({
-    agentId: params.target.requestedAgentId,
-    sessionKey: params.target.canonicalKey,
-    storePath: params.target.storePath,
-  });
+  const metadata = captureSessionEntryMetadataRead(
+    {
+      agentId: params.target.requestedAgentId,
+      sessionKey: params.target.canonicalKey,
+      storePath: params.target.storePath,
+    },
+    () => {
+      const error = params.commitGuard();
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
+    },
+  );
   if (metadata) {
     return withGatewaySessionEntryReadOnly(
       { cfg: params.cfg, key: params.target.key, agentId: params.target.requestedAgentId },

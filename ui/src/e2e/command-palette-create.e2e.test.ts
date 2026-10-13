@@ -33,7 +33,7 @@ const suite = createControlUiE2eSuite({
 });
 async function changePicker(
   picker: Locator,
-  eventType: "wa-after-show" | "wa-after-hide",
+  eventType: "wa-after-show" | "wa-after-hide" | "overlay-after-show" | "overlay-after-hide",
   action: () => Promise<void>,
 ) {
   await Promise.all([
@@ -430,17 +430,17 @@ suite.define(() => {
         expect(await remember.isChecked()).toBe(false);
         await capture("default-settings");
         const agent = popup.locator("openclaw-agent-select");
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
           agent.getByRole("button", { name: /^Agent:/ }).click(),
         );
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-hide", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-hide", () =>
           agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).press("Escape"),
         );
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         expect(
           await popup.getByRole("checkbox", { name: /Remember settings for/ }).isVisible(),
         ).toBe(true);
-        await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+        await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
           agent.getByRole("button", { name: /^Agent:/ }).click(),
         );
         await agent.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
@@ -681,7 +681,7 @@ suite.define(() => {
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
           const agent = palette.locator("openclaw-agent-select");
-          await changePicker(agent.locator("wa-dropdown"), "wa-after-show", () =>
+          await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
             agent.getByRole("button", { name: /^Agent:/ }).click(),
           );
           const reviewer = agent.getByRole("menuitemradio", { name: "Reviewer", exact: true });

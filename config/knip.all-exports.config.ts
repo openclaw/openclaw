@@ -108,6 +108,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
   "scripts/control-ui-parity/vitest.config.ts!",
   "scripts/control-ui-parity/capture-suite.ts!",
+  // The cold-load benchmark README invokes this standalone driver by path.
+  "scripts/bench-control-ui-cold-load.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.

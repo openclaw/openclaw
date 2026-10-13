@@ -94,7 +94,7 @@ export function createSubagentSweeperHarness(
           return { value: undefined };
         }
         const draft = structuredClone(current);
-        params.discardDelivery?.(draft);
+        params.finalizeDelivery?.(draft);
         return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
       },
       { runs },

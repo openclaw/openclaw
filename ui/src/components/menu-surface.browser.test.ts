@@ -8,6 +8,7 @@ import { renderComposerMenuOption } from "../pages/chat/components/chat-composer
 import "../pages/chat/components/browser-tab-card.tsx";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import "../test-helpers/load-styles.ts";
+import "./agent-select-registration.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
 import "./web-awesome.ts";
@@ -125,20 +126,6 @@ async function expectMenuInTopLayer(dropdown: Dropdown) {
   await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
 }
 
-async function pauseMenuOpening(dropdown: Dropdown, trigger: HTMLElement) {
-  const surface = await settledMenuSurface(dropdown);
-  surface.style.setProperty("--show-duration", "1s");
-  trigger.click();
-  await expect.poll(() => surface.getAnimations().length).toBe(1);
-  const animation = surface.getAnimations()[0];
-  if (!animation) {
-    throw new Error("expected the menu to be animating");
-  }
-  animation.pause();
-  animation.currentTime = 500;
-  return surface;
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
   const dropdown = card.querySelector("wa-dropdown");
@@ -230,16 +217,18 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
 describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
   it("stays opaque while the menu animates open", async () => {
     await useDesktopViewport();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "agent-select";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.textContent = "Agent";
-    const item = document.createElement("wa-dropdown-item");
-    item.textContent = "All agents";
-    dropdown.append(trigger, item);
-    document.body.append(dropdown);
-    const menu = await pauseMenuOpening(dropdown, trigger);
+    const picker = document.createElement("openclaw-agent-select");
+    picker.options = [{ value: "all", label: "All agents" }];
+    document.body.append(picker);
+    await picker.updateComplete;
+    const menu = picker.querySelector<HTMLElement>(".agent-select__menu")!;
+    menu.style.setProperty("--oc-overlay-show-duration", "1s");
+    picker.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await expect.poll(() => menu.getAnimations().length).toBeGreaterThan(0);
+    for (const animation of menu.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 500;
+    }
     expect(getComputedStyle(menu).opacity).toBe("1");
     expect(getComputedStyle(menu).scale).not.toBe("1");
   });
