@@ -41,6 +41,14 @@ artifact-preserving inspection still uses private snapshots. Initial recovery
 admission, finalization checks, executor authority, and refusal of newly committed
 recovery remain unchanged; no recovery decision is cached across an await.
 
+Before Doctor's pre-repair capture admits live SQLite reads, maintenance reuses
+the source content revision while the database, WAL, and journal file identities,
+sizes, and nanosecond modification/change timestamps remain unchanged. Capture
+checks still evaluate current custody, quarantine, and update admission each time;
+the final metadata observation invalidates cached rows even when a write happens
+during revision selection. Changed source files require a fresh revision and ledger read. Backup ordering,
+stored bytes, schemas, and rollback behavior are unchanged.
+
 Agent deletion status is loaded on first admission and retained per agent in the
 physical shared database's process-owned facts. Journal writers publish pending,
 completed, and removed status at commit through the existing worker fact transport;
