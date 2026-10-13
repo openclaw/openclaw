@@ -434,10 +434,18 @@ describe("browser wheel script", () => {
     const { el, scrollBy } = scroller("rtl", "auto", { client: 300, scroll: 3000 });
     el.style.direction = "rtl";
     el.scrollLeft = left;
-    document.body.append(el);
+    const { el: outer, scrollBy: scrollOuter } = scroller("outer", "auto", {
+      client: 300,
+      scroll: 3000,
+    });
+    outer.style.direction = "rtl";
+    outer.scrollLeft = -100;
+    outer.append(el);
+    document.body.append(outer);
     const { windowScroll } = await runAt(el, { deltaX: delta, deltaY: 0, point: { x: 10, y: 10 } });
     expect(scrollBy).toHaveBeenCalledTimes(nested ? 1 : 0);
-    expect(windowScroll).toHaveBeenCalledTimes(nested ? 0 : 1);
+    expect(scrollOuter).toHaveBeenCalledTimes(nested ? 0 : 1);
+    expect(windowScroll).not.toHaveBeenCalled();
   });
 
   it("scrolls an independently scrollable body", async () => {
