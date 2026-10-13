@@ -52,8 +52,8 @@ const inventory = {
     },
   ],
 };
-const list = (active: boolean) => ({
-  sessions: [active ? row : { ...row, placement: { state: "local" } }, notes],
+const list = (active: boolean, snapshotAt?: number) => ({
+  sessions: [active ? row : { ...row, placement: { state: "local" }, snapshotAt }, notes],
   count: 2,
   totalCount: 2,
   hasMore: false,
@@ -138,7 +138,7 @@ suite.define(() => {
             deferredMethods: ["desktop.observe"],
             historyMessages: [{ role: "assistant", content: "Your existing desktop is ready." }],
             methodResponses: {
-              "sessions.list": list(!staleRoster),
+              "sessions.list": list(!staleRoster, staleRoster ? 1000 : undefined),
               "environments.list": inventory,
               "environments.status": explicitTargetOnReload
                 ? {
