@@ -8,7 +8,6 @@ import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { isChatAbortControllerEntryAbortable } from "../chat-abort.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
-import type { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 // Native initialization may create the SID after admission. Only the original
@@ -54,9 +53,15 @@ export function createChatSendSessionInitialization(params: {
   agentId: string;
   needsCreationBinding: boolean;
   authorization: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
-  getSessionInitializationOptions: ReturnType<
-    typeof createGatewayChatUserTurnController
-  >["getSessionInitializationOptions"];
+  getSessionInitializationOptions: () => Pick<
+    InternalGetReplyOptions,
+    | "requestedSessionId"
+    | "resumeRequestedSession"
+    | "expectedExistingSessionId"
+    | "pinExpectedExistingSession"
+    | "newlyCreatedSessionId"
+    | "recordedSessionActivity"
+  >;
 }): () => ReturnType<typeof params.getSessionInitializationOptions> &
   Pick<
     InternalGetReplyOptions,
