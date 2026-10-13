@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { writeProviderAuthConfig } from "../plugins/provider-auth-config.js";
 import {
@@ -12,12 +14,21 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
+import {
+  createTestPlugin,
+  createTestChannelRegistry,
+  createTestChannelManager,
+  waitForAbort,
+  flushMicrotasks,
+  type TestAccount,
+} from "./server-channels.test-support.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
 
 async function reloadChannels(
@@ -42,7 +53,6 @@ async function reloadChannels(
     shouldSkipChannelRestart: false,
     isLifecycleReloadAborted: () => false,
     getChannelAutostartSuppression: () => null,
-    channelReloadTargets: () => channels,
     scheduleRecoveryRestart,
   });
 }
@@ -331,7 +341,6 @@ it.each(
       shouldSkipChannelRestart: false,
       isLifecycleReloadAborted: () => false,
       getChannelAutostartSuppression: () => null,
-      channelReloadTargets: () => channels,
       scheduleRecoveryRestart,
     });
     if (state === "racing") {
@@ -467,3 +476,160 @@ it("channel reload uses the attached registry instead of the process lookup", as
     expect(monitors.every(({ abortSignal, joined }) => abortSignal.aborted && joined)).toBe(true);
   }
 });
+
+it("retains the admitted teardown owner for a failed stop retry after account removal", async () => {
+  const originalConfig: OpenClawConfig = {
+    channels: { discord: { accounts: { alpha: { enabled: true } } } },
+  };
+  let config = originalConfig;
+  let stopFails = true;
+  const stopAccount = vi.fn(async (_context: ChannelGatewayContext<TestAccount>) => {
+    if (stopFails) {
+      throw new Error("first stop failed");
+    }
+  });
+  setActivePluginRegistry(
+    createTestChannelRegistry(
+      createTestPlugin({
+        listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+        resolveAccount: (cfg, id) => {
+          const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
+          if (!account) {
+            throw new Error(`Account ${id} no longer exists`);
+          }
+          return account;
+        },
+        startAccount: async ({ abortSignal }) => await waitForAbort(abortSignal),
+        stopAccount,
+      }),
+    ),
+  );
+  const owner = createTestChannelManager({ getRuntimeConfig: () => config });
+  manager = owner;
+  await owner.startChannels();
+  await flushMicrotasks();
+  await expect(owner.stopChannel("discord", "alpha", { manual: false })).rejects.toThrow(
+    "first stop failed",
+  );
+  expect(owner.resolveRuntimeAccountId("discord", "alpha")).toBe("alpha");
+  config = { channels: { discord: { accounts: {} } } };
+  stopFails = false;
+  await expect(owner.stopChannel("discord", "alpha", { manual: false })).resolves.toBeUndefined();
+  expect(stopAccount).toHaveBeenCalledTimes(2);
+  expect(stopAccount.mock.calls[1]?.[0].cfg).toBe(originalConfig);
+  expect(stopAccount.mock.calls[1]?.[0].account).toBe(
+    originalConfig.channels?.discord?.accounts?.alpha,
+  );
+  expect(owner.resolveRuntimeAccountId("discord", "alpha")).toBeUndefined();
+});
+
+it.each(["task", "stop-hook", "preparation"] as const)(
+  "reports an unfinished removed-account %s and retains its cleanup owner for recovery",
+  async (pending) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const originalConfig: OpenClawConfig = {
+      channels: { discord: { accounts: { alpha: { enabled: true }, beta: { enabled: true } } } },
+    };
+    let config = originalConfig;
+    const release = createDeferred();
+    const preparing = createDeferred();
+    const contexts = new Map<string, ChannelGatewayContext<TestAccount>>();
+    const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+      contexts.set(context.accountId, context);
+      await waitForAbort(context.abortSignal);
+      if (pending === "task" && context.accountId === "alpha") {
+        await release.promise;
+      }
+    });
+    const stopAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
+      if (pending === "stop-hook" && context.accountId === "alpha") {
+        await release.promise;
+      }
+    });
+    setActivePluginRegistry(
+      createTestChannelRegistry(
+        createTestPlugin({
+          listAccountIds: (cfg) => Object.keys(cfg.channels?.discord?.accounts ?? {}),
+          resolveAccount: (cfg, id) => {
+            const account = cfg.channels?.discord?.accounts?.[id ?? DEFAULT_ACCOUNT_ID];
+            if (!account) {
+              throw new Error(`Account ${id} no longer exists`);
+            }
+            return account;
+          },
+          isConfigured: async (account) => {
+            if (
+              pending === "preparation" &&
+              account === originalConfig.channels?.discord?.accounts?.alpha
+            ) {
+              preparing.resolve();
+              await release.promise;
+            }
+            return true;
+          },
+          startAccount,
+          stopAccount,
+        }),
+      ),
+    );
+    const owner = createTestChannelManager({ getRuntimeConfig: () => config });
+    manager = owner;
+    const scheduleRecoveryRestart = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    let removal: Promise<void> | undefined;
+    const starting = owner.startChannels();
+    try {
+      if (pending === "preparation") {
+        await preparing.promise;
+      } else {
+        await starting;
+      }
+      await flushMicrotasks();
+      config = { channels: { discord: { accounts: { beta: { enabled: true } } } } };
+      removal = restartGatewayChannels({
+        params: {
+          startChannel: owner.startChannel,
+          stopChannel: owner.stopChannel,
+          getPluginRegistry: requireActivePluginChannelRegistry,
+          releaseChannelRouteHandoffs: owner.releaseChannelRouteHandoffs,
+          logChannels,
+        },
+        nextConfig: config,
+        channelsToRestart: new Set(),
+        restartChannelAccounts: new Map([["discord", new Set(["alpha"])]]),
+        activePluginChannelsAfterReload: null,
+        shouldSkipChannelRestart: false,
+        isLifecycleReloadAborted: () => false,
+        getChannelAutostartSuppression: () => null,
+        scheduleRecoveryRestart,
+      });
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await removal;
+      expect(scheduleRecoveryRestart).toHaveBeenCalledWith("channel restart (discord[alpha])");
+      expect(logChannels.error).toHaveBeenCalledOnce();
+      expect(owner.resolveRuntimeAccountId("discord", "alpha")).toBe("alpha");
+      expect(owner.getRuntimeSnapshot().channelAccounts.discord?.beta?.running).toBe(true);
+      expect(contexts.get("beta")?.abortSignal.aborted).toBe(false);
+      expect(startAccount).toHaveBeenCalledTimes(pending === "preparation" ? 1 : 2);
+      release.resolve();
+      await starting;
+      await flushMicrotasks();
+      await owner.stopChannel("discord", "alpha", { manual: false, strict: true });
+      expect(stopAccount.mock.calls.every(([context]) => context.cfg === originalConfig)).toBe(
+        true,
+      );
+      expect(owner.resolveRuntimeAccountId("discord", "alpha")).toBeUndefined();
+      expect(owner.getRuntimeSnapshot().channelAccounts.discord).not.toHaveProperty("alpha");
+      expect(startAccount).toHaveBeenCalledTimes(pending === "preparation" ? 1 : 2);
+      expect(contexts.get("beta")?.abortSignal.aborted).toBe(false);
+    } finally {
+      release.resolve();
+      await starting;
+      await removal;
+      await owner.stopChannel("discord");
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  },
+);

@@ -25,6 +25,19 @@ import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 const activeReloaders = new Set<ReturnType<typeof startGatewayConfigReloaderImpl>>();
 let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
+export function createMattermostReloadConfig(): OpenClawConfig {
+  return {
+    channels: {
+      mattermost: {
+        accounts: {
+          alpha: { enabled: true },
+          beta: { enabled: true },
+        },
+      },
+    },
+  };
+}
+
 export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
 }
