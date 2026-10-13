@@ -55,6 +55,8 @@ describe("worker placement session events", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: () => 0,
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -174,6 +176,8 @@ describe("worker placement session events", () => {
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
         version: () => 0,
+        invalidate: vi.fn(),
+        nextSweepAtMs: () => Infinity,
         sweep: vi.fn().mockResolvedValue(undefined),
       });
       runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -190,8 +194,8 @@ describe("worker placement session events", () => {
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
-          workspaceResultInstanceId: () => "gateway-test",
           subscribeChanges: () => () => {},
+          workspaceResultInstanceId: () => "gateway-test",
           getAsync: async () => undefined,
           getManyAsync: async () => new Map(),
           listAsync: async () => [],
@@ -249,6 +253,8 @@ describe("worker placement session events", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: () => 0,
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -265,8 +271,8 @@ describe("worker placement session events", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        workspaceResultInstanceId: () => "gateway-test",
         subscribeChanges: () => () => {},
+        workspaceResultInstanceId: () => "gateway-test",
         getAsync: async () => undefined,
         getManyAsync: async () => new Map(),
         listAsync: async () => [],

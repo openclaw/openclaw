@@ -146,6 +146,8 @@ async function withRecoveryRuntime(
     runtimeMocks.createDiskSpace.mockReturnValue({
       read: vi.fn(),
       version: vi.fn(() => 0),
+      invalidate: vi.fn(),
+      nextSweepAtMs: () => Infinity,
       sweep: vi.fn().mockResolvedValue(undefined),
     });
     runtimeMocks.createSessionEvidenceResolver.mockResolvedValue(

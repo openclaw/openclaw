@@ -1,12 +1,15 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
@@ -14,6 +17,7 @@ import {
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { sealSecretSentinel } from "../sentinel.js";
+import { publishSecretStoreChange, subscribeSecretStoreChanges } from "./secret-store-changes.js";
 import {
   captureSecretStoreExpiryCutoffs,
   type SecretStoreExpiryResult,
@@ -26,6 +30,8 @@ import {
   type SecretStoreScope,
 } from "./secret-store-validation.js";
 import type { SecretStoreListInput, SecretStoreRow } from "./secret-store.types.js";
+
+export { subscribeSecretStoreChanges } from "./secret-store-changes.js";
 
 export {
   assertSecretStoreValue,
@@ -288,29 +294,68 @@ export async function readSecretStoreValue(params: {
   }
 }
 
-let expiryObservation: { path: string; result: SecretStoreExpiryResult } | undefined;
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    expiryObservation = undefined;
+type ExpiryObservation = { dirty: boolean; result?: SecretStoreExpiryResult };
+const expiryObservations = new Map<string, ExpiryObservation>();
+subscribeSecretStoreChanges(({ databasePath }) => {
+  const observation = expiryObservations.get(databasePath);
+  if (observation) {
+    observation.dirty = true;
   }
 });
+registerOpenClawStateDatabaseAsyncResource({
+  async close() {
+    const paths = [...expiryObservations.keys()];
+    expiryObservations.clear();
+    for (const path of paths) {
+      publishSecretStoreChange(path);
+    }
+  },
+});
+registerOpenClawStateDatabaseLifecycleListener((event) => {
+  if (event.kind !== "opened") {
+    const observation = expiryObservations.get(event.path);
+    if (observation) {
+      observation.dirty = true;
+      expiryObservations.delete(event.path);
+    }
+  }
+});
+
+/** Undefined means discovery is needed; null means the owner has no expiry work. */
+export function getSecretStoreExpiryDeadline(): number | null | undefined {
+  const observation = expiryObservations.get(resolveOpenClawStateSqlitePath());
+  return observation?.dirty ? undefined : observation?.result?.nextExpiryAtMs;
+}
 
 export async function purgeExpiredSecretStoreEntries(
   params: { database?: Pick<OpenClawStateDatabaseOptions, "path" | "env"> } = {},
 ): Promise<number> {
-  const input = captureSecretStoreExpiryCutoffs();
   const context = captureOpenClawStateWorkerContext(params.database);
   const path = context.admission.databasePath;
-  const retained = expiryObservation?.path === path ? expiryObservation.result : undefined;
-  const writeToken = readSqliteDatabaseWriteTokenForPath(path);
+  const cached = expiryObservations.get(path);
   if (
-    writeToken &&
-    retained?.writeToken === writeToken &&
-    (retained.nextExpiryAtMs === null || Date.now() < retained.nextExpiryAtMs)
+    cached &&
+    !cached.dirty &&
+    cached.result &&
+    (cached.result.nextExpiryAtMs === null || Date.now() < cached.result.nextExpiryAtMs)
   ) {
     return 0;
   }
-  const result = await executeOpenClawStateWorker(context, { type: "secrets.purge", input });
-  expiryObservation = { path, result };
-  return result.removed;
+  // Each discovery owns its result; overlapping callers cannot clear its invalidation.
+  const observation: ExpiryObservation = { dirty: false };
+  expiryObservations.set(path, observation);
+  try {
+    const result = await executeOpenClawStateWorker(context, {
+      type: "secrets.purge",
+      input: captureSecretStoreExpiryCutoffs(),
+    });
+    if (result.removed > 0) {
+      publishSecretStoreChange(path);
+    }
+    observation.result = result;
+    return result.removed;
+  } catch (error) {
+    observation.dirty = true;
+    throw error;
+  }
 }

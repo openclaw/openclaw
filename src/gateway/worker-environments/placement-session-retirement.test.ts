@@ -155,6 +155,25 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
 }
 
 describe("placement session retirement", () => {
+  it("reuses local session evidence until invalidated, including a receipt during discovery", async () => {
+    const placement = localPlacement("session-current");
+    const harness = createHarness([placement]);
+    harness.resolveSessionEvidence.mockResolvedValue("current");
+    await harness.retirement.reconcile();
+    await harness.retirement.reconcile();
+    expect(harness.listAsync).toHaveBeenCalledTimes(1);
+
+    harness.retirement.invalidateAll();
+    harness.listAsync.mockImplementationOnce(async () => {
+      harness.retirement.invalidateAll();
+      return [placement];
+    });
+    await harness.retirement.reconcile();
+    harness.resolveSessionEvidence.mockResolvedValue("absent");
+    await harness.retirement.reconcile();
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
+  });
+
   it("retires an exact local placement after its session disappears", async () => {
     const harness = createHarness([localPlacement("session-local")]);
 

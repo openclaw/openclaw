@@ -378,7 +378,20 @@ export function createAgentTurnService(
               requestedSessionId,
               fallbackSessionId: sessionId,
             });
-          const patchBuild = await buildSessionPatch(entry);
+          const patchBuild = preparedSession.freshChild
+            ? {
+                patch: {},
+                spawnedBy: entry?.spawnedBy,
+                groupId: entry?.groupId,
+                groupChannel: entry?.groupChannel,
+                groupSpace: entry?.space,
+                freshSessionRotatedSinceLoad: false,
+                isNewSession: false,
+                rotatedSessionId: false,
+                usableRequestedSessionId: undefined,
+                freshness: { fresh: true },
+              }
+            : await buildSessionPatch(entry);
           assertRequestCurrent();
           session.sessionEntry = entry;
           session.resolvedSessionId =
@@ -400,6 +413,7 @@ export function createAgentTurnService(
             return;
           }
           const persistedSession = await persistAgentSessionPhase({
+            freshChild: preparedSession.freshChild,
             onSessionCommitted: (committedEntry) => {
               session.sessionEntry = committedEntry;
               dedupeLifecycle.bindSessionTarget({

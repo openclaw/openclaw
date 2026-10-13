@@ -98,6 +98,8 @@ function createMaintenanceRuntime(params: {
   runtimeFactoryMocks.createDiskSpace.mockReturnValue({
     read: vi.fn(),
     version: vi.fn(() => 0),
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
     sweep: vi.fn().mockResolvedValue(undefined),
   });
   runtimeFactoryMocks.createDispatch.mockReturnValue({
@@ -128,8 +130,10 @@ function createMaintenanceRuntime(params: {
     getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
+      subscribeChanges: (
+        listener: Parameters<WorkerSessionPlacementStore["subscribeChanges"]>[0],
+      ) => params.preservationStore?.subscribeChanges(listener) ?? (() => {}),
       workspaceResultInstanceId: () => "gateway-test",
-      subscribeChanges: () => () => {},
       getAsync: async (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
       getManyAsync: async (sessionIds: readonly string[]) =>

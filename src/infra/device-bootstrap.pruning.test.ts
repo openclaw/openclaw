@@ -129,12 +129,14 @@ describe("device setup completion pruning", () => {
       await expect(
         pruneExpiredDevicePairSetupCompletions({ baseDir, nowMs: recordedAtMs }),
       ).resolves.toBe(0);
+      await closeOpenClawStateDatabaseAsync();
       const { db } = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
       });
       db.prepare(
-        "INSERT INTO device_pair_setup_completions (setup_id, device_id, access, completed_at_ms, delivery_state, retain_until_ms) VALUES ('foreign-expired', 'device-123', 'node', 1, 'confirmed', ?)",
+        "INSERT INTO device_pair_setup_completions (setup_id, device_id, access, completed_at_ms, delivery_state, retain_until_ms) VALUES ('restart-expired', 'device-123', 'node', 1, 'confirmed', ?)",
       ).run(recordedAtMs);
+      await closeOpenClawStateDatabaseAsync();
       await expect(
         pruneExpiredDevicePairSetupCompletions({ baseDir, nowMs: recordedAtMs }),
       ).resolves.toBe(1);
