@@ -59,7 +59,7 @@ describe("memory manager agent database lifecycle", () => {
     const workerEntered = createDeferred<void>();
     const workerGate = createDeferred<void>();
     let admitted: MemoryIndexDatabase | undefined;
-    const openPublished = MemoryIndexDatabase.openPublished;
+    const openPublished = MemoryIndexDatabase.openPublished.bind(MemoryIndexDatabase);
     vi.spyOn(MemoryIndexDatabase, "openPublished").mockImplementation(async (...args) => {
       admitted = await openPublished(...args);
       const closeWorker = admitted.closePublicationWorker.bind(admitted);
