@@ -16,8 +16,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
-  TranscriptAppendCursor,
-  TranscriptAppendOptions,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
@@ -31,6 +29,10 @@ import {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import type {
+  TranscriptAppendCursor,
+  TranscriptAppendOptions,
+} from "./session-accessor.sqlite-transcript-append.types.js";
 import {
   createTranscriptIdentityInserter,
   readIdempotencyKeyOwner,
