@@ -423,6 +423,15 @@ deny an ordinary read or grant effect authority. A changed token invalidates eve
 derived cache that depends on that database, including caches in sibling plugin
 instances. The helper does not observe writes by other processes.
 
+For independent data owners in one database,
+`readSqliteDatabaseScopedWriteTokenForPath(path, scope)` retains facts across
+unrelated scoped writes. The worker exports `readSqliteDatabaseScopedWriteToken`
+and `readSqliteDatabasePendingScopedWriteToken` from `sqlite-worker-runtime`;
+use the latter to attach the committed scope receipt to a transaction result.
+Each participating writer names its affected scopes with
+`withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
+all scope receipts. These tokens describe committed data, never effect authority.
+
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
 handle. Its required live authority runs inside worker grants and must not read

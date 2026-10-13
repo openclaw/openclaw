@@ -17,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  closeAuthProfileFileState,
+  noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
 } from "../auth-profiles/file-state.js";
 import * as migrationDiagnostics from "../auth-profiles/legacy-source-diagnostic.js";
@@ -471,7 +471,7 @@ describe("SDK migration guard endpoint context", () => {
             "requires legacy credential migration",
           );
           writePersistedAuthProfileStoreRaw(apiKeyStore("arcee", { key: localKey }), agentDir);
-          closeAuthProfileFileState();
+          noteAuthProfileFileWrite(path.join(agentDir, "openclaw-agent.sqlite"));
           storage.reload();
           reloadedSelectedCredential = true;
         });

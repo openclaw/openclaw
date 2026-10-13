@@ -18,8 +18,8 @@ import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
-  readSqliteDatabasePendingWriteToken,
-  readSqliteDatabaseWriteTokenForPath,
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseScopedWriteToken,
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
   setSqliteBusyTimeout,
@@ -45,6 +45,10 @@ import type {
   MemoryPublicationFragment,
   MemoryPublicationOperations,
   MemoryPublicationResult,
+} from "./manager-publication-task.js";
+import {
+  MEMORY_EMBEDDING_CACHE_WRITE_SCOPE,
+  MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_META_KEY, readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import {
@@ -74,6 +78,7 @@ const agentConnectionPragmas = new WeakMap<
   Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">
 >();
 const loadedExtensions = new WeakMap<DatabaseSync, string>();
+const embeddingCacheSizes = new WeakMap<DatabaseSync, { size: number; token?: string }>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -256,7 +261,7 @@ function createPublicationBackend(
         },
         withCommit: (commit) => {
           admit("commit");
-          writeToken = readSqliteDatabasePendingWriteToken(db);
+          writeToken = readSqliteDatabasePendingScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
           commit();
           committed = true;
         },
@@ -270,14 +275,17 @@ function createPublicationBackend(
       }
     }
   };
-  const write = <T>(run: () => T): MemoryPublicationResult<T> =>
+  const write = <T>(
+    run: () => T,
+    scopes = [MEMORY_INDEX_WRITE_SCOPE],
+  ): MemoryPublicationResult<T> =>
     transact((hooks) =>
       runSqliteImmediateTransactionSync(
         db,
         () => {
           hooks.onBegin();
           // Index writes do not change session facts. DDL still invalidates all scopes.
-          return withSqliteDatabaseWriteScope(db, [], run);
+          return withSqliteDatabaseWriteScope(db, scopes, run);
         },
         { withCommit: hooks.withCommit },
       ),
@@ -291,11 +299,11 @@ function createPublicationBackend(
       admit("commit");
       setSqliteBusyTimeout(db, 0);
       statementStarted = true;
-      const value = withSqliteDatabaseWriteScope(db, [], () =>
+      const value = withSqliteDatabaseWriteScope(db, [MEMORY_INDEX_WRITE_SCOPE], () =>
         runSqliteSingleStatementSync(db, statement),
       );
       committed = true;
-      const writeToken = readSqliteDatabaseWriteTokenForPath(databasePath);
+      const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
       return { ok: true, value, writeToken };
     } catch (error) {
       const detail = failure(error);
@@ -314,6 +322,27 @@ function createPublicationBackend(
   };
   const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
     result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
+  const cacheSize = () => {
+    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+    let retained = embeddingCacheSizes.get(db);
+    if (!retained || retained.token !== token) {
+      retained = { size: countMemoryEmbeddingCache(db), token };
+      embeddingCacheSizes.set(db, retained);
+    }
+    return retained.size;
+  };
+  const writeCache = (run: (size: number) => number): MemoryPublicationResult<boolean> => {
+    const size = cacheSize();
+    const result = write(() => run(size), [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE]);
+    if (!result.ok) {
+      return result;
+    }
+    embeddingCacheSizes.set(db, {
+      size: result.value,
+      token: readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
+    });
+    return { ...result, value: true };
+  };
   const writeMeta = (value: string) => {
     executeSqliteQuerySync(
       db,
@@ -412,19 +441,15 @@ function createPublicationBackend(
         return undefined;
       }
       if (command.type === "cache.prune") {
-        if (countMemoryEmbeddingCache(db) <= command.input.maxEntries) {
+        if (cacheSize() <= command.input.maxEntries) {
           return { ok: true, value: false };
         }
-        return write(() => {
-          pruneMemoryEmbeddingCache(db, command.input.maxEntries);
-          return true;
-        });
+        return writeCache((size) => pruneMemoryEmbeddingCache(db, size, command.input.maxEntries));
       }
       if (command.type === "cache.clear") {
-        return write(() => {
-          clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
-          return true;
-        });
+        return writeCache(
+          (size) => size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
+        );
       }
       if (command.type === "cache.write" || command.type === "cache.write.inline") {
         let header: MemoryEmbeddingCacheHeader;
@@ -441,7 +466,7 @@ function createPublicationBackend(
           const fragments = staged.fragments;
           readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
         }
-        const outcome = write(() => {
+        const outcome = writeCache((size) => {
           const eligible = new Map<string, boolean>();
           function* entries() {
             for (const entry of readEntries()) {
@@ -458,8 +483,7 @@ function createPublicationBackend(
               yield entry;
             }
           }
-          upsertMemoryEmbeddingCache({ ...header, db, entries });
-          return true;
+          return upsertMemoryEmbeddingCache({ ...header, db, cacheSize: size, entries });
         });
         return command.type === "cache.write" ? finish(outcome) : outcome;
       }

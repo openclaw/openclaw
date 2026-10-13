@@ -104,14 +104,9 @@ export function readSessionCostUsagePartitionsInDatabase(
 
 export function readSessionCostUsageRollupWithPartitionsInDatabase(
   db: DatabaseSync,
-  snapshot: { key: string; updatedAt: number; valueJson: string | Uint8Array },
+  snapshot: { key: string },
 ): { blob: Uint8Array | null; partitions: UsageCostPartition[] } | undefined {
   assertUsagePartitionWorker();
-  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
-  const valueJson =
-    typeof snapshot.valueJson === "string"
-      ? snapshot.valueJson
-      : expression.cast<string>(expression.val(snapshot.valueJson), "text");
   const rows = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<CacheDatabase>(db)
@@ -119,12 +114,7 @@ export function readSessionCostUsageRollupWithPartitionsInDatabase(
       .select(["scope", "key", "value_json", "blob"])
       .where((eb) =>
         eb.or([
-          eb.and([
-            eb("scope", "=", USAGE_COST_ROLLUP_SCOPE),
-            eb("key", "=", snapshot.key),
-            eb("updated_at", "=", snapshot.updatedAt),
-            eb("value_json", "=", valueJson),
-          ]),
+          eb.and([eb("scope", "=", USAGE_COST_ROLLUP_SCOPE), eb("key", "=", snapshot.key)]),
           eb.and([
             eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
             eb("key", ">=", `${snapshot.key}\0`),

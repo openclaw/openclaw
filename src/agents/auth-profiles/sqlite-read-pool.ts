@@ -28,6 +28,7 @@ const AUTH_PROFILE_READ_HANDLE_CAP = 64;
 const AUTH_PROFILE_READ_IDLE_MS = 30 * 60_000;
 type AuthProfileReadHandle = {
   db: DatabaseSync;
+  identity: string | undefined;
   ready: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
@@ -122,6 +123,7 @@ export function isMissingDatabasePath(pathname: string): boolean {
 export function acquireAuthProfileReadDatabase(
   pathname: string,
   schema?: SqliteAuthSchema,
+  expectedIdentity?: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
@@ -133,7 +135,11 @@ export function acquireAuthProfileReadDatabase(
     return { status: "unreadable" };
   }
   const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
-  if (cached?.ready && cached.db.isOpen) {
+  if (
+    cached?.ready &&
+    cached.db.isOpen &&
+    (expectedIdentity === undefined || cached.identity === expectedIdentity)
+  ) {
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
     armReadHandleIdleClose(resolvedPath, cached);
@@ -157,7 +163,8 @@ export function acquireAuthProfileReadDatabase(
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
-  const candidate: AuthProfileReadHandle = { db, ready: false };
+  // The worker validates this identity around the read; native open also binds its own file.
+  const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);
     unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);

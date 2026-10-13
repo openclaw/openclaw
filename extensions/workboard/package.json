@@ -41,6 +41,12 @@
       ]
     },
     "build": {
+      "staticAssets": [
+        {
+          "source": "./src/workboard-schema.postgres.sql",
+          "output": "./src/workboard-schema.postgres.sql"
+        }
+      ],
       "workerEntries": [
         "./src/sqlite-store.worker.ts"
       ]

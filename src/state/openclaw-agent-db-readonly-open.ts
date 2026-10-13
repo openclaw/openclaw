@@ -5,12 +5,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import {
-  admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
-  runSqliteReadOperationSync,
-} from "../infra/sqlite-schema-facts.js";
-import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
@@ -81,23 +76,6 @@ function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase)
   assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
   assertCanonicalSessionValidationSchema(database.db);
   return true;
-}
-
-/** Retained grants reuse their fresh read scope without re-admitting changed schema under a lock. */
-export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentReadOnlyDatabase) {
-  const changed = () =>
-    new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${database.path} schema admission changed; retry the request.`,
-    );
-  const schema = getAdmittedSqliteSchemaFacts(database.db);
-  if (!schema) {
-    throw changed();
-  }
-  return () => {
-    if (getAdmittedSqliteSchemaFacts(database.db) !== schema) {
-      throw changed();
-    }
-  };
 }
 
 /** Recheck admission and consume retained rows in the same fresh synchronous scope. */

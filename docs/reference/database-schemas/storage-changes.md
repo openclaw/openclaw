@@ -2706,7 +2706,15 @@ Append-only refreshes resume after the checkpoint sequence and decode each new
 page once. The transcript owner's existing rewrite watermark invalidates the
 checkpoint after a rewrite; branch changes rebuild from the visible ancestry.
 The Gateway serializes refreshes with a process-local reservation rather than
-durable cache-lock writes. Usage-only writes do not invalidate session facts.
+durable cache-lock writes. Usage-only writes do not invalidate session facts. The refresh worker also retains a
+bounded, receipt-covered working set of transcript statistics and rollup inputs.
+An unchanged receipt reuses the statistics (including generation and cold state)
+and skips unchanged calculations. Successful writes carry their checkpoint and
+partition inputs forward; transcript writes invalidate statistics, and rollup
+writes or pruning invalidate rollup inputs. Worker retirement discards the working
+set. Reports keep their independent read snapshots. A concurrent repair during a
+refresh can defer correction to the next refresh; it does not require another
+metadata comparison on the ordinary background path.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

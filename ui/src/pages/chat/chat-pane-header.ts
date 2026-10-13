@@ -377,7 +377,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
               active: subagents ? subagentsVisible : processesVisible,
-              // Keep the selected intent if a live batch opens the panel while the menu hides.
               onActivate: () =>
                 this.requestBackgroundPanel(
                   slot,

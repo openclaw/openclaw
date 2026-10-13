@@ -23,6 +23,7 @@ import {
   createConfigRecoveryStatEffect,
   createConfigBackupMissingEffect,
   createConfigBackupReadEffect,
+  commitRecoveryFileIfCurrent,
   type ConfigRecoveryEffect,
 } from "./io.observe-recovery-effects.js";
 import {
@@ -68,29 +69,6 @@ type ConfigReadRecoveryParams = {
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
-
-async function commitRecoveryFileIfCurrent(params: {
-  health: ReturnType<typeof captureConfigHealthStateStore>;
-  beforeCommit?: () => void;
-  write: (assertCurrent: () => void) => Promise<unknown>;
-}): Promise<boolean> {
-  let superseded: Error | undefined;
-  try {
-    await params.write(() => {
-      params.beforeCommit?.();
-      if (!params.health.isCurrent()) {
-        superseded = new Error("Config recovery observation was superseded");
-        throw superseded;
-      }
-    });
-    return true;
-  } catch (error) {
-    if (superseded && error === superseded) {
-      return false;
-    }
-    throw error;
-  }
-}
 
 function createRecoveryCommitEffect(params: {
   deps: ObserveRecoveryDeps;
@@ -443,6 +421,13 @@ function* planSuspiciousConfigRead(
       if (!(yield currentObservation)) {
         return { restored: false, error: undefined, superseded: true };
       }
+      if (clobberedPath === null) {
+        const error = new Error(
+          `Config backup recovery deferred: ${configPath}; original config snapshot could not be saved. Retry recovery.`,
+        );
+        deps.logger.warn(error.message);
+        return { restored: false, error };
+      }
       let restoredFromBackup = false;
       let restoreError: unknown;
       try {
@@ -675,6 +660,12 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     observedAt: now,
   });
   if (!health.isCurrent()) {
+    return false;
+  }
+  if (clobberedPath === null) {
+    deps.logger.warn(
+      `Config last-known-good recovery deferred: ${snapshot.path}; original config snapshot could not be saved. Retry recovery.`,
+    );
     return false;
   }
   if (recoveryCandidate.raw !== backupRaw) {

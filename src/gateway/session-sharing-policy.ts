@@ -6,7 +6,7 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isSessionMember, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
@@ -31,6 +31,7 @@ import {
   captureIncognitoSessionMutationFacts,
   captureSessionActorMutationFacts,
   captureSessionSharingActorBinding,
+  SessionMutationFactsUnavailableError,
 } from "./session-sharing-incognito.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
@@ -339,17 +340,10 @@ export function resolveSessionSharingRole(
   if (sessionCap === "none") {
     return "viewer";
   }
-  const member =
-    params.isMember ??
-    isSessionMember(
-      {
-        agentId: params.target.agentId,
-        sessionKey: params.target.storeKey,
-        storePath: params.target.storePath,
-      },
-      identity.id,
-    );
-  return member ? "member" : "viewer";
+  if (params.isMember === undefined) {
+    throw new SessionMutationFactsUnavailableError();
+  }
+  return params.isMember ? "member" : "viewer";
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
@@ -430,16 +424,6 @@ export async function authorizeResolvedSessionMutationAsync(params: {
       { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
     );
   });
-}
-
-/** Synchronous final-authority exception for existing security effect guards. */
-export function authorizeResolvedSessionMutation(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-  agentId?: string;
-}): ErrorShape | null {
-  return authorizeSessionMutationTarget(params, () => resolveSessionSharingTarget(params));
 }
 
 export type PreparedSessionMutationFacts = {

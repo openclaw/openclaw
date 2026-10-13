@@ -319,7 +319,7 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
           });
@@ -339,7 +339,12 @@ function runSession(): void {
           return;
         }
         assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        const rows = readAuthProfileRowsReadOnly(pathname, readSqliteAuthSchema(read.schema));
+        const rows = readAuthProfileRowsReadOnly(
+          pathname,
+          readSqliteAuthSchema(read.schema),
+          expectedIdentity,
+          read.retainReader === true,
+        );
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }
