@@ -227,7 +227,7 @@ export function createFollowupRunner(
         resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const { decision, accounting } = await withAgentTurnCompletion(
+      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
         {
           agentId: turn.queued.run.agentId,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
@@ -285,15 +285,15 @@ export function createFollowupRunner(
       // source owner settles in finally. Allocate its successor before that boundary.
       if (
         completion.kind === "completed" &&
-        accounting?.activeSessionEntry?.goal?.status === "active" &&
+        completedAccounting?.activeSessionEntry?.goal?.status === "active" &&
         turn.session.kind === "session" &&
         turn.session.storePath
       ) {
         await enqueueGoalContinuation({
           base: turn.queued,
-          result: accounting.runResult,
+          result: completedAccounting.runResult,
           initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
-          expectedSession: accounting.expectedSession,
+          expectedSession: completedAccounting.expectedSession,
           sessionKey: turn.session.key,
           storePath: turn.session.storePath,
           reader: getReplyOperationSessionReader(turn.operation),

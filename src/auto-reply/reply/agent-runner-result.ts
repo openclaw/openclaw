@@ -5,7 +5,6 @@ import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-
 import { enqueueGoalContinuation } from "./goal-continuation.js";
 import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 
@@ -13,7 +12,7 @@ export async function finalizeReplyAgentRun(
   context: FinalizeReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const initialGoalId = context.activeSessionEntry?.goal?.id;
-  const { result, accounting } = await withAgentTurnCompletion(
+  const { result, accounting: completedAccounting } = await withAgentTurnCompletion(
     {
       agentId: context.followupRun.run.agentId,
       storePath: context.storePath,
@@ -74,13 +73,13 @@ export async function finalizeReplyAgentRun(
     context.sessionKey &&
     context.storePath &&
     context.execution.status === "ok" &&
-    accounting.activeSessionEntry?.goal?.status === "active"
+    completedAccounting.activeSessionEntry?.goal?.status === "active"
   ) {
     await enqueueGoalContinuation({
       base: context.followupRun,
-      result: accounting.runResult,
+      result: completedAccounting.runResult,
       initialGoalId,
-      expectedSession: accounting.expectedSession,
+      expectedSession: completedAccounting.expectedSession,
       sessionKey: context.sessionKey,
       storePath: context.storePath,
       reader: getReplyOperationSessionReader(context.replyOperation),
