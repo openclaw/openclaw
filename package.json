@@ -360,6 +360,7 @@
     "!dist/extensions/slack/**",
     "!dist/extensions/slack-huddles/**",
     "!dist/extensions/sms/**",
+    "!dist/extensions/srt-sandbox/**",
     "!dist/extensions/stepfun/**",
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",

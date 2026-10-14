@@ -73,6 +73,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "onnx", minHostVersionBaseline: "2026.9.6" },
+  { pluginId: "srt-sandbox", minHostVersionBaseline: "2026.9.6" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
