@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import vm from "node:vm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -13,6 +14,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
@@ -28,6 +33,7 @@ import {
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
@@ -385,11 +391,58 @@ describe("prepared worker dispatch", () => {
   it.each([true, false])(
     "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
     async (reserve) => {
-      const { harness, request } = await preparedHarness({ reserve, recipe: lifecycleRecipe });
+      const { harness, request, ready } = await preparedHarness({
+        reserve,
+        recipe: lifecycleRecipe,
+      });
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      onTestFinished(() => {
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(sessionLog, "isEnabled").mockReturnValue(true);
+      const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {
+        throw new Error("diagnostic sink unavailable");
+      });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const attach = vi.mocked(harness.environments.attachSession);
+      const ordinaryAttach = attach.getMockImplementation()!;
+      attach.mockImplementation(async (params) => {
+        const credential = await ordinaryAttach(params);
+        now += 1_200;
+        return credential;
+      });
+      if (!reserve) {
+        const provision = vi.mocked(harness.environments.createWithRequest);
+        const environment = harness.environments.get(ready.environmentId)!;
+        provision.mockImplementation(async () => {
+          now += 600;
+          return environment;
+        });
+      }
 
       const active = await harness.service.dispatch(request);
 
       expect(active.state).toBe("active");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("slow placement dispatch", {
+        operation: "sessions.dispatch",
+        elapsedMs: reserve ? 1_200 : 1_800,
+        phaseDurationsMs: {
+          admission: 0,
+          workspacePreparation: 0,
+          reserveClaim: 0,
+          ...(!reserve ? { provision: 600 } : {}),
+          attach: 1_200,
+          tunnel: 0,
+          bind: 0,
+          repositoryStartup: 0,
+          lifecycleCommands: 0,
+          activation: 0,
+          cleanup: 0,
+        },
+      });
       expect(
         harness.log.filter((phase) =>
           [

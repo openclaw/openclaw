@@ -229,11 +229,13 @@ export function createWorkerPlacementDispatchStartup(options: {
     signal?: AbortSignal;
     recovery?: true;
     admittedNode?: WorkerNodePlacementAdmission;
+    markPhase?: (phase: string) => void;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
     }
     const { request } = params;
+    params.markPhase?.("attach");
     if (
       params.workspace.kind === "device-folder" &&
       (params.environment.nodeDeviceId !== params.workspace.deviceId ||
@@ -328,6 +330,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     };
     params.signal?.addEventListener("abort", stopAttemptTunnel, { once: true });
     try {
+      params.markPhase?.("tunnel");
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
@@ -362,6 +365,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         typeof syncSessionRepositoryWorkspace
       >[0]["preparedRepository"];
       if (preparation) {
+        params.markPhase?.("bind");
         const prepared = await environments.bindPreparedWorkspace({
           environmentId: provisioned.environmentId,
           ownerEpoch,
@@ -388,6 +392,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           };
         }
       }
+      params.markPhase?.("repositoryStartup");
       const synced =
         params.workspace.kind === "device-folder"
           ? await tunnel.syncWorkspace({
@@ -399,6 +404,7 @@ export function createWorkerPlacementDispatchStartup(options: {
             })
           : params.workspace.kind === "repository"
             ? await syncSessionRepositoryWorkspace({
+                markPhase: params.markPhase,
                 repository: params.workspace.repository,
                 preparedRepository,
                 tunnel,
@@ -433,6 +439,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       }
       assertSyncOwner();
       if (preparation?.recipe && preparation.runSetupScript !== false) {
+        params.markPhase?.("lifecycleCommands");
         await runWorkerProjectLifecycle({
           recipe: preparation.recipe,
           tunnel,
@@ -443,6 +450,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           signal: params.signal,
         });
       }
+      params.markPhase?.("activation");
       const assertActivationCurrent = () => {
         assertRequestCurrent();
         requireAttachedEnvironment();
@@ -526,6 +534,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       activationIndeterminate = error instanceof AcceptedWorkspacePublicationIndeterminateError;
       throw error;
     } finally {
+      params.markPhase?.("cleanup");
       params.signal?.removeEventListener("abort", stopAttemptTunnel);
       if (!activated && !activationIndeterminate && params.signal?.aborted) {
         // Start may publish its owner after the first abort. Join that exact epoch as well
