@@ -88,7 +88,8 @@ export async function reconcileGatewayServiceDefinition(params: {
         let owned = ownership.includes(true);
         if (!owned && params.root && entrypoint) {
           // Older updaters recorded pnpm store generations that the update then deleted.
-          const { isRetiredPnpmGenerationOfInstall } = await import("../infra/update-global.js");
+          const { isRetiredPnpmGenerationOfInstall } =
+            await import("../infra/update-global-pnpm-retired.js");
           owned = await isRetiredPnpmGenerationOfInstall({ entrypoint, activeRoot: params.root });
           assertCurrent();
         }
