@@ -149,6 +149,21 @@ export function recordOperationTimingEvent(
           "Authenticated Gateway WebSocket requests received.",
           labels,
         );
+        if (evt.method === "models.list" && evt.modelsList) {
+          const catalog = evt.modelsList;
+          store.counter(
+            "openclaw_models_list_requests_total",
+            "Model catalog requests by client kind and bounded request shape.",
+            {
+              client_kind: catalog.clientKind,
+              source: catalog.source,
+              view: catalog.view,
+              scope: catalog.scope,
+              refresh: String(catalog.refresh),
+              prepared_only: String(catalog.preparedOnly),
+            },
+          );
+        }
         return;
       }
       if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
