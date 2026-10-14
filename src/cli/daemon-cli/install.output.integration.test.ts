@@ -65,6 +65,7 @@ vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
 }));
 
 const daemonExec = await import("../../daemon/exec-file.js");
+const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
 const runtimePinState = await import("../../daemon/runtime-pin-state.js");
 const configMachineState = await import("../../state/config-machine-state.js");
 const { runDaemonInstall } = await import("./install.js");
@@ -100,6 +101,7 @@ describe("runDaemonInstall integration", () => {
   let accountHome: string;
   let tempHome: string;
   let configPath: string;
+  let coordinator: string;
 
   beforeAll(async () => {
     envSnapshot = captureEnv([
@@ -114,6 +116,8 @@ describe("runDaemonInstall integration", () => {
     tempHome = path.join(accountHome, ".openclaw");
     await fs.mkdir(tempHome);
     configPath = path.join(tempHome, "openclaw.json");
+    coordinator = path.join(accountHome, "coordinator");
+    await fs.mkdir(coordinator, { mode: 0o700 });
     process.env.HOME = accountHome;
     process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${path.join(accountHome, "bus")}`;
     process.env.OPENCLAW_STATE_DIR = tempHome;
@@ -142,6 +146,9 @@ describe("runDaemonInstall integration", () => {
     });
     mockSystemAccountHome();
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
+    // Config writes consult the host-wide managed handoff store in the OpenClaw temp
+    // root; keep it private so concurrent update tests cannot hold it locked.
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
     resetRuntimeCapture();
     clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.

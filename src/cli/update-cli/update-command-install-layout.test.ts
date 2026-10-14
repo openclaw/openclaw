@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as nodeRuntime from "../../commands/node-runtime-diagnostics.js";
 import * as container from "../../infra/container-environment.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
@@ -46,6 +47,11 @@ beforeEach(async () => {
   vi.stubEnv("HOME", base);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, "state", "openclaw.json"));
+  // Update executor and config-write coordination use the host-wide OpenClaw temp
+  // root; concurrent update tests must not wait on each other's handoff store.
+  const coordinator = path.join(base, "coordinator");
+  await fs.mkdir(coordinator, { mode: 0o700 });
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(coordinator);
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
   vi.spyOn(process, "cwd").mockReturnValue(root);
   vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (argv) => {
