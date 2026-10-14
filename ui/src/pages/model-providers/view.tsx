@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
@@ -676,7 +677,7 @@ export function renderModelProvidersPageShell(props: {
   loginMessage?: ModelProviderRowMessage;
 }): JSX.Element {
   return (
-    <>
+    <ShellLayoutBoundary traits={{ settingsPage: true }}>
       <SettingsPageHeader
         title={t("routeTitles.modelProviders")}
         subtitle={
@@ -693,6 +694,6 @@ export function renderModelProvidersPageShell(props: {
         </>
       </SettingsWorkspace>
       {props.login}
-    </>
+    </ShellLayoutBoundary>
   );
 }

@@ -758,6 +758,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--muted);
 }
 
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
 openclaw-settings-save-indicator {
   min-width: 0;
 }
