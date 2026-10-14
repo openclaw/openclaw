@@ -29,6 +29,8 @@ export const nativeChromeExtensionSetupResultSchema = z.object({
     discoveredProfiles: z.number().int().nonnegative(),
     awaitingApproval: z.boolean(),
     automaticBootstrapSupported: z.boolean(),
+    // Optional for older CLI output; missing is treated as not blocked.
+    discoveryBlocked: z.boolean().optional(),
   }),
   connection: z.object({
     state: z.enum(["not_checked", "unavailable", "waiting_for_extension", "connected"]),
