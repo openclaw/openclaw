@@ -6,9 +6,12 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { WorkerSshEndpoint, WorkerSshIdentity } from "../../plugins/types.js";
 import type { CommandOptions } from "../../process/exec.js";
-import { normalizeWorkerSshHostKey } from "./ssh-host-key.js";
 
+const MAX_HOST_KEY_LENGTH = 16_384;
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+const OPENSSH_HOST_KEY_TYPE_PATTERN =
+  /^(?:ssh|ecdsa-sha2|sk-(?:ssh|ecdsa-sha2))-[A-Za-z0-9@._+-]+$/u;
+const OPENSSH_HOST_KEY_DATA_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/u;
 
 export type PreparedWorkerSsh = {
   sshTarget: string;
@@ -62,8 +65,28 @@ function normalizeEndpoint(ssh: WorkerSshEndpoint): {
 }
 
 function pinnedKnownHosts(host: string, ports: readonly number[], pinnedHostKey: string): string {
-  const hostKey = normalizeWorkerSshHostKey(pinnedHostKey, "pinned");
-  return ports.map((port) => `${port === 22 ? host : `[${host}]:${port}`} ${hostKey}\n`).join("");
+  if (
+    pinnedHostKey.length > MAX_HOST_KEY_LENGTH ||
+    pinnedHostKey.includes("\n") ||
+    pinnedHostKey.includes("\r")
+  ) {
+    throw new Error("Pinned worker SSH host key must contain exactly one public key");
+  }
+  const tokens = pinnedHostKey.trim().split(/\s+/u);
+  const [algorithm, encodedKey] = tokens;
+  if (
+    tokens.length !== 2 ||
+    !algorithm ||
+    !encodedKey ||
+    !OPENSSH_HOST_KEY_TYPE_PATTERN.test(algorithm) ||
+    !OPENSSH_HOST_KEY_DATA_PATTERN.test(encodedKey) ||
+    encodedKey.length % 4 !== 0
+  ) {
+    throw new Error("Pinned worker SSH host key must use OpenSSH public-key format");
+  }
+  return ports
+    .map((port) => `${port === 22 ? host : `[${host}]:${port}`} ${algorithm} ${encodedKey}\n`)
+    .join("");
 }
 
 /** Adapts a provisioned, pinned worker endpoint to the SSH sandbox transport contract. */
