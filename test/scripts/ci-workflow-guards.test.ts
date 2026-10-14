@@ -2650,6 +2650,38 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
+  it.each(["hybrid", "runson"] as const)(
+    "gives %s UI offloads their hosted timeout budgets",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      for (const offload of [false, true]) {
+        const context = {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          matrix: { task: "build-play" },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          runnerBackend,
+          preflightOutputs: { hybrid_hosted_offload: String(offload) },
+        } as const;
+        expect(evaluateWorkflowExpression(workflow.jobs["checks-ui"]["runs-on"], context)).toBe(
+          offload ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        );
+        for (const [jobName, timeout] of [
+          ["build-artifacts", 20],
+          ["android", 20],
+          ["checks-ui-e2e-real-gateway", 20],
+          ["checks-ui", offload ? 35 : 20],
+        ] as const) {
+          expect(
+            evaluateWorkflowExpression(workflow.jobs[jobName]["timeout-minutes"], context),
+            `${jobName}: hosted offload ${offload}`,
+          ).toBe(timeout);
+        }
+      }
+    },
+  );
+
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");

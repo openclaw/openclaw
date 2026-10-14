@@ -130,25 +130,30 @@ export function readSessionMaintenanceAgeCandidates(params: {
 
 export function readSessionMaintenanceCapCandidates(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
+  activeSessionKeys: readonly string[];
   excludedKeys: ReadonlySet<string>;
   overflow: number;
-  preserveKeys?: ReadonlySet<string>;
+  readPreserveKeys: () => ReadonlySet<string> | undefined;
   preserveRecentMs?: number | null;
-}): Record<string, SessionEntry> {
+}): { store: Record<string, SessionEntry>; durableNoCandidates: boolean } {
   if (params.overflow <= 0) {
-    return {};
+    return { store: {}, durableNoCandidates: false };
   }
   const db = getSessionKysely(params.database.db);
+  const activeKeys = new Set(
+    params.activeSessionKeys.map(normalizeStoreSessionKey).filter(Boolean),
+  );
   // Only push down keys unchanged by Node/SQLite text conversion; retain exact membership below.
   const excludedKeys = [...params.excludedKeys].filter(
     (key) => toUSVString(key) === key && !key.includes("\0") && !/[\uFFFE\uFFFF]/u.test(key),
   );
   const selected: Array<{
     key: string;
-    keyBytes: Buffer;
+    keyBytes: Uint8Array;
     entry: SessionEntry;
     activityAt: number;
   }> = [];
+  let durableNoCandidates = true;
   for (const row of iterateSqliteQuerySync(
     params.database.db,
     db
@@ -165,7 +170,6 @@ export function readSessionMaintenanceCapCandidates(params: {
       .orderBy("updated_at", "asc")
       .orderBy("session_key", "desc"),
   )) {
-    const keyBytes = Buffer.from(row.key_bytes);
     const worst = selected.at(-1);
     // Activity is at least updatedAt; equal lower bounds follow descending keys.
     // Once neither can improve the worst selected row, the indexed scan is done.
@@ -173,7 +177,7 @@ export function readSessionMaintenanceCapCandidates(params: {
       selected.length === params.overflow &&
       worst &&
       (row.updated_at > worst.activityAt ||
-        (row.updated_at === worst.activityAt && Buffer.compare(keyBytes, worst.keyBytes) <= 0))
+        (row.updated_at === worst.activityAt && Buffer.compare(row.key_bytes, worst.keyBytes) <= 0))
     ) {
       break;
     }
@@ -181,12 +185,29 @@ export function readSessionMaintenanceCapCandidates(params: {
       continue;
     }
     const entry = parseSessionEntryJson(row);
-    if (!entry || shouldPreserveMaintenanceEntry({ ...params, key: row.session_key, entry })) {
+    if (!entry) {
+      durableNoCandidates = false;
+      continue;
+    }
+    if (shouldPreserveMaintenanceEntry({ key: row.session_key, entry, preserveRecentMs: null })) {
+      continue;
+    }
+    // Intrinsic protection needs no runtime snapshot; runtime/recent protection can end on its own.
+    durableNoCandidates = false;
+    if (
+      activeKeys.has(row.session_key) ||
+      shouldPreserveMaintenanceEntry({
+        key: row.session_key,
+        entry,
+        preserveKeys: params.readPreserveKeys(),
+        preserveRecentMs: params.preserveRecentMs,
+      })
+    ) {
       continue;
     }
     const candidate = {
       key: row.session_key,
-      keyBytes,
+      keyBytes: row.key_bytes,
       entry,
       activityAt: getSessionMaintenanceActivityAt(entry),
     };
@@ -212,9 +233,12 @@ export function readSessionMaintenanceCapCandidates(params: {
     }
   }
   // The phase owner reverses this original SQLite key order to resolve activity ties.
-  return Object.fromEntries(
-    selected
-      .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes))
-      .map(({ key, entry }) => [key, entry]),
-  );
+  return {
+    store: Object.fromEntries(
+      selected
+        .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes))
+        .map(({ key, entry }) => [key, entry]),
+    ),
+    durableNoCandidates,
+  };
 }

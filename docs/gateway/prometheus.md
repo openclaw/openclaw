@@ -200,6 +200,10 @@ worker. These counters describe transport work, not confirmed delivery.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.
+Commit receipts reuse their already-computed serialized fact sizes. Memory reports
+count numeric heap counters and GC durations; GC kind labels and object envelopes
+are excluded. Authority includes transaction/commit admission and settlement, not
+just authorization checks; arbitrary admission facts can still be unmeasured.
 Object graphs without a known size increase `openclaw_worker_message_unmeasured_total`
 instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic

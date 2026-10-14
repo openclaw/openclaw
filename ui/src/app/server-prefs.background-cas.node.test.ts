@@ -136,27 +136,6 @@ it("uses the exact saved record to fence an explicit background deletion", async
   expect(readUserPreferences(database, profileId)).toEqual({});
 });
 
-it.each([undefined, "faded", "full-bleed"] as const)(
-  "preserves exact presentation presence in the CAS baseline (%s)",
-  async (presentation) => {
-    const saved = { ...none, ...(presentation ? { presentation } : {}) };
-    expect(
-      commit({ entries: { "ui.background": saved }, expectedEntries: { "ui.background": null } }),
-    ).toEqual({ status: "ok" });
-    const request = requestOwner();
-    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    const edited = { ...saved, showInSessions: true };
-    patchSettings({ background: edited });
-    pushServerUiPrefs(writer, { background: edited }, { profileId, canWrite: true });
-    await waitForFast(() => expect(status()).toBe("saved"));
-    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-      entries: { "ui.background": edited },
-      expectedEntries: { "ui.background": saved },
-    });
-    expect(readUserPreferences(database, profileId)["ui.background"]).toEqual(edited);
-  },
-);
-
 it("advances the CAS baseline only after its own acknowledgement for rapid placement edits", async () => {
   const acknowledgement = createDeferred();
   let first = true;

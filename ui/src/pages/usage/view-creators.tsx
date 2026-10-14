@@ -4,7 +4,7 @@ import type {
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/session-owner-chip.ts";
+import "../../components/solid/session-owner-chip.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
