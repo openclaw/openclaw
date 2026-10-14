@@ -791,6 +791,7 @@ public protocol OpenClawChatTransport: Sendable {
         worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload
     /// Tri-state hello-catalog negotiation: true/false when the connected
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
@@ -925,6 +926,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func requestHistory(sessionKey: String, cursor _: String) async throws -> OpenClawChatHistoryPayload {
+        try await self.requestHistory(sessionKey: sessionKey)
+    }
+
     private static func unsupportedOperation(_ description: String) -> NSError {
         NSError(
             domain: "OpenClawChatTransport",
