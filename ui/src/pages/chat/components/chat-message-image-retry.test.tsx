@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { renderMessageImages } from "./chat-message-images.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { MessageImages } from "./chat-message-images-solid.tsx";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 
 let container: HTMLDivElement;
 let rerender: () => void;
+let unmount: () => void;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -13,7 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  render(nothing, container);
+  unmount();
   releaseChatMediaResourceSubscriber(rerender);
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -26,9 +29,15 @@ it.each(["render", "click"] as const)(
     const source = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
     const fetch = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetch);
-    rerender = () =>
-      render(renderMessageImages([{ url: source }], { onRequestUpdate: rerender }), container);
-    rerender();
+    const [images, setImages] = createSignal([{ url: source }]);
+    rerender = () => {
+      setImages([{ url: source }]);
+      flush();
+    };
+    ({ unmount } = mountSolid(
+      () => <MessageImages images={images()} options={{ onRequestUpdate: rerender }} />,
+      { container },
+    ));
     await vi.advanceTimersByTimeAsync(0);
     expect(fetch).toHaveBeenCalledTimes(1);
 

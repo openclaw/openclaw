@@ -82,6 +82,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { ModelCompatSchema } from "../config/zod-schema.model-compat.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -5249,8 +5250,18 @@ function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["model
     },
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
-    ...(model.compat ? { compat: model.compat } : {}),
+    ...(model.compat ? { compat: pickConfigModelCompat(model.compat) } : {}),
   };
+}
+
+// Runtime normalization can add plugin-internal compat flags (Xiaomi's omitEmptyArrayItems)
+// that the config schema rejects; the plugin re-applies them when it resolves the configured model.
+const CONFIG_MODEL_COMPAT_KEYS = new Set(Object.keys(ModelCompatSchema.unwrap().shape));
+
+function pickConfigModelCompat(compat: NonNullable<Model["compat"]>) {
+  return Object.fromEntries(
+    Object.entries(compat).filter(([key]) => CONFIG_MODEL_COMPAT_KEYS.has(key)),
+  );
 }
 
 function mergeLiveProviderConfig(params: {

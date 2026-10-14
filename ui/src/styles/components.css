@@ -2115,7 +2115,7 @@ select.input {
 .lazy-element-loading-modal {
   --openclaw-modal-width: 360px;
   --openclaw-modal-backdrop-filter: none;
-  --wa-color-overlay-modal: color-mix(in srgb, var(--text) 12%, transparent);
+  --openclaw-modal-backdrop-color: color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .lazy-element-loading {

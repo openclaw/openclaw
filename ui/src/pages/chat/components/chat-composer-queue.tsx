@@ -15,6 +15,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { hasComposerContent } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
@@ -23,6 +24,7 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 type ChatQueueProps = {
   queue: ChatQueueItem[];
   displayQueue?: ChatQueueDisplayItem[];
+  connected?: boolean;
   offline?: boolean;
   canAbort?: boolean;
   canRemoveServerQueued?: boolean;
@@ -144,7 +146,11 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   });
 }
 
-function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
+function sendStateLabel(
+  item: ChatQueueItem,
+  offline: boolean,
+  connected: boolean | undefined,
+): string | null {
   if (
     offline &&
     item.sendState !== "failed" &&
@@ -160,7 +166,9 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
     case "executing-command":
       return t("chat.queue.states.runningCommand");
     case "waiting-reconnect":
-      return t("chat.queue.states.waitingForReconnect");
+      return isChatSendReconnecting(item.sendState, connected)
+        ? t("chat.queue.states.waitingForReconnect")
+        : null;
     case "unconfirmed":
     case "held":
       return t("chat.queue.states.needsReview");
@@ -305,10 +313,15 @@ function ChatQueueItem(rowProps: {
     () =>
       !item().serverQueued &&
       !failed() &&
-      (rowProps.controls.offline || item().sendState === "waiting-reconnect"),
+      (rowProps.controls.offline === true ||
+        isChatSendReconnecting(item().sendState, rowProps.controls.connected)),
   );
   const stateLabel = createMemo(() =>
-    sendStateLabel(item(), !item().serverQueued && rowProps.controls.offline === true),
+    sendStateLabel(
+      item(),
+      !item().serverQueued && rowProps.controls.offline === true,
+      rowProps.controls.connected,
+    ),
   );
   const steered = createMemo(() => item().queueMode === "steer" && stateLabel() === null);
   const busy = createMemo(() => item().sendState === "executing-command");

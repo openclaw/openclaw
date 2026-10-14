@@ -550,6 +550,7 @@ describe("renderChatComposer controls", () => {
 
   it("renders reconnect waits as compact badges without the raw transport error", () => {
     const { container } = renderComposer({
+      connected: false,
       queue: [
         {
           id: "reconnect-1",

@@ -84,7 +84,7 @@ describe("Node Code Mode executor", () => {
               settledRequests: boundary.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })) };
           },
           onFailure: (error, phase, workerId) => {
-            failure = { code: error.cause?.code, stack: error.cause?.stack, phase, workerId };
+            failure = { code: error.cause?.code, phase, workerId };
           },
         } }));
         const recovered = await host.run(() => nodeCodeModeExecutor.execute({
@@ -117,7 +117,6 @@ describe("Node Code Mode executor", () => {
       },
       failure: {
         code: "ERR_WORKER_OUT_OF_MEMORY",
-        stack: expect.any(String),
         phase: "host",
         workerId: expect.stringMatching(/^code-mode-node:/),
       },

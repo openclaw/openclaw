@@ -38,6 +38,7 @@ on:
       - "scripts/windows-cmd-helpers.mjs"
       - "scripts/preinstall-package-manager-warning.mjs"
       - "scripts/prepare-git-hooks.mjs"
+      - "!patches/README.md"
 
 permissions:
   contents: read

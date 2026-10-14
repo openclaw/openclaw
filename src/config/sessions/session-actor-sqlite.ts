@@ -8,7 +8,6 @@ import type {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -128,7 +127,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
+        const snapshot = facts.snapshot as SessionActorAuthorityFacts;
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
         authority.authorize(
@@ -232,7 +231,7 @@ export function createSqliteSessionActorExecutor(
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = freezeJsonSnapshot({
+      committed = {
         ...committed,
         failure: committed.failure
           ? {
@@ -240,7 +239,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      });
+      };
       return committed;
     };
     let outcome: Outcome;
@@ -278,14 +277,12 @@ export function createSqliteSessionActorExecutor(
                 receipt.phaseId === captured.phaseId &&
                 receipt.phase === name
               ) {
-                // Register the shared postimage first so receipt freezing and replica settlement reuse it.
-                freezeJsonSnapshot(receipt.postimage);
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = evidence as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
+                  committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
                 try {
@@ -343,7 +340,7 @@ export function createSqliteSessionActorExecutor(
             if (result.kind === "stale-version") {
               try {
                 authority.assertCurrent();
-                authority.authorize("commit", freezeJsonSnapshot(result.postimage));
+                authority.authorize("commit", result.postimage);
                 authority.assertCurrent();
                 params.assertAccepted();
               } catch (error) {

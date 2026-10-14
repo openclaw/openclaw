@@ -1,12 +1,10 @@
-import { html } from "lit";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
-import { LitContent, solidContent } from "../lit/solid-content.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
-import { icons } from "./icons.ts";
+import { Icon } from "./solid/icon.tsx";
+import { SessionOwnerChip } from "./solid/session-owner-chip.tsx";
 import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
-import "./session-owner-chip.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -20,27 +18,47 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
     async (kind) => {
       const host = document.createElement("div");
       document.body.append(host);
-      const content =
-        kind === "page"
-          ? html`<span class="session-glyph__icon">${icons.clock}</span>`
-          : html`<openclaw-session-owner-chip
-              .owner=${{ type: "human", id: "ada", label: "Ada" }}
-              .participants=${kind === "group" ? [{ identity: { type: "profile", id: "bob" }, label: "Bob" }] : []}
-              .participantCount=${kind === "group" ? 1 : 0}
-            ></openclaw-session-owner-chip>`;
       let view: ReturnType<typeof mountSolid> | undefined;
       async function show(running: boolean, queued = false) {
         view?.unmount();
         view = mountSolid(
-          () =>
-            createComponent(LitContent, {
-              value: html`<a
-                style="display:flex;align-items:center;gap:8px;width:220px;min-height:30px"
-              >
-                ${solidContent(() => createComponent(SessionGlyph, { content: createComponent(LitContent, { value: content }), running, queued, circular: kind !== "page", ring: kind === "group" ? "pair" : "circle", badge: kind === "page" ? renderSessionUnreadBadge() : undefined }), {})}
-                <span data-title>Session title</span>
-              </a>`,
-            }),
+          () => (
+            <a
+              style={{
+                display: "flex",
+                "align-items": "center",
+                gap: "8px",
+                width: "220px",
+                "min-height": "30px",
+              }}
+            >
+              <SessionGlyph
+                content={
+                  kind === "page" ? (
+                    <span class="session-glyph__icon">
+                      <Icon name="clock" />
+                    </span>
+                  ) : (
+                    <SessionOwnerChip
+                      owner={{ type: "human", id: "ada", label: "Ada" }}
+                      participants={
+                        kind === "group"
+                          ? [{ identity: { type: "profile", id: "bob" }, label: "Bob" }]
+                          : []
+                      }
+                      participantCount={kind === "group" ? 1 : 0}
+                    />
+                  )
+                }
+                running={running}
+                queued={queued}
+                circular={kind !== "page"}
+                ring={kind === "group" ? "pair" : "circle"}
+                badge={kind === "page" ? renderSessionUnreadBadge() : undefined}
+              />
+              <span data-title>Session title</span>
+            </a>
+          ),
           { container: host },
         );
         const chip = host.querySelector("openclaw-session-owner-chip");

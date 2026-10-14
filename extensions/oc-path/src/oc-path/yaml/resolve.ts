@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
+import { isMap, isScalar, isSeq, type Node } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
@@ -10,21 +10,12 @@ import type { YamlAst } from "./ast.js";
 
 type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
-  | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
-  | {
-      readonly kind: "map";
-      readonly path: readonly string[];
-    }
-  | {
-      readonly kind: "seq";
-      readonly path: readonly string[];
-    }
-  | {
-      readonly kind: "pair";
-      readonly key: string;
-      readonly value: unknown;
-      readonly path: readonly string[];
-    };
+  | ({ readonly node: Node; readonly path: readonly unknown[] } & (
+      | { readonly kind: "scalar"; readonly value: unknown }
+      | { readonly kind: "map" }
+      | { readonly kind: "seq" }
+      | { readonly kind: "pair"; readonly key: string; readonly value: unknown }
+    ));
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
   const segments = splitOcPathSlots(path.section, path.item, path.field);
@@ -40,7 +31,7 @@ function walkNode(
   node: Node | null,
   segments: readonly string[],
   i: number,
-  walked: readonly string[],
+  walked: readonly unknown[],
 ): YamlOcPathMatch | null {
   if (node === null) {
     return null;
@@ -49,13 +40,13 @@ function walkNode(
 
   if (seg === undefined) {
     if (isMap(node)) {
-      return { kind: "map", path: walked };
+      return { kind: "map", node, path: walked };
     }
     if (isSeq(node)) {
-      return { kind: "seq", path: walked };
+      return { kind: "seq", node, path: walked };
     }
     if (isScalar(node)) {
-      return { kind: "scalar", value: node.value, path: walked };
+      return { kind: "scalar", node, value: node.value, path: walked };
     }
     return null;
   }
@@ -71,17 +62,19 @@ function walkNode(
   }
 
   if (isMap(node)) {
-    const pair = (node as { items: Pair[] }).items.find((p) => {
+    const pair = node.items.find((p) => {
       const k = isScalar(p.key) ? p.key.value : p.key;
       return String(k) === seg;
     });
     if (pair === undefined) {
       return null;
     }
-    const childWalked = [...walked, seg];
+    const key = isScalar(pair.key) ? pair.key.value : seg;
+    const childWalked = [...walked, key];
     if (i === segments.length - 1 && isScalar(pair.value)) {
       return {
         kind: "pair",
+        node: pair.value,
         key: seg,
         value: pair.value.value,
         path: childWalked,
@@ -96,7 +89,7 @@ function walkNode(
       return null;
     }
     const child = node.items[idx];
-    return walkNode(child as Node, segments, i + 1, [...walked, seg]);
+    return walkNode(child as Node, segments, i + 1, [...walked, idx]);
   }
 
   return null;
@@ -104,8 +97,7 @@ function walkNode(
 
 export function resolveYamlPositionalSegment(node: Node, seg: string): string | null {
   if (isMap(node)) {
-    const pairs = (node as { items: Pair[] }).items;
-    const keys = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
+    const keys = node.items.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
     return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
   }
   if (isSeq(node)) {
