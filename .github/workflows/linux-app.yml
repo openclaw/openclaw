@@ -26,7 +26,8 @@ jobs:
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Source runtime staging includes the canonical package/declaration build.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +103,8 @@ jobs:
           node --test \
             apps/linux/scripts/test-native-control-auth.mjs \
             apps/linux/scripts/test-runtime-boundary.mjs \
-            apps/linux/scripts/test-stage-runtime.mjs
+            apps/linux/scripts/test-stage-runtime.mjs \
+            apps/linux/scripts/test-stage-package.mjs
 
       - name: Test packaged runtime ABI scanner
         run: |
@@ -136,6 +138,8 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: |
           node ../scripts/stage-runtime.mjs
+          # The native fixture supplies its CLI at the same build-time boundary.
+          python3 ../tests/stage_onboarding_runtime.py target/desktop-runtime
           cargo +stable build --locked
 
       - name: Test native inline browser
@@ -383,7 +387,7 @@ jobs:
     name: Test Windows desktop
     # Match the regular Windows installer build runner.
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -419,10 +423,15 @@ jobs:
 
       - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop
+        run: |
+          node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          cargo +stable test --locked --bin openclaw-desktop
 
       - name: Build Windows installer without publishing
         working-directory: apps/linux/src-tauri
+        env:
+          # Cold Windows declarations can exceed the package builder's 45-minute default.
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Windows installer

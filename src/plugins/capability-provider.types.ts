@@ -487,7 +487,7 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
@@ -508,7 +508,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
@@ -531,7 +531,7 @@ export type RealtimeVoiceProviderPlugin = {
   resolveConfigAsync?: (
     ctx: RealtimeVoiceProviderResolveConfigContext,
   ) => Promise<RealtimeVoiceProviderConfig>;
-  /** @deprecated Use isConfiguredAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use isConfiguredAsync. Retained until an announced stable removal window. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;

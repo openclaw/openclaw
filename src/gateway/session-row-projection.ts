@@ -130,7 +130,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
-    current: (row) => !topologyDirty && records.ready(row) && isCurrent(row),
+    current: isCurrent,
     publish: (row, fields) => revisions.publishTranscript(row, fields, cfg, metadata.current),
   });
   const archive = createSessionRowProjectionArchive({

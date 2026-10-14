@@ -187,11 +187,6 @@ export function createSessionHistoryWorkerReaders(
     readWatermark: reader("transcript-watermark", (value) => value.watermark),
     readStats: reader("transcript-stats", (value) => value.stats),
     readActivitySummarySource: reader("session-activity-summary-source", (value) => value.source),
-    readRowBackfill: reader(
-      "session-row-backfill",
-      (value) => value.fields,
-      (params) => ({ kind: "session-row-backfill", params }),
-    ),
     run: async (prepare, inputBytes) => await runRequest(prepare, inputBytes, (value) => value),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];

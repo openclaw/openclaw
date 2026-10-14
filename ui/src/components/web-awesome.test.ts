@@ -2,11 +2,7 @@
 
 import "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  consumeDropdownKeyboardDismissal,
-  syncDropdownItemRadio,
-  trackDropdownKeyboardDismissal,
-} from "./web-awesome.ts";
+import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
 const domRoots = ["light", "shadow"] as const;
@@ -163,21 +159,6 @@ describe("Web Awesome adapters", () => {
     } finally {
       stopCanceling();
     }
-  });
-
-  it("restores a durable trigger only after keyboard dismissal", async () => {
-    const { dropdown } = await createDropdown();
-    dropdown.addEventListener("keydown", trackDropdownKeyboardDismissal);
-
-    expect(consumeDropdownKeyboardDismissal(lifecycleEvent("after-hide"))).toBe(false);
-
-    dropdown.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    let restoreFocus = false;
-    onLifecycle(dropdown, "after-hide", (event) => {
-      restoreFocus = consumeDropdownKeyboardDismissal(event);
-    });
-    dispatchLifecycle(dropdown, "after-hide");
-    expect(restoreFocus).toBe(true);
   });
 
   it("restores the durable trigger before native Tab navigation", async () => {

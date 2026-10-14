@@ -338,11 +338,21 @@ export function getDebugProxyCaptureStore(
   optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
   legacyBlobDir?: string,
 ): DebugProxyCaptureStore {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "getDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
   return getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
 }
 
 /** @deprecated Await each async capture lease's release instead. */
 export function closeDebugProxyCaptureStore(): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "closeDebugProxyCaptureStore",
+    replacement: "await each async capture lease.release() in finally",
+  });
   unregisterExitClose?.();
   unregisterExitClose = null;
   const stores = [...cachedStores.values()];
@@ -382,6 +392,11 @@ export function acquireDebugProxyCaptureStore(
   store: DebugProxyCaptureStore;
   release: () => void;
 } {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-store",
+    method: "acquireDebugProxyCaptureStore",
+    replacement: "await acquireDebugProxyCaptureStoreAsync() and await lease.release() in finally",
+  });
   const key = resolveDebugProxyCaptureStoreKey(optionsOrDbPath, legacyBlobDir);
   const store = getDebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   const cached = cachedStores.get(key);

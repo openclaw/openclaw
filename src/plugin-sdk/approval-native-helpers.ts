@@ -530,7 +530,7 @@ function prepareForwardingMatch<TTarget extends NativeApprovalTarget>(
   };
 }
 
-/** Create a fallback suppressor that avoids duplicate approval prompts after native delivery. */
+/** @deprecated Use createNativeApprovalForwardingFallbackSuppressorAsync with awaited route eligibility. */
 export function createNativeApprovalForwardingFallbackSuppressor<
   TTarget extends NativeApprovalTarget,
 >(
@@ -538,6 +538,11 @@ export function createNativeApprovalForwardingFallbackSuppressor<
 ): NonNullable<
   NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
 > {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createNativeApprovalForwardingFallbackSuppressor",
+    replacement: "createNativeApprovalForwardingFallbackSuppressorAsync",
+  });
   return (input) => {
     const prepared = prepareForwardingMatch(params, input);
     if (!prepared) {

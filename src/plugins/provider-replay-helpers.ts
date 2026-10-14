@@ -213,7 +213,7 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
-/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removal follows a stable deprecation period. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {

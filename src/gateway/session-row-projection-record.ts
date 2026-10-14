@@ -38,8 +38,6 @@ export type ProjectionOptions = {
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  /** A committed append's bounded preview; null means the newest message exceeded the bound. */
-  transcriptPreview?: string | null;
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
@@ -57,7 +55,6 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
       | "runtimeOwnershipDependencies"
       | "runtimeOwnershipRetryPending"
       | "repositoryWorkspace"
-      | "transcriptPreview"
     >
   >;
 

@@ -151,7 +151,7 @@ type AgentWorkerPublicationOptions = {
   onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
 };
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; removed in the next Plugin SDK major. */
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; retained until an announced stable removal window. */
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: DatabaseSync,

@@ -295,7 +295,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
   }
 
-  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
   function loadAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     loadOptions?: Pick<
@@ -353,7 +353,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return yield* readAuthProfileStoreFromSources(effectiveAgentDir, options, env, true);
   }
 
-  /** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use ensureAuthProfileStoreAsync. Retained until an announced stable removal window. */
   function ensureAuthProfileStore(
     agentDir?: string,
     options?: EnsureAuthProfileStoreOptions,
@@ -442,7 +442,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return materialized;
   }
 
-  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Removed at the next Plugin SDK major. */
+  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
   function ensureAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     options?: Omit<
