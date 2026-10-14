@@ -36,6 +36,15 @@ Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
 
+## Existing folders on devices
+
+**Existing folder on device** is separate from a managed worktree. A compatible
+paired session host can run a session directly in an absolute folder on that
+specific device. OpenClaw does not clone, snapshot, transfer, reconcile, or remove
+that folder as a managed worktree. Choose **New workspace** or a repository source
+when you want an isolated, OpenClaw-managed workspace instead. See
+[session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
+
 ## Sandboxed sessions
 
 Sandboxed project sessions use a private Git checkout for execution,

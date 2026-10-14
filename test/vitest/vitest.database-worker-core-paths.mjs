@@ -1229,6 +1229,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/node-worker-native-inference.test.ts",
   "src/node-host/node-worker-turn-store.test.ts",
   "src/node-host/node-worker-supervisor.test.ts",
+  "src/node-host/node-worker-supervisor.device-folder.test.ts",
   "src/node-host/node-worker-supervisor.container.test.ts",
   "src/node-host/node-worker-supervisor.lifetime.test.ts",
   "src/node-host/node-worker-supervisor.recovery.test.ts",

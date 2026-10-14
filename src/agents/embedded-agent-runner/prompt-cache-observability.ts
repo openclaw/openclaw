@@ -89,6 +89,7 @@ type PromptHistoryFingerprint = {
   contentKind: "string" | "blocks";
   blockCount: number;
   blocks: string[];
+  blockFields: Map<string, string>[];
   remainingBlocksDigest?: string;
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
@@ -99,7 +100,7 @@ const trackers = new Map<string, PromptCacheTracker>();
 const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
 const blockFingerprints = new WeakMap<
   object,
-  { digest: string; primitives: [string, unknown][] }
+  { digest: string; primitives: [string, unknown][]; fields: Map<string, string> }
 >();
 // Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
 const toolSchemaFingerprints = new WeakMap<object, string>();
@@ -125,12 +126,29 @@ const HISTORY_ENVELOPE_FIELDS = new Set([
   "runtimeContextCarrier",
   "operatorMessage",
 ]);
+const HISTORY_BLOCK_FIELDS = new Set([
+  "type",
+  "text",
+  "textSignature",
+  "thinking",
+  "thinkingSignature",
+  "openclawReasoningReplay",
+  "id",
+  "name",
+  "arguments",
+  "partialJson",
+  "async",
+  "thoughtSignature",
+  "data",
+  "mimeType",
+  "index",
+]);
 
-function fingerprintEnvelope(envelope: object): Map<string, string> {
+function fingerprintFields(envelope: object, allowed: Set<string>): Map<string, string> {
   const fields = new Map<string, string>();
   const other: [string, unknown][] = [];
   for (const [key, value] of Object.entries(envelope)) {
-    if (HISTORY_ENVELOPE_FIELDS.has(key)) {
+    if (allowed.has(key)) {
       fields.set(key, sha256Hex(stableStringify({ [key]: value })));
     } else {
       other.push([key, value]);
@@ -162,7 +180,16 @@ function describeHistoryChange(
       }
       for (let index = 0; index < Math.max(previous.blocks.length, next.blocks.length); index++) {
         if (previous.blocks[index] !== next.blocks[index]) {
-          fields.push(`content[${index}]`);
+          const before = previous.blockFields[index];
+          const after = next.blockFields[index];
+          const changed = [
+            ...new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]),
+          ].filter((key) => before?.get(key) !== after?.get(key));
+          fields.push(
+            ...(changed.length
+              ? changed.map((key) => `content[${index}].${key}`)
+              : [`content[${index}]`]),
+          );
         }
       }
       if (previous.remainingBlocksDigest !== next.remainingBlocksDigest) {
@@ -178,7 +205,7 @@ function describeHistoryChange(
   return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
 }
 
-function fingerprintBlock(block: object): string {
+function fingerprintBlock(block: object): { digest: string; fields: Map<string, string> } {
   const primitives: [string, unknown][] = [];
   const nested: [string, unknown][] = [];
   for (const entry of Object.entries(block)) {
@@ -195,15 +222,27 @@ function fingerprintBlock(block: object): string {
       const cached = previous.primitives[index];
       return cached?.[0] === key && cached[1] === value;
     });
+  const fields = unchanged
+    ? previous.fields
+    : fingerprintFields(Object.fromEntries(primitives), HISTORY_BLOCK_FIELDS);
   const memo = unchanged
     ? previous
-    : { digest: sha256Hex(stableStringify(Object.fromEntries(primitives))), primitives };
+    : { digest: sha256Hex(stableStringify(Object.fromEntries(fields))), primitives, fields };
   if (!unchanged) {
     blockFingerprints.set(block, memo);
   }
-  return nested.length
-    ? sha256Hex(`${memo.digest}:${stableStringify(Object.fromEntries(nested))}`)
-    : memo.digest;
+  if (!nested.length) {
+    return memo;
+  }
+  const nestedFields = fingerprintFields(Object.fromEntries(nested), HISTORY_BLOCK_FIELDS);
+  const combinedFields = new Map([...fields, ...nestedFields]);
+  if (fields.has("other") && nestedFields.has("other")) {
+    combinedFields.set("other", `${fields.get("other")}:${nestedFields.get("other")}`);
+  }
+  return {
+    digest: sha256Hex(`${memo.digest}:${stableStringify(Object.fromEntries(nestedFields))}`),
+    fields: combinedFields,
+  };
 }
 
 function fingerprintMessage(
@@ -213,6 +252,7 @@ function fingerprintMessage(
   const { content, ...envelope } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
   let blocks: string[];
+  let blockFields: Map<string, string>[] = [];
   if (typeof content === "string") {
     // Transcript messages own text memos; diagnostics retain only weak references.
     const previousMemo = previous?.stringBlock?.deref() ?? stringFingerprints.get(message);
@@ -225,9 +265,11 @@ function fingerprintMessage(
     blocks = [memo.digest];
   } else {
     stringFingerprints.delete(message);
-    blocks = content.map(fingerprintBlock);
+    const fingerprints = content.map(fingerprintBlock);
+    blocks = fingerprints.map(({ digest }) => digest);
+    blockFields = fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS).map(({ fields }) => fields);
   }
-  const envelopeFields = fingerprintEnvelope(envelope);
+  const envelopeFields = fingerprintFields(envelope, HISTORY_ENVELOPE_FIELDS);
   const contentDigest = sha256Hex(stableStringify(blocks));
   return {
     digest: sha256Hex(stableStringify([Object.fromEntries(envelopeFields), contentDigest])),
@@ -237,6 +279,7 @@ function fingerprintMessage(
     contentKind: typeof content === "string" ? "string" : "blocks",
     blockCount: blocks.length,
     blocks: blocks.slice(0, MAX_HISTORY_DIFF_FIELDS),
+    blockFields,
     ...(blocks.length > MAX_HISTORY_DIFF_FIELDS
       ? { remainingBlocksDigest: sha256Hex(stableStringify(blocks.slice(MAX_HISTORY_DIFF_FIELDS))) }
       : {}),

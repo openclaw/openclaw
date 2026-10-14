@@ -22,14 +22,14 @@ For the broader model/provider/runtime split, start with
 
 ## Requirements
 
-- OpenClaw with the `@openclaw/muse` plugin installed.
-- If your config uses `plugins.allow`, include `muse` (the manifest id), not the
+- OpenClaw. Model Setup can install and enable the `@openclaw/muse` plugin.
+- If your config uses `plugins.allow`, allow `muse` (the manifest id), not the
   npm package name.
 - The Muse Code CLI installed separately, with a `muse` binary on `PATH` or a
   configured `binaryPath`. Install it with Meta's installer:
 
   ```bash
-  curl -fsSL https://dev.meta.ai/install.sh | sh
+  curl -fsSL https://dev.meta.ai/install.sh | bash
   muse --version
   ```
 
@@ -37,6 +37,9 @@ For the broader model/provider/runtime split, start with
   auth profile in OpenClaw (see [Auth](#auth)).
 
 ## Install
+
+Model Setup installs the plugin when you choose **Muse Code**. To install it
+manually instead:
 
 ```bash
 openclaw plugins install @openclaw/muse
@@ -48,7 +51,20 @@ itself in the middle of a Gateway run. Update Muse with its own installer.
 
 ## Quickstart
 
-Route one Meta model through the Muse runtime:
+1. Open **Model Setup** (`/models`) in the Control UI.
+2. In **AI Setup**, choose **Connect provider**, then **Meta → Muse Code**.
+3. Start sign-in, confirm the displayed device code in the browser, and approve it.
+
+OpenClaw enables the Muse plugin and selects `meta/muse-spark-1.3` with the
+`muse` runtime by default. If you choose another Meta model during setup,
+that model uses Muse instead. No terminal login or manual runtime configuration
+is needed.
+
+The **Provider Access** connection dialog manages credentials without changing
+the active model. Use the **AI Setup** connection dialog for Muse Code because
+its sign-in also installs the runtime and selects a model.
+
+For manual configuration, route one Meta model through the Muse runtime:
 
 ```json5
 {
@@ -66,9 +82,13 @@ Route one Meta model through the Muse runtime:
 ```
 
 Set `agentRuntime.id` on one model entry to route only that model, or on the
-`meta` provider to route every Meta model. The runtime is never selected
-automatically: without `agentRuntime.id: "muse"`, `meta/*` models use the
+`meta` provider to route every Meta model. Models without this routing use the
 built-in OpenClaw runtime through the [Meta provider](/providers/meta).
+
+Choosing **Muse Code** in Model Setup routes the selected model through Muse
+for the agent being set up. It writes that agent's model entry, replacing any
+runtime choice already on it. Global model defaults, other agents and other
+Meta models keep their existing runtime policy.
 
 The harness accepts only the standard `meta` provider route on Meta's official
 endpoint (`https://api.meta.ai/v1`). A `meta` provider entry with another
@@ -77,17 +97,32 @@ calls Meta itself.
 
 ## Auth
 
-The usual setup is Muse Code's own sign-in. Run `muse` once on the Gateway host
-and sign in with your browser (subscription) or paste an API key, or store a key
-with `muse auth set`. The harness then needs no OpenClaw credential.
+Use **Model Setup → Muse Code** in the Control UI for browser sign-in.
+The credential stays in Muse Code's own credential store; OpenClaw does not
+copy it into an auth profile. This sign-in authorizes the Muse runtime, not
+the direct Meta API route.
+
+For Muse-owned sign-ins, setup checks that Muse can fetch the selected model
+from Meta's live catalog. It does not run a model turn or expose native tools
+during verification. The same check runs again before activation is committed.
+
+Gateway-driven sign-in always uses Muse's file credential backend under the
+OpenClaw state directory (`muse/muse/auth.json`). It needs one browser approval
+and does not access the macOS Keychain. Verification and chat use that same
+credential directory when its credential file exists.
+
+Alternatively, run `muse login` on the Gateway host and approve the browser
+code, or store an API key with `muse auth set`. When no Gateway-managed credential
+file exists, the harness uses Muse's own default credential store, including its
+native Keychain support, without an OpenClaw auth profile.
 
 The harness picks one credential per attempt, in this order:
 
 1. The API key OpenClaw resolved for the attempt's selected `meta` auth profile.
 2. The API key from the exact selected `meta:` auth profile, resolved through
    the provider auth runtime.
-3. Muse Code's own order: `META_API_KEY` in the Gateway environment, then a key
-   stored with `muse auth set`, then a browser sign-in.
+3. `META_API_KEY` in the Gateway environment, followed by the Gateway-managed
+   Muse credential file when present; otherwise Muse's own default credential store.
 
 When OpenClaw selects a key, the harness gives it to Muse as `META_API_KEY`.
 The Meta provider's `MODEL_API_KEY` is not passed to Muse; Muse does not read
@@ -95,6 +130,8 @@ it.
 
 Each credential gets its own `muse serve` process. Changing the key starts a
 new Muse session instead of resuming one that belongs to another credential.
+Switching between native and Gateway-managed credentials, or changing the
+managed credential file, retires the pooled process and starts a fresh session.
 
 If Muse rejects the credential, or finds none, the turn fails. Chat shows
 OpenClaw's generic failure notice; the Gateway log (`openclaw logs --follow`)
@@ -236,7 +273,7 @@ Muse owns its MCP configuration. Add MCP servers in Muse itself; OpenClaw's
   sandboxes or remote node execution.
 - Muse's built-in `echo` provider is not available over `muse serve`, so the
   runtime always needs a working Meta credential.
-- Model Setup checks a new `meta` sign-in with a short tool-restricted probe
+- Model Setup checks a new Meta API-key sign-in with a short tool-restricted probe
   turn. Muse cannot enforce that restriction, so while `meta/*` models are
   routed to `muse`, activating a new `meta` API key in Model Setup fails with
   "Muse Code cannot enforce this conversation's tool policy". Use Muse's own

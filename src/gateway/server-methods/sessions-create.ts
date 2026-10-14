@@ -20,6 +20,7 @@ import {
 } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
+import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -27,6 +28,7 @@ import { resolveSessionCreateCatalogSelectionError } from "../session-create-mod
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { prepareSessionDeviceFolder } from "../session-device-folder.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
@@ -64,12 +66,12 @@ import {
   assertRequiredWorkerSessionCreateCurrent,
   prepareRequiredWorkerCreatedSession,
   prepareRequiredWorkerSessionCreate,
-  requiredWorkerWorkspaceReuseError,
 } from "./session-create-required-worker.js";
 import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionCreateRequestedCwd,
   resolveSessionCreateRootParameters,
+  sessionWorkspaceReuseError,
 } from "./session-create-root.js";
 import {
   reportCreatedVisibleSpawn,
@@ -180,10 +182,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     );
     // Account selection is connection-bound until committed. Placement then consumes
     // that committed session under its retained request and session authority.
+    const deviceFolderAuthority: { assertCurrent?: () => void } = {};
     const commitGuard = () => {
       assertSessionCreateCurrent();
       personalModelSelection?.assertCurrent();
       personalAccountDefaults?.assertCurrent();
+      deviceFolderAuthority.assertCurrent?.();
     };
     await using operatorCapture = {
       preparation: captureGatewayOperatorRunAuthority({
@@ -285,6 +289,20 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const preparedFolder = p.deviceFolder
+      ? await prepareSessionDeviceFolder({
+          folder: p.deviceFolder,
+          transport: getNodeWorkerSupervisorTransport(context.nodeRegistry),
+          assertCurrent: commitGuard,
+          signal,
+        })
+      : undefined;
+    if (preparedFolder && !preparedFolder.ok) {
+      respond(false, undefined, preparedFolder.error);
+      return;
+    }
+    const deviceFolder = preparedFolder?.value.deviceFolder;
+    deviceFolderAuthority.assertCurrent = preparedFolder?.value.assertCurrent;
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     const requestedProjectId = normalizeOptionalString(p.projectId);
@@ -331,23 +349,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           })
         ).entry
       : undefined;
-    const workspaceReuseError = requiredWorkerWorkspaceReuseError(
-      automaticEmptyWorkspace,
-      existingTargetEntry,
-    );
-    if (workspaceReuseError) {
-      respond(false, undefined, workspaceReuseError);
-      return;
-    }
-    if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Repository sessions require their original repository source; dispatch the existing session to continue.",
-        ),
-      );
+    const reuseError = sessionWorkspaceReuseError(p, automaticEmptyWorkspace, existingTargetEntry);
+    if (reuseError) {
+      respond(false, undefined, reuseError);
       return;
     }
     const deferWorktree =
@@ -371,7 +375,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     const preparedRoot =
-      repository || emptyWorkspace
+      repository || emptyWorkspace || deviceFolder
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
@@ -506,6 +510,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       thinkingLevel: p.thinkingLevel,
       fastMode: p.fastMode,
       projectId: requestedProjectId,
+      deviceFolder,
       pendingProjectGitUrl: normalizeSessionProjectGitUrl(requestedProjectGitUrl),
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
@@ -549,7 +554,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       creation: sessionCreation,
       childSessionPublication: sessionCreation.childSessionPublication,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-      armSessionDiffBaselineCapture: !repository,
+      armSessionDiffBaselineCapture: !repository && !deviceFolder,
       loadGatewayModelCatalogSnapshot: async () => {
         const captured = await operatorCapture.preparation;
         return catalogWait.run(

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "./kysely-sync.js";
@@ -24,7 +25,7 @@ export function verifyTranscriptEvents(
       false,
       readTranscriptFingerprint(source.path),
       source.originalPath,
-    )((event) => stage.append(0, seq++, JSON.stringify(event)));
+    )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
     if (mode === "ordered") {
       const repair = stage.repairLegacyTranscript(0);
       // Receipt adoption retains its original order and branch-repair contract.

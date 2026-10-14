@@ -95,7 +95,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
             handlers.onevent(event);
           }
         }
-        handlers.oneose?.();
+        queueMicrotask(() => handlers.oneose?.());
         if (carriesMessages && relayMocks.dropSubscriptionReason) {
           const reason = relayMocks.dropSubscriptionReason;
           relayMocks.dropSubscriptionReason = undefined;

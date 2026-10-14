@@ -309,6 +309,9 @@ leave that dimension unrestricted. `phases` must be an array of non-empty
 strings; registration trims each string. A non-empty phase filter matches only
 events whose `data` is an object with a string `phase` in that list. Events with
 no phase or a non-string phase are excluded.
+Set `payload: "metadata"` to retain only own enumerable top-level `data` fields
+containing strings of at most 256 characters, numbers, booleans, or `null`, without
+reading accessors; omitted `payload` or `"full"` preserves the full cloned payload.
 
 Subscribe narrowly: event payloads are cloned per matching subscription. The
 host applies stream and phase filters before cloning payloads or allocating
