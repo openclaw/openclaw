@@ -11,10 +11,12 @@ const { loadConfig, callGateway } = vi.hoisted(() => ({
   callGateway: vi.fn(),
 }));
 
+// mock-isolation: Use only synthetic config, never the operator's Gateway state.
 vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfig,
 }));
+// mock-isolation: Capture requests without connecting to a running Gateway.
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   isGatewayCredentialsRequiredError: vi.fn(),
