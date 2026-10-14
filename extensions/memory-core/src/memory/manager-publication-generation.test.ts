@@ -65,14 +65,8 @@ function sourceReplacement(model: string): MemorySourceIndexReplacement {
   };
 }
 
-function recordIndexCommands(target: Pick<Worker, "postMessage">) {
-  const commands: string[] = [];
-  const postMessage = target.postMessage;
-  const messages = vi.spyOn(target, "postMessage").mockImplementation(function (
-    this: typeof target,
-    ...args
-  ) {
-    const message: unknown = args[0];
+function indexCommands(calls: unknown[][]): string[] {
+  return calls.flatMap(([message]) => {
     if (
       typeof message === "object" &&
       message !== null &&
@@ -87,25 +81,24 @@ function recordIndexCommands(target: Pick<Worker, "postMessage">) {
       "type" in message.input.command &&
       typeof message.input.command.type === "string"
     ) {
-      commands.push(message.input.command.type);
-    } else if (
-      typeof message === "object" &&
-      message !== null &&
-      "type" in message &&
-      message.type === "execute" &&
-      "input" in message &&
-      message.input instanceof Uint8Array
-    ) {
-      // Capture before the native send detaches the serialized command buffer.
-      const command = deserialize(message.input) as {
-        type: string;
-        input?: { command?: { type: string } };
-      };
-      commands.push(command.input?.command?.type ?? command.type);
+      return [message.input.command.type];
     }
-    return postMessage.apply(this, args);
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("type" in message) ||
+      message.type !== "execute" ||
+      !("input" in message) ||
+      !(message.input instanceof Uint8Array)
+    ) {
+      return [];
+    }
+    const command = deserialize(message.input) as {
+      type: string;
+      input?: { command?: { type: string } };
+    };
+    return [command.input?.command?.type ?? command.type];
   });
-  return { commands, restore: () => messages.mockRestore() };
 }
 
 function recordIndexCommands(prototype: Pick<MessagePort, "postMessage">) {
