@@ -370,7 +370,7 @@ function* assembleOpenClawCodingTools(
   // A new managed child has its own publication workspace. Run the real tool
   // through all parent policies before capturing it, without exposing it here.
   const unavailablePublicationTool =
-    shouldInheritEffectiveToolAllowlist &&
+    (shouldInheritEffectiveToolAllowlist || options?.inheritedPublicationToolRef) &&
     includeOpenClawTools &&
     options?.githubPublicationAvailable === false
       ? createGitHubPublishTool()
