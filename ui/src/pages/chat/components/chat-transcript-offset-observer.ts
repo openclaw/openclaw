@@ -24,11 +24,12 @@ export class TranscriptOffsetState {
   touching = false;
   touchScrolling = false;
   renderedScrollState = { atEnd: false, touchActive: false };
-  maintenanceScrollOffset: number | null = null;
+  maintenanceScroll: { offset: number; pending: boolean } | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   syncNativeOffset: (() => void) | null = null;
-  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null =
-    null;
+  recordProgrammaticScroll:
+    | ((before: number, after: number, maintenance: boolean, target?: number) => void)
+    | null = null;
 
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
@@ -44,10 +45,17 @@ export function isTranscriptMaintenanceScroll(
   element: HTMLDivElement | null,
 ): boolean {
   return (
+    state.maintenanceScroll !== null && matchesNativeOffset(element, state.maintenanceScroll.offset)
+  );
+}
+
+function matchesNativeOffset(element: HTMLDivElement | null, offset: number): boolean {
+  return (
     element !== null &&
-    state.maintenanceScrollOffset !== null &&
-    Math.min(state.maintenanceScrollOffset, maxTranscriptScrollOffset(element) ?? 0) ===
-      element.scrollTop
+    // Match the virtualizer's native read-back tolerance for fractional WebKit offsets.
+    Math.abs(
+      Math.max(0, Math.min(offset, maxTranscriptScrollOffset(element) ?? 0)) - element.scrollTop,
+    ) < 1.5
   );
 }
 
@@ -105,7 +113,14 @@ export function scrollTranscriptOffset(
   elementScroll(offset, options, instance);
   // TanStack omits behavior for measurement, anchor sync, and compensation retries.
   // Explicit commands carry their resolved behavior.
-  state.recordProgrammaticScroll?.(before, element?.scrollTop ?? 0, options.behavior === undefined);
+  state.recordProgrammaticScroll?.(
+    before,
+    element?.scrollTop ?? 0,
+    options.behavior === undefined,
+    // Smooth commands own intermediate offsets through scrollCommand. Retain
+    // an undelivered receipt only for a single native target replacement.
+    options.behavior === "smooth" ? undefined : offset + (options.adjustments ?? 0),
+  );
 }
 
 type OffsetOwner = {
@@ -145,7 +160,7 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
-  const recordProgrammaticScroll = (before: number, after: number) => {
+  const recordProgrammaticScroll = (before: number, after: number, target?: number) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
     publish({
@@ -155,20 +170,34 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic: owner.isProgrammaticScroll(),
     });
-    // Commands can move upward as rows retire. Keep the actual write's
-    // provenance until its native event arrives, even after command retirement.
+    // A deferred write must retain its provenance through incidental commits.
+    // Reader input cancels it before synchronization; only a matching native
+    // receipt retires the pending target into the delivered-event lifecycle.
     if (before !== after) {
-      owner.state.maintenanceScrollOffset = after;
+      owner.state.maintenanceScroll = { offset: after, pending: false };
       maintenanceRevision += 1;
+    } else if (target !== undefined) {
+      if (!matchesNativeOffset(element, target)) {
+        owner.state.maintenanceScroll = { offset: target, pending: true };
+        maintenanceRevision += 1;
+      } else if (owner.state.maintenanceScroll?.pending) {
+        owner.state.maintenanceScroll = null;
+        maintenanceRevision += 1;
+      }
     }
   };
-  const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
+  const recordVirtualizerScroll = (
+    before: number,
+    after: number,
+    maintenance: boolean,
+    target?: number,
+  ) => {
     // Measurement retries can move the old end after the grown range commits.
     // Layout/composer receipts already carry their anchor correction separately.
     if (maintenance && before !== after) {
       owner.onLayoutCorrection(before, after);
     }
-    recordProgrammaticScroll(before, after);
+    recordProgrammaticScroll(before, after, target);
   };
   owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
@@ -192,13 +221,13 @@ export function observeTranscriptOffset(
     }
     const delta = offset - nativeOffset;
     nativeOffset = offset;
-    if (owner.state.maintenanceScrollOffset !== null) {
-      const target = Math.min(
-        owner.state.maintenanceScrollOffset,
-        maxTranscriptScrollOffset(element) ?? 0,
-      );
-      const actualOffset = element?.scrollTop;
-      owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
+    const maintenance = owner.state.maintenanceScroll;
+    if (maintenance !== null) {
+      if (element && isTranscriptMaintenanceScroll(owner.state, element)) {
+        owner.state.maintenanceScroll = { offset: element.scrollTop, pending: false };
+      } else if (!maintenance.pending) {
+        owner.state.maintenanceScroll = null;
+      }
     }
     const programmatic = owner.isProgrammaticScroll();
     if (scrolling && delta !== 0 && !programmatic) {
@@ -297,7 +326,7 @@ export function observeTranscriptOffset(
     }
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
-    owner.state.maintenanceScrollOffset = null;
+    owner.state.maintenanceScroll = null;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -346,7 +375,7 @@ export function observeTranscriptOffset(
       return;
     }
     publishOffset(offset, scrolling);
-    if (scrolling && owner.state.maintenanceScrollOffset !== null) {
+    if (scrolling && owner.state.maintenanceScroll?.pending === false) {
       const revision = maintenanceRevision;
       if (maintenanceFrame !== null) {
         cancelAnimationFrame(maintenanceFrame);
@@ -356,7 +385,7 @@ export function observeTranscriptOffset(
       maintenanceFrame = requestAnimationFrame(() => {
         maintenanceFrame = null;
         if (revision === maintenanceRevision) {
-          owner.state.maintenanceScrollOffset = null;
+          owner.state.maintenanceScroll = null;
         }
       });
     }
@@ -398,7 +427,7 @@ export function observeTranscriptOffset(
     }
     if (owner.state.recordProgrammaticScroll === recordVirtualizerScroll) {
       owner.state.recordProgrammaticScroll = null;
-      owner.state.maintenanceScrollOffset = null;
+      owner.state.maintenanceScroll = null;
     }
     cleanup?.();
     stopCorrections?.();

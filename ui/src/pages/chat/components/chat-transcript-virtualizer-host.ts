@@ -353,7 +353,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       )
     ) {
       this.offsetState.syncNativeOffset?.();
-      this.host.requestUpdate();
+      this.prependAnchor.scheduleReconcile(() => this.connected && this.host.requestUpdate());
     }
     if (!this.initialPositionPending || (this.contentReady && this.rowKeys.length === 0)) {
       applyPendingScrollOffset(this.scrollRestoreHost);
@@ -381,7 +381,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.expandedAssistantMessages.clear();
     this.expandedAssistantMessages = new Map();
     this.offsetState.scrollCommand = null;
-    this.offsetState.maintenanceScrollOffset = null;
+    this.offsetState.maintenanceScroll = null;
     this.prependAnchor.clear();
     this.offsetState.touching = false;
     this.offsetState.touchScrolling = false;
