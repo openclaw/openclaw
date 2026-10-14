@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionCostSummaryAccumulator } from "../../infra/session-cost-usage-rollup.js";
 import {
@@ -31,7 +32,7 @@ export type UsageSessionSummaryTarget = {
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
-const USAGE_REPORT_BATCH_SIZE = 256;
+const USAGE_REPORT_BATCH_SIZE = 1024;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -256,7 +257,11 @@ export function withUsageRequestBudget(
           return partial();
         }
         try {
-          const result = await data.track(load);
+          const result = await racePromiseWithAbortSignal(
+            () => data.track(load),
+            data.signal,
+            (signal) => signal.reason,
+          );
           caller.signal.throwIfAborted();
           data.signal.throwIfAborted();
           return result;

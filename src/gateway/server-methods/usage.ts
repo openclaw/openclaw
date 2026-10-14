@@ -491,6 +491,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     try {
       const profiles = await prepareSessionSharingProfiles(client ?? null);
       const prepareUnavailableSources = async () => {
+        const signal = getAsyncWorkSignal();
         for (const session of result.sessions) {
           const source = sourceFor(session);
           if (
@@ -502,6 +503,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           ) {
             continue;
           }
+          signal?.throwIfAborted();
           contextReads.set(source, undefined);
           try {
             const prepared = await prepareSessionMutationFacts({
@@ -509,6 +511,10 @@ export const usageHandlers: GatewayRequestHandlers = {
               sessionKey: session.key,
               agentId: session.agentId,
             });
+            if (signal?.aborted) {
+              prepared.release();
+              signal.throwIfAborted();
+            }
             contextReads.set(source, prepared);
           } catch (error) {
             if (!(error instanceof SessionMutationFactsUnavailableError)) {
@@ -566,7 +572,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Refill once after an access change. Continued churn may shorten the page, never extend the scan.
       let visible: SessionUsageEntry[] | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        await prepareUnavailableSources();
+        await budget.read(prepareUnavailableSources, () => undefined);
         visible = readVisibleRows();
         const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
         const pageSources = (
@@ -612,7 +618,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         };
       }
       if (!visible) {
-        await prepareUnavailableSources();
+        await budget.read(prepareUnavailableSources, () => undefined);
         visible = readVisibleRows();
       }
       const creatorOptions = new Map<string, SessionUsageCreator>();

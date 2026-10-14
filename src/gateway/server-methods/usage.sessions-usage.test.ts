@@ -209,18 +209,12 @@ describe("sessions.usage", () => {
       }
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async () => {
         const signal = getAsyncWorkSignal();
-        const abort = () => release.resolve();
-        signal?.addEventListener("abort", abort, { once: true });
         started.resolve(signal);
-        try {
-          await release.promise;
-          return {
-            summaries: [createEmptyCostUsageTotals()],
-            cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
-          };
-        } finally {
-          signal?.removeEventListener("abort", abort);
-        }
+        await release.promise;
+        return {
+          summaries: [createEmptyCostUsageTotals()],
+          cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
+        };
       });
       const pending = runSessionsUsageMethod("sessions.usage", BASE_USAGE_RANGE, {
         signal: controller.signal,
@@ -272,14 +266,14 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
+      Array.from({ length: 1025 }, (_, index) => ({
         sessionId: `budget-${index}`,
         sessionFile: `/tmp/budget-${index}.jsonl`,
-        mtime: 257 - index,
+        mtime: 1025 - index,
       })),
     );
     load.mockImplementation(async ({ sessions }) => {
-      if (sessions.some(({ sessionId }) => sessionId === "budget-256")) {
+      if (sessions.some(({ sessionId }) => sessionId === "budget-1024")) {
         const signal = getAsyncWorkSignal()!;
         const abort = () => release.resolve();
         signal.addEventListener("abort", abort, { once: true });
@@ -306,11 +300,11 @@ describe("sessions.usage", () => {
       await started.promise;
       await vi.advanceTimersByTimeAsync(15_000);
       const result = readResult(await pending);
-      expect(result.totals.totalTokens).toBe(256 * 7);
+      expect(result.totals.totalTokens).toBe(1024 * 7);
       expect(result.sessions).toHaveLength(50);
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
-        cachedFiles: 256,
+        cachedFiles: 1024,
         pendingFiles: 1,
       });
       expect(result.partial?.reason).toBe("time-budget");
@@ -337,10 +331,10 @@ describe("sessions.usage", () => {
     const load = vi.mocked(loadSessionCostSummariesFromCache);
     const originalLoad = load.getMockImplementation()!;
     discovered.mockResolvedValue(
-      Array.from({ length: 257 }, (_, index) => ({
+      Array.from({ length: 1025 }, (_, index) => ({
         sessionId: `memory-${index}`,
         sessionFile: `/tmp/memory-${index}.jsonl`,
-        mtime: 257 - index,
+        mtime: 1025 - index,
       })),
     );
     load.mockImplementation(async ({ sessions, reportBudgetBytes }) => ({
@@ -358,10 +352,10 @@ describe("sessions.usage", () => {
     try {
       const result = readResult(await runSessionsUsage(BASE_USAGE_RANGE));
       expect(load.mock.calls[1]?.[0].reportBudgetBytes).toBe(0);
-      expect(result.totals.totalTokens).toBe(256 * 7);
+      expect(result.totals.totalTokens).toBe(1024 * 7);
       expect(result.cacheStatus).toMatchObject({
         status: "partial",
-        cachedFiles: 256,
+        cachedFiles: 1024,
         pendingFiles: 1,
       });
     } finally {
@@ -586,55 +580,66 @@ describe("sessions.usage", () => {
     expect(result.totals.totalTokens).toBe(7);
   });
 
-  it("uses resident authority for context searches and prepares only an unavailable row", async () => {
-    await withOpenClawTestState({ label: "usage-context-resident" }, async (state) => {
-      const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      const store: Record<string, SessionEntry> = {};
-      const report = {
-        source: "run" as const,
-        generatedAt: 1,
-        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      };
-      const discovered = Array.from({ length: 61 }, (_, index) => {
-        const sessionId = `context-${index}`;
-        const key = `agent:main:${sessionId}`;
-        const entry = { sessionId, updatedAt: index + 1, systemPromptReport: report };
-        store[key] = entry;
-        replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
-        return {
-          sessionId,
-          sessionFile: `sqlite:main:${sessionId}:${storePath}`,
-          mtime: index + 1,
+  it.each(["available", "time budget"])(
+    "uses resident authority when missing authority is %s",
+    async (mode) => {
+      await withOpenClawTestState({ label: "usage-context-resident" }, async (state) => {
+        const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+        const store: Record<string, SessionEntry> = {};
+        const report = {
+          source: "run" as const,
+          generatedAt: 1,
+          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
         };
-      });
-      mockCombinedStore(
-        store,
-        Object.keys(store).map((key) => [key, "main"] as const),
-        storePath,
-      );
-      vi.mocked(discoverAllSessions).mockResolvedValueOnce(discovered);
-      const projection = createSessionRowProjectionFixture({
-        cfg: TEST_RUNTIME_CONFIG,
-        store,
-        storePath,
-        agentId: "main",
-      });
-      const readCapabilityEntry = projection.readCapabilityEntry.bind(projection);
-      const unavailableKey = "agent:main:context-60";
-      vi.spyOn(projection, "readCapabilityEntry").mockImplementation((query) =>
-        query.key === unavailableKey ? undefined : readCapabilityEntry(query),
-      );
-      const context = bindSessionRowProjection(
-        { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
-        () => projection,
-      );
-      const reads = vi.spyOn(sessionSharingPreparation, "prepareSessionMutationFacts");
-      try {
-        const result = readResult(
-          await runSessionsUsageMethod(
+        const discovered = Array.from({ length: 61 }, (_, index) => {
+          const sessionId = `context-${index}`;
+          const key = `agent:main:${sessionId}`;
+          const entry = { sessionId, updatedAt: index + 1, systemPromptReport: report };
+          store[key] = entry;
+          replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
+          return {
+            sessionId,
+            sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+            mtime: index + 1,
+          };
+        });
+        mockCombinedStore(
+          store,
+          Object.keys(store).map((key) => [key, "main"] as const),
+          storePath,
+        );
+        vi.mocked(discoverAllSessions).mockResolvedValueOnce(discovered);
+        const projection = createSessionRowProjectionFixture({
+          cfg: TEST_RUNTIME_CONFIG,
+          store,
+          storePath,
+          agentId: "main",
+        });
+        const readCapabilityEntry = projection.readCapabilityEntry.bind(projection);
+        const unavailableKey = "agent:main:context-60";
+        vi.spyOn(projection, "readCapabilityEntry").mockImplementation((query) =>
+          query.key === unavailableKey ? undefined : readCapabilityEntry(query),
+        );
+        const context = bindSessionRowProjection(
+          { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+          () => projection,
+        );
+        const reads = vi.spyOn(sessionSharingPreparation, "prepareSessionMutationFacts");
+        const started = createDeferred();
+        const release = createDeferred();
+        if (mode === "time budget") {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          reads.mockImplementationOnce(async () => {
+            started.resolve();
+            await release.promise;
+            throw new sessionSharingPreparation.SessionMutationFactsUnavailableError();
+          });
+        }
+        try {
+          const pending = runSessionsUsageMethod(
             "sessions.usage",
             {
               range: "all",
@@ -643,21 +648,33 @@ describe("sessions.usage", () => {
               includeContextWeight: true,
             },
             { context },
-          ),
-        );
-        expect(result.overview?.total).toBe(61);
-        expect(result.sessions).toHaveLength(50);
-        expect(result.sessions.every((row) => row.hasContextWeight)).toBe(true);
-        expect(result.sessions.find((row) => row.key === unavailableKey)?.contextWeight).toEqual(
-          report,
-        );
-        expect(reads.mock.calls.map(([params]) => params.sessionKey)).toEqual([unavailableKey]);
-      } finally {
-        reads.mockRestore();
-        projection.dispose();
-      }
-    });
-  });
+          );
+          if (mode === "time budget") {
+            await started.promise;
+            await vi.advanceTimersByTimeAsync(15_000);
+          }
+          const result = readResult(await pending);
+          expect(result.overview?.total).toBe(mode === "time budget" ? 60 : 61);
+          expect(result.sessions).toHaveLength(50);
+          if (mode === "time budget") {
+            expect(result.partial?.reason).toBe("time-budget");
+            expect(result.sessions.some((row) => row.key === unavailableKey)).toBe(false);
+          } else {
+            expect(result.sessions.every((row) => row.hasContextWeight)).toBe(true);
+            expect(
+              result.sessions.find((row) => row.key === unavailableKey)?.contextWeight,
+            ).toEqual(report);
+          }
+          expect(reads.mock.calls.map(([params]) => params.sessionKey)).toEqual([unavailableKey]);
+        } finally {
+          release.resolve();
+          vi.useRealTimers();
+          reads.mockRestore();
+          projection.dispose();
+        }
+      });
+    },
+  );
 
   it.each([
     {
