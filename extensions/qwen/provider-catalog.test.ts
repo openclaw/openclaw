@@ -12,6 +12,8 @@ import {
   QWEN_DEFAULT_MODEL_ID,
   QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
   QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  resolveQwenTokenPlanBaseUrl,
 } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -86,7 +88,7 @@ describe("qwen provider catalog", () => {
 });
 
 describe("qwen token plan provider catalog", () => {
-  it("advertises current plan models while retaining the deprecated compatibility row", () => {
+  it("advertises the current Token Plan catalogue", () => {
     const provider = buildQwenTokenPlanProvider();
     const models = provider.models;
     const modelIds = models.map((model) => model.id);
