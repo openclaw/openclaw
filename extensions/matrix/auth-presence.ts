@@ -17,7 +17,7 @@ type MatrixAuthPresenceParams =
     }
   | OpenClawConfig;
 
-/** @deprecated Use hasAnyMatrixAuthAsync. This adapter will be removed in the next Plugin SDK major. */
+/** @deprecated Use hasAnyMatrixAuthAsync. Final compatibility day: 2026-12-31. */
 export function hasAnyMatrixAuth(
   params: MatrixAuthPresenceParams,
   env: NodeJS.ProcessEnv = process.env,

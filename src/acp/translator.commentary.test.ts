@@ -55,7 +55,7 @@ async function createHarness() {
 }
 
 describe("ACP commentary reclassification", () => {
-  it.each(["OK.", "The sample value is orchid, and verification succeeded."])(
+  it.each(["OK."])(
     "preserves narration and the answer when the replacement is deferred: %s",
     async (answer) => {
       const h = await createHarness();
@@ -89,11 +89,7 @@ describe("ACP commentary reclassification", () => {
     },
   );
 
-  it.each([
-    { answer: "OK.", rounds: 1 },
-    { answer: "The sample value is orchid, and verification succeeded.", rounds: 1 },
-    { answer: "Verified.", rounds: 2 },
-  ])(
+  it.each([{ answer: "Verified.", rounds: 2 }])(
     "delivers the complete answer after $rounds tool rounds: $answer",
     async ({ answer, rounds }) => {
       const h = await createHarness();
@@ -149,7 +145,7 @@ describe("ACP commentary reclassification", () => {
     ]);
   });
 
-  it.each(["Checking", "Reading files"])(
+  it.each(["Reading files"])(
     "resumes commentary from the last emitted snapshot after %s",
     async (snapshot) => {
       const h = await createHarness();

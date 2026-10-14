@@ -953,6 +953,9 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "src/state/openclaw-state-db*",
+  "src/state/openclaw-state-feature-schema-ensure.ts",
+  "src/state/user-profiles-schema.ts",
   "src/snapshot/**",
   "src/infra/backup-*.ts",
   "src/infra/update-database-*.ts",
@@ -1249,6 +1252,7 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-publication.test.ts",
           "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
           "test/scripts/pr-correction-continuation.test.ts",

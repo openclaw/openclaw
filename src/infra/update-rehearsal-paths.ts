@@ -31,6 +31,10 @@ export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
+/** Candidate-internal: one validation command's budget anchor, handed from its CLI to workers. */
+export const UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV =
+  "OPENCLAW_UPDATE_REHEARSAL_COMMAND_STARTED_AT_MS";
+
 /** Recognize the complete 9.3+ driver contract; update-in-progress alone is also used by live Doctor. */
 export function resolveUpdateRehearsalRoot(env: NodeJS.ProcessEnv): string | undefined {
   const root = env.OPENCLAW_STATE_DIR;

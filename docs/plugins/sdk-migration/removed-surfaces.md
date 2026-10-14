@@ -369,7 +369,7 @@ timeline for current status.
     `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
     the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
     result fields are no longer accepted. The raw result type remains available
-    until the next plugin-SDK major release.
+    until its separately announced ordinary stable removal release.
 
   </Accordion>
 
@@ -395,7 +395,7 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `await getSessionEntryAsync(...)` for one scoped row or `await listSessionEntriesAsync(...)` for scoped metadata iteration from `openclaw/plugin-sdk/session-store-runtime`. |
     | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
     | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
     | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |

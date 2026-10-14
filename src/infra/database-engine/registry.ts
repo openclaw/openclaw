@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-export type DatabaseEngineId = "sqlite" | "postgres";
+import type { DatabaseEngineId } from "./types.js";
+export type { DatabaseEngineId } from "./types.js";
 
 export type DatabaseEngineStore = {
   id: string;

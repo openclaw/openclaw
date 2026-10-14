@@ -4833,13 +4833,15 @@ candidates invalidate the retained selection. Conflicting selections return
 for fresh planning; unrelated writes invalidate age hints without cancelling the
 plan. Each actor retains at most two preparations, allowing a revoked
 predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
-operation and native close release those readers. Planning preserves age facts and
-the preservation-required rollback before retrying with current protection facts.
-Automatic maintenance prepares subagent protection through its existing
+operation and native close release those readers. No-op plans carry their current
+age and count facts through settlement. Automatic maintenance prepares protection
+once before candidate selection, without a preliminary scan under writer admission.
+It prepares subagent protection through its existing
 read worker outside agent writer admission. The retained provider capture checks
 live ownership and publication changes through commit, then releases its custody
 after settlement. Cold protection never reloads the subagent registry on the
-Gateway main thread; no-op planning still avoids that preparation entirely.
+Gateway main thread. Exhaustive protected-only results suppress further passes
+until eligibility, policy, or the existing age deadline changes.
 Committed registry publications update the retained capture before the final host
 maintenance grant, without another candidate read or worker-side registry digest.
 Protection published after that grant is ordered after the admitted maintenance

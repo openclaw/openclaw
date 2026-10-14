@@ -498,7 +498,7 @@ export function resolvePrimaryTtsProviderCandidate(
   });
 }
 
-/** @deprecated Use isTtsProviderConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isTtsProviderConfiguredAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,

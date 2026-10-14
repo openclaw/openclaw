@@ -88,7 +88,7 @@ export {
   type SessionTranscriptCatalogPage,
 } from "../gateway/session-transcript-catalog.js";
 
-/** @deprecated Await readSessionTranscriptCatalogTitleAsync. Retained during stable deprecation. */
+/** @deprecated Await readSessionTranscriptCatalogTitleAsync. Final compatibility day: 2026-12-31. */
 export function readSessionTranscriptCatalogTitle(
   params: Parameters<typeof readLegacySessionTranscriptCatalogTitle>[0],
 ): string | undefined {
@@ -552,7 +552,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    /** @deprecated Use preparation.prepareMessage outside the transaction. Retained during stable deprecation. */
+    /** @deprecated Use preparation.prepareMessage outside the transaction. Final compatibility day: 2026-12-31. */
     prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
     /** Awaited after duplicate detection; undefined suppresses a fresh append. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -659,7 +659,7 @@ export async function publishSessionTranscriptUpdateByIdentity(
 
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
- * @deprecated Use withSessionTranscriptWrite and preparation options. Retained during stable deprecation.
+ * @deprecated Use withSessionTranscriptWrite and preparation options. Final compatibility day: 2026-12-31.
  */
 export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,

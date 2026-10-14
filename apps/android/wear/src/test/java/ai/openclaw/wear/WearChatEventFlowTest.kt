@@ -54,6 +54,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
 
 @RunWith(RobolectricTestRunner::class)
@@ -2767,7 +2768,17 @@ class WearChatEventFlowTest {
       idle()
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    fun idle() {
+      // UI actions enqueue speech; speech callbacks publish state back to Compose.
+      // Drain both directions before asserting the resulting UI or playback state.
+      repeat(2) {
+        shadowOf(Looper.getMainLooper()).idle()
+        ShadowLooper
+          .getAllLoopers()
+          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .forEach { shadowOf(it).idle() }
+      }
+    }
 
     fun observeReplyCompletion() {
       val sessionKey = checkNotNull(state.selectedSession).key

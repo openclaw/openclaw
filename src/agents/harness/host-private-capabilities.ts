@@ -9,6 +9,7 @@ import type {
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -239,6 +240,11 @@ function assertQuestionCompatibilityCurrent(
     if (retained) {
       retained.assertCurrent();
     } else {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "question dispatcher authority.assertCurrent synchronous preparation",
+        replacement: "await authority.assertCurrentAsync() before the final effect assertion",
+      });
       fallback();
     }
   } finally {

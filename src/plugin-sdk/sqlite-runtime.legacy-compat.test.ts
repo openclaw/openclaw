@@ -58,7 +58,7 @@ it("keeps the released raw SDK transaction synchronous through its deprecation w
       { id: 1, value: "prepared" },
     ]);
     expect(warning).toHaveBeenCalledWith(
-      expect.stringContaining("later release after stable deprecation"),
+      expect.stringContaining("Final compatibility day: 2026-12-31"),
       { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
     );
   } finally {

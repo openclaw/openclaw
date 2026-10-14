@@ -15,6 +15,7 @@ import {
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseScopedWriteToken,
+  retireSqliteDatabaseWriteScopes,
   publishSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
 import type {
@@ -133,7 +134,7 @@ it("joins host admission created after a worker's operation context before its f
   }
 });
 
-it("shares exact session receipts with existing writer isolates and fences unclassified writes", async () => {
+it("settles scoped writes without host metadata round trips after peer registrations", async () => {
   const location = path.join(tempDirs.make("sqlite-scoped-receipts-"), "shared.sqlite");
   const database = openNodeSqliteDatabase(location);
   database.exec("CREATE TABLE original(value)");
@@ -145,7 +146,7 @@ it("shares exact session receipts with existing writer isolates and fences uncla
       databasePath: location,
       input: undefined,
     });
-    const first = readSqliteDatabaseScopedWriteToken(database, "first");
+    let first = readSqliteDatabaseScopedWriteToken(database, "first");
     const second = readSqliteDatabaseScopedWriteToken(database, "second");
     await store!.execute({
       type: "writeRows",
@@ -153,17 +154,72 @@ it("shares exact session receipts with existing writer isolates and fences uncla
     });
     expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
     expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(second);
-    const secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
+    let secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
 
-    // The writer already exists when a new actor registers another dependency.
-    const late = readSqliteDatabaseScopedWriteToken(database, "late");
-    await store!.execute({
-      type: "writeRows",
-      input: { sql: "INSERT INTO original VALUES (3)", sessionKeys: ["late"] },
-    });
+    const writeAfterPublication = (value: number, sessionKey: string, publish: () => void) =>
+      broker.runOperation(
+        store!,
+        (scope) =>
+          scope.execute({
+            type: "writeRows",
+            input: {
+              sql: `INSERT INTO original VALUES (${value})`,
+              sessionKeys: [sessionKey],
+              awaitPublication: true,
+            },
+          }),
+        undefined,
+        undefined,
+        () => ({
+          nativeLocations: [location],
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            if (request.stage === "transaction") {
+              publish();
+            }
+            grant();
+          }),
+        }),
+      );
+
+    // Publish after dispatch so the accepted writer cannot already have the new scope.
+    let late: string | undefined;
+    expect(
+      await writeAfterPublication(3, "late", () => {
+        late = readSqliteDatabaseScopedWriteToken(database, "late");
+      }),
+    ).toEqual({ lookupMessages: 0 });
+    expect(late).toBeTypeOf("string");
     expect(readSqliteDatabaseScopedWriteToken(database, "late")).not.toBe(late);
+    expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
+    first = readSqliteDatabaseScopedWriteToken(database, "first");
+    secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
+
+    // A new unrelated scope does not prevent a known shared cell from settling exactly.
+    let unrelated: string | undefined;
+    expect(
+      await writeAfterPublication(5, "second", () => {
+        unrelated = readSqliteDatabaseScopedWriteToken(database, "unrelated");
+      }),
+    ).toEqual({ lookupMessages: 0 });
+    expect(unrelated).toBeTypeOf("string");
+    expect(readSqliteDatabaseScopedWriteToken(database, "unrelated")).toBe(unrelated);
     expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
-    expect(readSqliteDatabaseScopedWriteToken(database, "second")).toBe(secondCommitted);
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
+
+    // The writer's retired cell must invalidate the host's replacement incarnation too.
+    let replacement: string | undefined;
+    expect(
+      await writeAfterPublication(6, "second", () => {
+        retireSqliteDatabaseWriteScopes(database, ["second"]);
+        replacement = readSqliteDatabaseScopedWriteToken(database, "second");
+      }),
+    ).toEqual({ lookupMessages: 0 });
+    expect(replacement).toBeTypeOf("string");
+    expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(replacement);
+    expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+    first = readSqliteDatabaseScopedWriteToken(database, "first");
+    secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
 
     await store!.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (4)" } });
     expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
@@ -172,6 +228,8 @@ it("shares exact session receipts with existing writer isolates and fences uncla
       { value: 2 },
       { value: 3 },
       { value: 4 },
+      { value: 5 },
+      { value: 6 },
     ]);
   } finally {
     database.close();
