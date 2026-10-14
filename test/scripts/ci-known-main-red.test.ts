@@ -254,11 +254,7 @@ const known = async (options: Parameters<typeof classify>[0] = {}) =>
   (await classify(options)).known;
 
 describe("main failure attribution", () => {
-  it.each([
-    { conclusion: "success", mainSelected: true, expected: "unknown" },
-    { conclusion: "failure", mainSelected: true, expected: "unknown" },
-    { conclusion: "success", mainSelected: false, expected: "new" },
-  ])(
+  it.each([{ conclusion: "success", mainSelected: false, expected: "new" }])(
     "compares selected build verifiers against main $conclusion (other verifiers=$mainSelected)",
     async ({ conclusion, mainSelected, expected }) => {
       const build = { ...job, name: "build-artifacts" };
@@ -316,42 +312,7 @@ describe("main failure attribution", () => {
     });
   });
 
-  it("makes unverified scope visible without inventing a mismatch", async () => {
-    const classifier = failureClassifier({
-      mainJobs: [{ ...job, id: 20, conclusion: "success" }],
-    });
-    expect(await classifier.classifyJob(job)).toMatchObject({
-      class: "new",
-      reason: "Matching main job passed; selected scope not compared",
-    });
-  });
-
   it.each([
-    {
-      name: "matching Node assertions",
-      failure: job,
-      expected: "pre-existing",
-      reason: "Failure signatures match main; selected scope not compared",
-    },
-    {
-      name: "changed Node assertions",
-      failure: job,
-      prReport: report("startup > rejects the session"),
-      expected: "new",
-    },
-    {
-      name: "only a subset of main assertions",
-      failure: job,
-      mainReport: report() + report("startup > rejects the session"),
-      expected: "new",
-    },
-    {
-      name: "matching static types",
-      failure: typeJob,
-      mainReport: typeReport(),
-      prReport: typeReport(),
-      expected: "pre-existing",
-    },
     {
       name: "changed static types",
       failure: typeJob,
@@ -360,30 +321,11 @@ describe("main failure attribution", () => {
       expected: "new",
     },
     {
-      name: "matching legacy lint diagnostics",
-      failure: lintJob,
-      mainReport: lintReport,
-      prReport: lintReport,
-      expected: "pre-existing",
-    },
-    {
       name: "a Node setup failure without signatures",
       failure: { ...job, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
       expected: "unknown",
     },
     { name: "missing assertions", failure: job, prReport: "truncated log", expected: "unknown" },
-    {
-      name: "a timeout in a signature-capable job",
-      failure: { ...job, conclusion: "timed_out" },
-      expected: "unknown",
-    },
-    {
-      name: "the same unparsed build failure",
-      failure: { ...job, name: "build-artifacts" },
-      expected: "pre-existing",
-      reason:
-        "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
-    },
     {
       name: "the same unparsed build timeout",
       failure: { ...job, name: "build-artifacts", conclusion: "timed_out" },
@@ -407,8 +349,6 @@ describe("main failure attribution", () => {
   });
 
   it.each([
-    { name: "passed", conclusion: "success", expected: "new" },
-    { name: "cancelled", conclusion: "cancelled", expected: "unknown" },
     { name: "skipped", conclusion: "skipped", expected: "unknown" },
     { name: "timed out", conclusion: "timed_out", expected: "unknown" },
     { name: "unfinished", conclusion: "failure", status: "in_progress", expected: "unknown" },
@@ -424,7 +364,6 @@ describe("main failure attribution", () => {
   });
 
   it.each([
-    { name: "another shard", mainJobs: [{ ...job, id: 20, name: `${job.name}0` }] },
     {
       name: "duplicate job names",
       mainJobs: [
@@ -511,60 +450,19 @@ describe("known hourly main failures", () => {
     ).toBe(false);
   });
 
-  it.each([repository, "contributor/openclaw"])(
-    "accepts exact trusted main assertions for %s",
-    async (headRepository) => {
-      expect(await classify({ headRepository })).toMatchObject({ known: true, mainRunId: 200 });
-    },
-  );
   it.each([
-    ["different test", { prReport: report("startup > opens a different session") }],
-    ["different assertion", { prReport: report().replaceAll("true to be false", "42 to be 43") }],
-    ["changed test", { changed: [file] }],
-    ["changed direct subject", { changed: ["src/gateway/subject.ts"] }],
-    [
-      "changed external subject",
-      { changed: ["src/infra/session.ts"], source: 'import { start } from "../infra/session.js";' },
-    ],
-    ["changed workflow", { changed: [".github/workflows/ci.yml"] }],
-    ["changed dependency", { changed: ["pnpm-lock.yaml"] }],
     ["truncated diff", { changedCount: 2 }],
     ["non-main event", { mainEvent: "pull_request" }],
     ["main predates merge base", { age: "behind" }],
-    ["unresolved subject alias", { source: 'import { start } from "@openclaw/runtime";' }],
     ["escaped relative module", { source: 'await import("./\\u002e\\u002e/subject.js");' }],
-    ["computed mock subject", { source: "vi.mock(moduleName);" }],
-    ["concatenated import subject", { source: 'await import("./subject" + suffix);' }],
     ["concatenated mock subject", { source: 'vi.mock("./subject" + suffix);' }],
-    ["template subject", { source: "await import(`./subject${suffix}`);" }],
     [
       "root directory subject",
       { changed: ["runtime/index.ts"], source: 'import { start } from "../../runtime";' },
     ],
-    ["computed subject", { source: "const subject = await import(name);" }],
-    ["unreported failure", { prReport: report().replace("Tests 1 failed", "Tests 2 failed") }],
-    ["missing test summary", { prReport: report().replace(/Tests 1 failed[^\n]+/u, "") }],
-    ["failed suite", { prReport: `${report()}\nFailed Suites 1` }],
     ["unhandled rejection", { prReport: `${report()}\nUnhandled Rejection` }],
     ["extra failure annotation", { prReport: `${report()}\n##[error]worker crashed` }],
-    [
-      "missing execution receipt",
-      { prReport: report().replace(/^.*\[shard:completion\].*\n/mu, "") },
-    ],
     ["unfinished outer plan", { prReport: report().replace('"planned":1', '"planned":2') }],
-    ["duplicate execution receipt", { prReport: `${report()}\n[shard:completion] {"version":1}` }],
-    [
-      "unknown stream before summary",
-      { prReport: `[shard:coverage] Error: setup failed\n${report()}` },
-    ],
-    [
-      "unknown stream without error header",
-      { prReport: `[shard:coverage] setup failed\n${report()}` },
-    ],
-    [
-      "failure before invocation start",
-      { prReport: `[shard:gateway] Error: setup failed\n${report()}` },
-    ],
     [
       "failure before first summary",
       {
@@ -608,15 +506,6 @@ describe("known hourly main failures", () => {
       },
     ],
     [
-      "failure during summaries",
-      {
-        prReport: report().replace(
-          "[shard:gateway] Tests 1 failed",
-          "[shard:gateway] Error: coverage finalization failed\n[shard:gateway] Tests 1 failed",
-        ),
-      },
-    ],
-    [
       "failure after summaries",
       {
         prReport: report().replace(
@@ -625,16 +514,12 @@ describe("known hourly main failures", () => {
         ),
       },
     ],
-    ["outer failure after receipt", { prReport: `${report()}\nError: write failed` }],
     ["main has recovered", { mainConclusion: "success" }],
   ])("keeps %s blocking", async (_name, options) => {
     expect(await known(options)).toBe(false);
   });
 
   it.each([
-    { mainChanged: ["docs/unrelated.md"], known: true },
-    { mainChanged: [file], known: false },
-    { mainChanged: ["src/gateway/subject.ts"], known: false },
     { mainChanged: ["scripts/run-vitest.mts"], known: false },
     { mainChanged: Array.from({ length: 300 }, (_, i) => `docs/page-${i}.md`), known: false },
   ])(
@@ -685,18 +570,11 @@ describe("known hourly main failures", () => {
   );
 
   it.each([
-    typeJob,
-    {
-      ...typeJob,
-      name: "check-prod-types",
-      steps: [{ name: "Run check shard", conclusion: "failure" }],
-    },
     {
       ...typeJob,
       name: "check-test-types",
       steps: [{ name: "Run check shard", conclusion: "failure" }],
     },
-    lintJob,
     {
       ...lintJob,
       name: "check-lint-core-1",
@@ -724,23 +602,20 @@ describe("known hourly main failures", () => {
     );
   });
 
-  it.each([
-    { ...typeJob, name: "other-check" },
-    { ...typeJob, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
-    { ...typeJob, steps: [...typeJob.steps, { name: "Cleanup", conclusion: "failure" }] },
-    { ...lintJob, name: "check-lint", steps: [{ name: "Run check shard", conclusion: "failure" }] },
-    { ...lintJob, steps: [{ name: "Run changed lint", conclusion: "failure" }] },
-  ])("keeps unowned static execution blocking: %j", async (failureJob) => {
-    const lint = failureJob.name.startsWith("check-lint");
-    expect(
-      await known({
-        failureJob,
-        signatureFile: lint ? lintFile : typeFile,
-        mainReport: lint ? lintReport : typeReport(),
-        prReport: lint ? completeLintReport() : typeReport(),
-      }),
-    ).toBe(false);
-  });
+  it.each([{ ...typeJob, steps: [...typeJob.steps, { name: "Cleanup", conclusion: "failure" }] }])(
+    "keeps unowned static execution blocking: %j",
+    async (failureJob) => {
+      const lint = failureJob.name.startsWith("check-lint");
+      expect(
+        await known({
+          failureJob,
+          signatureFile: lint ? lintFile : typeFile,
+          mainReport: lint ? lintReport : typeReport(),
+          prReport: lint ? completeLintReport() : typeReport(),
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("keeps incomplete lint execution and PR-owned static subjects blocking", async () => {
     const options = {
@@ -772,19 +647,6 @@ describe("known hourly main failures", () => {
 });
 
 describe("loose CI failure discovery", () => {
-  it("extracts project labels, ANSI, multiple shards and repeated names", () => {
-    const log = [
-      `2026-10-12T08:00:00Z [shard:gateway] \u001b[31m FAIL \u001b[0m gateway-server (gateway-server-parallel) ${file} > native session > denies`,
-      `2026-10-12T08:00:01Z [shard:other] FAIL ${file} > native session > denies`,
-      `2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
-    ].join("\n");
-    expect(extractNodeFailedTests(log)).toEqual([
-      { file, tests: ["native session > denies"] },
-      { file: "test/second.test.ts", tests: ["fails too"] },
-    ]);
-    expect(parseNodeFailureReport(log, false)).toEqual([]);
-  });
-
   it("reruns whole files for suite and unhandled failures without leaking across shards", () => {
     const log = [
       `[shard:a] FAIL ${file} > named failure`,

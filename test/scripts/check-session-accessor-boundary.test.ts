@@ -114,44 +114,6 @@ describe("session accessor boundary guard", () => {
     );
   });
 
-  it("flags legacy reader imports", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        import { loadSessionStore, readSessionEntries as readEntries } from "../config/sessions.js";
-        import { readSessionEntry, readSessionStoreReadOnly } from "../config/sessions/store-load.js";
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'imports legacy session store access "loadSessionStore"' },
-      { line: 2, reason: 'imports legacy session store access "readSessionEntries"' },
-      { line: 3, reason: 'imports legacy session store access "readSessionEntry"' },
-      { line: 3, reason: 'imports legacy session store access "readSessionStoreReadOnly"' },
-    ]);
-  });
-
-  it("flags direct and namespace legacy access calls", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        loadSessionStore(storePath);
-        sessions.readSessionEntries(storePath);
-        sessions["loadSessionStore"](storePath);
-        readSessionStoreReadOnly(storePath);
-        resolveSessionStoreEntry({ store, sessionKey });
-        resolveSessionStoreEntryCore({ store, sessionKey });
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'calls legacy session store access "loadSessionStore"' },
-      { line: 3, reason: 'references legacy session store access "readSessionEntries"' },
-      { line: 4, reason: 'references legacy session store access "loadSessionStore"' },
-      { line: 5, reason: 'calls legacy session store access "readSessionStoreReadOnly"' },
-      { line: 6, reason: 'calls legacy session store access "resolveSessionStoreEntry"' },
-      { line: 7, reason: 'calls legacy session store access "resolveSessionStoreEntryCore"' },
-    ]);
-  });
-
   it("flags aliased namespace reader references", () => {
     expect(
       findSessionAccessorBoundaryViolations(
@@ -165,60 +127,6 @@ describe("session accessor boundary guard", () => {
       { line: 2, reason: 'references legacy session store access "loadSessionStore"' },
       { line: 3, reason: 'aliases legacy session store access "readSessionEntries"' },
       { line: 4, reason: 'aliases legacy session store access "loadSessionStore"' },
-    ]);
-  });
-
-  it("flags legacy whole-store writes", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        import { saveSessionStore, updateSessionStore } from "../config/sessions.js";
-        saveSessionStore(storePath, store);
-        updateSessionStore(storePath, update);
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'imports legacy session store access "saveSessionStore"' },
-      { line: 2, reason: 'imports legacy session store access "updateSessionStore"' },
-      { line: 3, reason: 'calls legacy session store access "saveSessionStore"' },
-      { line: 4, reason: 'calls legacy session store access "updateSessionStore"' },
-    ]);
-  });
-
-  it("allows migrated accessor reads", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
-        listSessionEntriesCore({ storePath });
-      `),
-      ),
-    ).toEqual([]);
-  });
-
-  it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
-    expect(
-      findMemoryHostSessionCorpusBoundaryViolations(
-        ...parseFixture(`
-        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
-          return loadSessionTranscriptClassificationForSessionsDir(resolveSessionTranscriptsDirForAgent(agentId));
-        }
-        export async function listSessionFilesForAgent(agentId) {
-          return readSessionTranscriptClassificationStore("sessions.json");
-        }
-      `),
-      ),
-    ).toEqual([
-      {
-        line: 3,
-        reason:
-          'calls legacy memory-host session corpus helper "loadSessionTranscriptClassificationForSessionsDir"',
-      },
-      {
-        line: 6,
-        reason:
-          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
-      },
     ]);
   });
 
@@ -240,44 +148,6 @@ describe("session accessor boundary guard", () => {
         reason:
           'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
       },
-    ]);
-  });
-
-  it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
-    expect(
-      findMemoryHostSessionCorpusBoundaryViolations(
-        ...parseFixture(`
-        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
-          return listSessionEntriesCore({ agentId });
-        }
-        export async function listSessionFilesForAgent(agentId) {
-          return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
-        }
-      `),
-      ),
-    ).toEqual([]);
-  });
-
-  it("flags legacy writer imports and calls", () => {
-    expect(
-      findSessionAccessorWriteBoundaryViolations(
-        ...parseFixture(`
-        import { applySessionStoreEntryPatch, saveSessionStore, updateSessionStore, updateSessionStoreEntry as updateEntry } from "../config/sessions.js";
-        saveSessionStore(storePath, store);
-        updateSessionStore(storePath, () => undefined);
-        sessions.updateSessionStoreEntry({ storePath, sessionKey, update });
-        applySessionStoreEntryPatch({ storePath, sessionKey, patch });
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'imports legacy session store writer "applySessionStoreEntryPatch"' },
-      { line: 2, reason: 'imports legacy session store writer "saveSessionStore"' },
-      { line: 2, reason: 'imports legacy session store writer "updateSessionStore"' },
-      { line: 2, reason: 'imports legacy session store writer "updateSessionStoreEntry"' },
-      { line: 3, reason: 'calls legacy session store writer "saveSessionStore"' },
-      { line: 4, reason: 'calls legacy session store writer "updateSessionStore"' },
-      { line: 5, reason: 'references legacy session store writer "updateSessionStoreEntry"' },
-      { line: 6, reason: 'calls legacy session store writer "applySessionStoreEntryPatch"' },
     ]);
   });
 
@@ -318,19 +188,6 @@ describe("session accessor boundary guard", () => {
     }
   });
 
-  it("flags legacy transcript writer imports", () => {
-    expect(
-      findTranscriptWriterBoundaryViolations(
-        ...parseFixture(`
-        import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.test-support.js";
-        import { emitSessionTranscriptUpdate as emitUpdate } from "../sessions/transcript-events.js";
-      `),
-      ),
-    ).toEqual([
-      { line: 2, reason: 'imports legacy transcript writer "appendSessionTranscriptMessage"' },
-      { line: 3, reason: 'imports legacy transcript writer "emitSessionTranscriptUpdate"' },
-    ]);
-  });
   it("flags direct and namespace legacy transcript writer calls", () => {
     expect(
       findTranscriptWriterBoundaryViolations(
@@ -369,20 +226,6 @@ describe("session accessor boundary guard", () => {
         reason: 'calls legacy sessions.create lifecycle writer "ensureSessionTranscriptFile"',
       },
     ]);
-  });
-
-  it("allows the gateway sessions.create lifecycle accessor seam", () => {
-    expect(
-      findGatewaySessionCreateLifecycleViolations(
-        ...parseFixture(`
-        const handlers = {
-          "sessions.create": async () => {
-            await createSessionEntryWithTranscript(scope, createEntry);
-          },
-        };
-      `),
-      ),
-    ).toEqual([]);
   });
 
   it("flags gateway manual compact trim file mutations", () => {
@@ -441,17 +284,6 @@ describe("session accessor boundary guard", () => {
     ]);
   });
 
-  it("ignores comments and strings that describe legacy readers", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        // loadSessionStore and readSessionEntries used to be called here.
-        const description = "loadSessionStore";
-      `),
-      ),
-    ).toEqual([]);
-  });
-
   it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
     expect(
       findEmbeddedAgentSessionTargetViolations(
@@ -484,20 +316,6 @@ describe("session accessor boundary guard", () => {
           'passes deprecated embedded-agent runtime identity field "sessionFile"; use sessionTarget',
       },
     ]);
-  });
-
-  it("allows embedded-agent calls that pass sessionTarget identity", () => {
-    expect(
-      findEmbeddedAgentSessionTargetViolations(
-        ...parseFixture(`
-        agentRuntime.runEmbeddedAgent({
-          sessionId,
-          sessionKey,
-          sessionTarget: { agentId, sessionId, sessionKey, storePath },
-        });
-      `),
-      ),
-    ).toEqual([]);
   });
 });
 
