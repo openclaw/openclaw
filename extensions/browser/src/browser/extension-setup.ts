@@ -47,6 +47,8 @@ export type BrowserExtensionSetupResult = {
     discoveredProfiles: number;
     awaitingApproval: boolean;
     automaticBootstrapSupported: boolean;
+    /** Chrome profile reads are blocked; installation count may be unknown rather than zero. */
+    discoveryBlocked: boolean;
   };
   connection: {
     state: "not_checked" | "unavailable" | "waiting_for_extension" | "connected";
@@ -288,6 +290,9 @@ export async function runBrowserExtensionSetup(
       unpackedProfiles.length + storeProfiles.filter((entry) => entry.enabled).length,
     awaitingApproval: storeProfiles.some((entry) => entry.awaitingApproval),
     automaticBootstrapSupported: status.platformSupport === "automatic",
+    // Carried independently of the connection reason: verification proves the
+    // relay, not the installation count, so unknown must survive verify.
+    discoveryBlocked: status.chromeDiscoveryBlocked,
   };
   const result: BrowserExtensionSetupResult = {
     action: options.action,

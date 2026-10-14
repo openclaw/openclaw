@@ -185,7 +185,12 @@ it("verifies the relay instead of reporting a missing extension when profile rea
     phase: "waiting_for_connection",
     reason: "profile_inspection_blocked",
     nextAction: "check_connection",
-    installation: { nativeHostRegistered: true, installedProfiles: 0, discoveredProfiles: 0 },
+    installation: {
+      nativeHostRegistered: true,
+      installedProfiles: 0,
+      discoveredProfiles: 0,
+      discoveryBlocked: true,
+    },
   });
 
   const verified = await setup("verify");
@@ -194,6 +199,9 @@ it("verifies the relay instead of reporting a missing extension when profile rea
     reason: "connected",
     nextAction: "none",
     connection: { state: "connected", extensionVersion: "2.3.0" },
+    // The unknown install fact must survive a connected verify; the
+    // desktop card keys "unknown" off this, not off the connection reason.
+    installation: { discoveryBlocked: true },
   });
   expect(mocks.install).not.toHaveBeenCalled();
 });

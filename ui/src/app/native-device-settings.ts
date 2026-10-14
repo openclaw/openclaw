@@ -247,6 +247,8 @@ const legacyChromeInstallResultSchema = z.object({
   // Keep optional until the minimum supported Mac app includes status discovery.
   installedProfiles: z.number().int().nonnegative().optional(),
   discoveredProfiles: z.number().int().nonnegative(),
+  // Older Mac apps omit this; missing means not blocked.
+  discoveryBlocked: z.boolean().optional(),
 });
 export type LegacyChromeInstallResult = z.infer<typeof legacyChromeInstallResultSchema>;
 const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required({
