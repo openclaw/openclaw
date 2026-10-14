@@ -63,6 +63,7 @@ type PageOptions = {
   clawHubTrustWarning?: string;
   installedPlugins?: PluginListResult["plugins"];
   rosterErrorOnceAfterAdd?: boolean;
+  applyWait?: Promise<void>;
 };
 
 const disposers: Array<() => void> = [];
@@ -247,6 +248,7 @@ export function createPage(options: PageOptions = {}) {
       };
     }
     if (method === "claws.add.apply") {
+      await options.applyWait;
       const acknowledged =
         params &&
         typeof params === "object" &&

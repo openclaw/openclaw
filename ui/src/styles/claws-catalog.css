@@ -238,7 +238,7 @@
 
 .claws-add-consent__item > span,
 .claws-add-consent__item li {
-  color: var(--text-muted);
+  color: var(--muted);
 }
 
 .claws-add-consent__item ul {

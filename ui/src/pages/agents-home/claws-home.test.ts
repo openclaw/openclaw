@@ -93,6 +93,38 @@ describe("Claws on Agents Home", () => {
     expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")).toBeNull();
   });
 
+  it("retires a pending Add when the package route changes", async () => {
+    let finishApply: (() => void) | undefined;
+    const applyWait = new Promise<void>((resolve) => {
+      finishApply = resolve;
+    });
+    const { provider, request } = createPage({ clawsEnabled: true, applyWait });
+    const detail = new ClawsCatalogDialog.Element();
+    detail.pageMode = true;
+    detail.initialPackageName = workflowOperator.packageName;
+    provider.append(detail);
+
+    await vi.waitFor(() =>
+      expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
+        false,
+      ),
+    );
+    detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.click();
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "claws.add.apply")).toBe(true),
+    );
+
+    detail.initialPackageName = "@openclaw/another-claw";
+    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());
+    detail.initialPackageName = workflowOperator.packageName;
+    await vi.waitFor(() =>
+      expect(detail.querySelector<HTMLButtonElement>("[data-claws-confirm] button")?.disabled).toBe(
+        false,
+      ),
+    );
+    finishApply?.();
+  });
+
   it("asks before acknowledging a ClawHub trust warning", async () => {
     const { provider, request, navigate } = createPage({
       clawsEnabled: true,

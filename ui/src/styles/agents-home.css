@@ -196,7 +196,7 @@
   border: 0;
   border-radius: inherit;
   background: transparent;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .agents-home__claw-card-link:focus-visible {

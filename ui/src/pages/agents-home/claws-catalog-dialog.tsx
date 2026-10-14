@@ -108,6 +108,8 @@ class ClawsCatalogModel {
     this.detail = null;
     this.detailLoading = false;
     this.detailError = null;
+    this.applying = false;
+    this.addError = null;
     this.installedPluginPackages = new Set();
     this.consentWarning = null;
     this.reviewPlan = null;
