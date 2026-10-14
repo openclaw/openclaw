@@ -36,7 +36,7 @@ import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { agentCommandMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
@@ -1001,6 +1001,7 @@ test("sessions.recover rejects continuation launch after runtime authority close
       },
     },
   });
+  expect(agentCommandMock).not.toHaveBeenCalled();
   expect(
     loadSessionEntry({
       agentId: "main",
