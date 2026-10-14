@@ -26,21 +26,6 @@ import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 const CATALOG_SESSION_GROUP_LIMIT = 5;
-function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
-  if (hasActiveRun) {
-    return (
-      <span
-        class="session-run-spinner"
-        role="img"
-        aria-label={t("sessionsView.activeRun")}
-        title={t("sessionsView.activeRun")}
-      />
-    );
-  }
-  return hasUnread ? (
-    <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
-  ) : undefined;
-}
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
@@ -386,7 +371,20 @@ function renderCatalogGroup(
                   </span>
                 </span>
                 {renderHoverMarquee(readCatalog().label, "sidebar-recent-sessions__label-text")}
-                {renderCatalogHeaderStatus(hasActiveRun(), hasUnread())}
+                {hasActiveRun() ? (
+                  <span
+                    class="session-run-spinner"
+                    role="img"
+                    aria-label={t("sessionsView.activeRun")}
+                    title={t("sessionsView.activeRun")}
+                  />
+                ) : hasUnread() ? (
+                  <span
+                    class="session-unread-dot"
+                    role="img"
+                    aria-label={t("sessionsView.unread")}
+                  />
+                ) : undefined}
               </button>
               <button
                 type="button"
