@@ -79,7 +79,7 @@ import {
   getThinkingSliderValues,
   itemAt,
 } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.tsx";
@@ -956,16 +956,18 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("loads older history from upward wheel and keyboard intent without a button", () => {
+  it("loads older history from upward wheel and keyboard intent across transcript updates", () => {
     const onHistoryIntent = vi.fn();
-    const container = renderChatView({
+    const props = {
+      messages: [{ role: "assistant", content: "Current history" }],
       historyPagination: {
         hasMore: true,
         loading: false,
         onShowEarlier: vi.fn(),
       },
       onHistoryIntent,
-    });
+    };
+    const container = renderChatView(props);
     const thread = requireElement(container, ".chat-thread", "chat thread");
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
@@ -973,6 +975,19 @@ describe("chat history pagination", () => {
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
+
+    renderChatInto(container, {
+      ...props,
+      messages: [...props.messages, { role: "assistant", content: "Updated history" }],
+    });
+    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
+    expect(thread.contains(sentinel)).toBe(true);
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+    expect(onHistoryIntent).toHaveBeenCalledTimes(3);
+
+    renderChatInto(container, { messages: props.messages, onHistoryIntent });
+    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
+    expect(thread.contains(sentinel)).toBe(false);
   });
 });
 

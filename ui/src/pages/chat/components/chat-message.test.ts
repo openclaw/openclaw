@@ -16,7 +16,7 @@ import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { renderStreamGroup } from "./chat-message-stream.ts";
 import {

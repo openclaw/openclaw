@@ -1,15 +1,12 @@
-import { html, render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { formatChatWorkContext } from "../../../../../src/chat/work-context.js";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeStoredQueueItem } from "../../../lib/chat/outbox-store-codec.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 
-const container = document.createElement("div");
-afterEach(() => render(html``, container));
 const snapshot = {
   page: "review:board",
   detail: { filter: "stuck" },
@@ -31,7 +28,7 @@ describe("attached message context", () => {
               content: text + "\n\n" + formatChatWorkContext(snapshot),
               ...(source === "history" ? { __openclaw: { workContext: { snapshot, text } } } : {}),
             };
-      render(solidContent(MessageWorkContext, { message }), container);
+      const { container } = mountSolid(() => <MessageWorkContext message={message} />);
       if (source === "pasted") {
         expect(extractText(message)).toBe(text + "\n\n" + formatChatWorkContext(snapshot));
         expect(container.querySelector("details")).toBeNull();

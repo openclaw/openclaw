@@ -1,8 +1,6 @@
-import { html, LitElement, nothing, type PropertyValues } from "lit";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { t } from "../../i18n/index.ts";
-import "../../styles/chat/outbox-recovery.css";
 import type { DurableComposerRecoveryEntry } from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
@@ -12,6 +10,7 @@ import {
   retireDeliveredChatOutboxRecovery,
   type ChatOutboxRecoveryEntry,
 } from "../../lib/chat/outbox-recovery.ts";
+import "../../styles/chat/outbox-recovery.css";
 import {
   parseStoredChatOutboxScope,
   storageTargetForGateway,
@@ -19,38 +18,48 @@ import {
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 type RecoveryEntry = ChatOutboxRecoveryEntry | DurableComposerRecoveryEntry;
 
 const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 
+type RecoveryProps = {
+  host: ChatPageHost | undefined;
+  identity: string;
+  messages: readonly unknown[];
+};
+
 /** Recovery is owner-scoped and intentionally outside every automatic drain. */
-class ChatOutboxRecovery extends LitElement {
-  static override properties = {
-    host: { attribute: false },
-    identity: { type: String },
-    messages: { attribute: false },
-  };
-  host?: ChatPageHost;
-  identity = "";
-  messages: readonly unknown[] = [];
+class ChatOutboxRecoveryController {
   private entries: ChatOutboxRecoveryEntry[] = [];
   private drafts: DurableComposerRecoveryEntry[] = [];
   private error = "";
   private busy = false;
   private generation = 0;
-  private unsubscribe?: () => void;
   private refreshQueued = false;
 
-  override createRenderRoot() {
-    return this;
+  constructor(
+    private readonly props: RecoveryProps,
+    private readonly element: HTMLElement,
+    private readonly notify: () => void,
+  ) {}
+  private get host() {
+    return this.props.host;
   }
-  override connectedCallback() {
-    super.connectedCallback();
-    this.unsubscribe = subscribeStoredChatOutboxChanges(() => {
+  private get identity() {
+    return this.props.identity;
+  }
+  private get isConnected() {
+    return this.element.isConnected;
+  }
+
+  subscribe() {
+    return subscribeStoredChatOutboxChanges(() => {
       if (this.refreshQueued) {
         return;
       }
@@ -64,17 +73,19 @@ class ChatOutboxRecovery extends LitElement {
       });
     });
   }
-  override disconnectedCallback() {
+  disconnect() {
     this.generation++;
-    this.unsubscribe?.();
-    super.disconnectedCallback();
   }
-  protected override updated(changed: PropertyValues) {
-    // Loaded history only matters while a recovery row awaits delivery proof.
+  update(previous: RecoveryProps | undefined) {
     const awaitsProof =
-      changed.has("messages") &&
+      previous?.messages !== this.props.messages &&
       this.entries.some((entry) => entry.session.queue?.some((item) => item.sendRunId));
-    if (changed.has("identity") || changed.has("host") || awaitsProof) {
+    if (
+      !previous ||
+      previous.identity !== this.identity ||
+      previous.host !== this.host ||
+      awaitsProof
+    ) {
       void this.refresh();
     }
   }
@@ -96,7 +107,7 @@ class ChatOutboxRecovery extends LitElement {
     if (!owner) {
       this.entries = [];
       this.error = "";
-      this.requestUpdate();
+      this.notify();
       return;
     }
     try {
@@ -128,7 +139,7 @@ class ChatOutboxRecovery extends LitElement {
       }
       this.error = t("chat.outboxRecoveryStorageFailed");
     }
-    this.requestUpdate();
+    this.notify();
   }
   private async changeRecovery(entry: RecoveryEntry, action: "restore" | "discard") {
     const host = this.host;
@@ -157,7 +168,7 @@ class ChatOutboxRecovery extends LitElement {
           !host.chatQueue.length));
     this.busy = true;
     this.error = "";
-    this.requestUpdate();
+    this.notify();
     try {
       if (!restoring) {
         const confirmed = await showConfirmDialog({
@@ -238,7 +249,7 @@ class ChatOutboxRecovery extends LitElement {
             ).status;
       if (result === "restored" || result === "persisted") {
         if (this.host === host && this.identity === identity) {
-          this.dispatchEvent(new CustomEvent("outbox-restored", { bubbles: true }));
+          this.element.dispatchEvent(new CustomEvent("outbox-restored", { bubbles: true }));
         }
         await this.refresh();
       } else {
@@ -254,7 +265,7 @@ class ChatOutboxRecovery extends LitElement {
       }
     } finally {
       this.busy = false;
-      this.requestUpdate();
+      this.notify();
     }
   }
   private chatName(sessionKey: string) {
@@ -323,76 +334,131 @@ class ChatOutboxRecovery extends LitElement {
       .filter(Boolean)
       .join("\n\n");
   }
-  private renderEntry(entry: RecoveryEntry) {
-    const scope = parseStoredChatOutboxScope("id" in entry ? entry.sourceScopeKey : entry.scopeKey);
-    const currentScope = this.host
-      ? resolveUiConversationIdentity(this.host, this.host.sessionKey)
-      : undefined;
-    // Old global/main buckets do not identify a conversation. Never use today's
-    // defaults to invent their source or show an inaccessible chat's raw key.
-    const source =
-      scope &&
-      !["global", "main"].includes(scope.sessionKey) &&
-      (!currentScope || storedChatOutboxScopeKey(scope) !== storedChatOutboxScopeKey(currentScope))
-        ? this.host?.sessionsResult?.sessions.find((row) => row.key === scope.sessionKey)
+  private renderEntry(readEntry: () => RecoveryEntry, busy: () => boolean) {
+    const view = createMemo(() => {
+      const entry = readEntry();
+      const scope = parseStoredChatOutboxScope(
+        "id" in entry ? entry.sourceScopeKey : entry.scopeKey,
+      );
+      const currentScope = this.host
+        ? resolveUiConversationIdentity(this.host, this.host.sessionKey)
         : undefined;
-    const updatedAt = "id" in entry ? entry.session.updatedAt : entry.updatedAt;
-    const queued = "id" in entry && Boolean(entry.session.queue?.length);
-    return html`<div
-      class="chat-outbox-recovery-row"
-      title=${
-        updatedAt > 0
-          ? t("chat.outboxRecoveryUpdated", {
-              time: formatDateTimeMs(updatedAt, { dateStyle: "medium", timeStyle: "short" }),
-            })
-          : ""
-      }
-    >
-      <span class="chat-outbox-recovery__kind"
-        >${t(queued ? "chat.outboxRecoveryQueued" : "chat.outboxRecoveryDraft")}</span
+      // Old global/main buckets do not identify a conversation. Never use today's
+      // defaults to invent their source or show an inaccessible chat's raw key.
+      const source =
+        scope &&
+        !["global", "main"].includes(scope.sessionKey) &&
+        (!currentScope ||
+          storedChatOutboxScopeKey(scope) !== storedChatOutboxScopeKey(currentScope))
+          ? this.host?.sessionsResult?.sessions.find((row) => row.key === scope.sessionKey)
+          : undefined;
+      const updatedAt = "id" in entry ? entry.session.updatedAt : entry.updatedAt;
+      const queued = "id" in entry && Boolean(entry.session.queue?.length);
+      return {
+        source,
+        updatedAt,
+        queued,
+        sourceLabel: source ? resolveSessionDisplayName(source.key, source) : "",
+      };
+    });
+    return (
+      <div
+        class="chat-outbox-recovery-row"
+        title={
+          view().updatedAt > 0
+            ? t("chat.outboxRecoveryUpdated", {
+                time: formatDateTimeMs(view().updatedAt, {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                }),
+              })
+            : ""
+        }
       >
-      <span class="chat-outbox-recovery__preview">${this.preview(entry)}</span>
-      ${
-        this.unconfirmed(entry)
-          ? html`<span
-              class="chat-outbox-recovery__warning"
-              title=${t("chat.outboxRecoveryUnconfirmed")}
-              >${t("chat.outboxRecoveryUnconfirmedLabel")}</span
-            >`
-          : nothing
-      }
-      ${
-        source
-          ? html`<span class="chat-outbox-recovery__source"
-              >${t("chat.outboxRecoverySource", { chat: resolveSessionDisplayName(source.key, source) })}</span
-            >`
-          : nothing
-      }
-      <div class="chat-outbox-recovery__actions">
-        ${(
-          [
-            ["chat.outboxRecoveryRestore", () => void this.changeRecovery(entry, "restore")],
-            ["chat.outboxRecoveryDelete", () => void this.changeRecovery(entry, "discard")],
-          ] as const
-        ).map(
-          ([label, action]) => html`
-            <button class="btn btn--sm" ?disabled=${this.busy || !this.owner()} @click=${action}>
-              ${t(label)}
-            </button>
-          `,
-        )}
+        <span class="chat-outbox-recovery__kind">
+          {t(view().queued ? "chat.outboxRecoveryQueued" : "chat.outboxRecoveryDraft")}
+        </span>
+        <span class="chat-outbox-recovery__preview">{this.preview(readEntry())}</span>
+        {this.unconfirmed(readEntry()) ? (
+          <span class="chat-outbox-recovery__warning" title={t("chat.outboxRecoveryUnconfirmed")}>
+            {t("chat.outboxRecoveryUnconfirmedLabel")}
+          </span>
+        ) : null}
+        {view().source ? (
+          <span class="chat-outbox-recovery__source">
+            {t("chat.outboxRecoverySource", {
+              chat: view().sourceLabel,
+            })}
+          </span>
+        ) : null}
+        <div class="chat-outbox-recovery__actions">
+          <button
+            class="btn btn--sm"
+            disabled={busy() || !this.owner()}
+            onClick={() => void this.changeRecovery(readEntry(), "restore")}
+          >
+            {t("chat.outboxRecoveryRestore")}
+          </button>
+          <button
+            class="btn btn--sm"
+            disabled={busy() || !this.owner()}
+            onClick={() => void this.changeRecovery(readEntry(), "discard")}
+          >
+            {t("chat.outboxRecoveryDelete")}
+          </button>
+        </div>
       </div>
-    </div>`;
+    );
   }
-  protected override render() {
-    const rows: RecoveryEntry[] = [...this.entries, ...this.drafts];
-    if (!rows.length && !this.error) {
-      return nothing;
-    }
-    return html`<div class="chat-outbox-recovery">
-      ${this.error ? html`<div class="chat-outbox-recovery__error" role="alert" title=${this.error}>${this.error}</div>` : nothing}
-      ${rows.map((entry) => this.renderEntry(entry))}
-    </div>`;
+  render(revision: () => number) {
+    const view = createMemo(() => {
+      revision();
+      return { rows: [...this.entries, ...this.drafts], error: this.error, busy: this.busy };
+    });
+    return (
+      <Show when={view().rows.length || view().error}>
+        <div class="chat-outbox-recovery">
+          <Show when={view().error}>
+            <div class="chat-outbox-recovery__error" role="alert" title={view().error}>
+              {view().error}
+            </div>
+          </Show>
+          <For
+            each={view().rows}
+            keyed={(entry) => ("id" in entry ? `outbox:${entry.id}` : `draft:${entry.scopeKey}`)}
+          >
+            {(entry) => <>{this.renderEntry(entry, () => view().busy)}</>}
+          </For>
+        </div>
+      </Show>
+    );
   }
 }
-customElements.define("openclaw-chat-outbox-recovery", ChatOutboxRecovery);
+
+export type ChatOutboxRecoveryElement = SolidBridgeElement<RecoveryProps>;
+export const ChatOutboxRecovery = defineSolidBridge<RecoveryProps>(
+  "openclaw-chat-outbox-recovery",
+  (props, element) => {
+    const [revision, setRevision] = createSignal(0);
+    const controller = new ChatOutboxRecoveryController(props, element, () =>
+      setRevision((value) => value + 1),
+    );
+    const unsubscribe = controller.subscribe();
+    createEffect(
+      () => ({ host: props.host, identity: props.identity, messages: props.messages }),
+      (_current, previous) => untrack(() => controller.update(previous)),
+    );
+    onCleanup(() => {
+      unsubscribe();
+      controller.disconnect();
+    });
+    return untrack(() => controller.render(revision));
+  },
+  {
+    properties: {
+      host: { default: undefined, attribute: false },
+      identity: { default: "" },
+      messages: { default: [], attribute: false },
+    },
+  },
+);

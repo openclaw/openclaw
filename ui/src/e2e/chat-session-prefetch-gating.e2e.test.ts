@@ -70,11 +70,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await page.locator(".chat-bubble", { hasText: "Main transcript" }).first().waitFor();
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       await page
         .locator(`openclaw-app-sidebar [data-session-key="${WARM_SESSION_KEY}"] a`)
         .first()
         .hover();
       await expect.poll(() => historyRequestCount(gateway, WARM_SESSION_KEY)).toBe(1);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       // A failed warm-up leaves the session eligible and arms the prefetcher's own
       // cooldown retry timer, which fires without any page update in between.
       // Not retryable: the Gateway client would otherwise re-issue the request itself.

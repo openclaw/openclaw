@@ -19,7 +19,10 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
-import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.worker.js";
+import {
+  recordUpdateRunMutationInWorker,
+  withUpdateRunWriteAdmission,
+} from "../infra/update-run-mutation.worker.js";
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
@@ -97,21 +100,18 @@ export function executeSharedStateCommand(
     command.type === "updateRuns.recordVerification" ||
     command.type === "updateRuns.recordDiagnostics"
   ) {
-    return recordUpdateRunMutationInWorker(
-      command,
-      stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
-      updateRunWriter,
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      recordUpdateRunMutationInWorker(command, stateOptions(), assertCurrent, updateRunWriter),
     );
   }
   if (command.type === "updateRuns.reconcile") {
-    return reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      reconcileUpdateRunCandidatesInWorker(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "updateRuns.reconcileInterrupted") {
-    return persistInterruptedUpdateObservation(command.input, stateOptions(), (stage) =>
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    return withUpdateRunWriteAdmission((assertCurrent) =>
+      persistInterruptedUpdateObservation(command.input, stateOptions(), assertCurrent),
     );
   }
   if (command.type === "claws.install-schema-versions") {

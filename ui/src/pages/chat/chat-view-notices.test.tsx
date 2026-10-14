@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
-import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -26,18 +27,16 @@ it.each([
   "renders worker runtime progress for %s at %s bytes",
   (phase, transferredBytes, title, body) => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderChatTopbarNotices({
-        workerRuntimeInstall: {
-          phase,
-          transferredBytes,
-          totalBytes: 100 * 1_024 * 1_024,
-          startedAtMs: 1,
-          updatedAtMs: 2,
-        },
-      }),
-      container,
-    );
+    const [props, setProps] = createSignal<Parameters<typeof renderChatTopbarNotices>[0]>({
+      workerRuntimeInstall: {
+        phase,
+        transferredBytes,
+        totalBytes: 100 * 1_024 * 1_024,
+        startedAtMs: 1,
+        updatedAtMs: 2,
+      },
+    });
+    mountSolid(() => <>{renderChatTopbarNotices(props())}</>, { container });
 
     const notice = container.querySelector(".chat-worker-runtime-install-notice");
     expect(notice?.getAttribute("role")).toBe("status");
@@ -45,7 +44,8 @@ it.each([
     expect(notice?.getAttribute("title")).toBe(body);
     expect(notice?.textContent).toContain(body);
 
-    render(renderChatTopbarNotices({}), container);
+    setProps({});
+    flush();
     expect(container.querySelector(".chat-worker-runtime-install-notice")).toBeNull();
   },
 );
@@ -53,14 +53,15 @@ it.each([
 it.each([true, false])("refreshes a failed conversation only while connected=%s", (connected) => {
   const onRefresh = vi.fn();
   const container = document.body.appendChild(document.createElement("div"));
-  render(
-    renderChatComposerNotices({
-      connected,
-      messages: [],
-      runError: { summary: "The conversation changed before your message could run." },
-      onRefresh,
-    }),
-    container,
+  mountSolid(
+    () =>
+      renderChatComposerNotices({
+        connected,
+        messages: [],
+        runError: { summary: "The conversation changed before your message could run." },
+        onRefresh,
+      }),
+    { container },
   );
   const refresh = Array.from(
     container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
@@ -85,48 +86,66 @@ it.each([
   "renders the %s provider notice above the composer as plain text",
   (state, role, copy) => {
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderChatComposerNotices({
-        messages: [],
-        providerPolicyNotice: {
-          runId: "run-1",
-          seq: 1,
-          state,
-          model: "original-model",
-          fallbackModel: "<img src=x onerror=alert(1)>",
-        },
-      }),
-      container,
-    );
+    const [props, setProps] = createSignal<Parameters<typeof renderChatComposerNotices>[0]>({
+      messages: [],
+      providerPolicyNotice: {
+        runId: "run-1",
+        seq: 1,
+        state,
+        model: "original-model",
+        fallbackModel: "<img src=x onerror=alert(1)>",
+      },
+    });
+    mountSolid(() => <>{renderChatComposerNotices(props())}</>, { container });
     const notice = container.querySelector(".chat-provider-policy-notice");
     expect(notice?.getAttribute("role")).toBe(role);
     expect(notice?.textContent).toContain(copy);
     expect(notice?.querySelector("img, button")).toBeNull();
 
-    render(renderChatComposerNotices({ messages: [] }), container);
+    setProps({ messages: [] });
+    flush();
     expect(container.querySelector(".chat-provider-policy-notice")).toBeNull();
   },
 );
+
+it("retains the provider notice across unrelated pane publications", () => {
+  const ComposerNotices = renderChatComposerNotices;
+  const providerPolicyNotice = { runId: "run-1", seq: 1, state: "buffering" as const };
+  const [props, publish] = createSignal<Parameters<typeof ComposerNotices>[0]>({
+    messages: [],
+    providerPolicyNotice,
+  });
+  const { container } = mountSolid(() => <ComposerNotices {...props()} />);
+  const notice = container.querySelector(".chat-provider-policy-notice");
+  expect(notice).not.toBeNull();
+  for (const messages of [[], [{ role: "assistant", content: "Updated history" }]]) {
+    publish({ messages, providerPolicyNotice });
+    flush();
+    expect(container.querySelector(".chat-provider-policy-notice")).toBe(notice);
+    expect(notice?.getAttribute("role")).toBe("status");
+  }
+});
 
 it("offers an explicit discard action with the full warning when unsaved starts block recovery", () => {
   const discardAndReload = vi.fn();
   const retry = vi.fn();
   const container = document.body.appendChild(document.createElement("div"));
 
-  render(
-    renderChatComposerNotices({
-      messages: [],
-      placementStartup: {
-        sessionKey: "agent:main:unsaved-start",
-        phase: "failed",
-        startedAt: 1,
-        retryable: false,
-        error: t("newSession.placementReloadBlocked"),
-        discardAndReload,
-      },
-      onRetrySessionPlacementStartup: retry,
-    }),
-    container,
+  mountSolid(
+    () =>
+      renderChatComposerNotices({
+        messages: [],
+        placementStartup: {
+          sessionKey: "agent:main:unsaved-start",
+          phase: "failed",
+          startedAt: 1,
+          retryable: false,
+          error: t("newSession.placementReloadBlocked"),
+          discardAndReload,
+        },
+        onRetrySessionPlacementStartup: retry,
+      }),
+    { container },
   );
 
   const alert = container.querySelector('[role="alert"]');
@@ -152,15 +171,16 @@ it.each([true, false])(
     const diagnostic =
       "Temporarily busy. Check status before trying again.\nState contention: session store; attempts exhausted.\n<img src=x onerror=alert(1)>";
     const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderChatComposerNotices({
-        connected,
-        messages: [],
-        runError: { kind: "state_contention", summary: diagnostic },
-        onRefresh,
-        onRetrySessionPlacementStartup,
-      }),
-      container,
+    mountSolid(
+      () =>
+        renderChatComposerNotices({
+          connected,
+          messages: [],
+          runError: { kind: "state_contention", summary: diagnostic },
+          onRefresh,
+          onRetrySessionPlacementStartup,
+        }),
+      { container },
     );
     const notice = container.querySelector(".chat-error");
     expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
@@ -179,5 +199,48 @@ it.each([true, false])(
     check?.click();
     expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
     expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["run", "placement"] as const)(
+  "keeps an expanded diagnostic and its focus across owner publications (%s)",
+  (kind) => {
+    const ComposerNotices = renderChatComposerNotices;
+    const diagnostic = "Synthetic failure\n  at workspace/session.ts:42";
+    const initial: Parameters<typeof renderChatComposerNotices>[0] = {
+      messages: [],
+      runError: kind === "run" ? { summary: diagnostic } : undefined,
+      placementStartup:
+        kind === "placement"
+          ? {
+              sessionKey: "agent:main:failed-start",
+              phase: "failed",
+              startedAt: 1,
+              retryable: false,
+              error: diagnostic,
+            }
+          : undefined,
+    };
+    const [props, publish] = createSignal(initial);
+    const { container } = mountSolid(() => <ComposerNotices {...props()} />);
+    const details = container.querySelector("details")!;
+    const summary = details.querySelector("summary")!;
+    details.open = true;
+    summary.focus();
+    for (const messages of [[], [{ role: "assistant", content: "Updated history" }]]) {
+      publish({
+        ...initial,
+        messages,
+        runError: initial.runError && { ...initial.runError },
+        placementStartup: initial.placementStartup && { ...initial.placementStartup },
+      });
+      flush();
+      expect(container.querySelector("details")).toBe(details);
+      expect(details.open).toBe(true);
+      expect(document.activeElement).toBe(summary);
+      expect(details.querySelector("pre")?.textContent).toBe(
+        kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
+      );
+    }
   },
 );

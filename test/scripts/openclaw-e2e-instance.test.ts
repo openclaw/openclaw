@@ -449,6 +449,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
   });
 
   it.for([
+    ["accepts the current listener marker", "http server listening", true, "strict", 0],
     ["accepts the March listening marker", "listening on", true, "legacy-ready-log-ok", 0],
     ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 1],
     ["rejects the March marker in strict mode", "listening on", true, "strict", 1],
