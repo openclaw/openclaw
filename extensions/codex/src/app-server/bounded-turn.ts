@@ -243,6 +243,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       client,
       selection: params.model,
       requiredModalities: params.requiredModalities,
+      requestTimeoutMs: appServer.requestTimeoutMs,
       ...requestOptions,
     });
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
@@ -554,6 +555,7 @@ async function resolveCodexBoundedTurnModel(params: {
   client: CodexAppServerClient;
   selection: CodexBoundedTurnModelSelection;
   requiredModalities: string[];
+  requestTimeoutMs: number;
   timeoutMs: number;
   signal: AbortSignal;
   assertCurrent?: () => void;
@@ -562,7 +564,7 @@ async function resolveCodexBoundedTurnModel(params: {
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     {
-      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      timeoutMs: Math.min(params.timeoutMs, params.requestTimeoutMs),
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     },
