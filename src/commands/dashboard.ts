@@ -139,6 +139,9 @@ export async function dashboardCommand(
     yes: options.yes,
   });
   if (!readiness.ready) {
+    if (!readiness.declined) {
+      runtime.exit(1);
+    }
     return;
   }
 
@@ -153,6 +156,7 @@ export async function dashboardCommand(
       allowRecovery: false,
     });
     if (!finalReadiness.ready) {
+      runtime.exit(1);
       return;
     }
   }
@@ -161,6 +165,7 @@ export async function dashboardCommand(
       "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
     );
     runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
+    runtime.exit(1);
     return;
   }
   const document = await waitForControlUiDocument({
@@ -182,6 +187,7 @@ export async function dashboardCommand(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
     );
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
+    runtime.exit(1);
     return;
   }
   const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;

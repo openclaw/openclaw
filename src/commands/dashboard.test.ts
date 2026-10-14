@@ -174,6 +174,46 @@ describe("dashboardCommand bind selection", () => {
     },
   );
 
+  it.each([
+    { declined: undefined, exitCode: 1 },
+    { declined: true, exitCode: undefined },
+  ])(
+    "reports readiness failure unless recovery was explicitly declined ($declined)",
+    async ({ declined, exitCode }) => {
+      mockSnapshot();
+      mocks.ensureDashboardGatewayReady.mockResolvedValue({
+        ready: false,
+        status: {},
+        reason: "Gateway is not running.",
+        recoverable: true,
+        declined,
+      });
+
+      await dashboardCommand(runtime, { noOpen: true });
+
+      if (exitCode === undefined) {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+      }
+      expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+      expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+    },
+  );
+
+  it("reports failure when browser pairing credentials cannot be issued", async () => {
+    mockSnapshot();
+    mocks.issueDeviceBootstrapToken.mockRejectedValue(new Error("pairing unavailable"));
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("pairing unavailable"));
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
+  });
+
   it("refuses an authenticated loopback URL owned by a different process", async () => {
     mockSnapshot({ bind: "custom", customBindHost: "10.0.0.5" });
     mockSpecificDashboardLinks({ bind: "custom", host: "10.0.0.5" });
@@ -183,6 +223,7 @@ describe("dashboardCommand bind selection", () => {
 
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("refusing to copy or open an authenticated URL"),
     );
@@ -278,6 +319,6 @@ describe("dashboardCommand bind selection", () => {
     expect(mocks.copyToClipboard).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Dashboard URL:"));
-    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

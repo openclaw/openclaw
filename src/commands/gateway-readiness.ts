@@ -120,12 +120,17 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
   const prompt = shouldInstall
     ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
     : "The background Gateway service is not running. Start it to open the dashboard?";
-  const approved =
-    options.yes ||
-    ((options.interactive ?? process.stdin.isTTY) && (await promptYesNo(prompt, true)));
+  const interactive = options.interactive ?? process.stdin.isTTY;
+  const approved = options.yes || (interactive && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(options.runtime, reason);
-    return { ready: false as const, status: initialStatus, reason, recoverable: true };
+    return {
+      ready: false as const,
+      status: initialStatus,
+      reason,
+      recoverable: true,
+      declined: interactive === true,
+    };
   }
 
   if (shouldInstall) {
