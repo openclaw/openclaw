@@ -117,7 +117,7 @@ export function SidebarAgentRoster(props: RosterProps) {
   const parkedSections = createParkedProjection(() => props.sections, presented);
   const empty = createParkedProjection(() => props.empty, presented);
   const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
-  const settingsScope = () => gatewaySnapshot().connection.gatewayUrl;
+  const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(
     new Set(
       untrack(() => props.host.sidebarSnapshot?.collapsedAgentIds) ??
