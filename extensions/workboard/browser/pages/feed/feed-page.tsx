@@ -11,31 +11,21 @@ import { feedGreeting, type FeedItem } from "../../lib/feed/feed-view.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { WorkboardComment, WorkboardFeedAction } from "../../lib/workboard/types.ts";
 import { liveInputValue } from "../workboard/view-input-value.ts";
+import { FeedHandledSection, FeedSnoozedSection } from "./feed-lists.tsx";
 import { FeedMarkdown } from "./feed-markdown.tsx";
+import { FeedSnoozePanel } from "./feed-snooze.tsx";
+import { formatTime, formatWakeTime } from "./feed-time.ts";
 
 /** How long a decided card shows its checked state before it folds into the handled list. */
 const FEED_CONFIRM_MS = 900;
 const FEED_COLLAPSE_MS = 320;
 const FEED_THREAD_PREVIEW = 2;
-const FEED_HANDLED_PREVIEW = 5;
 const FEED_BODY_FOLD_CHARS = 280;
 const ACK = "__ack";
 const COMMENT = "__comment";
 
 type Phase = "idle" | "pending" | "confirmed" | "collapsing";
 type Held = ReadonlyMap<string, { item: FeedItem; index: number }>;
-
-function formatTime(at: number, now: number): string {
-  const date = new Date(at);
-  if (date.toDateString() === new Date(now).toDateString()) {
-    return date.toLocaleTimeString(workboardLocale(), { hour: "numeric", minute: "2-digit" });
-  }
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  return date.toDateString() === yesterday.toDateString()
-    ? t("feed.yesterday")
-    : date.toLocaleDateString(workboardLocale(), { month: "short", day: "numeric" });
-}
 
 function agentName(host: ControlUiHost, agentId: string | undefined): string {
   const agent = agentId ? host.agents.rows.find((row) => row.id === agentId) : undefined;
@@ -77,6 +67,7 @@ function FeedCard(props: CardProps) {
   const [draftText, setDraftText] = createSignal("");
   const [commentOpen, setCommentOpen] = createSignal(false);
   const [commentText, setCommentText] = createSignal("");
+  const [snoozeOpen, setSnoozeOpen] = createSignal(false);
   const [bodyExpanded, setBodyExpanded] = createSignal(false);
   const [threadExpanded, setThreadExpanded] = createSignal(false);
   const [error, setError] = createSignal("");
@@ -176,6 +167,19 @@ function FeedCard(props: CardProps) {
       );
     }
   };
+  // Snoozing is silent and leaves the card's state alone; the store drops it from the open list.
+  const snooze = async (until: number) => {
+    setError("");
+    try {
+      await props.feed.snooze(props.item.card.id, until);
+      props.notice(
+        t("feed.snoozedUntil", { time: formatWakeTime(until, Date.now()) }),
+        () => void props.feed.snooze(props.item.card.id, null),
+      );
+    } catch (failure) {
+      setError(formatUiError(failure));
+    }
+  };
   const saveDraft = async () => {
     setError("");
     try {
@@ -218,8 +222,10 @@ function FeedCard(props: CardProps) {
           {decided() ? icons.check : icons[props.item.icon]}
         </span>
         <span class="wb-feed-card__tag">{props.item.tag || t("feed.needsYou")}</span>
-        <Show when={props.item.unread}>
-          <span class="wb-feed-card__unread">{t("feed.newReply")}</span>
+        <Show when={props.item.unread || props.item.woke}>
+          <span class="wb-feed-card__unread">
+            {props.item.unread ? t("feed.newReply") : t("feed.reminder")}
+          </span>
         </Show>
         <Show when={props.item.card.priority === "urgent"}>
           <span class="wb-feed-card__urgent">{t("feed.urgent")}</span>
@@ -462,6 +468,14 @@ function FeedCard(props: CardProps) {
           </div>
         </div>
       </Show>
+      <Show when={snoozeOpen()}>
+        <FeedSnoozePanel
+          now={props.now}
+          locked={locked()}
+          onPick={(until) => void snooze(until)}
+          onClose={() => setSnoozeOpen(false)}
+        />
+      </Show>
       <Show when={error()}>
         <p class="wb-feed-card__error" role="alert">
           {error()}
@@ -512,6 +526,17 @@ function FeedCard(props: CardProps) {
           </button>
           <button
             type="button"
+            class={["btn btn--ghost wb-feed-tool", { active: snoozeOpen() }]}
+            aria-label={t("feed.snoozeHint")}
+            aria-expanded={snoozeOpen() ? "true" : "false"}
+            title={t("feed.snoozeHint")}
+            disabled={locked()}
+            onClick={() => setSnoozeOpen(!snoozeOpen())}
+          >
+            {icons.clock}
+          </button>
+          <button
+            type="button"
             class="btn btn--ghost wb-feed-tool"
             aria-label={t("feed.doneHint")}
             title={t("feed.doneHint")}
@@ -533,7 +558,6 @@ function FeedCard(props: CardProps) {
 
 function FeedPage(props: { feed: FeedStore; host: ControlUiHost; revision: number }) {
   const [held, setHeld] = createSignal<Held>(new Map());
-  const [handledExpanded, setHandledExpanded] = createSignal(false);
   const [notice, setNotice] = createSignal<{ message: string; key: number; undo?: () => void }>({
     message: "",
     key: 0,
@@ -624,54 +648,22 @@ function FeedPage(props: { feed: FeedStore; host: ControlUiHost; revision: numbe
             <p>{t("feed.allCaughtUp")}</p>
           </div>
         </Show>
-        <Show when={handled().length}>
-          <section class="wb-feed-handled" aria-label={t("feed.handledToday")}>
-            <h2 class="wb-feed-handled__title">
-              {t("feed.handledToday")}
-              <span>{handled().length}</span>
-            </h2>
-            <ul class="wb-feed-handled__list">
-              <For
-                each={handledExpanded() ? handled() : handled().slice(0, FEED_HANDLED_PREVIEW)}
-                keyed={(item) => item.card.id}
-              >
-                {(item) => (
-                  <li class="wb-feed-handled__row">
-                    <span class="wb-feed-handled__check" aria-hidden="true">
-                      {icons.check}
-                    </span>
-                    <span class="wb-feed-handled__label">{item().doneLabel}</span>
-                    <span class="wb-feed-handled__time">
-                      {formatTime(item().handledAt ?? view().now, view().now)}
-                    </span>
-                    <Show when={item().card.status !== "done"}>
-                      <button
-                        type="button"
-                        class="btn btn--ghost wb-feed-tool wb-feed-handled__reopen"
-                        aria-label={t("feed.reopen")}
-                        title={t("feed.reopen")}
-                        onClick={() => void props.feed.ack(item().card.id, false)}
-                      >
-                        {icons.undo}
-                      </button>
-                    </Show>
-                  </li>
-                )}
-              </For>
-            </ul>
-            <Show when={handled().length > FEED_HANDLED_PREVIEW}>
-              <button
-                type="button"
-                class="wb-feed-link-button"
-                onClick={() => setHandledExpanded(!handledExpanded())}
-              >
-                {handledExpanded()
-                  ? t("feed.less")
-                  : t("feed.showAll", { count: String(handled().length) })}
-              </button>
-            </Show>
-          </section>
-        </Show>
+        <FeedSnoozedSection
+          items={view().snoozed}
+          now={view().now}
+          onUnsnooze={(item) =>
+            void props.feed
+              .snooze(item.card.id, null)
+              .catch((failure: unknown) =>
+                setNotice((current) => ({ message: formatUiError(failure), key: current.key + 1 })),
+              )
+          }
+        />
+        <FeedHandledSection
+          items={handled()}
+          now={view().now}
+          onReopen={(item) => void props.feed.ack(item.card.id, false)}
+        />
       </div>
       <WorkboardToast
         message={notice().message}

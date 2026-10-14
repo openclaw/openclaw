@@ -779,14 +779,20 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     };
     return await this.updateMetadata(id, (existing) => {
       assertCanMutateClaimedCard(existing, scope);
-      const { ackedAction: _ackedAction, ...feed } = existing.metadata?.feed ?? {};
+      const { ackedAction, snoozedUntil, ...feed } = existing.metadata?.feed ?? {};
+      // An owner reply settles the card; an agent reply wakes a snoozed one early.
+      const wakes = input.author?.kind === "agent" && snoozedUntil !== undefined;
       return {
         ...existing.metadata,
         // A backdated comment still sorts before any reply written after its timestamp.
         comments: [...(existing.metadata?.comments ?? []), comment]
           .toSorted((a, b) => a.createdAt - b.createdAt)
           .slice(-MAX_CARD_COMMENTS),
-        ...(input.ackFeed ? { feed: { ...feed, ackedAt: now } } : {}),
+        ...(input.ackFeed
+          ? { feed: { ...feed, ackedAt: now } }
+          : wakes
+            ? { feed: { ...feed, ...(ackedAction ? { ackedAction } : {}) } }
+            : {}),
       };
     });
   }
@@ -814,6 +820,17 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     });
   }
 
+  /** Snooze the card in the owner's Feed until `until`, or wake it now with `null`. */
+  async snoozeFeed(id: string, until: number | null): Promise<WorkboardCard> {
+    return await this.updateMetadata(id, (existing) => {
+      const { snoozedUntil: _snoozedUntil, ...feed } = existing.metadata?.feed ?? {};
+      return {
+        ...existing.metadata,
+        feed: { ...feed, ...(until === null ? {} : { snoozedUntil: until }) },
+      };
+    });
+  }
+
   /** Record or undo the owner's Feed ack. Acking never changes the card's status. */
   async ackFeed(
     id: string,
@@ -824,6 +841,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       const {
         ackedAt: _ackedAt,
         ackedAction: _ackedAction,
+        snoozedUntil,
         ...feed
       } = existing.metadata?.feed ?? {};
       return {
@@ -831,7 +849,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         feed: {
           ...feed,
           ...(input.draft !== undefined ? { draft: input.draft, draftEdited: true } : {}),
-          ...(input.acked ? { ackedAt: now } : {}),
+          // An ack settles the card, so it also ends a snooze.
+          ...(input.acked ? { ackedAt: now } : snoozedUntil ? { snoozedUntil } : {}),
           ...(input.acked && input.actionId ? { ackedAction: input.actionId } : {}),
         },
       };

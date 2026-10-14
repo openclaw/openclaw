@@ -8,6 +8,8 @@ type FeedListResult = { cards?: WorkboardCard[]; ownerName?: string };
 type FeedCardResult = { card?: WorkboardCard };
 
 const FEED_REFRESH_DEBOUNCE_MS = 250;
+// setTimeout overflows past ~24.8 days; a longer snooze just re-arms the timer when it fires.
+const FEED_MAX_WAKE_DELAY_MS = 24 * 60 * 60 * 1000;
 
 export type FeedStore = {
   readonly cards: readonly WorkboardCard[];
@@ -22,6 +24,8 @@ export type FeedStore = {
   ack: (id: string, acked: boolean) => Promise<void>;
   comment: (id: string, body: string, draft?: string) => Promise<void>;
   saveDraft: (id: string, draft: string) => Promise<void>;
+  /** Hide the card until `until` (epoch ms), or bring it back now with `null`. */
+  snooze: (id: string, until: number | null) => Promise<void>;
   dispose: () => void;
 };
 
@@ -35,14 +39,30 @@ export function createFeedStore(host: ControlUiHost): FeedStore {
   let connected = false;
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<void> | null = null;
   let rerun = false;
   const listeners = new Set<() => void>();
   const notify = () => {
+    scheduleWake();
     for (const listener of listeners) {
       listener();
     }
   };
+  // Snoozes end on the clock, not on a Gateway event: republish when the next one runs out
+  // so the page and the nav badge show the card again.
+  function scheduleWake() {
+    if (wakeTimer) {
+      clearTimeout(wakeTimer);
+      wakeTimer = undefined;
+    }
+    const now = Date.now();
+    const wakeAt = buildFeedView(cards, now).nextWakeAt;
+    if (disposed || wakeAt === undefined) {
+      return;
+    }
+    wakeTimer = setTimeout(notify, Math.min(wakeAt - now, FEED_MAX_WAKE_DELAY_MS));
+  }
 
   const load = async (): Promise<void> => {
     if (disposed || !host.connection.connected) {
@@ -153,10 +173,14 @@ export function createFeedStore(host: ControlUiHost): FeedStore {
         idempotencyKey: `workboard-feed:${id}:comment:${Date.now()}`,
       }),
     saveDraft: (id, draft) => mutate("workboard.feed.update", { id, draft }),
+    snooze: (id, until) => mutate("workboard.feed.snooze", { id, until }),
     dispose() {
       disposed = true;
       if (timer) {
         clearTimeout(timer);
+      }
+      if (wakeTimer) {
+        clearTimeout(wakeTimer);
       }
       unsubscribeHost();
       unsubscribeEvents();

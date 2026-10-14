@@ -686,8 +686,19 @@ owner saves travels with their next click or comment, until the agent sets a
 new draft. **Done** only marks the card handled; it does not move the card to
 `done`. When the agent answers with `workboard_comment`, the
 card returns to the top of the Feed as a new reply. The undo button on a handled
-row puts the card back. Scripts can use the Gateway methods `workboard.feed.list`,
-`workboard.feed.act`, `workboard.feed.comment`, `workboard.feed.ack`, and
+row puts the card back.
+
+**Snooze** (the clock button) hides an open card until a chosen time: in 1 hour,
+in 3 hours, tomorrow at 9:00, next Monday at 9:00, or a picked date and time,
+in the viewer's local time. Snoozing tells no agent and does not mark the card
+handled. Snoozed cards leave the open count and wait under **Snoozed** with
+their wake time and an **Unsnooze** button. When the time passes, the card
+comes back at the top as a reminder. An agent reply with `workboard_comment`, or
+`workboard_feed` with `reopen: true`, wakes it early.
+
+Scripts can use the Gateway methods `workboard.feed.list`, `workboard.feed.act`,
+`workboard.feed.comment`, `workboard.feed.ack`, `workboard.feed.snooze` (`until`
+in epoch milliseconds, at most a year out, or `null` to unsnooze), and
 `workboard.feed.update`.
 
 ### Session-board widgets

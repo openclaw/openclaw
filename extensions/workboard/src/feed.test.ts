@@ -299,4 +299,43 @@ describe("workboard feed", () => {
       (gateway.request.mock.calls.at(-1) as unknown as [string, Record<string, string>])[1].message,
     ).not.toContain("edited the draft");
   });
+
+  it("snoozes silently, and an agent reply, reopen or owner ack wakes the card", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      const { store, gateway, call } = setup();
+      const card = await store.create({ title: "Decide", agentId: "email", boardId: "owner" });
+      const snooze = (until: unknown) => call("workboard.feed.snooze", { id: card.id, until });
+      const snoozedUntil = async () => (await store.get(card.id))?.metadata?.feed?.snoozedUntil;
+      await expect(snooze(Date.now())).rejects.toThrow("in the future");
+      await expect(snooze(Date.now() + 400 * 24 * 60 * 60 * 1000)).rejects.toThrow(
+        "at most a year",
+      );
+      await expect(snooze("soon")).rejects.toThrow("epoch milliseconds");
+
+      const until = Date.now() + 60 * 60 * 1000;
+      await snooze(until);
+      expect(await snoozedUntil()).toBe(until);
+      expect((await store.get(card.id))?.metadata?.feed?.ackedAt).toBeUndefined();
+      expect(gateway.request).not.toHaveBeenCalled();
+      await snooze(null);
+      expect(await snoozedUntil()).toBeUndefined();
+
+      const tool = toolsFor(store, "email");
+      await snooze(until);
+      await tool("workboard_comment").execute("call-6", { id: card.id, body: "Dana replied." });
+      expect(await snoozedUntil()).toBeUndefined();
+      await snooze(until);
+      await tool("workboard_feed").execute("call-7", { id: card.id, snoozedUntil: 1 } as never);
+      expect(await snoozedUntil()).toBe(until);
+      await tool("workboard_feed").execute("call-8", { id: card.id, reopen: true });
+      expect(await snoozedUntil()).toBeUndefined();
+      await snooze(until);
+      await call("workboard.feed.ack", { id: card.id });
+      expect(await snoozedUntil()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

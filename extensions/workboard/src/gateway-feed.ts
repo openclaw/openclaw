@@ -41,6 +41,26 @@ function readOptionalText(params: Record<string, unknown>, key: string): string 
   return value;
 }
 
+/** Snoozes reach at most a year out; past times are refused so a card never hides by mistake. */
+export const FEED_MAX_SNOOZE_MS = 366 * 24 * 60 * 60 * 1000;
+
+function readSnoozeUntil(params: Record<string, unknown>, now: number): number | null {
+  const until = params.until;
+  if (until === null) {
+    return null;
+  }
+  if (typeof until !== "number" || !Number.isFinite(until)) {
+    throw new Error("until must be a time in epoch milliseconds, or null to unsnooze.");
+  }
+  if (until <= now) {
+    throw new Error("Pick a snooze time in the future.");
+  }
+  if (until - now > FEED_MAX_SNOOZE_MS) {
+    throw new Error("Snooze for at most a year.");
+  }
+  return Math.trunc(until);
+}
+
 export function registerWorkboardFeedGatewayMethods(params: {
   api: OpenClawPluginApi;
   store: WorkboardStore;
@@ -76,6 +96,11 @@ export function registerWorkboardFeedGatewayMethods(params: {
   register("workboard.feed.ack", "operator.write", async ({ params: input }) => ({
     card: redactClaimToken(await store.ackFeed(readId(input), { acked: input.acked !== false })),
   }));
+  register("workboard.feed.snooze", "operator.write", async ({ params: input }) => {
+    const until = readSnoozeUntil(input, Date.now());
+    // Snoozing is silent: it only hides the card from the owner, no agent is told.
+    return { card: redactClaimToken(await store.snoozeFeed(readId(input), until)) };
+  });
   register("workboard.feed.act", "operator.write", async ({ params: input }) => {
     const card = await requireCard(readId(input));
     const action = findFeedAction(card, input.actionId);

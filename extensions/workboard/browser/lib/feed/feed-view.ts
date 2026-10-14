@@ -32,6 +32,10 @@ export type FeedItem = {
   comments: WorkboardComment[];
   /** The newest comment is an agent reply the owner has not answered or acked. */
   unread: boolean;
+  /** Snoozed until this future time; the card waits in the snoozed list. */
+  snoozedUntil?: number;
+  /** The snooze ran out and the owner has not touched the card since. */
+  woke: boolean;
   open: boolean;
   handledAt?: number;
   doneLabel: string;
@@ -40,8 +44,13 @@ export type FeedItem = {
 
 export type FeedView = {
   open: FeedItem[];
+  snoozed: FeedItem[];
   handled: FeedItem[];
+  /** The next time a snoozed card comes back, so the view can refresh then. */
+  nextWakeAt?: number;
 };
+
+export type FeedSnoozeOption = { id: "hour" | "hours3" | "tomorrow" | "nextWeek"; until: number };
 
 const PRIORITY_RANK: Record<WorkboardPriority, number> = {
   urgent: 0,
@@ -150,7 +159,7 @@ function handledLabel(params: {
   return repliedOnAck ? `${t("feed.replied")}: ${title}` : title;
 }
 
-export function toFeedItem(card: WorkboardCard): FeedItem {
+export function toFeedItem(card: WorkboardCard, now = Date.now()): FeedItem {
   const feed = card.metadata?.feed ?? {};
   const comments = card.metadata?.comments ?? [];
   const split = splitLaneTitle(card.title);
@@ -161,7 +170,11 @@ export function toFeedItem(card: WorkboardCard): FeedItem {
   const ownerTouchAt = latestOwnerTouch(feed, comments);
   const unread = agentReplyAt > ownerTouchAt;
   const done = card.status === "done";
-  const open = !done && (!feed.ackedAt || unread);
+  const snoozed = !done && feed.snoozedUntil !== undefined && feed.snoozedUntil > now;
+  // The server clears the snooze on any owner decision or agent reply, so a stored past
+  // snooze means the reminder fired and still waits for the owner.
+  const woke = !done && feed.snoozedUntil !== undefined && !snoozed;
+  const open = !done && !snoozed && (!feed.ackedAt || unread || woke);
   const action = feed.actions?.find((entry) => entry.id === feed.ackedAction);
   const handledAt = done ? (card.completedAt ?? card.updatedAt) : feed.ackedAt;
   return {
@@ -175,16 +188,19 @@ export function toFeedItem(card: WorkboardCard): FeedItem {
     actions: feed.actions ?? [],
     comments,
     unread,
+    ...(snoozed ? { snoozedUntil: feed.snoozedUntil } : {}),
+    woke,
     open,
     ...(handledAt ? { handledAt } : {}),
     doneLabel: handledLabel({ feed, action, done, title: split.title, comments }),
-    sortAt: Math.max(card.createdAt, agentReplyAt),
+    sortAt: Math.max(card.createdAt, agentReplyAt, woke ? (feed.snoozedUntil ?? 0) : 0),
   };
 }
 
 function compareOpen(left: FeedItem, right: FeedItem): number {
-  if (left.unread !== right.unread) {
-    return left.unread ? -1 : 1;
+  const leftNew = left.unread || left.woke;
+  if (leftNew !== (right.unread || right.woke)) {
+    return leftNew ? -1 : 1;
   }
   const rank = PRIORITY_RANK[left.card.priority] - PRIORITY_RANK[right.card.priority];
   return rank !== 0 ? rank : right.sortAt - left.sortAt;
@@ -196,14 +212,22 @@ function startOfDay(now: number): number {
   return date.getTime();
 }
 
-/** Open cards first (unread replies, then priority, then newest), then what was handled today. */
+/**
+ * Open cards first (unread replies and ended snoozes, then priority, then newest), then the
+ * snoozed cards by wake time, then what was handled today.
+ */
 export function buildFeedView(cards: readonly WorkboardCard[], now = Date.now()): FeedView {
-  const items = cards.map(toFeedItem);
+  const items = cards.map((card) => toFeedItem(card, now));
   const today = startOfDay(now);
+  const snoozed = items
+    .filter((item) => item.snoozedUntil !== undefined)
+    .toSorted((left, right) => (left.snoozedUntil ?? 0) - (right.snoozedUntil ?? 0));
   return {
     open: items.filter((item) => item.open).toSorted(compareOpen),
+    snoozed,
+    ...(snoozed[0]?.snoozedUntil ? { nextWakeAt: snoozed[0].snoozedUntil } : {}),
     handled: items
-      .filter((item) => !item.open && (item.handledAt ?? 0) >= today)
+      .filter((item) => !item.open && !item.snoozedUntil && (item.handledAt ?? 0) >= today)
       .toSorted((left, right) => (right.handledAt ?? 0) - (left.handledAt ?? 0)),
   };
 }
@@ -211,4 +235,23 @@ export function buildFeedView(cards: readonly WorkboardCard[], now = Date.now())
 export function feedGreeting(now = Date.now()): "morning" | "afternoon" | "evening" {
   const hour = new Date(now).getHours();
   return hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+}
+
+function atNineOn(now: number, addDays: number): number {
+  const date = new Date(now);
+  date.setDate(date.getDate() + addDays);
+  date.setHours(9, 0, 0, 0);
+  return date.getTime();
+}
+
+/** Snooze choices in the viewer's local time: 1 hour, 3 hours, tomorrow 9:00, next Monday 9:00. */
+export function feedSnoozeOptions(now = Date.now()): FeedSnoozeOption[] {
+  const hour = 60 * 60 * 1000;
+  const daysToMonday = (8 - new Date(now).getDay()) % 7 || 7;
+  return [
+    { id: "hour", until: now + hour },
+    { id: "hours3", until: now + 3 * hour },
+    { id: "tomorrow", until: atNineOn(now, 1) },
+    { id: "nextWeek", until: atNineOn(now, daysToMonday) },
+  ];
 }

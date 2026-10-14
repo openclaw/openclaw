@@ -191,6 +191,11 @@ export type WorkboardFeed = {
   ackedAt?: number;
   /** Action id the owner clicked when acking; absent for a plain ack or comment. */
   ackedAction?: string;
+  /**
+   * The owner snoozed the card until this time (epoch ms). It leaves the open list until then.
+   * Any owner decision or agent reply clears it.
+   */
+  snoozedUntil?: number;
 };
 
 export type WorkboardLink = {

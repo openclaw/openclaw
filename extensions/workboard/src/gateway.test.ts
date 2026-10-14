@@ -282,6 +282,7 @@ describe("workboard gateway methods", () => {
       "workboard.feed.list",
       "workboard.feed.update",
       "workboard.feed.ack",
+      "workboard.feed.snooze",
       "workboard.feed.act",
       "workboard.feed.comment",
       "workboard.notifications.subscribe",

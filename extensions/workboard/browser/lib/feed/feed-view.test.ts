@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkboardCard } from "../workboard/types.ts";
-import { buildFeedView, toFeedItem } from "./feed-view.ts";
+import { buildFeedView, feedSnoozeOptions, toFeedItem } from "./feed-view.ts";
 
 const NOW = new Date(2026, 9, 13, 15, 0, 0).getTime();
 const HOUR = 60 * 60 * 1000;
@@ -140,5 +140,46 @@ describe("feed view", () => {
       }),
     );
     expect(shared.doneLabel).toBe("Shared the Q3 summary");
+  });
+
+  it("hides a snoozed card until it wakes, then puts it back on top", () => {
+    const cards = [
+      card({ id: "urgent", priority: "urgent", createdAt: NOW - HOUR }),
+      card({ id: "snoozed", metadata: { feed: { snoozedUntil: NOW + HOUR } } }),
+      card({
+        id: "snoozed-done",
+        status: "done",
+        metadata: { feed: { snoozedUntil: NOW + HOUR } },
+      }),
+    ];
+    const before = buildFeedView(cards, NOW);
+    expect(before.open.map((item) => item.card.id)).toEqual(["urgent"]);
+    expect(before.snoozed.map((item) => item.card.id)).toEqual(["snoozed"]);
+    // A finished card goes to handled even if it was snoozed.
+    expect(before.handled.map((item) => item.card.id)).toEqual(["snoozed-done"]);
+    expect(before.nextWakeAt).toBe(NOW + HOUR);
+
+    const after = buildFeedView(cards, NOW + HOUR);
+    expect(after.open.map((item) => item.card.id)).toEqual(["snoozed", "urgent"]);
+    expect(after.open[0]).toMatchObject({ woke: true, sortAt: NOW + HOUR });
+    expect(after.snoozed).toEqual([]);
+    expect(after.nextWakeAt).toBeUndefined();
+  });
+
+  it("offers snooze times in local time: 1h, 3h, tomorrow 9:00, next Monday 9:00", () => {
+    // NOW is Tuesday 13 October 2026, 15:00 local.
+    const until = Object.fromEntries(
+      feedSnoozeOptions(NOW).map((option) => [option.id, option.until]),
+    );
+    expect(until).toEqual({
+      hour: NOW + HOUR,
+      hours3: NOW + 3 * HOUR,
+      tomorrow: new Date(2026, 9, 14, 9, 0, 0).getTime(),
+      nextWeek: new Date(2026, 9, 19, 9, 0, 0).getTime(),
+    });
+    const monday = new Date(2026, 9, 19, 8, 0, 0).getTime();
+    expect(feedSnoozeOptions(monday).find((option) => option.id === "nextWeek")?.until).toBe(
+      new Date(2026, 9, 26, 9, 0, 0).getTime(),
+    );
   });
 });

@@ -656,6 +656,122 @@
   opacity: 1;
 }
 
+.wb-feed-snooze {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated, var(--card));
+  animation: wb-feed-fade-in 180ms ease;
+}
+
+.wb-feed-snooze__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wb-feed-snooze__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+}
+
+.wb-feed-snooze__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text-strong);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.wb-feed-snooze__option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.wb-feed-snooze__option:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wb-feed-snooze__when {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 500;
+}
+
+.wb-feed-snooze__custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wb-feed-snooze__input {
+  flex: 1 1 180px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  color-scheme: light dark;
+}
+
+.wb-feed-snoozed__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: var(--cursor-action);
+}
+
+.wb-feed-snoozed__toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.wb-feed-snoozed__toggle span {
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-feed-snoozed__icon {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted);
+}
+
+.wb-feed-snoozed__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .wb-feed-card__actions .btn {
   min-height: 32px;
   padding-block: 0;
