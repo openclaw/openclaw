@@ -312,10 +312,12 @@ describe("Doctor btrfs NOCOW", () => {
       const tool = vi.mocked(spawnSync).getMockImplementation()!;
       vi.mocked(spawnSync).mockImplementation((command, args, options) => {
         if (command === "fuser") {
-          expect(args).toContain(lock);
           for (const pathname of args ?? []) {
             expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
             expect(pathname.startsWith(external)).toBe(false);
+          }
+          if (!args?.every((pathname) => path.basename(pathname).includes(".nocow-probe-"))) {
+            expect(args).toContain(lock);
           }
         }
         return tool(command, args, options);
@@ -439,16 +441,43 @@ describe("Doctor btrfs NOCOW", () => {
       result: { status: null, stdout: "", stderr: "", signal: "SIGTERM" as const },
       detail: "signal SIGTERM",
     },
+    {
+      name: "kernel stat refusal",
+      result: {
+        status: 1,
+        stdout: "",
+        stderr:
+          "Cannot stat /app/package.json: Invalid argument\nCannot find socket's device number.\n",
+      },
+      detail:
+        "Cannot stat /app/package.json: Invalid argument\nCannot find socket's device number.",
+    },
   ])("inspects every file and refuses uncertain handles with $name", async (scenario) => {
     seedDatabase();
     const original = fs.statSync(sqlitePath);
     if (scenario.result) {
       fixture.fuserResult = { pid: 0, output: [], signal: null, ...scenario.result };
+      const readdirSpy = vi.spyOn(fs, "readdirSync");
       const notes = (await repair()).join("\n");
       expect(notes).toContain(
         `fuser could not establish that all handles are closed: ${scenario.detail}`,
       );
       expect(notes).not.toContain("store files are open");
+      expect(
+        readdirSpy.mock.calls.filter(([target]) => path.resolve(String(target)) === directory),
+      ).toEqual([]);
+      expect(vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl")).toEqual(
+        [],
+      );
+      expect(
+        fs
+          .readdirSync(root)
+          .filter((name) =>
+            [".nocow-probe-", ".nocow-backup-", ".nocow-snapshots-"].some((marker) =>
+              name.includes(marker),
+            ),
+          ),
+      ).toEqual([]);
       expect(fixture.exchanges).toBe(0);
       expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
       return;
@@ -470,7 +499,10 @@ describe("Doctor btrfs NOCOW", () => {
     const tool = vi.mocked(spawnSync).getMockImplementation()!;
     const batches: string[][] = [];
     vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-      if (command !== "fuser") {
+      if (
+        command !== "fuser" ||
+        args?.every((pathname) => path.basename(pathname).includes(".nocow-probe-"))
+      ) {
         return tool(command, args, options);
       }
       const argv = [...(args ?? [])];
@@ -521,6 +553,41 @@ describe("Doctor btrfs NOCOW", () => {
       expect(fixture.exchanges).toBe(0);
       expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
     }
+  });
+
+  it("refuses unsupported atomic directory exchange before store inventory, ACL collection, or copying", async () => {
+    seedDatabase();
+    const original = fs.statSync(sqlitePath);
+    fixture.exchangeProbeResult = {
+      status: 1,
+      stdout: "",
+      stderr: "mv: cannot exchange 'a' and 'b': Operation not supported\n",
+      pid: 0,
+      output: [],
+      signal: null,
+    };
+    const readdirSpy = vi.spyOn(fs, "readdirSync");
+    const notes = (await repair()).join("\n");
+    expect(notes).toContain(
+      "atomic directory exchange failed: mv: cannot exchange 'a' and 'b': Operation not supported",
+    );
+    expect(
+      readdirSpy.mock.calls.filter(([target]) => path.resolve(String(target)) === directory),
+    ).toEqual([]);
+    expect(vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl")).toEqual(
+      [],
+    );
+    expect(
+      fs
+        .readdirSync(root)
+        .filter((name) =>
+          [".nocow-probe-", ".nocow-backup-", ".nocow-snapshots-"].some((marker) =>
+            name.includes(marker),
+          ),
+        ),
+    ).toEqual([]);
+    expect(fixture.exchanges).toBe(0);
+    expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
   });
 
   it.each([

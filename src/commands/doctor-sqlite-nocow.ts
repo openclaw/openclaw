@@ -243,6 +243,10 @@ export async function repairDoctorSqliteNoCow(params: {
   }
   const result: MigrationMessages = { changes: [], warnings: [] };
   for (const directory of new Set(params.paths.map((pathname) => path.dirname(pathname)))) {
+    let probeLeft: string | undefined;
+    let probeLeftIdentity: fs.BigIntStats | undefined;
+    let probeRight: string | undefined;
+    let probeRightIdentity: fs.BigIntStats | undefined;
     let backup: string | undefined;
     let backupIdentity: fs.BigIntStats | undefined;
     let snapshotRoot: string | undefined;
@@ -260,6 +264,45 @@ export async function repairDoctorSqliteNoCow(params: {
         [directory],
         [params.stateDir],
       );
+      if (!fs.lstatSync(directory).isDirectory()) {
+        throw new Error(`store directory changed during traversal: ${directory}`);
+      }
+      probeLeft = fs.mkdtempSync(`${directory}.nocow-probe-`);
+      probeLeftIdentity = fs.statSync(probeLeft, { bigint: true });
+      assertNoOpenFiles([probeLeft]);
+      probeRight = fs.mkdtempSync(`${directory}.nocow-probe-`);
+      probeRightIdentity = fs.statSync(probeRight, { bigint: true });
+      params.assertCurrent();
+      const probeExchange = spawnSync(
+        "mv",
+        ["--exchange", "--no-copy", "-T", "--", probeLeft, probeRight],
+        {
+          encoding: "utf8",
+          timeout: TOOL_TIMEOUT_MS,
+        },
+      );
+      const probeLeftAfter = fs.statSync(probeLeft, { bigint: true });
+      const probeRightAfter = fs.statSync(probeRight, { bigint: true });
+      const expectedLeft = probeRightIdentity;
+      const expectedRight = probeLeftIdentity;
+      probeLeftIdentity = probeLeftAfter;
+      probeRightIdentity = probeRightAfter;
+      if (
+        probeExchange.error ||
+        probeExchange.status !== 0 ||
+        probeLeftAfter.dev !== expectedLeft.dev ||
+        probeLeftAfter.ino !== expectedLeft.ino ||
+        probeRightAfter.dev !== expectedRight.dev ||
+        probeRightAfter.ino !== expectedRight.ino
+      ) {
+        throw new Error(
+          `atomic directory exchange failed: ${probeExchange.error?.message ?? probeExchange.stderr.trim()}`,
+        );
+      }
+      await removeUninstalledDirectory(probeLeft, probeLeftIdentity, params.assertCurrent);
+      probeLeft = undefined;
+      await removeUninstalledDirectory(probeRight, probeRightIdentity, params.assertCurrent);
+      probeRight = undefined;
       const entries = readStoreEntries(directory);
       const files = entries.map((entry) => path.join(entry.parentPath, entry.name));
       const inventory = new Map(
@@ -301,11 +344,6 @@ export async function repairDoctorSqliteNoCow(params: {
           ([pathname, stat]) => !stat.isFile() || !sharedMemoryPaths.has(pathname),
         ),
       );
-      const sourceAcls = new Map(
-        [directory, ...sourceFiles.keys()]
-          .filter((pathname) => !sourceLinks.has(pathname))
-          .map((pathname) => [pathname, readAcl(pathname)]),
-      );
       for (const pathname of sqlitePaths) {
         params.assertCurrent();
         retireSqliteDatabaseAdmissionForPath(pathname, { requireSoleDescriptor: true });
@@ -319,6 +357,11 @@ export async function repairDoctorSqliteNoCow(params: {
           `at least ${size * 2n} bytes of free space are required (twice the store directory size)`,
         );
       }
+      const sourceAcls = new Map(
+        [directory, ...sourceFiles.keys()]
+          .filter((pathname) => !sourceLinks.has(pathname))
+          .map((pathname) => [pathname, readAcl(pathname)]),
+      );
       backup = fs.mkdtempSync(`${directory}.nocow-backup-`);
       backupIdentity = fs.statSync(backup, { bigint: true });
       setSqliteDirectoryNoCow(backup);
@@ -460,6 +503,12 @@ export async function repairDoctorSqliteNoCow(params: {
         );
       }
       for (const { pathname, identity } of [
+        ...(probeLeft && probeLeftIdentity
+          ? [{ pathname: probeLeft, identity: probeLeftIdentity }]
+          : []),
+        ...(probeRight && probeRightIdentity
+          ? [{ pathname: probeRight, identity: probeRightIdentity }]
+          : []),
         ...(backup && backupIdentity ? [{ pathname: backup, identity: backupIdentity }] : []),
         ...(snapshotRoot && snapshotIdentity && snapshotsCompleted === 0
           ? [{ pathname: snapshotRoot, identity: snapshotIdentity }]
@@ -467,6 +516,12 @@ export async function repairDoctorSqliteNoCow(params: {
       ]) {
         try {
           await removeUninstalledDirectory(pathname, identity, params.assertCurrent);
+          if (pathname === probeLeft) {
+            probeLeft = undefined;
+          }
+          if (pathname === probeRight) {
+            probeRight = undefined;
+          }
           if (pathname === backup) {
             backup = undefined;
           }

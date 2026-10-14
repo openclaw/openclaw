@@ -20,6 +20,7 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
     verifyPrivateAclBoundary: false,
     beforeExchange: undefined as (() => void) | undefined,
     fuserResult: undefined as SpawnSyncReturns<string> | undefined,
+    exchangeProbeResult: undefined as SpawnSyncReturns<string> | undefined,
   };
   function permissions(bits: number): string {
     return `${bits & 4 ? "r" : "-"}${bits & 2 ? "w" : "-"}${bits & 1 ? "x" : "-"}`;
@@ -130,24 +131,33 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
     } else if (command === "fuser" && !nativeSpawnSync) {
       expect(argv.length).toBeGreaterThan(0);
       expect(argv.every((argument) => path.isAbsolute(argument))).toBe(true);
-      status = fixture.tools === "busy" ? 0 : 1;
-      stdout = fixture.tools === "busy" ? "12345" : "";
+      const isProbe = argv.every((argument) => path.basename(argument).includes(".nocow-probe-"));
+      status = !isProbe && fixture.tools === "busy" ? 0 : 1;
+      stdout = !isProbe && fixture.tools === "busy" ? "12345" : "";
     } else if (command === "mv" && argv[0] === "--help") {
       stdout = fixture.tools === "unavailable" ? "mv" : "--exchange --no-copy";
     } else if (command === "mv") {
       expect(argv.slice(0, 4)).toEqual(["--exchange", "--no-copy", "-T", "--"]);
-      fixture.beforeExchange?.();
-      fixture.exchanges++;
-      if (fixture.tools === "exchange-failed") {
-        return { status: 1, stdout: "", stderr: "denied", pid: 0, output: [], signal: null };
-      }
       const source = String(argv.at(-2));
       const target = String(argv.at(-1));
+      const isProbe =
+        path.basename(source).includes(".nocow-probe-") &&
+        path.basename(target).includes(".nocow-probe-");
+      if (isProbe && fixture.exchangeProbeResult) {
+        return fixture.exchangeProbeResult;
+      }
+      if (!isProbe) {
+        fixture.beforeExchange?.();
+        fixture.exchanges++;
+        if (fixture.tools === "exchange-failed") {
+          return { status: 1, stdout: "", stderr: "denied", pid: 0, output: [], signal: null };
+        }
+      }
       const temporary = `${target}.test-exchange`;
       fs.renameSync(target, temporary);
       fs.renameSync(source, target);
       fs.renameSync(temporary, source);
-      if (fixture.tools === "exchange-timeout") {
+      if (!isProbe && fixture.tools === "exchange-timeout") {
         status = 1;
       }
     } else if (nativeSpawnSync) {
