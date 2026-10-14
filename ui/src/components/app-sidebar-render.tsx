@@ -196,22 +196,18 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event: PointerEvent) => {
-            if (event.currentTarget instanceof HTMLElement) {
-              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-            }
+          onPointerMove={(event) => {
+            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
           }}
           onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
           onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event: MouseEvent) => {
+          onClick={(event) => {
             event.stopPropagation();
-            if (event.currentTarget instanceof HTMLElement) {
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-            }
+            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
           }}
-          onContextMenu={(event: MouseEvent) => {
+          onContextMenu={(event) => {
             event.preventDefault();
-            if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
+            if (!menuOpen()) {
               host.sidebarMenus.toggleAgentMenu(event.currentTarget);
             }
           }}
@@ -221,9 +217,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
               aria-hidden="true"
             >
-              {branding().brandIcon === "claw" ? (
-                <Icon name="lobster" />
-              ) : branding().brandIcon === "mark" ? (
+              {branding().brandIcon === "mark" ? (
                 <Icon name="mark" />
               ) : (
                 <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />

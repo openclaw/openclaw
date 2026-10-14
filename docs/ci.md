@@ -96,6 +96,25 @@ and Wear store capture script in one hosted Ubuntu job. The final CI gate requir
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
 
+Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
+manual validation when Android is selected, matching the iOS qualification
+selection. The final CI gate requires its success. Manual Android Store Release
+also requires qualification before the signing/upload job; internal distributions
+and Gateway APK publication retain their existing paths. It validates phone
+onboarding/chat/relaunch against a pinned stable Gateway, native transcript and
+keyboard behavior, and Wear native input, chat, history, restarts, and reply-reader
+behavior through a local raw-message transport at the Google Data Layer boundary.
+The production wire codec, phone bridge/controller, Gateway, and response/event
+path still execute. Real Google capability discovery, listener-service delivery,
+and Play services package/signature enforcement remain separate physical-device
+smoke coverage. Built debug APK hash, signature, package, version, and listener
+declaration checks remain in the gate; Release/R8, store signing, and upload
+remain owned by the existing release lane. See the
+[Android release validation contract](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md#release-validation)
+for evidence, rerun, and coverage details. Standard SDK images and build
+dependencies are downloaded during setup; no Google account, companion APK, or
+paired-device image is provisioned.
+
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
 Preflight passes the complete changed-path manifest between steps as a local JSON

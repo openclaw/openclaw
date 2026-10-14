@@ -233,14 +233,16 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-The complete agents-support, CLI, embedded-agent-run, and gateway-methods leaf
+The complete agents-support, CLI, commands, embedded-agent-run, and gateway-methods leaf
 configs also support Bun. Their existing pools, exclusions, and worker limits
 remain in effect. CLI-process and other agent and Gateway owners keep their
-separate qualification policies. Agents-support and gateway-methods include
+separate qualification policies. Agents-support, commands, and gateway-methods include
 overrides use Bun only for canonical owner patterns or literal files proven to
 belong to that owner; broad or uncertain patterns keep the complete Node
 selection. Dual validation runs each complete selected owner on Node before Bun
 in the same worker slot.
+Commands keeps commands-light, database-worker, and unit-fast files in their
+existing owners; its admission does not change their runtime policies.
 
 OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),

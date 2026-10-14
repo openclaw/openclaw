@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
@@ -31,39 +30,6 @@ export class SubagentAnnouncePreparationConflictError extends Error {
   override name = "SubagentAnnouncePreparationConflictError";
 }
 
-function announceResultFacts(child: SubagentRunRecord) {
-  return {
-    task: child.task,
-    taskName: child.taskName,
-    label: child.label,
-    endedReason: child.endedReason,
-    status: child.execution.status,
-    endedAt: child.execution.endedAt,
-    outcome: child.execution.outcome,
-    interruptionReason: child.execution.interruptionReason,
-    transcriptTarget: child.execution.transcriptTarget,
-    terminalReply: child.completion?.terminalReply,
-    resultText: child.completion?.resultText,
-    fallbackResultText: child.completion?.fallbackResultText,
-  };
-}
-
-function captureAnnounceResultAuthority(
-  child: SubagentRunRecord,
-  readSubagentRun: SubagentAnnounceResultDeps["readSubagentRun"],
-): () => boolean {
-  const facts = structuredClone(announceResultFacts(child));
-  const runId = child.runId;
-  return () => {
-    const current = readSubagentRun(runId);
-    return Boolean(
-      current &&
-      isSameSubagentRunOwner(current, child) &&
-      isDeepStrictEqual(announceResultFacts(current), facts),
-    );
-  };
-}
-
 /** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResultUsing(
   observed: SubagentRunRecord,
@@ -75,7 +41,15 @@ export async function readSubagentRunAnnounceResultUsing(
       "The completed child run's owner changed before announcement.",
     );
   }
-  const isCurrent = captureAnnounceResultAuthority(child, deps.readSubagentRun);
+  // Terminal result metadata is best-effort; replacement executions still lose ownership.
+  const isCurrent = () => {
+    const current = deps.readSubagentRun(child.runId);
+    return (
+      isSameSubagentRunOwner(current, child) &&
+      current?.endedReason === child.endedReason &&
+      current?.execution.outcome?.status === child.execution.outcome?.status
+    );
+  };
   const terminalReply = child.completion?.terminalReply;
   const capturedResult = resolveSubagentCompletionResultText(child);
   if (

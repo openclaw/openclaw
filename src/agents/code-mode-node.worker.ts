@@ -556,21 +556,24 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
   }
 }
 
-serveWorkerTasks(async (input, channel): Promise<NodeResult> => {
-  if (
-    !isRecord(input) ||
-    !isRecord(input.config) ||
-    (input.kind !== "exec" && input.kind !== "resume")
-  ) {
-    return failed("invalid_input", "invalid code mode worker input");
-  }
-  // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-  const result = await run(input as NodeInput, channel);
-  if (cell?.networkContentObserved) {
-    result.networkContentObserved = true;
-  }
-  if (result.status !== "waiting") {
-    cell = undefined;
-  }
-  return result;
-});
+serveWorkerTasks(
+  async (input, channel): Promise<NodeResult> => {
+    if (
+      !isRecord(input) ||
+      !isRecord(input.config) ||
+      (input.kind !== "exec" && input.kind !== "resume")
+    ) {
+      return failed("invalid_input", "invalid code mode worker input");
+    }
+    // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
+    const result = await run(input as NodeInput, channel);
+    if (cell?.networkContentObserved) {
+      result.networkContentObserved = true;
+    }
+    if (result.status !== "waiting") {
+      cell = undefined;
+    }
+    return result;
+  },
+  { idleGc: false },
+);
