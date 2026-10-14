@@ -204,13 +204,13 @@ function createPolicyDispatcherWithoutPinnedDns(
   timeoutMs?: number,
   streamTimeoutMs?: number,
 ): Dispatcher | null {
-  if (!dispatcherPolicy) {
+  if (!dispatcherPolicy && streamTimeoutMs === undefined) {
     return null;
   }
   const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
-  if (dispatcherPolicy.mode === "direct") {
-    return createHttp1Agent({ ...streamTimeouts, connect: dispatcherPolicy.connect }, timeoutMs);
+  if (!dispatcherPolicy || dispatcherPolicy.mode === "direct") {
+    return createHttp1Agent({ ...streamTimeouts, connect: dispatcherPolicy?.connect }, timeoutMs);
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
