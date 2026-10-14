@@ -83,6 +83,8 @@ export type MessageActionInput = Pick<
   workspaceReadiness?: AgentWorkspaceReadiness;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
+  /** @internal Preserves the originating channel-selection namespace across Gateway delegation. */
+  allowNativeChannelNamespace?: boolean;
   /**
    * Authorization facts resolved from the host-issued current-turn capability.
    * Presence means ambient routing fields must not be used as identity.

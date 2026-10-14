@@ -138,6 +138,9 @@ async function createFixture(state: OpenClawTestState) {
         otherCredentials: headers.get("authorization") === "Bot synthetic-other-provider-fixture",
       });
       if (url.origin === "https://discord.com" && method === "GET") {
+        if (url.pathname === "/api/v10/users/@me/guilds") {
+          return Response.json([]);
+        }
         if (url.pathname === `/api/v10/channels/${channelId}`) {
           return Response.json({ id: channelId, guild_id: guildId, type: 0, name: "fixture" });
         }
@@ -215,6 +218,8 @@ async function createFixture(state: OpenClawTestState) {
       accountId?: string;
       paramsAccountId?: string;
       client?: GatewayClient;
+      channelId?: string;
+      allowNativeChannelNamespace?: boolean;
     },
   ): Promise<Parameters<RespondFn>> => {
     const respond = vi.fn<RespondFn>();
@@ -224,11 +229,14 @@ async function createFixture(state: OpenClawTestState) {
         channel: "discord",
         action,
         params: {
-          channelId,
+          channelId: options.channelId ?? channelId,
           ...(action === "read" ? { limit: 1 } : { messageId }),
           ...(options.paramsAccountId ? { accountId: options.paramsAccountId } : {}),
         },
         ...(options.accountId ? { accountId: options.accountId } : {}),
+        ...(options.allowNativeChannelNamespace !== undefined
+          ? { allowNativeChannelNamespace: options.allowNativeChannelNamespace }
+          : {}),
         sessionKey,
         sessionId,
         idempotencyKey: options.idempotencyKey,
@@ -446,6 +454,21 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
     },
   );
 
+  it.each([undefined, false])(
+    "rejects an inferred channel name before a scheduled provider mutation (provenance=%s)",
+    async (allowNativeChannelNamespace) => {
+      await withFixture(async (fixture) => {
+        const response = await fixture.invokeAction("pin", {
+          idempotencyKey: `scheduled-pin-inferred-channel-name-${String(allowNativeChannelNamespace)}`,
+          channelId: "discord",
+          allowNativeChannelNamespace,
+        });
+
+        expectDenied(response, "does not specify a destination");
+        expect(fixture.httpRequests.every((request) => request.method === "GET")).toBe(true);
+      });
+    },
+  );
   it("keeps same-key pins separate for different saved accounts", async () => {
     await withFixture(async (fixture) => {
       const otherClient = fixture.createClient({

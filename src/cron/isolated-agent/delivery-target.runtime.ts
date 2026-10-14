@@ -1,5 +1,5 @@
 /** Runtime-loaded channel target helpers used by cron delivery resolution. */
-import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import {
@@ -21,6 +21,9 @@ export async function resolveChannelTargetForDelivery(params: {
   agentId: string;
   input: string;
   accountId?: string | null;
+  allowFrom?: string[];
+  allowNativeChannelNamespace?: boolean;
+  nativeTargetMode?: ChannelOutboundTargetMode;
 }): Promise<{ ok: true; target: ResolvedMessagingTarget } | { ok: false; error: Error }> {
   // Delivery may be the first channel touch after startup; allow bootstrap so
   // plugin config and account metadata are available before target resolution.
@@ -36,7 +39,10 @@ export async function resolveChannelTargetForDelivery(params: {
       channel: params.channel,
       input: params.input,
       accountId: params.accountId,
+      allowFrom: params.allowFrom,
       unknownTargetMode: "normalized",
+      allowNativeChannelNamespace: params.allowNativeChannelNamespace,
+      nativeTargetMode: params.nativeTargetMode,
       plugin,
     });
   } catch (err) {
