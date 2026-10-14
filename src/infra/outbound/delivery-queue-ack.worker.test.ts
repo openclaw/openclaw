@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
@@ -110,9 +111,11 @@ describe("outbound acknowledgement worker", () => {
     if (!claimId || !entry) {
       throw new Error("Expected a claimed queue entry");
     }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const reply = holdAcknowledgementReply(id);
     const options: AckDeliveryOptions = {
       expectedPlatformSendAttemptId: claimId,

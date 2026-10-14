@@ -22,6 +22,7 @@ import {
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   runOutsideOpenClawDatabaseMaintenanceScope,
@@ -283,8 +284,9 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
       ),
     );
   // Preserve real scheduler continuation and native command execution while exposing SQL counts.
-  walAdmission.registerSqliteWalWorkerMaintenance(database.db, async (request) =>
-    z.object({ reclaimedPages: z.number() }).parse(execute(request)),
+  walAdmission.registerSqliteWalWorkerMaintenance(
+    requireNativeSqliteDatabase(database.db),
+    async (request) => z.object({ reclaimedPages: z.number() }).parse(execute(request)),
   );
   const statements = vi.spyOn(database.db, "exec");
   const analyses = () =>
