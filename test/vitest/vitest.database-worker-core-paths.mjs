@@ -885,6 +885,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/user-background.test.ts",
   "src/state/user-profiles.avatar-worker.test.ts",
   "src/state/user-channel-identities.test.ts",
+  "src/state/user-channel-identities.worker.test.ts",
   "src/state/user-profiles.schema.test.ts",
   "src/state/user-profile-writes.owner.test.ts",
   "src/state/user-profile-writes.role.test.ts",

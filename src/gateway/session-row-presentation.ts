@@ -90,7 +90,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   return (sessions: T[]) => {
     type SharedFact = { fact: Partial<T>; rows: number[] };
     const candidates = new Map<string, SharedFact>();
+    const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
+      const { key, kind, updatedAt, sessionId, rowMode } = row;
+      rows.push({ key, kind, updatedAt, sessionId, rowMode });
       let facts = prepared.get(row);
       if (!facts) {
         facts = [];
@@ -109,12 +112,12 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         }
         prepared.set(row, facts);
       }
-      for (const [key, fact] of facts) {
-        const candidate = candidates.get(key);
+      for (const [encoded, fact] of facts) {
+        const candidate = candidates.get(encoded);
         if (candidate) {
           candidate.rows.push(index);
         } else {
-          candidates.set(key, { fact, rows: [index] });
+          candidates.set(encoded, { fact, rows: [index] });
         }
       }
     });
@@ -122,6 +125,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const groups = new Map<string, SharedFact>();
     for (const candidate of candidates.values()) {
       if (candidate.rows.length < 2) {
+        Object.assign(rows[candidate.rows[0]!]!, candidate.fact);
         continue;
       }
       const key = candidate.rows.join(",");
@@ -132,17 +136,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         groups.set(key, { fact: { ...candidate.fact }, rows: candidate.rows });
       }
     }
-    const rows = sessions.map((row) => ({ ...row }));
     const sharedFacts: Partial<T>[] = [];
     for (const group of groups.values()) {
       const reference = sharedFacts.push(group.fact) - 1;
-      const fields = Object.keys(group.fact);
       for (const index of group.rows) {
-        const row = rows[index]!;
-        for (const field of fields) {
-          Reflect.deleteProperty(row, field);
-        }
-        (row.sharedFacts ??= []).push(reference);
+        (rows[index]!.sharedFacts ??= []).push(reference);
       }
     }
     return { sessions: rows, sharedFacts };
@@ -198,10 +196,12 @@ export function prepareSessionRowPublication(
       publications.set(projection, publication);
       const { lists } = publication;
       projection.onSelectionChange(() => lists.clear());
-      projection.onFactsChange(() => {
+      projection.onFactsChange((change) => {
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of lists.values()) {
-          list.rows = undefined;
+          if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
+            list.rows = undefined;
+          }
         }
       });
     } else if (publication.revision !== revision) {

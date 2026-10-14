@@ -2420,7 +2420,7 @@ openclaw-settings-save-indicator:empty {
   height: 20px;
 }
 
-/* All rows are connected; a hollow ring avoids implying observed activity. */
+/* A hollow ring distinguishes connected people without observed activity. */
 .sidebar-online__avatar::after {
   position: absolute;
   right: -2px;
@@ -2441,6 +2441,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {
   background: var(--bg);
   box-shadow: inset 0 0 0 1.5px var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="offline"] .sidebar-online__avatar::after {
+  background: var(--muted);
 }
 
 .sidebar-online__person-name {

@@ -58,6 +58,50 @@ function execute(source: string, overrides: Partial<CodeModeExecutorStartInput> 
 }
 
 describe("Node Code Mode executor", () => {
+  it("reuses healthy workers after rejected cells without retaining guest state", async () => {
+    const starts = () =>
+      sampleTrackedWorkerMemory().workerLifecycle.find(
+        ({ script }) => script === "code-mode-node.worker.js",
+      )?.started ?? 0;
+    const before = starts();
+    for (const source of [
+      "return (",
+      'require("node:fs")',
+      'globalThis.failedCell = true; throw new Error("guest failure");',
+      'globalThis.failedCell = true; Promise.reject(new Error("unhandled failure")); return 1;',
+    ]) {
+      expect(await execute(source)).toMatchObject({ status: "failed" });
+      expect(await execute("return typeof failedCell;")).toMatchObject({
+        status: "completed",
+        value: { kind: "complete", json: '"undefined"' },
+      });
+    }
+    const waiting = await execute("globalThis.failedCell = true; await yield_control();");
+    if (waiting.status !== "waiting") {
+      throw new Error("Expected a live continuation");
+    }
+    continuations.add(waiting.continuation);
+    expect(
+      await waiting.continuation.resume(
+        {
+          kind: "resume",
+          config,
+          settledRequests: waiting.pendingRequests.map(({ id }) => ({
+            id,
+            ok: false,
+            json: '"bridge failure"',
+          })),
+        },
+        { timeoutMs: 7_000 },
+      ),
+    ).toMatchObject({ status: "failed" });
+    expect(await execute("return typeof failedCell;")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: '"undefined"' },
+    });
+    expect(starts() - before).toBe(1);
+  });
+
   it("reports heap exhaustion, recovers, and bounds captured output below the heap limit", async () => {
     // Vitest runs inside a Worker whose inherited heap flags can override resourceLimits.
     // A standalone process exercises native OOM without changing the test runner's V8 flags.

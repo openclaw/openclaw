@@ -248,6 +248,7 @@ function prepareSqliteWorkerOperationAdmission(
     ),
   };
   job.request.executionAuthority = readSqliteWorkerExecutionAuthority(retained.admission);
+  job.request.operationAttachment = retained.admission.attachment;
   return retained.admission.port;
 }
 

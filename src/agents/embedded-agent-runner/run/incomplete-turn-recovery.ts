@@ -34,6 +34,8 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TEXT_TOOL_CALL_RETRY_INSTRUCTION =
+  "You wrote a tool call as text, so nothing ran for that call. Continue from the current state and call the tool natively through the tool interface. Do not print tool-call JSON or markup as your answer.";
 const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
   "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
 const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
@@ -419,6 +421,10 @@ export function resolveEmptyResponseRetryInstruction(
     })
   ) {
     return null;
+  }
+
+  if (params.attempt.textToolCallAttempt) {
+    return TEXT_TOOL_CALL_RETRY_INSTRUCTION;
   }
 
   // A tool-use stop with no structured call executed nothing; its text is not an answer.

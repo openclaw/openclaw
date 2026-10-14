@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureUiProofEnabled,
@@ -87,19 +87,22 @@ suite.define(() => {
         const chevron = daytona.locator(".new-session-page__submenu-chevron");
         await plus.waitFor({ state: "visible" });
         await chevron.waitFor({ state: "visible" });
-        const [plusBox, chevronBox] = await Promise.all([
-          plus.boundingBox(),
-          chevron.boundingBox(),
-        ]);
-        expect(plusBox?.width).toBeLessThanOrEqual(20);
-        expect(chevronBox).not.toBeNull();
-        expect(
-          Math.abs(
-            (plusBox?.x ?? 0) +
-              (plusBox?.width ?? 0) / 2 -
-              ((chevronBox?.x ?? 0) + (chevronBox?.width ?? 0) / 2),
-          ),
-        ).toBeLessThanOrEqual(4);
+        await vi.waitFor(async () => {
+          const [plusBox, chevronBox] = await Promise.all([
+            plus.boundingBox(),
+            chevron.boundingBox(),
+          ]);
+          expect(plusBox).not.toBeNull();
+          expect(plusBox?.width).toBeLessThanOrEqual(20);
+          expect(chevronBox).not.toBeNull();
+          expect(
+            Math.abs(
+              (plusBox?.x ?? 0) +
+                (plusBox?.width ?? 0) / 2 -
+                ((chevronBox?.x ?? 0) + (chevronBox?.width ?? 0) / 2),
+            ),
+          ).toBeLessThanOrEqual(4);
+        });
         if (captureUiProofEnabled) {
           await writeFile(
             path.join(suite.artifactDir, "environment-picker-capabilities-after.png"),

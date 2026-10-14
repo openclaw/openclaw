@@ -2213,6 +2213,9 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    usersTitle: "Users",
+    allUsers: "All users",
+    directoryFailed: "Could not load all users. Retry",
     filters: {
       label: "Filter & sort people",
       noMatches: "No people match this filter",
@@ -2812,7 +2815,6 @@ export const en: TranslationMap & {
       failedTitle: "Unable to finish this reply",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
-      changeModel: "Change model",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -3350,8 +3352,7 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary:
-          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+        summary: "Gateway restarted. Resuming your interrupted request.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
@@ -4279,6 +4280,7 @@ export const en: TranslationMap & {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+    sv: "Svenska (Swedish)",
   },
   secretsStore: {
     name: "Name",

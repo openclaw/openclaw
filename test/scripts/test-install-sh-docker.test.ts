@@ -2293,6 +2293,11 @@ if (args[0] === "--version") {
 } else if (args[0] === "gateway") {
   const port = Number(args[args.indexOf("--port") + 1]);
   http.createServer((_req, res) => {
+      if (_req.url === "/readyz") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ready: true }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok");
     })
