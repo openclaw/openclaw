@@ -43,6 +43,7 @@ import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { registerWorkerTurnFallbackTests } from "./worker-turn-execution.fallback.suite.js";
 import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
   acknowledgeCompletedWorkerTurn,
@@ -893,6 +894,7 @@ describe("worker turn execution", () => {
   );
 
   registerWorkerTurnInferenceTests();
+  registerWorkerTurnFallbackTests();
 
   it.each([[WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
