@@ -715,6 +715,44 @@ describe("worker environment service", () => {
     }
   });
 
+  it("retains a bootstrap lease when scheduler shutdown precedes service teardown", async () => {
+    const environmentId = "worker-scheduler-bootstrap";
+    const initial = await support.seedBootstrapping(environmentId);
+    const entered = createDeferred();
+    const finishProducer = createDeferred();
+    let signal: AbortSignal | undefined;
+    support.testState.bootstrapWorker = vi.fn(async (input) => {
+      signal = input.signal;
+      entered.resolve();
+      await finishProducer.promise;
+      input.signal.throwIfAborted();
+      return support.BOOTSTRAP_RECEIPT;
+    });
+    const destroy = vi.fn(async () => {});
+    const scheduler = createTestGatewayScheduler();
+    const workerService = support.createService(support.createProvider({ destroy }), { scheduler });
+    const reconciliation = workerService.reconcileEnvironment(environmentId).catch(() => undefined);
+    try {
+      await entered.promise;
+      scheduler.beginClose();
+      expect(signal?.aborted).toBe(true);
+      finishProducer.resolve();
+      await reconciliation;
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: initial.state,
+        leaseId: initial.leaseId,
+        ownerEpoch: initial.ownerEpoch,
+        destroyRequestedAtMs: null,
+        lastError: initial.lastError,
+      });
+    } finally {
+      finishProducer.resolve();
+      await reconciliation;
+      await workerService.stop();
+    }
+  });
+
   it.each(["bootstrap", "inspection", "bundle", "npm", "refresh"] as const)(
     "cancels startup %s before teardown and retains its actual producer until settlement",
     async (kind) => {

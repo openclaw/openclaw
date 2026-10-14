@@ -141,7 +141,7 @@ export function createWorkerProviderLifecycle(
       }
     } catch (error) {
       await cancellation?.settleStopIntent();
-      if (options.isStopping()) {
+      if (options.ownerSignal.aborted) {
         // Owner shutdown leaves this allocation for restart recovery.
         throw error;
       }
