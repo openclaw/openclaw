@@ -300,6 +300,13 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+// The model-catalog process fixture re-executes itself as a native app-server
+// stand-in and launches a wrapper child to cover signal forwarding.
+const EXTENDED_STABLE_2026_9_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map([
+  ...CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+  ["@openclaw/codex:dangerous-exec:src/app-server/model-catalog.process.test.ts", 2],
+]);
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
@@ -415,6 +422,16 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
   ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
   ["release/2026.9.8", CURRENT_SECURITY_INVENTORY_POLICY],
   ["release/2026.9.9", CURRENT_SECURITY_INVENTORY_POLICY],
+  // Cut from release/2026.9.9; the extended-stable update backports add one
+  // reviewed Codex model-catalog process fixture to that line's inventory.
+  [
+    "extended-stable/2026.9.33",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts:
+        EXTENDED_STABLE_2026_9_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+    },
+  ],
   [
     "extended-stable/2026.6.33",
     {
