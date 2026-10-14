@@ -4,6 +4,7 @@ import type { IrcAccountConfigInput } from "./config-schema.js";
 
 export type IrcChannelConfig = NonNullable<NonNullable<IrcAccountConfigInput["groups"]>[string]>;
 export type IrcNickServConfig = NonNullable<IrcAccountConfigInput["nickserv"]>;
+export type ResolvedIrcNickServConfig = Omit<IrcNickServConfig, "password"> & { password?: string };
 export type IrcAccountConfig = Omit<IrcAccountConfigInput, "groups"> & {
   defaultTo?: string;
   groups?: Record<string, IrcChannelConfig>;

@@ -27,8 +27,14 @@ export const channelSecrets = createChannelSecretContract({
         isBaseFieldActiveForChannelSurface(surface, "nickserv") &&
         isRecord(irc.nickserv) &&
         isEnabledFlag(irc.nickserv),
-      topLevelInheritedAccountActive: ({ account, enabled }) =>
-        enabled && !Object.hasOwn(account, "nickserv") && isEnabledFlag(irc.nickserv),
+      topLevelInheritedAccountActive: ({ account, enabled }) => {
+        const accountNickServ = isRecord(account.nickserv) ? account.nickserv : {};
+        return (
+          enabled &&
+          !Object.hasOwn(accountNickServ, "password") &&
+          isEnabledFlag(Object.hasOwn(accountNickServ, "enabled") ? accountNickServ : irc.nickserv)
+        );
+      },
       topInactiveReason:
         "no enabled account inherits this top-level IRC nickserv config or NickServ is disabled.",
       accountActive: ({ account, enabled }) =>

@@ -9,6 +9,7 @@ import {
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
@@ -16,7 +17,7 @@ const IrcNickServSchema = z
   .object({
     enabled: z.boolean().optional(),
     service: z.string().optional(),
-    password: z.string().optional(),
+    password: buildSecretInputSchema().optional(),
     passwordFile: z.string().optional(),
     register: z.boolean().optional(),
     registerEmail: z.string().optional(),
@@ -55,7 +56,7 @@ const IrcAccountSchemaBase = z
     nick: z.string().optional(),
     username: z.string().optional(),
     realname: z.string().optional(),
-    password: z.string().optional(),
+    password: buildSecretInputSchema().optional(),
     passwordFile: z.string().optional(),
     nickserv: IrcNickServSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),

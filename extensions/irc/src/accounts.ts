@@ -7,7 +7,12 @@ import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+import type {
+  CoreConfig,
+  IrcAccountConfig,
+  IrcNickServConfig,
+  ResolvedIrcNickServConfig,
+} from "./types.js";
 
 type CredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
@@ -29,7 +34,7 @@ export type ResolvedIrcAccount = {
   passwordSource: "env" | "passwordFile" | "config" | "none";
   tokenStatus?: "available" | "configured_unavailable" | "missing";
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
-  config: IrcAccountConfig;
+  config: Omit<IrcAccountConfig, "nickserv"> & { nickserv?: ResolvedIrcNickServConfig };
 };
 
 const {
@@ -120,7 +125,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig) 
     }
   }
 
-  const merged: IrcNickServConfig = {
+  const merged: ResolvedIrcNickServConfig = {
     ...base,
     service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,
@@ -180,7 +185,7 @@ export function resolveIrcAccount(params: {
       (diagnostic): diagnostic is CredentialUnavailableDiagnostic => Boolean(diagnostic),
     );
 
-    const config: IrcAccountConfig = {
+    const config: ResolvedIrcAccount["config"] = {
       ...merged,
       channels: merged.channels ?? envChannels,
       tls,

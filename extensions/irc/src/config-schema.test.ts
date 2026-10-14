@@ -128,6 +128,28 @@ describe("irc config schema", () => {
     expect(issues[0]?.path?.join(".")).toBe("nickserv.registerEmail");
   });
 
+  it("accepts SecretRef passwords at channel, account, and nickserv level", () => {
+    const ref = { source: "env", provider: "default", id: "IRC_PASSWORD_REF" } as const;
+    const config = expectValidConfig(
+      parseIrcConfig({
+        password: ref,
+        nickserv: { password: ref },
+        accounts: {
+          work: {
+            host: "irc.example.com",
+            password: ref,
+            nickserv: { service: "NickServ", password: ref },
+          },
+        },
+      }),
+    );
+
+    expect(config.password).toEqual(ref);
+    expect(config.nickserv?.password).toEqual(ref);
+    expect(config.accounts?.work?.password).toEqual(ref);
+    expect(config.accounts?.work?.nickserv?.password).toEqual(ref);
+  });
+
   it("accepts nickserv register with registerEmail only", () => {
     expectValidConfig(
       parseIrcConfig({
