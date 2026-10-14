@@ -9,7 +9,7 @@ import {
   loadDevicePairingStoreState,
   loadPairedDevicePairingStoreRecordFromDatabase,
   persistDevicePairingStoreState,
-  readDevicePairingStoreStateFromDatabase,
+  readPairedDevicePairingRecordsFromDatabase,
   readPairedDevicePairingSnapshotFromDatabase,
   updatePairedDeviceInTransaction,
   withDevicePairingStoreDatabase,
@@ -242,7 +242,7 @@ test.each([false, true])(
       runWithSqliteWorkerStateContext({ environment: env }, () =>
         stateDb.runOpenClawStateWriteTransaction(
           () => {
-            const paired = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
+            const paired = readPairedDevicePairingRecordsFromDatabase(database.db);
             return withDevicePairingStoreDatabase(
               database,
               () => {
@@ -266,9 +266,7 @@ test.each([false, true])(
                 expect(loadPairedDevicePairingStoreRecordFromDatabase(database.db, "node")).toEqual(
                   expected.node,
                 );
-                expect(
-                  readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId,
-                ).toEqual(expected);
+                expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(expected);
                 expect(
                   loadPairedDevicePairingStoreRecordFromDatabase(database.db, "constructor"),
                 ).toBeNull();
@@ -292,7 +290,7 @@ test.each([false, true])(
       } else {
         operate();
       }
-      expect(readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId).toEqual(
+      expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(
         rollback ? initial.pairedByDeviceId : expected,
       );
     } finally {
