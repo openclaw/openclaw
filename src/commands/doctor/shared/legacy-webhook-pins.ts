@@ -4,7 +4,7 @@ import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/type
 import { getConfigValueAtPath, setConfigValueAtPath } from "../../../config/config-paths.js";
 import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/paths.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
-import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -27,6 +27,39 @@ export const HISTORICAL_WEBHOOK_CHANNELS = ["telegram", "feishu", "msteams", "ne
 
 function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
   return `webhookListeners:${resolveConfigPath(env)}`;
+}
+
+type WebhookCompletion = true | Record<string, string[][]>;
+
+/**
+ * Doctor records completion in config; startup records it in machine state, including a
+ * channel Doctor left pending. Config decisions win per channel.
+ */
+function readWebhookCompletion(
+  config: Pick<OpenClawConfig, "meta">,
+  env: NodeJS.ProcessEnv,
+): WebhookCompletion | undefined {
+  const configured = config.meta?.migrations?.webhookListeners;
+  if (configured === true) {
+    return true;
+  }
+  const recorded = readConfigMachineState<WebhookCompletion>(webhookCompletionKey(env), { env });
+  if (!configured) {
+    return recorded;
+  }
+  return recorded && recorded !== true ? { ...recorded, ...configured } : configured;
+}
+
+/** Startup skips the listener scan once every historical channel has a recorded decision. */
+export function isWebhookListenerMigrationComplete(
+  config: Pick<OpenClawConfig, "meta">,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const completion = readWebhookCompletion(config, env);
+  return (
+    completion === true ||
+    HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(completion ?? {}, id))
+  );
 }
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
@@ -66,9 +99,7 @@ export function applyHistoricalWebhookPins(
   } = {},
 ): ChannelDoctorConfigMutation {
   const env = context.env ?? process.env;
-  const marker =
-    mutation.config.meta?.migrations?.webhookListeners ??
-    readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), { env });
+  const marker = readWebhookCompletion(mutation.config, env);
   if (marker === true || mutation.warnings?.length) {
     return mutation;
   }

@@ -383,6 +383,27 @@ describe("Doctor historical webhook pins", () => {
     },
   );
 
+  it("keeps a Teams decision startup recorded after Doctor left it pending", async () => {
+    const { env, migrate } = await fixture([undefined], { channelId: "msteams" });
+    const updateEnv = { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+    const config: OpenClawConfig = { meta: { migrations: { webhookListeners: doctorRecord } } };
+    // A startup without Teams credentials completes Teams in machine state only.
+    expect(
+      recordUnwrittenWebhookCompletion(
+        { sourceConfig: config },
+        {
+          config: { meta: { migrations: { webhookListeners: { ...doctorRecord, msteams: [] } } } },
+          changes: ["Recorded webhook listener decisions."],
+        },
+        updateEnv,
+      ),
+    ).toBe(true);
+
+    // Adding Teams later must not reopen its historical port.
+    expect(migrate(config, updateEnv)).toEqual({ config, changes: [] });
+  });
+
   it("does not turn an environment-only Teams pin into authored activation on a later Doctor run", async () => {
     const { env, migrate } = await fixture([undefined], {
       channelId: "msteams",
