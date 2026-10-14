@@ -100,8 +100,9 @@ suite.define(() => {
         expect(await page.evaluate(() => history.length)).toBe(
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
+        // Title decoration resolves once initially and once after reconnect, beside navigation.
         expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+          navigateAway ? 3 : 4,
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });
