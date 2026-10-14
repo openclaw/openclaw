@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/sqlite";
 import {
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { parseSqliteTableDefinition } from "../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -41,7 +41,7 @@ import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.
 import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
 
 export function readWorkerPlacementEnvironmentOwnerInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
 ): WorkerSessionPlacementRecord | undefined {
   const rows = executeSqliteQuerySync(
@@ -66,7 +66,7 @@ type ProjectionSchema = {
 const projectionSchemas = new WeakMap<SqliteSchemaFacts, ProjectionSchema>();
 const PROJECTION_BATCH_SIZE = 250;
 
-function readProjectionSchema(db: DatabaseSync): ProjectionSchema {
+function readProjectionSchema(db: EngineConnection): ProjectionSchema {
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Worker placement projection requires admitted schema facts");
@@ -98,7 +98,7 @@ function readProjectionSchema(db: DatabaseSync): ProjectionSchema {
   return projectionSchema;
 }
 
-function moveRows(db: DatabaseSync, sessionIds: readonly string[], schema: ProjectionSchema) {
+function moveRows(db: EngineConnection, sessionIds: readonly string[], schema: ProjectionSchema) {
   return getNodeSqliteKysely<StateDatabase>(db)
     .selectFrom("worker_session_placement_moves")
     .select([
@@ -125,7 +125,7 @@ function moveRows(db: DatabaseSync, sessionIds: readonly string[], schema: Proje
 }
 
 function readProjectionRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
   schema: ProjectionSchema,
 ) {
@@ -222,7 +222,7 @@ function readProjectionRows(
 }
 
 export function readWorkerSessionPlacementProjectionInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
   conflictBindings: readonly WorkerPlacementConflictBinding[],
 ): WorkerSessionPlacementReadResult {
@@ -341,7 +341,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
 }
 
 export function readWorkerPlacementRecoveryCandidatesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): WorkerPlacementRecoveryCandidate[] {
   return runSqliteDeferredTransactionSync(db, () => {
     const query = getNodeSqliteKysely<StateDatabase>(db);

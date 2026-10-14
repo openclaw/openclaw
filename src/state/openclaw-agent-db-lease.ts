@@ -2,13 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -256,7 +258,7 @@ export function releaseOpenClawAgentDatabaseLease(
   options: OpenClawStateDatabaseOptions = {},
   closeOutcome?: { path: string; publishSeal: () => boolean } | "read-only" | "uncheckpointed",
 ): void {
-  const release = (database: DatabaseSync) => {
+  const release = (database: EngineConnection) => {
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
@@ -325,7 +327,7 @@ type AgentDatabaseLeaseOwner = Pick<
 >;
 
 function agentDatabaseLeasePaths(
-  database: DatabaseSync,
+  database: EngineConnection,
   excludedOwner?: AgentDatabaseLeaseOwner,
 ): string[] {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
@@ -346,7 +348,7 @@ function agentDatabaseLeasePaths(
 }
 
 function hasAgentDatabasePathLease(
-  database: DatabaseSync,
+  database: EngineConnection,
   pathname: string,
   excludedOwner?: AgentDatabaseLeaseOwner,
 ): boolean {
@@ -376,7 +378,7 @@ export function recordOpenClawAgentDatabaseAdmission(
   );
 }
 
-function clearAgentDatabaseLeaseVerifications(database: DatabaseSync, pathname: string): void {
+function clearAgentDatabaseLeaseVerifications(database: EngineConnection, pathname: string): void {
   for (const held of new Set([pathname, ...agentDatabaseLeasePaths(database)])) {
     if (mayShareAgentDatabaseFile(held, pathname)) {
       invalidateOpenClawAgentDatabaseValidation(held);
@@ -507,7 +509,7 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
 
 /** The caller owns the original shared transaction and has joined the exact native Worker exit. */
 export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
   onInvalidation?: () => void,
 ): void {
@@ -532,7 +534,7 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   );
 }
 
-function readAgentDatabaseLeases(database: DatabaseSync, leaseId?: string) {
+function readAgentDatabaseLeases(database: EngineConnection, leaseId?: string) {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
   const query = db.selectFrom("agent_database_leases").selectAll();
   return executeSqliteQuerySync(
@@ -559,13 +561,15 @@ export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
   const cached = openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(pathname)
     ? openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname)
     : undefined;
-  const readActiveLeases = (db: DatabaseSync) =>
-    runWithSqliteBusyTimeout(db, 250, () => {
+  const readActiveLeases = (db: EngineConnection) => {
+    const read = () => {
       if (!tableExists(db, "agent_database_leases")) {
         return [];
       }
       return readAgentDatabaseLeases(db).filter((row) => !agentDatabaseLeaseStaleReason(row));
-    });
+    };
+    return isPostgresSqlConnection(db) ? read() : runWithSqliteBusyTimeout(db, 250, read);
+  };
   if (!cached) {
     return withOpenClawStateReadOnlyLocation(
       ({ db }) => readActiveLeases(db),
@@ -574,7 +578,11 @@ export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
       openStateSchemaReadAdmission,
     );
   }
-  const closeSchemaReadAdmission = openStateSchemaReadAdmission?.(cached.db);
+  const closeSchemaReadAdmission = openStateSchemaReadAdmission
+    ? isPostgresSqlConnection(cached.db)
+      ? requireNativeDatabaseFile("postgres", "repair")
+      : openStateSchemaReadAdmission(cached.db)
+    : undefined;
   try {
     return readActiveLeases(cached.db);
   } finally {

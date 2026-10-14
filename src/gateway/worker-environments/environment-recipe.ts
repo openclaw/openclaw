@@ -205,7 +205,9 @@ export async function resolveEnvironmentRecipe(
       inputs,
       // Corepack auto-pinning must not rewrite the admitted package.json during detection.
       env:
-        file === "pnpm-lock.yaml" || file === "yarn.lock" ? { COREPACK_ENABLE_AUTO_PIN: "0" } : {},
+        file === "pnpm-lock.yaml" || file === "yarn.lock"
+          ? { COREPACK_ENABLE_AUTO_PIN: "0", COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" }
+          : {},
       detectedInstall,
     };
   }

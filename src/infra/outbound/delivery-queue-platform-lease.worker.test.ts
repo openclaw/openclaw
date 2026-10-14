@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
@@ -188,9 +189,11 @@ describe("outbound producer claim worker", () => {
     if (!claimId || !entry) {
       throw new Error("Expected claimed queue custody");
     }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = requireNativeSqliteDatabase(
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }).db,
+    );
     const dispatch = observeRenewalDispatch(id);
     db.exec("BEGIN IMMEDIATE");
     let settled = false;

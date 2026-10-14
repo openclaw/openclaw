@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
+import type { EngineConnection } from "../../../src/infra/sql-connection.ts";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -33,7 +33,7 @@ const scope = "ws://background-cas";
 let profileId: string;
 const none = selectBackgroundSource({ kind: "none" });
 const theme = selectBackgroundSource({ kind: "theme" });
-let database: DatabaseSync;
+let database: EngineConnection;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let options: { path: string };
 installSettingsStorageLifecycle();

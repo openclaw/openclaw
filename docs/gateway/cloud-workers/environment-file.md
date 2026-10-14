@@ -63,6 +63,8 @@ Without a devcontainer file, an executable `.openclaw/worktree-setup.sh` runs be
 
 Yarn's `packageManager` major selects Berry (2+) or Classic; without it, `.yarnrc.yml` selects Berry. No recognized lockfile means no dependency setup. Detection itself does not install Node or Bun; Linux [toolchain bootstrap](/gateway/cloud-workers/setup-and-bundle-installation#automatic-linux-node-toolchains) supplies Node separately.
 
+Detected pnpm and Yarn installs suppress Corepack's download prompt and do not auto-pin `packageManager` in `package.json`.
+
 A failed detected install records a reason and bounded output, skips capture for that run, and lets the session start cold. A failed declared command or fallback script stops dispatch. Changing the recipe changes snapshot compatibility; see [Warm images](/gateway/cloud-workers/warm-images).
 
 ## Setup secrets

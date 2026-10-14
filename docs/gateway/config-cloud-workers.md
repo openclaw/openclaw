@@ -122,6 +122,8 @@ The supported CLI is also required to inspect and stop existing leases. On hosts
 
 Unknown settings are rejected. Backend credentials, coordinator access, networking, and provider-specific snapshot support remain configured in [Crabbox](https://crabbox.sh/providers/index.html), rather than OpenClaw settings. Keep Crabbox's state across Gateway restarts. Provisioning retries use one fixed lease ID; never bypass a fixed-ID capability error by allocating a replacement manually. See [provider requirements](/gateway/cloud-workers#crabbox-provider-support).
 
+Cloud-worker discovery and lifecycle commands run from the Gateway user's home directory, so a `crabbox.yaml` in the Gateway's repository working directory does not override Crabbox's global configuration. Project-scoped sandbox commands retain their explicit workspace directory.
+
 Codex remote-exec requires `codex.exec-server.stdio.v1` in the node-command allowlist and critical invocation approval. AWS admission requires authoritative `providerMetadata.instanceProfileAttached: false`; workers with an instance role are rejected.
 
 #### Crabbox machine catalog
