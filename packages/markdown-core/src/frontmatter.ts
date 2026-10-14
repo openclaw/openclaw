@@ -201,7 +201,7 @@ function parseYamlFrontmatterOnce(
     }
 
     for (const [key, value] of Object.entries(fallback)) {
-      if (!Object.hasOwn(result, key)) {
+      if (!Object.hasOwn(result, key) && !value.startsWith("#")) {
         result[key] = value;
       }
     }
