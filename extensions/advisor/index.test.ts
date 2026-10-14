@@ -26,7 +26,7 @@ Only correct a clear wrong turn when a cheaper authorized next step still fulfil
 Calibration: "Four of five required checks done; next do the fifth" needs NO_CHANGE. "Fetched all pages; next consolidate them" needs NO_CHANGE, even if tool output summarizes the data. "Producer exited with bad config; keep waiting for its output" needs CORRECTION: fix the available config and restart, not keep waiting.
 A snapshot ending never means the agent stopped. Never remind it to perform its already-planned work. Preserve requested repetition, waiting, ordering and timing. Reproduce BEFORE fixing permits fixing afterward; reproduce ONLY and diagnose-only do not.
 Name concrete evidence and the different next action. Fix recoverable causes using available authorized inputs, then continue within scope, including known test updates and requested verification. Report a blocker only if no viable path remains; never invent permissions or weaken safety. If unsure there is a wrong turn, choose NO_CHANGE.
-First line exactly NO_CHANGE or CORRECTION. NO_CHANGE has no body. CORRECTION has one correction below it, preferably under 80 words, at most 120. No other decision tokens, preamble or code fence.`;
+First line exactly NO_CHANGE or CORRECTION. NO_CHANGE has no body. CORRECTION has one correction below it, preferably under 80 words, at most 120. No other decision tokens, preamble or code fence. A tool call without a result may still be running; never treat it as failed or aborted.`;
 
 /** Waits for observable scheduler work rather than sleeping or polling. */
 function createSignal<T>() {
@@ -187,9 +187,14 @@ function setup(pluginConfig: Record<string, unknown>) {
       { ...context, sessionId: "session-1", ...overrides },
     );
   const emitEvent = (
-    stream: "tool" | "lifecycle",
+    stream: "tool" | "lifecycle" | "codex_app_server.item",
     phase: string,
-    overrides: Partial<typeof context> & { ts?: number; startedAt?: number } = {},
+    overrides: Partial<typeof context> & {
+      ts?: number;
+      startedAt?: number;
+      itemId?: string;
+      type?: string;
+    } = {},
   ) =>
     toolEvents?.handle(
       {
@@ -198,7 +203,38 @@ function setup(pluginConfig: Record<string, unknown>) {
         seq: 1,
         ts: overrides.ts ?? Date.now(),
         stream,
-        data: { phase, startedAt: overrides.startedAt },
+        data: {
+          phase,
+          startedAt: overrides.startedAt,
+          itemId: overrides.itemId,
+          type: overrides.type,
+        },
+      },
+      eventContext(overrides.runId ?? context.runId),
+    );
+  const toolEvent = (
+    phase: "start" | "result",
+    overrides: Partial<typeof context> & {
+      omitSessionKey?: boolean;
+      toolCallId?: string;
+      itemId?: string;
+    } = {},
+  ) =>
+    toolEvents?.handle(
+      {
+        runId: overrides.runId ?? context.runId,
+        sessionKey: overrides.omitSessionKey
+          ? undefined
+          : (overrides.sessionKey ?? context.sessionKey),
+        seq: 1,
+        ts: Date.now(),
+        stream: "tool",
+        data: {
+          phase,
+          name: "exec",
+          toolCallId: overrides.toolCallId ?? "call-1",
+          itemId: overrides.itemId,
+        },
       },
       eventContext(overrides.runId ?? context.runId),
     );
@@ -228,20 +264,12 @@ function setup(pluginConfig: Record<string, unknown>) {
       await admitRun(overrides);
       await emitEvent("lifecycle", "start", { ...overrides, startedAt: Date.now() });
     },
-    toolStarted: (overrides: Partial<typeof context> & { omitSessionKey?: boolean } = {}) =>
-      toolEvents?.handle(
-        {
-          runId: overrides.runId ?? context.runId,
-          sessionKey: overrides.omitSessionKey
-            ? undefined
-            : (overrides.sessionKey ?? context.sessionKey),
-          seq: 1,
-          ts: Date.now(),
-          stream: "tool",
-          data: { phase: "start", name: "exec" },
-        },
-        eventContext(overrides.runId ?? context.runId),
-      ),
+    toolStarted: (overrides?: Parameters<typeof toolEvent>[1]) => toolEvent("start", overrides),
+    toolFinished: (overrides?: Parameters<typeof toolEvent>[1]) => toolEvent("result", overrides),
+    toolCompleted: async (overrides?: Parameters<typeof toolEvent>[1]) => {
+      await toolEvent("start", overrides);
+      await toolEvent("result", overrides);
+    },
     endRun: (durationMs = 1_000, overrides: Partial<typeof context> = {}) => {
       const runId = overrides.runId ?? context.runId;
       const namespace = `${runId}:advisor:admitted-run`;
@@ -261,6 +289,7 @@ function setup(pluginConfig: Record<string, unknown>) {
       return result;
     },
     wakeScheduler: () => clock.wake(),
+    advanceBy: (ms: number) => clock.advanceBy(ms),
     dispatchReview: () => {
       const review = started.next();
       void clock.wake();
@@ -272,6 +301,177 @@ function setup(pluginConfig: Record<string, unknown>) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("advisor", () => {
+  it.each(["commandExecution", "dynamicToolCall"])(
+    "waits for native %s completion instead of an early Codex result",
+    async (type) => {
+      const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+      run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+      await run.startService();
+      await run.startRun();
+      const call = { toolCallId: "native-call", itemId: "native-call" };
+      await run.toolStarted(call);
+      await run.toolFinished(call);
+      await run.advanceBy(24 * 60 * 60_000);
+      expect(run.forkSession).not.toHaveBeenCalled();
+      await run.emitEvent("codex_app_server.item", "completed", { itemId: "other", type });
+      await run.wakeScheduler();
+      expect(run.forkSession).not.toHaveBeenCalled();
+      await run.emitEvent("codex_app_server.item", "completed", { itemId: "native-call", type });
+      await run.wakeScheduler();
+      expect(run.forkSession).toHaveBeenCalledOnce();
+      await run.stopService();
+    },
+  );
+
+  it("defers reviews until every started tool has a result and rechecks at dispatch", async () => {
+    const run = setup({ everyToolCalls: 2, everyMinutes: 0 });
+    run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+    await run.startService();
+    await run.startRun();
+    await run.toolStarted({ toolCallId: "first" });
+    await run.toolStarted({ toolCallId: "second" });
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.toolFinished({ toolCallId: "unknown" });
+    await run.toolFinished({ toolCallId: "first" });
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.toolFinished({ toolCallId: "second" });
+    await run.toolStarted({ toolCallId: "third" });
+    await run.wakeScheduler();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.toolFinished({ toolCallId: "third" });
+    await run.wakeScheduler();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.stopService();
+  });
+
+  it.each(["end", "error"].flatMap((phase) => [false, true].map((native) => ({ phase, native }))))(
+    "reviews due work once at lifecycle $phase and clears native=$native pending tools",
+    async ({ phase, native }) => {
+      const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+      run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+      await run.startService();
+      await run.startRun();
+      await run.toolStarted(native ? { itemId: "call-1" } : {});
+      await run.emitEvent("lifecycle", phase);
+      await run.emitEvent("lifecycle", phase);
+      await run.wakeScheduler();
+      expect(run.forkSession).toHaveBeenCalledOnce();
+      await run.startRun({ runId: "run-2" });
+      await run.toolCompleted({ runId: "run-2" });
+      await run.wakeScheduler();
+      expect(run.forkSession).toHaveBeenCalledTimes(2);
+      await run.stopService();
+    },
+  );
+
+  it.each([0, 3])(
+    "never forces a stalled call review with minutes interval=%s",
+    async (everyMinutes) => {
+      const run = setup({ everyToolCalls: 1, everyMinutes });
+      run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+      await run.startService();
+      await run.startRun();
+      await run.toolStarted();
+      await run.advanceBy(24 * 60 * 60_000);
+      expect(run.forkSession).not.toHaveBeenCalled();
+      await run.toolFinished();
+      await run.wakeScheduler();
+      expect(run.forkSession).toHaveBeenCalledOnce();
+      await run.stopService();
+    },
+  );
+
+  it("counts elapsed time through the tool result without requiring another call", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const run = setup({ everyToolCalls: 0, everyMinutes: 1 });
+    run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
+    await run.startService();
+    await run.startRun();
+    await run.toolStarted();
+    now = 60_000;
+    await run.toolFinished();
+    await run.wakeScheduler();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    await run.stopService();
+  });
+
+  it("cancels a due review waiting for tool settlement on reset", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    await run.startRun();
+    await run.toolStarted();
+    await run.lifecycles[0]!.cleanup?.({ reason: "reset", sessionKey: "agent:main:main" });
+    now = 120_000;
+    await run.advanceBy(now);
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.stopService();
+  });
+
+  it.each(["result", "native", "end"])(
+    "holds verification until authoritative settlement via %s",
+    async (release) => {
+      const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+      await run.startService();
+      await run.startRun();
+      await run.toolCompleted();
+      const review = await run.dispatchReview();
+      const call = {
+        toolCallId: "during-review",
+        ...(release === "native" ? { itemId: "during-review" } : {}),
+      };
+      await run.toolStarted(call);
+      const nextFork = run.nextFork();
+      review.resolve("CORRECTION\nStop duplicate checks.");
+      // Drain the completed review's promise chain without polling the pending verifier.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await run.advanceBy(24 * 60 * 60_000);
+      expect(run.forkSession).toHaveBeenCalledOnce();
+      if (release === "native") {
+        await run.toolFinished(call);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(run.forkSession).toHaveBeenCalledOnce();
+        await run.emitEvent("codex_app_server.item", "completed", { itemId: call.itemId });
+      } else if (release === "result") {
+        await run.toolFinished(call);
+      } else {
+        await run.endRun();
+      }
+      const verification = await nextFork;
+      const done = run.finished();
+      verification.resolve("REJECT");
+      await done;
+      expect(run.forkSession).toHaveBeenCalledTimes(2);
+      expect(run.steer).not.toHaveBeenCalled();
+      await run.stopService();
+    },
+  );
+
+  it("cancels verification while waiting for an in-flight tool", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.startService();
+    await run.startRun();
+    await run.toolCompleted();
+    const review = await run.dispatchReview();
+    await run.toolStarted();
+    review.resolve("CORRECTION\nStop duplicate checks.");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await run.stopService();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+    expect(run.steer).not.toHaveBeenCalled();
+    expect(run.warn).not.toHaveBeenCalled();
+  });
+
   it("admits user-triggered runs without claiming the reply", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     expect(Object.keys(run.handlers)).toEqual(["before_agent_reply"]);
@@ -300,7 +500,7 @@ describe("advisor", () => {
     expect(await run.admitRun({ trigger })).toBeUndefined();
     expect(run.runContexts.size).toBe(0);
     await run.emitEvent("lifecycle", "start");
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.endRun();
     await run.wakeScheduler();
     expect(run.forkSession).not.toHaveBeenCalled();
@@ -318,19 +518,23 @@ describe("advisor", () => {
     await run.startRun();
     run.getRunContext.mockClear();
     runStarted.mockClear();
-    for (const phase of ["result", "update", "end", "error", ""]) {
+    for (const phase of ["update", "end", "error", ""]) {
       await run.emitEvent("tool", phase);
     }
     for (const phase of ["model", "update", ""]) {
       await run.emitEvent("lifecycle", phase);
+    }
+    for (const phase of ["started", "update", "end", ""]) {
+      await run.emitEvent("codex_app_server.item", phase);
     }
     expect(run.getRunContext).not.toHaveBeenCalled();
     expect(runStarted).not.toHaveBeenCalled();
     expect(toolStarted).not.toHaveBeenCalled();
     expect(turnEnded).not.toHaveBeenCalled();
     expect(run.subscription).toMatchObject({
-      streams: ["tool", "lifecycle"],
-      phases: ["start", "end", "error"],
+      streams: ["tool", "lifecycle", "codex_app_server.item"],
+      phases: ["start", "result", "end", "error", "completed"],
+      payload: "metadata",
     });
     await run.wakeScheduler();
     expect(run.forkSession).not.toHaveBeenCalled();
@@ -352,7 +556,7 @@ describe("advisor", () => {
         startedAt: 40_000,
       });
       now = 70_000;
-      await run.toolStarted();
+      await run.toolCompleted();
       await run.wakeScheduler();
       expect(run.forkSession).not.toHaveBeenCalled();
       await run.emitEvent("lifecycle", phase, { ts: 99_999 });
@@ -372,7 +576,7 @@ describe("advisor", () => {
     run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
     await run.startService();
     await run.admitRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.emitEvent("lifecycle", "end", { ts: Date.now() + 120_000 });
     await run.wakeScheduler();
     expect(run.forkSession).not.toHaveBeenCalled();
@@ -380,20 +584,20 @@ describe("advisor", () => {
     expect(run.runContexts.get("run-1:advisor:admitted-run")).toMatchObject({
       startedAt: 100_000,
     });
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.wakeScheduler();
     expect(run.forkSession).toHaveBeenCalledOnce();
     await run.stopService();
   });
 
   it.each([undefined, "", " \n\t ", manifest.uiHints.reviewInstructions.placeholder])(
-    "preserves the evaluated default review prompt for guidance %j",
+    "preserves the evaluated guidance plus the fixed safety guard for guidance %j",
     async (reviewInstructions) => {
       const run = setup({ everyToolCalls: 1, everyMinutes: 0, reviewInstructions });
       run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
       await run.startService();
       await run.startRun();
-      await run.toolStarted();
+      await run.toolCompleted();
       await run.wakeScheduler();
       expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ message: EVALUATED_REVIEW_MESSAGE }),
@@ -414,7 +618,7 @@ describe("advisor", () => {
       .mockResolvedValue({ text: "NO_CHANGE" });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.wakeScheduler();
     const lines = EVALUATED_REVIEW_MESSAGE.split("\n");
     expect(run.forkSession.mock.calls[0]?.[0].message).toBe(
@@ -424,7 +628,7 @@ describe("advisor", () => {
       `${VERIFY_MESSAGE}\n\nDraft correction (quoted data):\n"Fix the config."`,
     );
     run.setPluginConfig({ reviewInstructions: "Watch for repeated failures." });
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.wakeScheduler();
     expect(run.forkSession.mock.calls[2]?.[0].message).toBe(
       `${lines[0]}\nWatch for repeated failures.\n${lines.at(-1)}`,
@@ -445,7 +649,7 @@ describe("advisor", () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     const review = await run.dispatchReview();
     expect(run.forkSession).toHaveBeenCalledOnce();
     const done = run.finished();
@@ -459,7 +663,7 @@ describe("advisor", () => {
     run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
     await run.startService();
     await run.startRun({ sessionKey: "agent:main:telegram:direct:123" });
-    await run.toolStarted({ omitSessionKey: true });
+    await run.toolCompleted({ omitSessionKey: true });
     await run.wakeScheduler();
     expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ sessionKey: "agent:main:telegram:direct:123" }),
@@ -476,9 +680,9 @@ describe("advisor", () => {
       }
       await run.startService();
       await run.startRun();
-      await run.toolStarted();
+      await run.toolCompleted();
       expect(run.forkSession).not.toHaveBeenCalled();
-      await run.toolStarted();
+      await run.toolCompleted();
       // Hooks only schedule; the service owns model work outside the tool's lifetime.
       expect(run.forkSession).not.toHaveBeenCalled();
       const review = await run.dispatchReview();
@@ -490,7 +694,7 @@ describe("advisor", () => {
       );
       expect(run.forkSession.mock.calls[0]?.[0]).not.toHaveProperty("model");
       // A third completed tool does not start a second concurrent review.
-      await run.toolStarted();
+      await run.toolCompleted();
       expect(run.forkSession).toHaveBeenCalledOnce();
       const done = run.finished();
       const nextFork = run.nextFork();
@@ -504,7 +708,7 @@ describe("advisor", () => {
         ),
         signal: run.forkSession.mock.calls[0]?.[0].signal,
       });
-      await run.toolStarted();
+      await run.toolCompleted();
       expect(run.forkSession).toHaveBeenCalledTimes(2);
       verification.resolve("APPROVE\nReturn to the requested README typo; leave CI unchanged.");
       await done;
@@ -544,13 +748,13 @@ describe("advisor", () => {
     await run.startService();
     await run.startRun();
     now = 30_000;
-    await run.toolStarted();
+    await run.toolCompleted();
     await run.endRun(40_000);
     expect(run.forkSession).not.toHaveBeenCalled();
     now = 50_000;
     await run.startRun({ runId: "run-2" });
     now = 69_000;
-    await run.toolStarted({ runId: "run-2" });
+    await run.toolCompleted({ runId: "run-2" });
     expect(run.forkSession).not.toHaveBeenCalled();
     await run.endRun(20_000, { runId: "run-2" });
     const review = await run.dispatchReview();
@@ -571,7 +775,7 @@ describe("advisor", () => {
       await run.startService();
       await run.startRun();
       now = 60_000;
-      await run.toolStarted();
+      await run.toolCompleted();
       const review = await run.dispatchReview();
       const done = run.finished();
       now = 150_000;
@@ -583,11 +787,11 @@ describe("advisor", () => {
       await done;
       run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
       now = 151_000;
-      await run.toolStarted();
+      await run.toolCompleted();
       await run.wakeScheduler();
       expect(run.forkSession).toHaveBeenCalledOnce();
       now = 210_000;
-      await run.toolStarted();
+      await run.toolCompleted();
       await run.wakeScheduler();
       expect(run.forkSession).toHaveBeenCalledTimes(2);
       await run.stopService();
@@ -598,7 +802,7 @@ describe("advisor", () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     const review = await run.dispatchReview();
     const done = run.finished();
     review.reject(new Error("PRIVATE_PROVIDER_SENTINEL".repeat(1000)));
@@ -617,7 +821,7 @@ describe("advisor", () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     const review = await run.dispatchReview();
     const nextFork = run.nextFork();
     const done = run.finished();
@@ -639,7 +843,7 @@ describe("advisor", () => {
       const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
       await run.startService();
       await run.startRun();
-      await run.toolStarted();
+      await run.toolCompleted();
       const review = await run.dispatchReview();
       const done = run.finished();
       review.resolve(output);
@@ -684,7 +888,7 @@ describe("advisor", () => {
       const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
       await run.startService();
       await run.startRun();
-      await run.toolStarted();
+      await run.toolCompleted();
       const review = await run.dispatchReview();
       run.forkSession.mockResolvedValue({ text: "APPROVE\nReturn to the requested README typo." });
       const done = run.finished();
@@ -717,7 +921,7 @@ describe("advisor", () => {
       const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
       await run.startService();
       await run.startRun();
-      await run.toolStarted();
+      await run.toolCompleted();
       const review = await run.dispatchReview();
       const nextFork = run.nextFork();
       const done = run.finished();
@@ -749,7 +953,7 @@ describe("advisor", () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     const review = await run.dispatchReview();
     const nextFork = run.nextFork();
     review.resolve("CORRECTION\nStop duplicate checks.");
@@ -768,7 +972,7 @@ describe("advisor", () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
     await run.startRun();
-    await run.toolStarted();
+    await run.toolCompleted();
     const review = await run.dispatchReview();
     const nextFork = run.nextFork();
     const done = run.finished();
@@ -795,7 +999,7 @@ describe("advisor", () => {
     ].entries()) {
       const runId = `run-${index + 1}`;
       await run.startRun({ runId });
-      await run.toolStarted({ runId });
+      await run.toolCompleted({ runId });
       const review = await run.dispatchReview();
       await cancel();
       expect(review.signal?.aborted).toBe(true);

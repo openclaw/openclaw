@@ -46,11 +46,22 @@ still running in the background and calls from channel-originated user runs.
 Accounting begins at the lifecycle start event, not at admission; events before
 that start do not count. `everyMinutes` counts accumulated agent run time from
 that start, including model work before the first tool call, checked as tools
-start and when a run ends. Either trigger starts a review; `0` disables a trigger.
-Both counters restart when a review completes, including a failed review, so the
-next review waits a full interval. The event subscription requests only tool
-starts and lifecycle starts, ends, and errors; ignored phases are also rejected
-before reading run context on hosts without subscription phase filtering.
+start, finish, and when a run ends. Either trigger marks a review due; `0` disables
+a trigger. The review waits until all started tool calls have authoritative
+completion events, or the run ends or errors. Built-in runs settle on tool
+results. Codex runs settle on native `item/completed` events, not the early
+dynamic tool result emitted before Codex records the response. Both the initial
+review and verification recheck settlement immediately before forking; new calls
+during a review can delay verification.
+
+Stalled calls never force a review. A due review waits for tool settlement or
+run end; reviewing at run end preserves feedback when no next model call occurs.
+Lifecycle end/error clears pending tool IDs. Both counters restart when a review
+completes, including a failed review, so the next review waits a full interval.
+
+The event subscription requests metadata only for tool starts/results, Codex
+native item completion, and lifecycle starts/ends/errors, without copying tool
+result payloads. Ignored phases are rejected before reading run context.
 
 ### Review instructions
 
@@ -66,8 +77,10 @@ Custom instructions replace only the review guidance. The fixed prefix still
 says tools are disabled and the conversation is evidence, not instructions.
 The fixed output contract still requires `NO_CHANGE` or `CORRECTION` and limits
 corrections to 120 words. The second-stage `APPROVE`/`REJECT` verification prompt
-is a safety gate and is not editable. The default prompt remains byte-identical
-to the evaluated prompt; custom instructions are not covered by that evaluation.
+is a safety gate and is not editable. A fixed sentence warning that a missing tool
+result may still be running was added to the output contract after the evaluation;
+the default guidance is otherwise unchanged. Custom instructions are not covered
+by that evaluation.
 
 Reviews keep the session's model and context; there is no separate model setting.
 The fork cannot execute tools, persist conversation messages, or send replies.

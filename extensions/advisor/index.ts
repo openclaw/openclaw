@@ -40,14 +40,13 @@ export default definePluginEntry({
     const controller = createAdvisorController({
       schedule,
       logger: api.logger,
-      runInBackground: (sessionKey, run) => {
+      scheduleReview: (id, run) => {
         if (!scheduler || scheduler.signal.aborted) {
-          return false;
+          return undefined;
         }
-        scheduler.schedule({ id: `review:${sessionKey}`, delayMs: 0, run });
-        return true;
+        return scheduler.schedule({ id, delayMs: 0, run }).cancel;
       },
-      review: async ({ sessionKey, signal }) => {
+      review: async ({ sessionKey, signal, withSettledTools }) => {
         const deadline = AbortSignal.timeout(REVIEW_TIMEOUT_MS);
         const reviewSignal = AbortSignal.any(
           scheduler ? [signal, scheduler.signal, deadline] : [signal, deadline],
@@ -56,12 +55,14 @@ export default definePluginEntry({
           const startedAt = Date.now();
           let usage = "input=unknown cacheRead=unknown cacheWrite=unknown output=unknown";
           try {
-            const result = await api.runtime.subagent.forkSession({
-              sessionKey,
-              message,
-              timeoutMs: REVIEW_TIMEOUT_MS,
-              signal: reviewSignal,
-            });
+            const result = await withSettledTools(reviewSignal, () =>
+              api.runtime.subagent.forkSession({
+                sessionKey,
+                message,
+                timeoutMs: REVIEW_TIMEOUT_MS,
+                signal: reviewSignal,
+              }),
+            );
             usage = `input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} cacheWrite=${result.usage?.cacheWriteTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`;
             reviewSignal.throwIfAborted();
             return result.text;
@@ -152,14 +153,16 @@ export default definePluginEntry({
     // still read run context; the host clears it only after those handlers settle.
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
-      description: "Counts tool starts and closes admitted runs for the review trigger.",
-      streams: ["tool", "lifecycle"],
-      phases: ["start", "end", "error"],
+      description: "Counts tool starts and waits for settled tool calls before reviewing.",
+      streams: ["tool", "lifecycle", "codex_app_server.item"],
+      phases: ["start", "result", "end", "error", "completed"],
+      payload: "metadata",
       handle: (event, ctx) => {
         const phase = event.data.phase;
         if (
           !(
-            (event.stream === "tool" && phase === "start") ||
+            (event.stream === "tool" && (phase === "start" || phase === "result")) ||
+            (event.stream === "codex_app_server.item" && phase === "completed") ||
             (event.stream === "lifecycle" &&
               (phase === "start" || phase === "end" || phase === "error"))
           )
@@ -185,7 +188,27 @@ export default definePluginEntry({
           });
         } else if (run.startedAt !== null) {
           if (event.stream === "tool") {
-            controller.toolStarted({ sessionKey: run.sessionKey, runId: event.runId });
+            const toolCallId = event.data.toolCallId;
+            if (typeof toolCallId !== "string") {
+              return;
+            }
+            const params = { sessionKey: run.sessionKey, runId: event.runId, toolCallId };
+            if (phase === "start") {
+              controller.toolStarted(params);
+            } else if (typeof event.data.itemId !== "string") {
+              controller.toolFinished(params);
+            }
+          } else if (event.stream === "codex_app_server.item") {
+            // Codex tool events have itemId; its early dynamic result precedes native
+            // persistence. Only item/completed (event-projector.ts) settles that call.
+            const itemId = event.data.itemId;
+            if (typeof itemId === "string") {
+              controller.toolFinished({
+                sessionKey: run.sessionKey,
+                runId: event.runId,
+                toolCallId: itemId,
+              });
+            }
           } else {
             controller.turnEnded({
               sessionKey: run.sessionKey,

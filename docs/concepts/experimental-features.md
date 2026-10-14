@@ -261,18 +261,28 @@ you set the options below. Or use config:
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
-  calls start in a conversation, including during a run and including commands
-  still running in the background.
-- `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of accumulated agent run time from the lifecycle start event, checked as tools
-  start and when a run ends. Time before that start does not count.
+- `everyToolCalls` (default `10`, range `0`–`1000`): mark a review due after this
+  many tool calls start in a conversation, including commands still running in
+  the background.
+- `everyMinutes` (default `20`, range `0`–`1440`): mark a review due after this
+  many minutes of accumulated agent run time from the lifecycle start event,
+  checked as tools start or finish and when a run ends. Time before that start
+  does not count.
 
 Reviews always use the session's own model; there is no separate model setting.
 
-A review starts when either trigger is reached, and both counters restart after
-each review. Set a trigger to `0` to turn it off. With both at `0`, no reviews
-run. Changes apply without restarting the Gateway.
+A due review waits until all started tool calls have authoritative completion
+events, or the run ends or errors. Built-in runs settle on tool results; Codex
+runs settle on native `item/completed` notifications rather than early dynamic
+tool results. Verification checks the same condition again before its fork.
+A stalled call never forces a review: Advisor waits for completion or run end,
+without a timer bypass. A call without a result may still be running; the fixed
+review contract forbids treating it as failed or aborted. Run end/error clears
+pending tool IDs and allows one due review even when no next model call occurs.
+
+Both counters restart after each review completes, including a failed review.
+Set a trigger to `0` to turn it off. With both at `0`, no reviews run. Changes apply
+without restarting the Gateway.
 
 Behavior and limits:
 

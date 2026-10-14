@@ -10,7 +10,11 @@ export type AdvisorSchedule = {
 
 type AdvisorDeps = {
   schedule: AdvisorSchedule;
-  review: (input: { sessionKey: string; signal: AbortSignal }) => Promise<string | null>;
+  review: (input: {
+    sessionKey: string;
+    signal: AbortSignal;
+    withSettledTools: <T>(signal: AbortSignal, run: () => Promise<T>) => Promise<T>;
+  }) => Promise<string | null>;
   deliver: (input: {
     agentId: string;
     sessionKey: string;
@@ -19,15 +23,19 @@ type AdvisorDeps = {
     signal: AbortSignal;
   }) => Promise<void>;
   logger: { info: (message: string) => void; warn: (message: string) => void };
-  /** Runs reviews under the plugin service's lifetime, not the triggering hook's. */
-  runInBackground: (sessionKey: string, run: () => Promise<void>) => boolean;
+  /** Schedules reviews under the plugin service's lifetime; returns their cancellation handle. */
+  scheduleReview: (id: string, run: () => Promise<void>) => (() => void) | undefined;
 };
 
 type SessionState = {
   toolCalls: number;
   activeMs: number;
   run?: { id: string; agentId: string; startedAt: number; accountedMs: number };
+  pendingTools: Set<string>;
+  reviewDue: boolean;
+  cancelScheduled?: () => void;
   inFlight?: AbortController;
+  onSettled?: () => void;
 };
 
 const MAX_TRACKED_SESSIONS = 1000;
@@ -37,12 +45,17 @@ export function createAdvisorController(deps: AdvisorDeps) {
   const everyMs = deps.schedule.everyMinutes * 60_000;
 
   function stateFor(sessionKey: string): SessionState {
-    const state = sessions.get(sessionKey) ?? { toolCalls: 0, activeMs: 0 };
+    const state = sessions.get(sessionKey) ?? {
+      toolCalls: 0,
+      activeMs: 0,
+      reviewDue: false,
+      pendingTools: new Set<string>(),
+    };
     sessions.delete(sessionKey);
     sessions.set(sessionKey, state);
     if (sessions.size > MAX_TRACKED_SESSIONS) {
       for (const [key, candidate] of sessions) {
-        if (!candidate.inFlight && !candidate.run) {
+        if (!candidate.inFlight && !candidate.run && !candidate.cancelScheduled) {
           sessions.delete(key);
           break;
         }
@@ -65,8 +78,39 @@ export function createAdvisorController(deps: AdvisorDeps) {
     if (state.run) {
       accountTime(state, Date.now() - state.run.startedAt);
     }
+    state.cancelScheduled?.();
+    state.cancelScheduled = undefined;
+    state.reviewDue = false;
     state.toolCalls = 0;
     state.activeMs = 0;
+  }
+
+  async function withSettledTools<T>(
+    state: SessionState,
+    signal: AbortSignal,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    while (state.pendingTools.size > 0) {
+      signal.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          signal.removeEventListener("abort", onAbort);
+          state.onSettled = undefined;
+        };
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(new DOMException("Advisor review cancelled", "AbortError"));
+        };
+        state.onSettled = onReady;
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+    signal.throwIfAborted();
+    return run();
   }
 
   async function runReview(
@@ -76,7 +120,11 @@ export function createAdvisorController(deps: AdvisorDeps) {
     controller: AbortController,
   ): Promise<void> {
     try {
-      const finding = await deps.review({ sessionKey, signal: controller.signal });
+      const finding = await deps.review({
+        sessionKey,
+        signal: controller.signal,
+        withSettledTools: (signal, run) => withSettledTools(state, signal, run),
+      });
       if (controller.signal.aborted) {
         return;
       }
@@ -114,19 +162,32 @@ export function createAdvisorController(deps: AdvisorDeps) {
     }
   }
 
-  function reviewIfDue(sessionKey: string, agentId: string, state: SessionState) {
+  function scheduleDueReview(sessionKey: string, agentId: string, state: SessionState) {
+    if (!state.reviewDue || state.inFlight || state.pendingTools.size > 0) {
+      return;
+    }
+    state.cancelScheduled?.();
+    state.cancelScheduled = deps.scheduleReview(`review:${sessionKey}`, async () => {
+      state.cancelScheduled = undefined;
+      if (!state.reviewDue || state.inFlight || state.pendingTools.size > 0) {
+        return;
+      }
+      const controller = new AbortController();
+      state.inFlight = controller;
+      await runReview(sessionKey, agentId, state, controller);
+    });
+  }
+
+  function markReviewDue(sessionKey: string, agentId: string, state: SessionState) {
+    if (state.inFlight) {
+      return;
+    }
     const due =
       (deps.schedule.everyToolCalls > 0 && state.toolCalls >= deps.schedule.everyToolCalls) ||
       (everyMs > 0 && state.activeMs >= everyMs);
-    if (!due || state.inFlight) {
-      return;
-    }
-    const controller = new AbortController();
-    state.inFlight = controller;
-    if (
-      !deps.runInBackground(sessionKey, () => runReview(sessionKey, agentId, state, controller))
-    ) {
-      state.inFlight = undefined;
+    if (due) {
+      state.reviewDue = true;
+      scheduleDueReview(sessionKey, agentId, state);
     }
   }
 
@@ -146,16 +207,35 @@ export function createAdvisorController(deps: AdvisorDeps) {
           accountedMs: 0,
         };
       }
+      state.pendingTools.clear();
+      state.onSettled?.();
     },
-    toolStarted(params: { sessionKey: string; runId: string }): void {
+    toolStarted(params: { sessionKey: string; runId: string; toolCallId: string }): void {
       const state = sessions.get(params.sessionKey);
       // Tool events carry no trigger; only admitted runs with a lifecycle start count.
       if (state?.run?.id !== params.runId) {
         return;
       }
+      state.pendingTools.add(params.toolCallId);
+      state.cancelScheduled?.();
+      state.cancelScheduled = undefined;
       state.toolCalls += 1;
       accountTime(state, Date.now() - state.run.startedAt);
-      reviewIfDue(params.sessionKey, state.run.agentId, state);
+      markReviewDue(params.sessionKey, state.run.agentId, state);
+    },
+    toolFinished(params: { sessionKey: string; runId: string; toolCallId: string }): void {
+      const state = sessions.get(params.sessionKey);
+      if (state?.run?.id !== params.runId) {
+        return;
+      }
+      if (!state.pendingTools.delete(params.toolCallId)) {
+        return;
+      }
+      if (state.pendingTools.size === 0) {
+        state.onSettled?.();
+      }
+      accountTime(state, Date.now() - state.run.startedAt);
+      markReviewDue(params.sessionKey, state.run.agentId, state);
     },
     turnEnded(params: {
       sessionKey: string;
@@ -169,13 +249,18 @@ export function createAdvisorController(deps: AdvisorDeps) {
       }
       accountTime(state, params.durationMs ?? (state.run ? Date.now() - state.run.startedAt : 0));
       state.run = undefined;
-      reviewIfDue(params.sessionKey, params.agentId, state);
+      state.pendingTools.clear();
+      state.cancelScheduled?.();
+      state.cancelScheduled = undefined;
+      state.onSettled?.();
+      markReviewDue(params.sessionKey, params.agentId, state);
     },
     /** Drops one session's state, or all state, and cancels the matching reviews. */
     forget(sessionKey?: string) {
       for (const [key, state] of sessions) {
         if (sessionKey === undefined || key === sessionKey) {
           state.inFlight?.abort();
+          state.cancelScheduled?.();
           sessions.delete(key);
         }
       }
