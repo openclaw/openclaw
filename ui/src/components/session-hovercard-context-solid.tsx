@@ -1,15 +1,18 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+import {
+  SessionHovercardAutomations,
+  type SessionHovercardAutomation,
+} from "./session-hovercard-automations.tsx";
 import { sessionMachineParts } from "./session-machine.ts";
 import type { progressCardHeadsUp } from "./session-progress-card.ts";
 import { Icon } from "./solid/icon.tsx";
 
 export type SessionHovercardContextInput = {
   row?: SidebarSessionHovercardRow;
-  automationLink?: { href: string; navigate: () => void };
+  automationLink?: SessionHovercardAutomation;
 };
 
 function ContextRow(props: { icon: JSX.Element; value: string; label: string; title?: string }) {
@@ -142,26 +145,7 @@ export function SessionHovercardContext(
         />
       </Show>
       <Show when={props.row?.hasAutomation && props.automationLink}>
-        <a
-          class="session-hovercard__context-row session-hovercard__automation-link"
-          href={props.automationLink?.href}
-          onClick={(event: MouseEvent) => {
-            if (shouldHandleNavigationClick(event)) {
-              event.preventDefault();
-              props.automationLink?.navigate();
-            }
-          }}
-        >
-          <span class="session-hovercard__context-icon" aria-hidden="true">
-            <Icon name="clock" />
-          </span>
-          <span class="session-hovercard__context-value session-hovercard__context-text">
-            {t("sessionsView.automationAttached")}
-          </span>
-          <span class="session-hovercard__context-icon" aria-hidden="true">
-            <Icon name="chevronRight" />
-          </span>
-        </a>
+        <SessionHovercardAutomations automation={props.automationLink!} />
       </Show>
       <ProgressHeadsUp headsUp={props.headsUp} />
     </div>
