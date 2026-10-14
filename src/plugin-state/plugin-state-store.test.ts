@@ -29,6 +29,7 @@ import { withPluginStateDatabaseReadOnly } from "./plugin-state-store.database.j
 import {
   getPluginStateCapacity,
   createCorePluginStateKeyedStore,
+  createCorePluginStateKeyedStoreV2,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -265,6 +266,9 @@ describe("plugin-state-store", () => {
       };
       const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>(options);
       const asyncStore = createCorePluginStateKeyedStore<{ stopped: boolean }>(options);
+      const workerStore = createCorePluginStateKeyedStoreV2<{ stopped: boolean }>(options, {
+        assertCurrent: () => {},
+      });
       expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
       closePluginStateDatabase();
       await expect(asyncStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
@@ -272,6 +276,16 @@ describe("plugin-state-store", () => {
         asyncStore.update("telegram:personal", () => ({ stopped: false })),
       ).resolves.toBe(true);
       expect(store.lookup("telegram:personal")).toEqual({ stopped: false });
+      const observation = await workerStore.observe("telegram:personal");
+      store.register("telegram:personal", { stopped: true });
+      await expect(
+        workerStore.compareAndApply("telegram:personal", observation.comparison, {
+          operation: "delete",
+          action: "delete",
+        }),
+      ).resolves.toMatchObject({ status: "conflict" });
+      await expect(workerStore.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      store.register("telegram:personal", { stopped: false });
       await expect(
         asyncStore.deleteIf("telegram:personal", (current) => !current.stopped),
       ).resolves.toBe(true);
@@ -670,10 +684,14 @@ describe("plugin-state-store.errors", () => {
           const options = { namespace: "corrupt", maxEntries: 10, env: state.env };
           const sync = createPluginStateSyncKeyedStore("discord", options);
           const store = createPluginStateKeyedStore("discord", options);
-          sync.register("key", "custom");
           const database = openOpenClawStateDatabase({ env: state.env });
           expect(database.path).not.toBe(resolveOpenClawStateSqlitePath());
-          database.db.prepare("UPDATE plugin_state_entries SET value_json = ?").run("invalid JSON");
+          // Seed corrupt storage before any keyed receipt can cache the row.
+          database.db
+            .prepare(
+              "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, NULL)",
+            )
+            .run("discord", "corrupt", "key", "invalid JSON", Date.now());
           const expected = {
             code: "PLUGIN_STATE_CORRUPT",
             path: database.path,

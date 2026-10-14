@@ -12,6 +12,31 @@ vi.mock("./openclaw-state-worker-runtime.js", () => {
   throw new Error("Plugin-state preparation must not load unrelated shared-state commands");
 });
 
+it.each(["restartLifecycle.consumeIntent", "restartLifecycle.writeHandoff"] as const)(
+  "prepares cold %s without application commands or database access",
+  async (commandType) => {
+    await withOpenClawTestState({ label: "restart-lazy-preparation" }, async () => {
+      const databasePath = openOpenClawStateDatabase().path;
+      await closeOpenClawStateDatabaseAsync();
+      const context = captureOpenClawStateWorkerContext();
+      const backend = runWithSqliteWorkerStateContext(context, () =>
+        openExistingSqliteWorkerBackend(undefined, {
+          databasePath,
+          existingIdentity: context.admission.identity.key,
+        }),
+      );
+      unlinkSync(databasePath);
+      try {
+        expect(backend[SQLITE_WORKER_PREPARE_COMMAND]).toBeTypeOf("function");
+        await backend[SQLITE_WORKER_PREPARE_COMMAND]?.(commandType);
+        expect(existsSync(databasePath)).toBe(false);
+      } finally {
+        await backend.close();
+      }
+    });
+  },
+);
+
 it("keeps the shared-state command worker independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges("src/state/openclaw-state-worker-runtime.ts", [

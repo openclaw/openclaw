@@ -13,12 +13,13 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
 /** Lease inspection precedes runtime schema admission, including newer or quarantined state. */
-export function inspectGatewayOwnerLeaseForMaintenance(
+export function inspectGatewayOwnerLease(
   source: Pick<
     OpenClawStateReadRequest,
     "databasePath" | "location" | "expectedIdentity" | "snapshotRoot"
   >,
   onAdmitted: () => void,
+  schemaMaintenance: boolean,
 ): GatewayOwnerLeaseIdentity | undefined {
   const connection = openOpenClawStateReadConnection(
     source.databasePath,
@@ -35,7 +36,7 @@ export function inspectGatewayOwnerLeaseForMaintenance(
     "Gateway owner lease inspection",
     () => {
       const db = connection.database.db;
-      const closeAdmission = openDoctorStateSchemaReadAdmission(db);
+      const closeAdmission = schemaMaintenance ? openDoctorStateSchemaReadAdmission(db) : undefined;
       return runWithSqliteCleanup(
         { release: () => closeAdmission?.() },
         "Gateway owner lease schema read admission",

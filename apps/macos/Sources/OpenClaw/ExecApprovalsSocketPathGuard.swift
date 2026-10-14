@@ -403,18 +403,14 @@ enum ExecApprovalsSocketPathGuard {
                     path: path,
                     code: errno == 0 ? EIO : errno)
             }
-            var grantsMutation = false
-            for permission in self.mutatingACLPermissions {
+            let grantsMutation = try self.mutatingACLPermissions.contains { permission in
                 let result = acl_get_perm_np(permissionSet, permission)
                 guard result >= 0 else {
                     throw ExecApprovalsSocketPathGuardError.parentACLReadFailed(
                         path: path,
                         code: errno == 0 ? EIO : errno)
                 }
-                if result != 0 {
-                    grantsMutation = true
-                    break
-                }
+                return result != 0
             }
             guard try !grantsMutation || self.aclEntryBelongsToTrustedUser(entry, path: path) else {
                 throw ExecApprovalsSocketPathGuardError.parentACLUnsafe(path: path)

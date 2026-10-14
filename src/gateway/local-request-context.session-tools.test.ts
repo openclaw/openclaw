@@ -211,7 +211,12 @@ describe("built-in session tool role authority", () => {
             expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
             return undefined;
           });
-        const wake = vi.fn(() => ({ ok: true as const }));
+        const enqueueWake = vi.fn();
+        const wake = vi.fn(async (opts: { commitGuard?: () => void }) => {
+          opts.commitGuard?.();
+          enqueueWake();
+          return { ok: true as const };
+        });
         if (surface === "unselected wake") {
           context.cron = { ...context.cron, prepareWake: steer, wake };
         } else {
@@ -235,7 +240,7 @@ describe("built-in session tool role authority", () => {
           `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
         );
         if (surface === "unselected wake") {
-          expect(wake).not.toHaveBeenCalled();
+          expect(enqueueWake).not.toHaveBeenCalled();
         }
         expect(
           (
@@ -762,12 +767,13 @@ describe("built-in session tool role authority", () => {
         });
         let current = true;
         const settled = createDeferredCore();
+        const sourceReleased = createDeferredCore();
         const source = captureGatewayDeviceRevocation(
           context,
           { deviceId: "archive-device", role: "operator" },
           () => current,
           undefined,
-          { isCurrent: () => true, subscribe: () => () => {} },
+          { isCurrent: () => true, subscribe: () => () => sourceReleased.resolve() },
         );
         try {
           const archive = () =>
@@ -839,6 +845,7 @@ describe("built-in session tool role authority", () => {
         }
         await settled.promise;
         await archived.promise;
+        await sourceReleased.promise;
         expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
         expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
           sessionId,

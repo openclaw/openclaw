@@ -8,6 +8,7 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -21,9 +22,9 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { parseSessionPendingInputMessage } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import { discardSessionPendingInput } from "./session-pending-input-withdrawal.js";
 
 type WithdrawalScope = Parameters<typeof discardSessionPendingInput>[0];
@@ -196,18 +197,13 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
     const receipts: SessionPendingInputReceipt[] = [];
     const receipt = await stage(target, "revoked", receipts);
     const original = readPendingRow(database, receipt.inputId);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
     let current = true;
-    const admitted = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            current = false;
-          }
-          return callback(request, grant);
-        }, attachment),
-      );
+    const admitted = probe.admission(admission, (request, grant, callback) => {
+      if (request.stage === "commit") {
+        current = false;
+      }
+      return callback(request, grant);
+    });
     try {
       await expect(
         discardSessionPendingInput(target, "revoked", () => {

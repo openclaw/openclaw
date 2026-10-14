@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
@@ -13,21 +11,9 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
-import type { AcpSessionEntryMutation } from "./session-meta-entry.types.js";
-import type {
-  IncognitoAcpSessionMutation,
-  IncognitoAcpSessionParams,
-} from "./session-meta-incognito.types.js";
-import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
-import type { PreparedAcpSessionEntryRead } from "./session-meta-read.types.js";
-import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import type {
   AcpSessionMutationCommit,
   AcpSessionMutationDecision,
@@ -60,45 +46,38 @@ export async function prepareAcpSessionMutation(
         let phase: "transaction" | "commit" | "settled" = "transaction";
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           const facts = request.facts;
-          const port =
-            isRecord(facts) && facts.preparationPort instanceof MessagePort
-              ? facts.preparationPort
-              : undefined;
-          try {
+          assertCurrent();
+          if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
+            throw new Error("ACP callback differs from its retained transaction");
+          }
+          authorize?.(request.stage === "transaction" ? "transaction" : "commit");
+          if (request.stage === "transaction") {
+            if (decision) {
+              throw new Error("ACP callback has no unique decision");
+            }
+            // SAFETY: this private worker supplies this operation's authoritative row snapshot.
+            const prepared = facts.preparation as AcpSessionMutationPreparation;
+            const next = mutate(
+              prepared.current,
+              prepared.current
+                ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
+                : prepared.entry,
+            );
+            decision =
+              next === undefined
+                ? { kind: "keep" }
+                : next === null
+                  ? { kind: "clear" }
+                  : { kind: "set", meta: next };
             assertCurrent();
-            if (!isRecord(facts) || facts.nonce !== nonce || request.stage !== phase) {
-              throw new Error("ACP callback differs from its retained transaction");
-            }
-            authorize?.(request.stage === "transaction" ? "transaction" : "commit");
-            if (request.stage === "transaction") {
-              if (!port || decision) {
-                throw new Error("ACP callback has no unique decision port");
-              }
-              // SAFETY: this private worker supplies this operation's authoritative row snapshot.
-              const prepared = facts.preparation as AcpSessionMutationPreparation;
-              const next = mutate(
-                prepared.current,
-                prepared.current
-                  ? mergeSessionEntry(prepared.preparedEntry, { acp: prepared.current })
-                  : prepared.entry,
-              );
-              decision =
-                next === undefined
-                  ? { kind: "keep" }
-                  : next === null
-                    ? { kind: "clear" }
-                    : { kind: "set", meta: next };
-              assertCurrent();
-              port.postMessage(decision, []);
-              phase = "commit";
-            } else {
-              phase = "settled";
-            }
-            if (!grant()) {
-              throw new Error("ACP callback admission expired");
-            }
-          } finally {
-            port?.close();
+            // Reject uncloneable metadata before any canonical entry mutation.
+            structuredClone(decision);
+            phase = "commit";
+          } else {
+            phase = "settled";
+          }
+          if (!grant()) {
+            throw new Error("ACP callback admission expired");
           }
         });
         return {
@@ -125,9 +104,6 @@ export async function commitAcpSessionMutation(
   assertCurrent: () => void,
   authorize?: (stage: "transaction" | "commit") => void,
 ) {
-  if ("kind" in input.source && input.source.kind === "reset" && !authorize) {
-    throw new Error("ACP reset publication requires its retained lifecycle guard");
-  }
   const nonce = randomUUID();
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
@@ -213,7 +189,7 @@ export async function commitAcpSessionMutation(
           return {
             nativeLocations: [
               context.admission.databasePath,
-              ...("kind" in input.source && input.source.kind === "ephemeral"
+              ...("kind" in input.source && input.source.kind !== "reset"
                 ? []
                 : [input.source.path]),
             ],
@@ -233,232 +209,4 @@ export async function commitAcpSessionMutation(
       unsubscribe();
     }
   }
-}
-
-type Target = IncognitoAcpSessionParams & {
-  actor: IncognitoSessionActor;
-};
-
-function captureTarget(params: Target) {
-  const { actor, authority } = params;
-  const sessionKey = params.sessionKey.trim().toLowerCase();
-  const context = captureOpenClawStateWorkerContext({ env: params.env, path: params.databasePath });
-  const assertCurrent = () => {
-    actor.assertCurrent();
-    authority.assertCurrent();
-    context.admission.assertCurrent();
-  };
-  assertCurrent();
-  if (
-    !isIncognitoSessionKey(sessionKey) ||
-    parseAgentSessionKey(sessionKey)?.agentId !== actor.agentId ||
-    actor.path !==
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: actor.agentId, env: context.environment })
-  ) {
-    throw new Error("ACP incognito access differs from its retained actor");
-  }
-  return { actor, authority, sessionKey, context, assertCurrent };
-}
-
-/** Inactive join: volatile entry custody spans the existing shared metadata reader. */
-export async function readIncognitoAcpSessionEntry(
-  params: Target,
-): Promise<SessionEntry | undefined> {
-  return (await prepareIncognitoAcpSessionEntry(params)).entry;
-}
-
-function prepareIncognitoAcpSessionEntry(params: Target) {
-  const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
-  return actor.sessions.withSharedState(async () => {
-    const { entry, claim, snapshot } = await actor.sessions.read(authority, { sessionKey });
-    const [acp] = await readAcpSessionMetaForEntries({
-      entries: [{ sessionKey, agentId: actor.agentId, entry }],
-      cfg: params.cfg,
-      env: context.environment,
-      databasePath: context.admission.databasePath,
-    });
-    const assertPreparedCurrent = () => {
-      assertCurrent();
-      snapshot.assertCurrent();
-      claim.authorize(authority, "commit");
-    };
-    assertPreparedCurrent();
-    if (entry) {
-      delete entry.acp;
-    }
-    return {
-      entry: entry && acp ? { ...entry, acp } : entry,
-      assertCurrent: assertPreparedCurrent,
-    };
-  });
-}
-
-/** Inactive cleanup composition; both source fences remain owned until release. */
-export function prepareIncognitoAcpSessionEntryRead(
-  params: Target & { storePath: string },
-): Promise<PreparedAcpSessionEntryRead> {
-  const { actor, sessionKey } = captureTarget(params);
-  const cfg = params.cfg;
-  const storePath = params.storePath;
-  const logicalSessionKey = params.sessionKey.trim();
-  return actor.sessions.withSharedState(async () => {
-    const released = createDeferredCore();
-    void actor.sessions.withSharedState(() => released.promise);
-    let active = true;
-    let changed = false;
-    const unsubscribe = sessionChanges.subscribeFacts((change) => {
-      if (
-        "all" in change ||
-        (change.sessionKey === sessionKey && (!change.agentId || change.agentId === actor.agentId))
-      ) {
-        changed = true;
-      }
-    });
-    const release = () => {
-      active = false;
-      unsubscribe();
-      released.resolve();
-    };
-    try {
-      const prepared = await prepareIncognitoAcpSessionEntry(params);
-      const assertCurrent = () => {
-        // Shared ACP publication can follow its actor-entry commit; retain both fences.
-        prepared.assertCurrent();
-        if (!active || changed) {
-          throw new Error("Prepared ACP session changed before binding cleanup");
-        }
-      };
-      assertCurrent();
-      return {
-        session: {
-          cfg,
-          agentId: actor.agentId,
-          storePath,
-          sessionKey: logicalSessionKey,
-          storeSessionKey: sessionKey,
-          entry: prepared.entry,
-          acp: prepared.entry?.acp,
-        },
-        assertCurrent,
-        release,
-      };
-    } catch (error) {
-      release();
-      throw error;
-    }
-  });
-}
-
-/** Preserve entry → shared metadata ordering without holding an actor grant across a second owner. */
-export function upsertIncognitoAcpSessionMeta(
-  params: Target & IncognitoAcpSessionMutation,
-): Promise<SessionEntry | null> {
-  const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
-  const expectedControlBinding =
-    params.expectedControlBinding && structuredClone(params.expectedControlBinding);
-  const updatedAt = params.now?.() ?? Date.now();
-  const metadataRead = {
-    keys: [buildAcpDatabaseSessionKey(sessionKey, actor.agentId)],
-  };
-  return actor.sessions.withSharedState(async () => {
-    const readSource = async () => {
-      const { snapshot, claim } = await actor.sessions.acpSource(authority, sessionKey);
-      const retained = actor.sessions.captureSnapshot(sessionKey);
-      return {
-        source: {
-          kind: "ephemeral" as const,
-          agentId: actor.agentId,
-          path: actor.path,
-          identity: actor.identity,
-          snapshot,
-        },
-        assertCurrent(this: void) {
-          assertCurrent();
-          retained.assertCurrent();
-        },
-        authorize(this: void, stage: "transaction" | "commit") {
-          claim.authorize(authority, stage);
-        },
-      };
-    };
-    const initial = await readSource();
-    const entry = initial.source.snapshot.entry;
-    const { preparation, decision } = await prepareAcpSessionMutation(
-      context,
-      {
-        read: { ...metadataRead, entry },
-        entry,
-        updatedAt,
-        source: initial.source,
-        sessionKey,
-        agentId: actor.agentId,
-        expectedControlBinding,
-      },
-      params.mutate,
-      initial.assertCurrent,
-      initial.authorize,
-    );
-    initial.assertCurrent();
-    initial.authorize("commit");
-    if (decision.kind === "keep") {
-      return preparation.current
-        ? mergeSessionEntry(entry, { acp: preparation.current })
-        : (entry ?? null);
-    }
-    const update = async (
-      mutation: AcpSessionEntryMutation,
-      expectedEntry: SessionEntry | undefined,
-    ) => {
-      // Row predicates are transaction-local. A pending actor projection cannot grant its own write.
-      const result = await actor.sessions.sideData(authority, {
-        type: "session.acp.entry",
-        input: {
-          agentId: actor.agentId,
-          sessionKey,
-          mutation,
-          expectedEntry: expectedEntry ? captureAcpSessionEntryBinding(expectedEntry) : null,
-          expectedControlBinding,
-        },
-      });
-      assertCurrent();
-      return result.entry;
-    };
-    const changed =
-      decision.kind === "clear"
-        ? entry
-          ? await update({ kind: "clear" }, entry)
-          : null
-        : await update(
-            { kind: "touch", updatedAt, fallbackEntry: preparation.preparedEntry },
-            entry,
-          );
-    if (decision.kind === "set" && !changed) {
-      return null;
-    }
-    const commitEntry = changed ?? entry;
-    const publication = await readSource();
-    await commitAcpSessionMutation(
-      context,
-      {
-        agentId: actor.agentId,
-        storageSessionKey: sessionKey,
-        sessionKey,
-        entry: commitEntry,
-        currentRowKey: preparation.currentRowKey,
-        currentRowSessionId: preparation.currentRowSessionId,
-        updatedAt,
-        decision,
-        source: publication.source,
-        expectedControlBinding,
-      },
-      publication.assertCurrent,
-      publication.authorize,
-    );
-    publication.assertCurrent();
-    publication.authorize("commit");
-    if (decision.kind === "clear") {
-      return changed;
-    }
-    return mergeSessionEntry(changed ?? undefined, { acp: decision.meta });
-  });
 }

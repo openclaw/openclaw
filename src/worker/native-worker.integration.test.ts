@@ -1,5 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   createServer,
   type IncomingHttpHeaders,
@@ -7,55 +6,32 @@ import {
   type ServerResponse,
 } from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
-import { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import {
-  WORKER_NATIVE_INFERENCE_STARTUP_ARG,
-  WORKER_NATIVE_INFERENCE_STARTUP_FD,
-  type NativeInferenceStartup,
-} from "./native-inference-startup.js";
-import { nativeWorkerTestEntrypoint } from "./native-worker-entrypoints.test-support.js";
+import type { NativeInferenceStartup } from "./native-inference-startup.js";
 import { ComposedGatewayHarness, SESSION_ID } from "./worker-fault-injection.test-support.js";
+import { parseWorkerProcessMessage } from "./worker-process-protocol.js";
 import {
-  parseWorkerProcessMessage,
-  serializeWorkerProcessInput,
-} from "./worker-process-protocol.js";
-import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
+  createWorkerProcessTestHarness,
+  type WorkerProcessTestExit,
+} from "./worker-process.test-support.js";
 
-const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const fixtureEntry = resolveRuntimeWorkerUrl(nativeWorkerTestEntrypoint);
 // External proxy auth is opaque, even when it resembles another process's sentinel.
 const LOCAL_KEY = "oc-sent-v2." + "A".repeat(48) + ".end";
 const MODEL = { provider: "openai", model: "local-worker-model" };
-const children: Array<{ child: ChildProcess; exited: Promise<ProcessExit> }> = [];
 const servers: Server[] = [];
 let gateway: ComposedGatewayHarness | undefined;
 let activeTestSignal: AbortSignal;
-type ProcessExit = { code: number | null; stdout: string; stderr: string };
 
 // Join child/transport lifetimes before the shared tracker removes their homes.
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async ({ signal }) => {
     try {
-      for (const { child, exited } of children.splice(0)) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGTERM");
-          try {
-            await withinTest(exited, signal);
-          } catch {
-            child.kill("SIGKILL");
-            await exited;
-          }
-        }
-      }
+      await workers.close(signal);
       for (const server of servers.splice(0)) {
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => {
@@ -69,6 +45,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     }
   }),
 );
+
+const workers = createWorkerProcessTestHarness((prefix) => tempDirs.make(prefix));
 
 function owner(): ComposedGatewayHarness {
   if (!gateway) {
@@ -118,123 +96,27 @@ function startupFor(descriptor: WorkerLaunchDescriptor, baseUrl: string): Native
 }
 
 async function launch(descriptor: WorkerLaunchDescriptor, startup?: NativeInferenceStartup) {
-  const sdkHost = createCompiledSdkHost(
-    [
-      workerBackgroundExecEntrypoints.providerModelMetadata,
-      workerBackgroundExecEntrypoints.stringCoerceRuntime,
-    ],
-    (prefix) => tempDirs.make(prefix),
-    { mode: "link" },
-  );
-  const home = tempDirs.make("oc-native-child-");
-  const temp = path.join(home, "tmp");
-  await mkdir(temp);
-  const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
-  using secretDelivery = prepareSecretInputStdio(
-    stdio,
-    startup
-      ? {
-          fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,
-          createData: () => Buffer.from(JSON.stringify(startup)),
-        }
-      : undefined,
-  );
-  const child = spawn(
-    process.execPath,
-    [
-      "--unhandled-rejections=strict",
-      ...resolveRuntimeWorkerArgv(fixtureEntry),
-      ...(startup ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
-    ],
-    {
-      cwd: repoRoot,
-      // Deliberately do not inherit provider keys, proxy settings, NODE_OPTIONS, or live state.
-      env: {
-        // Compiled fixture keeps synchronous exec helpers out of the TS loader.
-        PATH: process.env.PATH,
-        SystemRoot: process.env.SystemRoot,
-        WINDIR: process.env.WINDIR,
-        HOME: home,
-        USERPROFILE: home,
-        TMPDIR: temp,
-        TMP: temp,
-        TEMP: temp,
-        OPENCLAW_STATE_DIR: path.join(home, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(home, "config.json"),
-        ...(sdkHost
+  return workers.launch({
+    descriptor,
+    startup,
+    signal: activeTestSignal,
+    diagnostics: () => ({
+      admissions: owner().admissions.length,
+      methods: owner().requests.map((request) => request.method),
+      transcript: messages().map((message) =>
+        message.role === "assistant"
           ? {
-              OPENCLAW_DEV_SOURCE_ROOT: sdkHost,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+              role: message.role,
+              stopReason: message.stopReason,
+              errorMessage: message.errorMessage,
             }
-          : {}),
-      },
-      stdio,
-    },
-  );
-  const { stdin, stdout: childOutput, stderr: childError } = child;
-  if (!stdin || !childOutput || !childError) {
-    child.kill("SIGKILL");
-    throw new Error("Native worker fixture requires all three control/output pipes");
-  }
-  let stdout = "";
-  let stderr = "";
-  childOutput.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-  });
-  childError.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  const exited = new Promise<ProcessExit>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
-  });
-  // A spawn failure must remain observed even when a provider-readiness assertion fails first.
-  void exited.catch(() => undefined);
-  children.push({ child, exited });
-  await secretDelivery?.deliverTo(child);
-  stdin.write(
-    serializeWorkerProcessInput({
-      type: "turn",
-      turnId: descriptor.assignment.turnId,
-      descriptor,
-    }),
-  );
-  return {
-    child,
-    exited,
-    cancel: () =>
-      stdin.write(
-        serializeWorkerProcessInput({ type: "cancel", turnId: descriptor.assignment.turnId }),
+          : { role: message.role },
       ),
-    finish: async () => {
-      try {
-        return await withinTest(exited, activeTestSignal);
-      } catch (error) {
-        throw new Error(
-          JSON.stringify({
-            error: String(error),
-            stdout,
-            stderr,
-            admissions: owner().admissions.length,
-            methods: owner().requests.map((request) => request.method),
-            transcript: messages().map((message) =>
-              message.role === "assistant"
-                ? {
-                    role: message.role,
-                    stopReason: message.stopReason,
-                    errorMessage: message.errorMessage,
-                  }
-                : { role: message.role },
-            ),
-          }),
-          { cause: error },
-        );
-      }
-    },
-  };
+    }),
+  });
 }
 
-function result(exit: ProcessExit) {
+function result(exit: WorkerProcessTestExit) {
   expect(exit.code, exit.stderr).toBe(0);
   const lines = exit.stdout.trim().split("\n");
   expect(lines, exit.stderr).toHaveLength(1);
@@ -300,7 +182,7 @@ async function providerFixture(mode: "tools" | "pending" = "tools") {
           " " +
           JSON.stringify(path.join(owner().root, "tool-proof.mjs")) +
           " " +
-          children.at(-1)!.child.pid;
+          workers.lastPid();
         frame(response, {
           role: "assistant",
           tool_calls: [

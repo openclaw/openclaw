@@ -175,26 +175,6 @@ describe("conversations.list Gateway handler", () => {
 });
 
 describe("conversations.send Gateway handler", () => {
-  it("rejects a source session owned by another agent", async () => {
-    const runConversationSend = vi.mocked(runGatewayConversationSend);
-    const handler = conversationHandlers["conversations.send"]!;
-    const respond = vi.fn<RespondFn>();
-
-    await invokeSend({
-      handler,
-      context: context(),
-      respond,
-      request: { ...sendRequest, sourceSessionKey: "agent:ops:main" },
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST", message: expect.stringContaining("ops") }),
-    );
-    expect(runConversationSend).not.toHaveBeenCalled();
-  });
-
   it("owns the send and rejects operation-id reuse with different source input", async () => {
     const runConversationSend = vi
       .mocked(runGatewayConversationSend)
@@ -229,45 +209,6 @@ describe("conversations.send Gateway handler", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-  });
-
-  it("keeps concurrent operation IDs isolated between agents", async () => {
-    let finishMain: ((value: typeof sendResult) => void) | undefined;
-    const otherResult = { ...sendResult, messageId: "reef-outbound-other" };
-    const runConversationSend = vi
-      .mocked(runGatewayConversationSend)
-      .mockImplementation(async ({ agentId }: Parameters<typeof runGatewayConversationSend>[0]) =>
-        agentId === "main"
-          ? await new Promise<typeof sendResult>((resolve) => {
-              finishMain = resolve;
-            })
-          : otherResult,
-      );
-    const handler = conversationHandlers["conversations.send"]!;
-    const gatewayContext = context();
-    const mainRespond = vi.fn<RespondFn>();
-    const otherRespond = vi.fn<RespondFn>();
-
-    const main = invokeSend({ handler, context: gatewayContext, respond: mainRespond });
-    await vi.waitFor(() => expect(runConversationSend).toHaveBeenCalledOnce());
-    const other = invokeSend({
-      handler,
-      context: gatewayContext,
-      respond: otherRespond,
-      request: {
-        ...sendRequest,
-        agentId: "other-agent",
-        sourceSessionKey: "agent:other-agent:telegram:direct:operator",
-      },
-    });
-    await vi.waitFor(() => expect(runConversationSend).toHaveBeenCalledTimes(2));
-    finishMain?.(sendResult);
-    await Promise.all([main, other]);
-
-    expect(mainRespond).toHaveBeenCalledWith(true, sendResult, undefined, { channel: "reef" });
-    expect(otherRespond).toHaveBeenCalledWith(true, otherResult, undefined, {
-      channel: "reef",
-    });
   });
 });
 

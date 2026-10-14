@@ -94,12 +94,8 @@ function compactDetail(value: string, maxChars: number): string {
     .trimStart()}`;
 }
 
-function compactTitle(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_TASK_TITLE_MAX);
-}
-
-function compactChunkText(value: string): string {
-  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_CHUNK_TEXT_MAX);
+function compactTitle(value: string, maxChars = SLACK_PROGRESS_TASK_TITLE_MAX): string {
+  return truncateSlackText(value.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 // Card text is transient status: render authored Markdown as mrkdwn, but never
@@ -296,11 +292,12 @@ export function buildSlackProgressStreamChunks(params: {
         ? "Completed"
         : "Working";
   const newest = tasks.at(-1);
-  const title = compactChunkText(
+  const title = compactTitle(
     headline ||
       (newest?.details ? `${newest.title} — ${newest.details}` : newest?.title) ||
       (params.summaryRow ? summaryTitle : attention.at(-1)?.title) ||
       SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
+    SLACK_PROGRESS_CHUNK_TEXT_MAX,
   );
   const diffOutput = formatTaskDiffOutput(params.diffStat);
   if (tasks.length === 0 && (params.summaryRow || params.sessionLinks?.length || diffOutput)) {
@@ -325,22 +322,13 @@ export function buildSlackProgressStreamChunks(params: {
   const finalTaskIndex = tasks.length - 1;
   const taskChunks: TaskUpdateChunk[] = tasks.map((task, index) => {
     const recovered = params.finalInProgressStatus === "complete" && task.status === "error";
-    const chunk: TaskUpdateChunk = {
-      type: "task_update",
-      id: task.id,
-      title: recovered ? compactTitle(`Recovered: ${task.title}`) : task.title,
-      status: recovered
-        ? "complete"
-        : task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? task.status)
-          : task.status,
-    };
-    if (task.details) {
-      chunk.details = task.details;
-    }
-    if (task.output) {
-      chunk.output = task.output;
-    }
+    const chunk: TaskUpdateChunk = Object.assign({ type: "task_update" as const }, task);
+    chunk.title = recovered ? compactTitle(`Recovered: ${task.title}`) : task.title;
+    chunk.status = recovered
+      ? "complete"
+      : task.status === "in_progress"
+        ? (params.finalInProgressStatus ?? task.status)
+        : task.status;
     if (index === finalTaskIndex && diffOutput) {
       chunk.output = [task.output, diffOutput].filter(Boolean).join(" · ");
     }

@@ -6,7 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { switchChatFastMode, switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatSetting } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -71,8 +71,8 @@ it.each([
         change === "speed" ? { fastMode: true, effectiveFastMode: true } : { thinkingLevel: "off" };
       operation =
         change === "speed"
-          ? switchChatFastMode(panes[0]!.state, "on")
-          : switchChatThinkingLevel(panes[0]!.state, "off");
+          ? switchChatSetting(panes[0]!.state, { kind: "fastMode", value: "on" })
+          : switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: initial.key,
@@ -185,7 +185,7 @@ it.each(["qualified", "global"] as const)(
       for (const pane of panes) {
         expect(selectedChatSessionRow(pane.state)).toMatchObject(target);
       }
-      operation = switchChatThinkingLevel(panes[0]!.state, "off");
+      operation = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
       expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: target.key, thinkingLevel: "off" });
       const assertOwned = (thinkingLevel: string) => {
         expect(selectedChatSessionRow(main.state)).toMatchObject(primary);
@@ -351,10 +351,10 @@ it.each(["confirmed", "rejected", "both-rejected"] as const)(
         }
       };
       assertThinking("high");
-      first = switchChatThinkingLevel(panes[0]!.state, "off");
+      first = switchChatSetting(panes[0]!.state, { kind: "thinkingLevel", value: "off" });
       expect(patch).toHaveBeenCalledOnce();
       assertThinking("off");
-      second = switchChatThinkingLevel(panes[1]!.state, "low");
+      second = switchChatSetting(panes[1]!.state, { kind: "thinkingLevel", value: "low" });
       void second.then(
         () => {
           secondSettled = true;

@@ -54,6 +54,7 @@ const message: AssistantMessage = {
 const config = { model, convertToLlm: () => [user] };
 const noTools = async () => ({
   messages: [],
+  terminalToolCallIds: [],
   steeringMessages: [],
   terminate: false,
   terminateRun: false,
@@ -165,41 +166,14 @@ describe("plugin stream consumer admission", () => {
     },
   );
 
-  it("fences new retained admission while replacing an idle donor and releases only its own reservation", async () => {
-    const instance = new PluginInstance("idle-donor");
-    const custody = instance.retainConsumer(undefined, undefined, "custody");
-    const release = instance.reserveReplacement();
-    try {
-      expect(() => instance.retainConsumer()).toThrow("retiring");
-      expect(() => custody.run(() => instance.retainConsumer())).toThrow("retiring");
-      expect(() => instance.retainWork()).toThrow("replacement is in progress");
-      expect(() => instance.reserveReplacement()).toThrow("replacement is in progress");
-      release();
-      const releaseNext = instance.reserveReplacement();
-      release();
-      expect(() => instance.retainWork()).toThrow("replacement is in progress");
-      releaseNext();
-      const work = instance.retainConsumer();
-      expect(work.run(() => "still callable")).toBe("still callable");
-      work.release();
-    } finally {
-      release();
-      custody.release();
-      await instance.dispose();
-    }
-  });
-
-  it.each(["host", "descendant"])("joins retained %s work during replacement", async (kind) => {
+  it.each(["host", "descendant"])("waits for retained %s work to settle", async (kind) => {
     const instance = new PluginInstance("retained-work");
     const parent = kind === "descendant" ? instance.retainConsumer() : undefined;
-    const custody = parent ? instance.retainConsumer(undefined, undefined, "custody") : undefined;
     const release = parent ? () => parent.release() : instance.retainWork();
-    const replacement = instance.reserveReplacement();
     const child = parent?.run(() => instance.retainConsumer());
     const settled = vi.fn();
     const drained = instance.waitForRetainedWork(new AbortController().signal).then(settled);
     if (child) {
-      expect(() => custody!.run(() => instance.retainConsumer())).toThrow("retiring");
       release();
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
@@ -213,8 +187,6 @@ describe("plugin stream consumer admission", () => {
     }
     await drained;
     expect(settled).toHaveBeenCalledOnce();
-    replacement();
-    custody?.release();
     await instance.dispose();
     expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
   });

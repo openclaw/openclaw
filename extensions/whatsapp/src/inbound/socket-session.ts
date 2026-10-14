@@ -231,14 +231,10 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
 
   let reachoutTimeLock: ReachoutTimelockState | undefined;
   let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
-  let reachoutTimeLockVersion = 0;
-  let verifiedSendReady:
-    | { jid: string; sock: WASocket; reachoutTimeLockVersion: number }
-    | undefined;
+  let verifiedSendReady: { jid: string; sock: WASocket } | undefined;
 
   const rememberReachoutTimeLock = (state: ReachoutTimelockState | undefined) => {
     reachoutTimeLock = state;
-    reachoutTimeLockVersion += 1;
     verifiedSendReady = undefined;
   };
 
@@ -268,26 +264,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     return await reachoutTimeLockFetch;
   };
 
-  const rememberVerifiedSendReady = (jid: string, currentSock: WASocket) => {
-    verifiedSendReady = {
-      jid,
-      sock: currentSock,
-      reachoutTimeLockVersion,
-    };
-  };
-
-  const consumeVerifiedSendReady = (jid: string, currentSock: WASocket): boolean => {
-    if (
-      verifiedSendReady?.jid !== jid ||
-      verifiedSendReady.sock !== currentSock ||
-      verifiedSendReady.reachoutTimeLockVersion !== reachoutTimeLockVersion
-    ) {
-      return false;
-    }
-    verifiedSendReady = undefined;
-    return true;
-  };
-
   const assertCanSendToJid = async (
     jid: string,
     currentSock: WASocket,
@@ -296,7 +272,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     if (!isDirectUserJid(jid)) {
       return;
     }
-    if (readinessOptions?.useVerifiedReady && consumeVerifiedSendReady(jid, currentSock)) {
+    if (
+      readinessOptions?.useVerifiedReady &&
+      verifiedSendReady?.jid === jid &&
+      verifiedSendReady.sock === currentSock
+    ) {
+      verifiedSendReady = undefined;
       return;
     }
     const state =
@@ -311,8 +292,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     }
     if (readinessOptions?.rememberReady && state) {
       // The top-level direct send checks readiness before typing; consume this
-      // same socket/JID/version proof at the native send.
-      rememberVerifiedSendReady(jid, currentSock);
+      // same socket/JID proof at the native send unless a timelock update invalidates it.
+      verifiedSendReady = { jid, sock: currentSock };
     }
   };
 

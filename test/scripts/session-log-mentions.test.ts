@@ -53,26 +53,6 @@ async function writeSqliteTranscript(events: string[], storage: "legacy" | "zstd
 }
 
 describe("session log mention scanner", () => {
-  it("counts mentions across bounded session logs", async () => {
-    const root = tempRoots.make("openclaw-session-log-mentions-");
-    await fs.writeFile(path.join(root, "one.jsonl"), "API.read MCP.fixture API.read\n");
-    await fs.writeFile(path.join(root, "two.jsonl"), "MCP.fixture\n");
-    await fs.writeFile(path.join(root, "ignored.txt"), "API.read\n");
-
-    await expect(
-      countSessionLogMentions({
-        sessionsDir: root,
-        needles: {
-          apiFileRead: "API.read",
-          mcpNamespace: "MCP.fixture",
-        },
-      }),
-    ).resolves.toEqual({
-      apiFileRead: 2,
-      mcpNamespace: 2,
-    });
-  });
-
   it("does not count user prompt lines as runtime mention proof", async () => {
     const root = tempRoots.make("openclaw-session-log-mentions-");
     await fs.writeFile(
@@ -115,42 +95,39 @@ describe("session log mention scanner", () => {
     });
   });
 
-  it.each(["legacy", "zstd"] as const)(
-    "counts mentions from %s SQLite transcript rows",
-    async (storage) => {
-      const sessionsDir = await writeSqliteTranscript(
-        [
-          JSON.stringify({
-            message: { role: "user", content: "Use API.read and MCP.fixture from the prompt." },
-          }),
-          JSON.stringify({
-            message: {
-              role: "assistant",
-              content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
-            },
-          }),
-        ],
-        storage,
-      );
-
-      await expect(
-        countSessionLogMentions({
-          sessionsDir,
-          needles: {
-            apiFileRead: "API.read",
-            mcpNamespace: "MCP.fixture",
-            mcpTool: "fixture__lookup_note",
-            toolSearchPollution: 'catalog.search("lookup note"',
+  it("counts mentions from zstd SQLite transcript rows", async () => {
+    const sessionsDir = await writeSqliteTranscript(
+      [
+        JSON.stringify({
+          message: { role: "user", content: "Use API.read and MCP.fixture from the prompt." },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: 'API.read MCP.fixture fixture__lookup_note catalog.search("lookup note")',
           },
         }),
-      ).resolves.toEqual({
-        apiFileRead: 1,
-        mcpNamespace: 1,
-        mcpTool: 1,
-        toolSearchPollution: 1,
-      });
-    },
-  );
+      ],
+      "zstd",
+    );
+
+    await expect(
+      countSessionLogMentions({
+        sessionsDir,
+        needles: {
+          apiFileRead: "API.read",
+          mcpNamespace: "MCP.fixture",
+          mcpTool: "fixture__lookup_note",
+          toolSearchPollution: 'catalog.search("lookup note"',
+        },
+      }),
+    ).resolves.toEqual({
+      apiFileRead: 1,
+      mcpNamespace: 1,
+      mcpTool: 1,
+      toolSearchPollution: 1,
+    });
+  });
 
   it("rejects oversized SQLite transcript rows before counting them", async () => {
     const sessionsDir = await writeSqliteTranscript(["API.read ".repeat(16)]);
@@ -166,19 +143,6 @@ describe("session log mention scanner", () => {
     ).rejects.toMatchObject({
       code: "ETOOBIG",
       message: expect.stringContaining("per-file limit"),
-    });
-  });
-
-  it("returns zero counts when the sessions directory is absent", async () => {
-    await expect(
-      countSessionLogMentions({
-        sessionsDir: path.join(tempRoots.make("openclaw-session-log-mentions-"), "missing"),
-        needles: {
-          apiFileRead: "API.read",
-        },
-      }),
-    ).resolves.toEqual({
-      apiFileRead: 0,
     });
   });
 

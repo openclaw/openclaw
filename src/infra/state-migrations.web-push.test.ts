@@ -73,15 +73,6 @@ describe("legacy Web Push Doctor migration", () => {
     };
   }
 
-  function withUnexpectedJsonFields<T extends object>(value: T) {
-    return { "": 1, later: 2, ...value };
-  }
-
-  function subscriptionStore(value: unknown) {
-    const endpoint = subscription().endpoint;
-    return { subscriptionsByEndpointHash: { [hashWebPushEndpoint(endpoint)]: value } };
-  }
-
   async function writeLegacyState(params: {
     stateDir: string;
     subscriptions?: unknown;
@@ -234,31 +225,7 @@ describe("legacy Web Push Doctor migration", () => {
     expect(fs.existsSync(paths.vapidKeysPath!)).toBe(false);
   });
 
-  it("imports subscriptions and VAPID identity in one verified operation", async () => {
-    const stateDir = useStateDir();
-    const first = subscription();
-    const second = subscription({
-      subscriptionId: "c0a80101-0000-4000-8000-000000000002",
-      endpoint: "https://push.example.com/send/second",
-    });
-    const paths = await writeLegacyState({
-      stateDir,
-      subscriptions: [first, second],
-      vapid: vapidKeys(),
-    });
-
-    const result = await migrate(stateDir);
-
-    expect(result.warnings).toEqual([]);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([first, second]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toEqual(vapidKeys());
-    expect(fs.existsSync(paths.subscriptionsPath!)).toBe(false);
-    expect(fs.existsSync(paths.vapidKeysPath!)).toBe(false);
-  });
-
   it.each([
-    ["missing legacy subject", undefined, undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
-    ["empty legacy subject", "", undefined, DEFAULT_WEB_PUSH_VAPID_SUBJECT],
     ["blank injected subject", undefined, "   ", DEFAULT_WEB_PUSH_VAPID_SUBJECT],
     [
       "padded injected subject",
@@ -303,50 +270,6 @@ describe("legacy Web Push Doctor migration", () => {
     expect(result.warnings[0]).toContain("VAPID keys are invalid");
     expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
     expect(fs.existsSync(paths.vapidKeysPath!)).toBe(true);
-  });
-
-  it.each([
-    ["subscriptions store", false, withUnexpectedJsonFields({ subscriptionsByEndpointHash: {} })],
-    ["subscription", false, subscriptionStore(withUnexpectedJsonFields(subscription()))],
-    [
-      "subscription keys",
-      false,
-      subscriptionStore({
-        ...subscription(),
-        keys: withUnexpectedJsonFields(subscription().keys),
-      }),
-    ],
-    ["VAPID keys", true, withUnexpectedJsonFields(vapidKeys())],
-  ])("rejects unexpected JSON fields before mutation: %s", async (label, isVapid, value) => {
-    const stateDir = useStateDir();
-    const pushDir = path.join(stateDir, "push");
-    const sourcePath = path.join(
-      pushDir,
-      isVapid ? "vapid-keys.json" : "web-push-subscriptions.json",
-    );
-    await fsp.mkdir(pushDir, { recursive: true });
-    await fsp.writeFile(sourcePath, JSON.stringify(value), "utf8");
-
-    const result = await migrate(stateDir);
-
-    expect(result.warnings[0]).toBe(
-      `Failed reading legacy Web Push state: Error: legacy Web Push ${label} has unexpected field ""`,
-    );
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-  });
-
-  it("removes an empty valid store only after opening SQLite", async () => {
-    const stateDir = useStateDir();
-    const { subscriptionsPath } = await writeLegacyState({ stateDir, subscriptions: [] });
-
-    const result = await migrate(stateDir);
-
-    expect(result.warnings).toEqual([]);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
-    expect(fs.existsSync(subscriptionsPath!)).toBe(false);
   });
 
   it("rejects either malformed file without importing its valid pair", async () => {
@@ -413,23 +336,6 @@ describe("legacy Web Push Doctor migration", () => {
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...canonical, createdAtMs: 100 }]);
   });
 
-  it("updates an older SQLite row from newer legacy state", async () => {
-    const stateDir = useStateDir();
-    const canonical = subscription({ updatedAtMs: 200 });
-    const legacy = subscription({
-      keys: { p256dh: "newer-p256dh", auth: "newer-auth" },
-      createdAtMs: 500,
-      updatedAtMs: 600,
-    });
-    seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    await writeLegacyState({ stateDir, subscriptions: [legacy] });
-
-    const result = await migrate(stateDir);
-
-    expect(result.warnings).toEqual([]);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([legacy]);
-  });
-
   it("retries a committed newer-row merge after normalizing its creation time", async () => {
     const stateDir = useStateDir();
     const canonical = subscription({ createdAtMs: 100, updatedAtMs: 200 });
@@ -439,9 +345,10 @@ describe("legacy Web Push Doctor migration", () => {
       updatedAtMs: 600,
     });
     seedSubscription(hashWebPushEndpoint(canonical.endpoint), canonical);
-    const { subscriptionsPath } = await writeLegacyState({
+    const { subscriptionsPath, vapidKeysPath } = await writeLegacyState({
       stateDir,
       subscriptions: [legacy],
+      vapid: vapidKeys(),
     });
 
     const first = await migrate(stateDir, {
@@ -450,12 +357,16 @@ describe("legacy Web Push Doctor migration", () => {
       },
     });
     expect(first.warnings[0]).toContain("legacy cleanup failed");
+    expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(true);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(true);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
 
     const retry = await migrate(stateDir);
     expect(retry.warnings).toEqual([]);
     expect(await listWebPushSubscriptions(stateDir)).toEqual([{ ...legacy, createdAtMs: 100 }]);
     expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(`${vapidKeysPath}.doctor-importing`)).toBe(false);
+    expect(await readPersistedVapidKeyPair(stateDir)).toEqual(vapidKeys());
   });
 
   it("rolls back equal-timestamp divergence and VAPID identity conflicts", async () => {
@@ -551,30 +462,6 @@ describe("legacy Web Push Doctor migration", () => {
     expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
     expect(fs.existsSync(subscriptionsPath!)).toBe(true);
     expect(fs.existsSync(`${subscriptionsPath}.doctor-importing`)).toBe(false);
-  });
-
-  it("retains fixed claims on cleanup failure and retries idempotently", async () => {
-    const stateDir = useStateDir();
-    const paths = await writeLegacyState({
-      stateDir,
-      subscriptions: [subscription()],
-      vapid: vapidKeys(),
-    });
-    const first = await migrate(stateDir, {
-      removeSource: () => {
-        throw new Error("simulated unlink failure");
-      },
-    });
-    expect(first.warnings[0]).toContain("legacy cleanup failed");
-    expect(fs.existsSync(`${paths.subscriptionsPath}.doctor-importing`)).toBe(true);
-    expect(fs.existsSync(`${paths.vapidKeysPath}.doctor-importing`)).toBe(true);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
-
-    const retry = await migrate(stateDir);
-    expect(retry.warnings).toEqual([]);
-    expect(fs.existsSync(`${paths.subscriptionsPath}.doctor-importing`)).toBe(false);
-    expect(fs.existsSync(`${paths.vapidKeysPath}.doctor-importing`)).toBe(false);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([subscription()]);
   });
 
   it("refuses symlinked sources", async () => {

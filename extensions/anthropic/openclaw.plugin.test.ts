@@ -58,7 +58,7 @@ describe("Anthropic plugin manifest", () => {
       cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
       thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
     },
-  ])("publishes $name API and CLI contracts", ({ id, name, cost, thinkingLevelMap }) => {
+  ])("publishes $name API contracts", ({ id, name, cost, thinkingLevelMap }) => {
     const metadata = {
       id,
       reasoning: true,
@@ -78,12 +78,9 @@ describe("Anthropic plugin manifest", () => {
       thinkingLevelMap,
       compat: { codeMode: "preferred" },
     });
-    const cliModel = providers?.["claude-cli"]?.models?.find((model) => model.id === id);
-    expect(cliModel).toMatchObject({ ...metadata, name: `${name} (Claude CLI)` });
-    expect(cliModel).not.toHaveProperty("cost");
   });
 
-  it("preserves older Claude CLI contracts without overstating bare context", () => {
+  it("preserves deprecated API metadata without seeding native membership", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
       contextWindow: 1_000_000,
@@ -91,24 +88,8 @@ describe("Anthropic plugin manifest", () => {
       status: "deprecated",
       replacedBy: "claude-opus-5",
     });
-    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
-    for (const [id, label, maxSidePx] of [
-      ["claude-opus-4-8", "Claude Opus 4.8", 2576],
-      ["claude-opus-4-7", "Claude Opus 4.7", 2576],
-      ["claude-sonnet-4-6", "Claude Sonnet 4.6", 1568],
-      ["claude-opus-4-6", "Claude Opus 4.6", 1568],
-    ] as const) {
-      expect(cliModels.find((model) => model.id === id)).toMatchObject({
-        name: `${label} (Claude CLI)`,
-        contextWindow: 200_000,
-        maxTokens: 128_000,
-        mediaInput: { image: { maxSidePx, preferredSidePx: maxSidePx, tokenMode: "provider" } },
-      });
-    }
-    expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
-      status: "deprecated",
-      replacedBy: "claude-opus-5",
-    });
+    expect(manifest.modelCatalog.providers["claude-cli"].models).toEqual([]);
+    expect(manifest.modelCatalog.discovery["claude-cli"]).toBe("refreshable");
   });
 
   it("keeps only the dateless Claude Haiku 4.5 identifier in the static catalog", () => {

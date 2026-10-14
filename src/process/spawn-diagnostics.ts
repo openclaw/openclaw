@@ -34,6 +34,13 @@ const GIT_OPERATIONS = [
   "project.clone",
   "session.materialize",
   "publication",
+  "github.identity",
+  "project.checkout",
+  "update.inspect",
+  "worktree.config",
+  "worktree.maintenance",
+  "workspace.sync",
+  "workspace.result",
 ] as const;
 export type GitProcessOperation = (typeof GIT_OPERATIONS)[number];
 const gitOperations: ReadonlySet<string> = new Set(GIT_OPERATIONS);
@@ -42,18 +49,57 @@ const gitOperation = resolveGlobalSingleton(
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
 
+// Unscoped callers remain visible without exporting aliases, arguments, or repository paths.
+function unscopedGitOperation(args: readonly string[]): string {
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i]!;
+    if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(arg)) {
+      i += 2;
+    } else if (/^--(?:git-dir|work-tree|namespace|config-env|attr-source)=/u.test(arg)) {
+      i++;
+    } else if (
+      [
+        "--no-pager",
+        "--no-optional-locks",
+        "--no-lazy-fetch",
+        "--literal-pathspecs",
+        "--bare",
+      ].includes(arg)
+    ) {
+      i++;
+    } else {
+      break;
+    }
+  }
+  const command = args[i] ?? "";
+  return /^(config|rev-parse|status|diff|ls-files|rev-list|merge-base|cat-file|symbolic-ref|for-each-ref|show-ref|remote|log|show|hash-object|update-ref|worktree|branch|fetch|clone|init|checkout|read-tree|write-tree|commit-tree|pack-objects|index-pack|maintenance|multi-pack-index|gc|fast-import|add|commit|push|reset|clean|merge|tag|describe|switch|ls-tree|update-index|check-ref-format|diff-tree|diff-index|diff-files|sparse-checkout|checkout-index|check-attr|mktree|var|apply|fsck|ls-remote|rebase|reflog)$/u.test(
+    command,
+  )
+    ? `unscoped.${command}`
+    : command === "--version" || command === "version"
+      ? "unscoped.version"
+      : "unscoped.other";
+}
+
 /** Preserve the admitted owner across retries, ref admission, and asynchronous spawn events. */
 export function withGitProcessOperation<T>(
   operation: GitProcessOperation | undefined,
   run: () => T,
+  mode: "override" | "default" = "override",
 ): T {
-  return operation === undefined
+  return operation === undefined || (mode === "default" && gitOperation.getStore() !== undefined)
     ? run()
     : gitOperation.run(gitOperations.has(operation) ? operation : "unknown", run);
 }
 
 /** Count admitted local and broker launches, without recording paths or arguments. */
-export function recordChildProcessSpawn(command: string, child: ChildProcess): void {
+export function recordChildProcessSpawn(
+  command: string,
+  child: ChildProcess,
+  sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+  args: readonly string[] = [],
+): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
@@ -62,7 +108,10 @@ export function recordChildProcessSpawn(command: string, child: ChildProcess): v
     .toLowerCase()
     .replace(/\.(exe|cmd)$/, "");
   const family = COMMAND_FAMILIES.test(name) ? name : "other";
-  const operation = family === "git" ? (gitOperation.getStore() ?? "unknown") : "none";
+  const operation =
+    family === "git"
+      ? (gitOperation.getStore() ?? unscopedGitOperation(args))
+      : (sqliteOperation ?? "none");
   const key = `${family}:${operation}`;
   child.once("spawn", () => {
     if (areDiagnosticsEnabledForProcess()) {

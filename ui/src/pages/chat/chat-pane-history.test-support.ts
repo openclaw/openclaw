@@ -8,8 +8,12 @@ import {
   createGatewayHarness,
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
-import "./chat-pane.ts";
-import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import {
+  createInitializationContext,
+  createRenderTestChatPane,
+  createPaneTestHost,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export function createRefreshChatPane(client?: GatewayBrowserClient) {
@@ -47,8 +51,7 @@ export type TestChatPane = HTMLElement & {
   syncHistoryObserver: () => void;
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<boolean>;
-  stagedOlderPage: unknown;
-  stagedOlderLoad: Promise<void> | null;
+  stagedOlder: { page: unknown; load: Promise<void> | null };
   readReplyMessage: (messageId: string) => unknown;
   replyMessageStatus: (messageId: string) => string | undefined;
   openReplyMessage: (messageId: string) => void;
@@ -60,6 +63,8 @@ export type TestChatPane = HTMLElement & {
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
+    readonly isPositionSettled: boolean;
+    readonly isProgrammaticScroll: boolean;
     readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
@@ -93,7 +98,11 @@ export function createTestChatPane(params: {
     vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
     onTestFinished(() => sessions.dispose());
   }
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+  // SAFETY: The test host forwards the runtime surface declared by this fixture.
+  const pane = createPaneTestHost(
+    "openclaw-chat-runtime-test",
+    ChatPaneRuntime,
+  ) as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
     configurable: true,
     value: true,
@@ -138,6 +147,7 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
   return { pane, state, requestUpdate };
 }
 

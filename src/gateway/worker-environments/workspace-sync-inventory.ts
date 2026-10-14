@@ -6,6 +6,10 @@ import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
+import {
+  recordChildProcessSpawn,
+  withGitProcessOperation,
+} from "../../process/spawn-diagnostics.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import type { WorkspaceInventoryWriteCommand } from "./workspace-inventory-computation.js";
 import { workspaceInventoryError } from "./workspace-inventory-error.js";
@@ -47,7 +51,7 @@ async function writeInventory(
       ),
       onInventoryChunk: async (bytes, context) => {
         context.signal.throwIfAborted();
-        await output.writeFile(bytes);
+        await output.writeFile(bytes, { signal: context.signal });
         context.signal.throwIfAborted();
       },
     });
@@ -94,6 +98,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   let abortedCommand = false;
+  let timedOut = false;
   let outputError: Error | undefined;
   let outputBytes = 0;
   let outputWrite = Promise.resolve();
@@ -107,6 +112,11 @@ export async function runWorkspaceInventoryCommandToFile(params: {
       ...(process.platform !== "win32" ? { detached: true } : {}),
       windowsHide: true,
     });
+    withGitProcessOperation(
+      "workspace.inventory",
+      () => recordChildProcessSpawn(command, child, undefined, args),
+      "default",
+    );
     const childStderr = child.stderr;
     if (!childStderr) {
       throw new Error("Worker workspace command has no stderr pipe");
@@ -193,7 +203,10 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         terminate();
       };
       params.signal.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(terminate, params.timeoutMs);
+      timer = setTimeout(() => {
+        timedOut = !terminationStarted && child.exitCode === null && child.signalCode === null;
+        terminate();
+      }, params.timeoutMs);
       timer.unref?.();
       if (params.signal.aborted) {
         abort();
@@ -209,10 +222,11 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (abortedCommand) {
       params.signal.throwIfAborted();
     }
-    if (result.code !== 0) {
+    if (result.code !== 0 || timedOut) {
+      const detail = timedOut ? `timed out after ${params.timeoutMs}ms` : stderr.trim();
       throw new Error(
-        stderr.trim()
-          ? `Worker workspace file enumeration failed: ${stderr.trim()}`
+        detail
+          ? `Worker workspace file enumeration failed: ${detail}`
           : "Worker workspace file enumeration failed",
       );
     }

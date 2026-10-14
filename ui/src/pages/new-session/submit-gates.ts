@@ -73,7 +73,8 @@ export function readNewSessionSubmissionAccess(options: {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
   const target = resolveDraftSessionPlacement(pendingPlacement, place);
-  const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
+  const remoteProject =
+    !place.hostedEnvironment && !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",
@@ -89,9 +90,13 @@ export function readNewSessionSubmissionAccess(options: {
       params: createParams,
       sessionScope: true,
     });
-    if (!createAccess.allowed || !target) {
+    // Creation assigns ownership before its required first-turn handoff has a row.
+    if (!createAccess.allowed || !target || (target.kind === "profile" && target.required)) {
       return createAccess;
     }
+  }
+  if (target.kind === "profile" && target.required) {
+    return readSessionMethodAccess(gateway, { method: "sessions.send", sessionScope: true });
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",
@@ -111,6 +116,11 @@ export function requiresNewSessionModelSetup(options: {
   pendingPlacement: PendingSessionPlacementRecoveryState;
 }): boolean {
   const { snapshot, gateway, place, pendingPlacement } = options;
+  // Placement metadata decides where credentials live; do not flash Gateway
+  // setup before the required worker policy is known. Submission remains gated.
+  if (!gateway.placementPolicyReady) {
+    return false;
+  }
   const selectedAgent = place.selectedAgent();
   const agents = snapshot.context?.agents.state;
   return place.modelControl.requiresModelSetup({
@@ -163,6 +173,28 @@ export function resolveNewSessionSubmitBlock(
     !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
+  }
+  const agents = snapshot.context?.agents.state;
+  const rosterBlock = (): NewSessionSubmitBlock => ({
+    gate: "agents",
+    reason: t(
+      agents?.agentsError
+        ? "newSession.agentDefaultsUnavailable"
+        : "newSession.loadingAgentDefaults",
+    ),
+  });
+  if (kind === "session" && !gateway.placementPolicyReady) {
+    // The policy arrives with the agent roster; a loaded roster leaves only a runner to wait for.
+    return agents?.agentsList
+      ? { gate: "cloud", reason: t("newSession.placementNotReady") }
+      : rosterBlock();
+  }
+  if (
+    kind === "session" &&
+    gateway.requiredProfile &&
+    !gateway.cloudProfiles.some((profile) => profile.id === gateway.requiredProfile)
+  ) {
+    return { gate: "cloud", reason: t("newSession.requiredWorkerUnavailable") };
   }
   if (kind === "session" && draft.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
@@ -219,15 +251,15 @@ export function resolveNewSessionSubmitBlock(
     if (place.remotePlacement || draft.pendingPlacement.sessionKey) {
       return { gate: "device", reason: t("newSession.terminalPlacementUnsupported") };
     }
+    if (draft.capabilities.toolOverrides !== null) {
+      return {
+        gate: "terminal-capabilities",
+        reason: t("newSession.terminalCapabilityOverridesUnsupported"),
+      };
+    }
   }
-  if (kind === "terminal" && draft.capabilities.toolOverrides !== null) {
-    return {
-      gate: "terminal-capabilities",
-      reason: t("newSession.terminalCapabilityOverridesUnsupported"),
-    };
-  }
-  if (place.folderSubmissionBlocked()) {
-    return { gate: "folder", reason: t("newSession.checkingPlace") };
+  if (place.suggestedCloudProfile.pending) {
+    return { gate: "cloud", reason: t("newSession.placementNotReady") };
   }
   if (pendingPlacementActive) {
     const retryReady = Boolean(
@@ -244,15 +276,25 @@ export function resolveNewSessionSubmitBlock(
       ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (!snapshot.context?.agents.state.agentsList) {
+  if (place.folderSubmissionBlocked()) {
     return {
-      gate: "agents",
-      reason: t(
-        snapshot.context?.agents.state.agentsError
-          ? "newSession.agentDefaultsUnavailable"
-          : "newSession.loadingAgentDefaults",
-      ),
+      gate: "folder",
+      reason:
+        (place.deviceFolder && place.deviceFolderRuntimeUnsupportedReason) ||
+        t(
+          place.deviceFolder
+            ? place.deviceFolderAvailable
+              ? "newSession.deviceFolderPathRequired"
+              : "newSession.deviceFolderUnavailable"
+            : "newSession.checkingPlace",
+        ),
     };
+  }
+  if (place.deviceFolder && draft.attachmentDraft.attachments.length > 0) {
+    return { gate: "folder", reason: t("newSession.deviceFolderAttachmentsUnsupported") };
+  }
+  if (!agents?.agentsList) {
+    return rosterBlock();
   }
   const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place);
   const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";

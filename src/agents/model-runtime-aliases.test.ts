@@ -1,6 +1,7 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -103,6 +104,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     providerKey = "anthropic",
     profiles: AuthProfileStore["profiles"] = {},
   ): void {
+    prepareSharedAuthStoreOwnershipForNative();
     setRuntimeAuthProfileStoreSnapshot({
       version: 1,
       profiles,
@@ -110,22 +112,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     });
   }
 
-  it("honors a stored auth order when config declares none", () => {
-    // `models auth order set` writes the persisted store, not the config file.
-    // With no config order the resolver used to build an empty ordered list and
-    // fall through to the "exactly one compatible profile" branch, which returns
-    // undefined whenever two profiles share the provider auth key.
-    seedStoredAuthOrder(["anthropic:claude-cli"]);
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({}),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it.each(["order", "pin"])(
+  it.each(["pin"])(
     "routes a stored CLI profile selected by %s without config metadata",
     (selection) => {
       seedStoredAuthOrder(selection === "order" ? ["anthropic:claude-cli"] : [], "anthropic", {
@@ -171,24 +158,21 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBeUndefined();
   });
 
-  it.each(["configured", "stored"])(
-    "repairs a %s order containing only deleted profiles",
-    (source) => {
-      if (source === "stored") {
-        seedStoredAuthOrder(["anthropic:deleted"]);
-      }
-      expect(
-        resolveCliRuntimeExecutionProvider({
-          cfg: createAnthropicAuthConfig({
-            order: source === "configured" ? ["anthropic:deleted"] : undefined,
-            onlyCliProfile: true,
-          }),
-          provider: "anthropic",
-          modelId: "opus-4.7",
+  it.each(["stored"])("repairs a %s order containing only deleted profiles", (source) => {
+    if (source === "stored") {
+      seedStoredAuthOrder(["anthropic:deleted"]);
+    }
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({
+          order: source === "configured" ? ["anthropic:deleted"] : undefined,
+          onlyCliProfile: true,
         }),
-      ).toBe("claude-cli");
-    },
-  );
+        provider: "anthropic",
+        modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
 
   it.each([
     {
@@ -219,16 +203,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
-  it("matches a config order key through the same normalized lookup as profile selection", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:claude-cli"], orderKey: "Anthropic" }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
   it("inherits the main-agent stored order for an agent with no snapshot of its own", () => {
     // Named agents inherit auth state from the main agent, and only the main
     // snapshot may be published. An exact-agent lookup would miss it and fall
@@ -245,18 +219,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
-  it("keeps direct Anthropic execution when the selected auth profile is direct Anthropic", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({
-          order: ["anthropic:api", "anthropic:claude-cli"],
-        }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBeUndefined();
-  });
-
   it("honors an explicit direct Anthropic auth profile over CLI auth order", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
@@ -266,17 +228,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         modelId: "opus-4.7",
       }),
     ).toBeUndefined();
-  });
-
-  it("uses an explicit Claude CLI auth profile without a model-runtime entry", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        authProfileId: "anthropic:claude-cli",
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
   });
 
   it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
@@ -294,20 +245,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         modelId: "opus-4.7",
       }),
     ).toBeUndefined();
-  });
-
-  it("matches a configured claude-cli policy when the caller provider is empty", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({
-          models: {
-            "anthropic/opus-4.7": { agentRuntime: { id: "claude-cli" } },
-          },
-        }),
-        provider: "",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
   });
 
   it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {

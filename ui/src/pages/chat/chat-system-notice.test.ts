@@ -55,6 +55,12 @@ describe("system notices through pending-to-history promotion", () => {
       false,
     ],
     [
+      "cron_failure_repair",
+      "System · automation recovery",
+      "An automation failed — asked the agent to investigate and continue if needed.",
+      false,
+    ],
+    [
       "restart-sentinel",
       "System · gateway restarted",
       "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
@@ -84,7 +90,9 @@ describe("system notices through pending-to-history promotion", () => {
         content:
           sourceTool === "main_session_restart_recovery"
             ? baseMessage.content
-            : (midTurn ? "" : "[System] ") + text,
+            : sourceTool === "cron_failure_repair"
+              ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+              : (midTurn ? "" : "[System] ") + text,
         provenance: { kind: "internal_system", sourceTool },
         __openclaw: imported
           ? {
@@ -174,5 +182,56 @@ describe("system notices through pending-to-history promotion", () => {
         },
       ]);
     }
+  });
+});
+
+describe("skill review notices", () => {
+  const notice = (skills: unknown) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "💾 Learned: updated `deploy-staging`." }],
+    provider: "openclaw",
+    model: "delivery-mirror",
+    timestamp: 2000,
+    openclawDeliveryMirror: {
+      kind: "skill-workshop-change",
+      agentId: "main",
+      runId: "skill-workshop-review:r1",
+      skills,
+    },
+    __openclaw: { id: "notice-1", seq: 3 },
+  });
+  const question = { role: "user", content: "deploy it", timestamp: 1000 };
+  const answer = {
+    role: "assistant",
+    content: "Deployed.",
+    timestamp: 1500,
+    __openclaw: { runId: "run" },
+  };
+
+  it("renders a marked review notice natively and keeps malformed markers as text", () => {
+    const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
+    expect(render([question, answer, notice(skills)], [])).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: answer }] },
+      {
+        kind: "notice",
+        text: "",
+        timestamp: 2000,
+        skillChanges: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "skill-workshop-review:r1",
+          skills,
+        },
+      },
+    ]);
+
+    const malformed = notice([{ name: "deploy-staging", action: "renamed" }]);
+    const items = render([question, malformed], []);
+    expect(items.some((item) => item.kind === "notice")).toBe(false);
+    expect(items).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: malformed }] },
+    ]);
   });
 });

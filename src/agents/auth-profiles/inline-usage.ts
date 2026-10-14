@@ -1,6 +1,7 @@
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -260,26 +261,22 @@ async function persistPreparedInlineAuthFailure(
     }
   };
   return withAuthProfileCleanup(runWithAdmission, async () => {
-    let releaseFailure: { error: unknown } | undefined;
     try {
       await execution.release();
     } catch (error) {
-      releaseFailure = { error };
-    }
-    if (releaseFailure) {
       if (durableReceipt) {
         reportCommittedInlineAuthFailure(
           "auth usage committed before captured owner release failed",
-          releaseFailure.error,
+          error,
         );
       } else if (failure) {
-        throw new AggregateError(
-          [failure.error, releaseFailure.error],
+        throw createSqliteLifecycleAggregateError(
+          [failure.error, error],
           "Auth usage and captured owner release failed",
-          { cause: failure.error },
+          failure.error,
         );
       } else {
-        throw releaseFailure.error;
+        throw error;
       }
     }
   });

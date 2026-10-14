@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
@@ -7,8 +8,8 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { certifySessionCanonicalValidationPending } from "../config/sessions/session-canonical-validation-readiness.js";
 import {
   hasPendingCanonicalSessionValidation,
@@ -49,6 +50,7 @@ describe("Doctor maintenance with session workers", () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-canonical-worker" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const options = { agentId: "main", env: state.env };
         const scopes = ["first", "second"].map((name) => ({
           agentId: options.agentId,

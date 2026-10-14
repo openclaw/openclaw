@@ -68,7 +68,7 @@ export async function writeCronJobScratch(
   admission?: {
     context?: OpenClawStateWorkerContext;
     assertCurrent?: () => void;
-    assertJobCurrent?: (configRevision: string | undefined) => void;
+    expectedConfigRevision?: string;
     createdAtMsFallback?: number;
   },
 ): Promise<CronJobScratchWriteResult> {
@@ -91,14 +91,8 @@ export async function writeCronJobScratch(
       createdAtMsFallback: admission?.createdAtMsFallback,
     },
     assertCurrent: () => admission?.assertCurrent?.(),
-    prepare({ configRevision }) {
-      const assertCurrent = () => {
-        admission?.assertCurrent?.();
-        admission?.assertJobCurrent?.(configRevision);
-      };
-      assertCurrent();
-      return { value: {}, assertCurrent };
-    },
+    // Caller authority may retire after dispatch; the worker checks the captured job revision.
+    snapshot: { expectedConfigRevision: admission?.expectedConfigRevision },
     publish(outcome) {
       result = outcome.result;
       if (outcome.written) {

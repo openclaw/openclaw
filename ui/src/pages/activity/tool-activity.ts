@@ -1,6 +1,5 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { redactToolPayloadText } from "../../lib/browser-redact.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 
 const ACTIVITY_ENTRY_LIMIT = 100;
@@ -116,8 +115,7 @@ function buildOutputPreview(value: unknown): { text?: string; truncated: boolean
   if (!raw) {
     return { truncated: false };
   }
-  const redacted = redactToolPayloadText(raw);
-  const truncated = truncateText(redacted, ACTIVITY_OUTPUT_PREVIEW_LIMIT);
+  const truncated = truncateText(raw, ACTIVITY_OUTPUT_PREVIEW_LIMIT);
   // A sliced preview can retain the whole output after the raw event is evicted.
   // Copy its characters here so the bounded Activity entry owns only its preview.
   return { text: Array.from(truncated.text).join(""), truncated: truncated.truncated };

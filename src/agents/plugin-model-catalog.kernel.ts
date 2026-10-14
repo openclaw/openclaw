@@ -94,26 +94,18 @@ export function replacePluginModelCatalogEntriesInDatabase(params: {
       )
     : undefined;
   const upsertCacheEntry = (scope: string, pluginId: string, contents: string): void => {
+    const values = {
+      value_json: contents,
+      blob: null,
+      expires_at: null,
+      updated_at: params.updatedAt,
+    };
     executeSqliteQuerySync(
       params.database,
       kysely
         .insertInto("cache_entries")
-        .values({
-          scope,
-          key: pluginId,
-          value_json: contents,
-          blob: null,
-          expires_at: null,
-          updated_at: params.updatedAt,
-        })
-        .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet({
-            value_json: contents,
-            blob: null,
-            expires_at: null,
-            updated_at: params.updatedAt,
-          }),
-        ),
+        .values({ scope, key: pluginId, ...values })
+        .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
     );
   };
   let changed = false;

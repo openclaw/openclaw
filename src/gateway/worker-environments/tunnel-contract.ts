@@ -1,3 +1,4 @@
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -150,12 +151,15 @@ export type WorkerWorkspaceSyncRequest = {
   sessionKey?: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
-  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+  source:
+    | { kind: "local"; path: string; projectKey?: string }
+    | { kind: "device-folder"; deviceId: string; path: string }
+    | WorkerRepositoryWorkspaceSource;
 };
 
 export type WorkerWorkspaceSyncResult =
   | {
-      mode: "git" | "plain";
+      mode: "git" | "plain" | "device-folder";
       remoteWorkspaceDir: string;
       manifestRef: string;
     }
@@ -226,6 +230,7 @@ export type WorkerWorkspaceQuiescence = {
 };
 
 type WorkerTurnLaunchRequest = {
+  assertCurrent?: SessionSourceAssertion;
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;

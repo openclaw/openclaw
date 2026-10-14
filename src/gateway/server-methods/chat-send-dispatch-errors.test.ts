@@ -8,6 +8,7 @@ import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -18,6 +19,10 @@ import {
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import {
+  beginSessionWorkAdmission,
+  getTerminalSessionWorkAdmissionRelease,
+} from "../../sessions/session-lifecycle-admission.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
 import {
   AgentDatabaseAdmissionError,
@@ -25,7 +30,9 @@ import {
 } from "../../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
@@ -141,6 +148,7 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it("does not terminalize a replacement physical store containing the same claim", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:terminal",
@@ -174,6 +182,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     "refuses queued terminal settlement after its %s changes",
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const scope = {
           agentId: "main",
           sessionKey: "agent:main:terminal",
@@ -268,6 +277,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
     async ({ settlement, missingProfile, policyFailure, sessionChanged, stateContention }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
         const target = {
           agentId: "main",
           sessionKey: "agent:main:main",
@@ -500,6 +510,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
 
   it("keeps restart-safe settlement successful when its notice cannot be written", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const target = {
         sessionKey: "agent:main:main",
         storePath: path.join(state.sessionsDir(), "sessions.json"),
@@ -785,80 +796,84 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     );
   });
 
-  it("does not overwrite a terminal already owned by the agent lifecycle", async () => {
-    const runId = "agent-owned-terminal-before-dispatch-rejection";
-    const sessionKey = "agent:main:main";
-    const chatAbortControllers = new Map();
-    const registration = registerChatAbortController({
-      chatAbortControllers,
-      runId,
-      sessionId: "sess-main",
-      sessionKey,
-      timeoutMs: 60_000,
-    });
-    if (!registration.entry) {
-      throw new Error("expected the chat abort controller to be registered");
-    }
-    registration.entry.projectSessionTerminalPersisted = true;
-    const terminalEntry = {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId, status: "ok" as const },
-    };
-    const dedupe = new Map([[`chat:${runId}`, terminalEntry]]);
-    const broadcast = vi.fn();
-    const chatRunState = createChatRunState();
-    chatRunState.getOrCreate(runId).buffer = "Native-owned output";
-    const lifecycle = createChatSendDispatchErrorLifecycle({
-      admission: {
-        sessionBinding: {
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          lifecycleGeneration: "test-generation",
-        },
-        activeRunAbort: registration,
-        cleanupAdmittedRun: registration.cleanup,
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState,
-        dedupe,
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(),
-      } as never,
-      isQueuedFollowupEnqueued: () => false,
-      isAgentRunStarted: () => true,
-      persistUserTurnTranscript: vi.fn(),
-      session: {
-        agentId: "main",
-        backingSessionId: "sess-main",
-        cfg: {},
-        clientRunId: runId,
-        now: 1,
-        rawSessionKey: sessionKey,
+  it.each([true, false])(
+    "does not overwrite a lifecycle terminal after persistence success=%s",
+    async (persisted) => {
+      const runId = "agent-owned-terminal-before-dispatch-rejection";
+      const sessionKey = "agent:main:main";
+      const chatAbortControllers = new Map();
+      const registration = registerChatAbortController({
+        chatAbortControllers,
+        runId,
+        sessionId: "sess-main",
         sessionKey,
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-      userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
-    });
+        timeoutMs: 60_000,
+      });
+      if (!registration.entry) {
+        throw new Error("expected the chat abort controller to be registered");
+      }
+      markChatAbortTerminalOutcome(registration.entry);
+      registration.entry.projectSessionTerminalPersisted = persisted;
+      const terminalEntry = {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok" as const },
+      };
+      const dedupe = new Map([[`chat:${runId}`, terminalEntry]]);
+      const broadcast = vi.fn();
+      const chatRunState = createChatRunState();
+      chatRunState.getOrCreate(runId).buffer = "Native-owned output";
+      const lifecycle = createChatSendDispatchErrorLifecycle({
+        admission: {
+          sessionBinding: {
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: "test-generation",
+          },
+          activeRunAbort: registration,
+          cleanupAdmittedRun: registration.cleanup,
+          lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
+        },
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState,
+          dedupe,
+          getRuntimeConfig: () => ({}),
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
+        } as never,
+        isQueuedFollowupEnqueued: () => false,
+        isAgentRunStarted: () => true,
+        persistUserTurnTranscript: vi.fn(),
+        session: {
+          agentId: "main",
+          backingSessionId: "sess-main",
+          cfg: {},
+          clientRunId: runId,
+          now: 1,
+          rawSessionKey: sessionKey,
+          sessionKey,
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+        userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
+      });
 
-    await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
-    await lifecycle.finalize();
+      await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
+      await lifecycle.finalize();
 
-    expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
-    expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
-    expect(broadcast).not.toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId, state: "error" }),
-      expect.anything(),
-    );
-  });
+      expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
+      expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        expect.anything(),
+      );
+    },
+  );
 
   it("keeps a failed non-default global send admitted through lifecycle persistence", async () => {
     const cfg = retainLegacyDefaultAgentId(
@@ -877,9 +892,24 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         persistenceEntered.resolve();
         await releasePersistence.promise;
       });
-    const cleanupAdmittedRun = vi.fn();
+    const sessionBinding: Pick<
+      ChatAbortControllerEntry,
+      "sessionId" | "sessionKey" | "agentId" | "lifecycleGeneration" | "terminalOutcomeObserved"
+    > = {
+      sessionId: "sess-ops",
+      sessionKey: "agent:ops:main",
+      agentId: "ops",
+      lifecycleGeneration: "test-generation",
+    };
+    const target = { scope: "/isolated/dispatch-terminal", identities: [sessionBinding.sessionId] };
+    const work = await beginSessionWorkAdmission({
+      ...target,
+      assertAllowed: () => {},
+      isSettling: () => sessionBinding.terminalOutcomeObserved === true,
+    });
+    const cleanupAdmittedRun = vi.fn(work.release);
     const activeRunCleanup = vi.fn();
-    const broadcast = vi.fn();
+    const broadcast = vi.fn(() => getTerminalSessionWorkAdmissionRelease(target));
     const dedupe = new Map();
     const clientRunId = "failed-ops-global-send";
     const chatAbortControllers = new Map([
@@ -896,12 +926,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     try {
       const lifecycle = createChatSendDispatchErrorLifecycle({
         admission: {
-          sessionBinding: {
-            sessionId: "sess-ops",
-            sessionKey: "agent:ops:main",
-            agentId: "ops",
-            lifecycleGeneration: "test-generation",
-          },
+          sessionBinding,
           activeRunAbort: {
             cleanup: activeRunCleanup,
             controller: new AbortController(),
@@ -941,6 +966,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
+      expect(getTerminalSessionWorkAdmissionRelease(target)).toBe(false);
       await lifecycle.handleError(new Error("dispatch rejected"));
       const finalization = lifecycle.finalize();
       await persistenceEntered.promise;
@@ -967,10 +993,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect.objectContaining({ runId: clientRunId, state: "error" }),
         expect.anything(),
       );
+      await expect(broadcast.mock.results[0]?.value).resolves.toBeUndefined();
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
       releasePersistence.resolve();
+      work.release();
       persistLifecycleEvent.mockRestore();
     }
   });

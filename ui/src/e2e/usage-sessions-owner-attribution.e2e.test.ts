@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { resetLogger, setLoggerOverride } from "../../../src/logging/logger.ts";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.ts";
@@ -10,8 +12,8 @@ import {
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { COMMUNITY_INVITE_KEY } from "../components/community-invite-state.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -70,12 +72,10 @@ async function requestGateway<T>(
   methodName: string,
   requestParams: Record<string, unknown>,
 ) {
-  return await page.evaluate(
-    async ({ method, params }) => {
-      const app = document.querySelector("openclaw-app") as
-        | (HTMLElement & { runtime?: { context: ApplicationContext } })
-        | null;
-      const client = app?.runtime?.context.gateway.snapshot.client;
+  return await evaluateControlUiContext(
+    page,
+    async (context, { method, params }) => {
+      const client = context.gateway.snapshot.client;
       if (!client) {
         throw new Error("Usage proof has no connected Gateway client");
       }
@@ -131,7 +131,7 @@ suite.define(() => {
             await import("../../../src/config/sessions/session-accessor.js");
 
           signal.throwIfAborted();
-          await state.writeConfig({
+          const config: OpenClawConfig = {
             agents: {
               ownership: "explicit",
               defaults: { workspace: state.workspaceDir },
@@ -151,7 +151,9 @@ suite.define(() => {
             session: {
               store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
             },
-          });
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
 
           for (const agentId of ["main", "opus"]) {
             signal.throwIfAborted();

@@ -121,7 +121,8 @@ describe("native assignment completion custody", () => {
         completionScope: createCompletionScope("agent:main:original"),
         agentId: "main",
         claimDirectChild,
-        assertCurrent: () => {
+        assertCurrentAsync: async () => {
+          await Promise.resolve();
           if (!current) {
             throw new Error("Caller registration is no longer current");
           }
@@ -515,6 +516,7 @@ async function createSubmissionFixture() {
         throw new Error("Submission binding changed.");
       }
     },
+    assertCurrentAsync: async () => submissionStore.assertCurrent(),
     read: () => bindingStore.readNativeSubagentSubmissions(identity, owner),
     record: (receipt, guard) =>
       bindingStore.mutate(
@@ -610,7 +612,7 @@ async function createSubmissionFixture() {
       }),
     );
     await parent.unregister();
-    expect(submissionStore.read()).toHaveLength(1);
+    expect(await submissionStore.read()).toHaveLength(1);
     expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
   };
   return {
@@ -630,7 +632,7 @@ it("stops observing opaque receipts when existing warm subscriptions expire", as
   const { client, runtime, holds, consume, submissionStore, unsubscribe } = fixture;
   vi.useFakeTimers({ shouldClearNativeTimers: true });
   await fixture.submit("815dc55d-2d19-4bfe-9fd3-038ce4d6aada");
-  const receipt = structuredClone(submissionStore.read());
+  const receipt = structuredClone(await submissionStore.read());
   const reads = () =>
     client.request.mock.calls.filter(([method]) => method === "thread/read").length;
   // The existing client-runtime owner expires unprotected subscriptions after 30 minutes.
@@ -647,11 +649,11 @@ it("stops observing opaque receipts when existing warm subscriptions expire", as
   await vi.advanceTimersByTimeAsync(300_000);
   expect(reads()).toBe(readsAtExpiry);
   expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
-  expect(submissionStore.read()).toEqual(receipt);
+  expect(await submissionStore.read()).toEqual(receipt);
   expect(consume).not.toHaveBeenCalled();
   expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
   await client.notify(turnStartedNotification(receipt[0]!.submissionId));
-  expect(submissionStore.read()).toEqual(receipt);
+  expect(await submissionStore.read()).toEqual(receipt);
   expect(holds).toEqual({ client: 0, parent: 0, child: 0 });
 });
 
@@ -663,7 +665,7 @@ it("admits a delayed exact start under warm backing and retains its completion o
   await fixture.submit("turn-b");
   await client.notify(turnStartedNotification("turn-b"));
   const runId = "codex-thread:child-thread:turn:turn-b";
-  expect(submissionStore.read()).toHaveLength(1);
+  expect(await submissionStore.read()).toHaveLength(1);
   expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(true);
   expect(holds.client).toBe(1);
   expect(holds.parent).toBe(1);
@@ -677,7 +679,7 @@ it("admits a delayed exact start under warm backing and retains its completion o
       items: [{ id: "b", type: "agentMessage", text: "result B" }],
     }),
   );
-  await vi.waitFor(() => expect(submissionStore.read()).toEqual([]));
+  await vi.waitFor(async () => expect(await submissionStore.read()).toEqual([]));
   expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ childSessionKey: runId, result: "result B" }),
   );
@@ -828,7 +830,8 @@ describe("Codex native transient predecessor anchor", () => {
       let parentRegistered = true;
       const submissionStore = {
         assertCurrent: () => {},
-        read: () => [...receipts.values()],
+        assertCurrentAsync: async () => {},
+        read: async () => [...receipts.values()],
         record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>(async (receipt, guard) => {
           guard();
           ownerStatesAtRecord.push(parentRegistered);
@@ -903,7 +906,8 @@ describe("Codex native transient predecessor anchor", () => {
     let recordCompletion: Promise<boolean> | undefined;
     const submissionStore = {
       assertCurrent: () => {},
-      read: () => [...receipts.values()],
+      assertCurrentAsync: async () => {},
+      read: async () => [...receipts.values()],
       record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>((receipt, guard) => {
         recordCompletion = (async () => {
           recordEntered.resolve();

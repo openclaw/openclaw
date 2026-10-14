@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -13,7 +14,6 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
@@ -120,9 +120,7 @@ export async function admitFollowupTurn(params: {
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
   const resolveRunSessionFile = (source: FollowupRun["run"]) =>
-    resolveAdmittedRunSessionFile({
-      sessionKey: replySessionKey,
-    }) ?? source.sessionFile;
+    normalizeOptionalString(replySessionKey) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     agentId: run.agentId,
     resolveGatewayContext: params.defaults.resolveGatewayContext,
@@ -131,6 +129,29 @@ export async function admitFollowupTurn(params: {
     expectedSessionId: initialEntry?.sessionId,
     storePath: params.defaults.storePath,
     kind: "queued_followup",
+    // Settings writers can refresh this queued source while admission waits.
+    // Copy only selection at the admission owner’s writer fence, before any
+    // source-adoption await. Session identity and authority keep their original
+    // bindings; later preference edits cannot alter this detached turn selection.
+    captureRunSelection: () => {
+      const selected = params.queued.run;
+      run = {
+        ...run,
+        provider: selected.provider,
+        model: selected.model,
+        requestedRouteResolution: selected.requestedRouteResolution,
+        hasAutoFallbackProvenance: selected.hasAutoFallbackProvenance,
+        autoFallbackPrimaryProbe: selected.autoFallbackPrimaryProbe
+          ? { ...selected.autoFallbackPrimaryProbe }
+          : undefined,
+        hasSessionModelOverride: selected.hasSessionModelOverride,
+        modelOverrideSource: selected.modelOverrideSource,
+        authProfileId: selected.authProfileId,
+        authProfileIdSource: selected.authProfileIdSource,
+        thinkLevel: selected.thinkLevel,
+        thinkingCatalog: selected.thinkingCatalog,
+      };
+    },
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
@@ -144,6 +165,8 @@ export async function admitFollowupTurn(params: {
     return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
+  const selectionEntry = admission.sessionEntry ?? initialEntry;
+  const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
   try {
@@ -158,11 +181,6 @@ export async function admitFollowupTurn(params: {
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
     assertOperatorCurrent();
     const sessionRotated = operation.sessionId !== run.sessionId;
-    const admittedEntry = replySessionKey
-      ? params.defaults.storePath
-        ? loadSessionEntry({ storePath: params.defaults.storePath, sessionKey: replySessionKey })
-        : params.defaults.sessionStore?.[replySessionKey]
-      : undefined;
     const admissionEntry =
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
@@ -184,20 +202,9 @@ export async function admitFollowupTurn(params: {
         );
       }
     };
-    assertPersistedGeneration(admittedEntry);
-    const reloadedEntry =
-      admittedEntry?.sessionId === operation.sessionId ? admittedEntry : undefined;
-    const freshestMatchingEntry =
-      reloadedEntry && admissionEntry
-        ? reloadedEntry.updatedAt >= admissionEntry.updatedAt
-          ? reloadedEntry
-          : admissionEntry
-        : (reloadedEntry ?? admissionEntry);
     let activeEntry =
-      freshestMatchingEntry ??
-      (admittedEntry === undefined && initialEntry?.sessionId === operation.sessionId
-        ? initialEntry
-        : undefined);
+      admissionEntry ??
+      (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&
@@ -221,7 +228,10 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      entry: activeEntry,
+      // Reconcile the probe against the same admitted preferences, not a newer
+      // selection published while source adoption awaited. Lifecycle checks and
+      // compaction still consume fresh session state independently above/below.
+      entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };
@@ -272,9 +282,9 @@ export async function admitFollowupTurn(params: {
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
-    const readTurnSessionEntry = () =>
+    const readNoticeSessionEntry = async () =>
       replySessionKey && params.defaults.storePath
-        ? loadSessionEntry({
+        ? await readSessionEntryInWorker({
             storePath: params.defaults.storePath,
             sessionKey: replySessionKey,
           })
@@ -314,15 +324,20 @@ export async function admitFollowupTurn(params: {
       | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      turn.sendPolicy === "allow" &&
-      queued.currentInboundEventKind !== "room_event" &&
-      shouldNotifyUserAboutCompaction(config)
+      turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
+            if (
+              phase !== "context_bounded" &&
+              phase !== "degraded" &&
+              !shouldNotifyUserAboutCompaction(config)
+            ) {
+              return;
+            }
             if (phase !== "start") {
               pendingTerminalCompactionNotice = { phase, text };
               return;
             }
-            const noticeEntry = readTurnSessionEntry();
+            const noticeEntry = await readNoticeSessionEntry();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
@@ -347,6 +362,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
@@ -369,27 +385,6 @@ export async function admitFollowupTurn(params: {
           "Follow-up session generation changed during preflight notice delivery",
         );
       }
-      if (replySessionKey && params.defaults.storePath) {
-        const persistedEntry = readTurnSessionEntry();
-        if (
-          (!persistedEntry && preflightEntry) ||
-          (persistedEntry &&
-            !isSameSessionGeneration(persistedEntry, preflightEntry) &&
-            !isSameSessionGeneration(persistedEntry, activeEntry))
-        ) {
-          throw new FollowupSessionGenerationInvalidatedError(
-            "Follow-up session generation changed during preflight",
-          );
-        }
-        if (
-          persistedEntry &&
-          (!activeEntry ||
-            (isSameSessionGeneration(persistedEntry, activeEntry) &&
-              persistedEntry.updatedAt >= activeEntry.updatedAt))
-        ) {
-          activeEntry = persistedEntry;
-        }
-      }
       if (activeEntry) {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
@@ -398,10 +393,7 @@ export async function admitFollowupTurn(params: {
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
-      const failureEntry = readTurnSessionEntry();
-      if (!isSameSessionGeneration(failureEntry, session.current())) {
-        assertPersistedGeneration(failureEntry);
-      }
+      const failureEntry = session.current();
       if (failureEntry) {
         session.adopt(failureEntry);
         activeEntry = session.current() ?? failureEntry;
@@ -436,14 +428,23 @@ export async function admitFollowupTurn(params: {
       turn.sendPolicy === "allow" &&
       turn.queued.currentInboundEventKind !== "room_event"
     ) {
-      await params.onCompactionNoticePayload?.(
-        createCompactionNoticePayload({
-          phase: pendingTerminalCompactionNotice.phase,
-          text: pendingTerminalCompactionNotice.text,
-          currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
-        }),
-        turn,
-      );
+      const noticeEntry = await readNoticeSessionEntry();
+      const expectedEntry = session.current();
+      if ((noticeEntry || expectedEntry) && !isSameSessionGeneration(noticeEntry, expectedEntry)) {
+        throw new FollowupSessionGenerationInvalidatedError(
+          "Follow-up session generation changed before compaction notice delivery",
+        );
+      }
+      if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "allow") {
+        await params.onCompactionNoticePayload?.(
+          createCompactionNoticePayload({
+            phase: pendingTerminalCompactionNotice.phase,
+            text: pendingTerminalCompactionNotice.text,
+            currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
+          }),
+          turn,
+        );
+      }
     }
     return { kind: "admitted", turn };
   } catch (error) {

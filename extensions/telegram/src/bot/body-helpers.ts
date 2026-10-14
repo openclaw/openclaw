@@ -1,7 +1,8 @@
 import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
-import type {
-  ChannelInboundMediaInput,
-  NormalizedLocation,
+import {
+  type ChannelInboundMediaInput,
+  formatLocationText,
+  type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,13 +12,14 @@ import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
-  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+  "photo" | "video" | "video_note" | "animation" | "audio" | "voice" | "document" | "sticker"
 >;
 
 type TelegramMediaFileRef =
   | NonNullable<Message["photo"]>[number]
   | NonNullable<Message["video"]>
   | NonNullable<Message["video_note"]>
+  | NonNullable<Message["animation"]>
   | NonNullable<Message["audio"]>
   | NonNullable<Message["voice"]>
   | NonNullable<Message["document"]>
@@ -45,7 +47,7 @@ export function resolveTelegramPrimaryMedia(
   }
   const candidates: Array<[TelegramMediaKind, TelegramMediaFileRef | undefined]> = [
     ["image", msg.photo?.[msg.photo.length - 1]],
-    ["video", msg.video ?? msg.video_note],
+    ["video", msg.video ?? msg.video_note ?? msg.animation],
     ["audio", msg.audio ?? msg.voice],
     ["document", msg.document],
     ["sticker", msg.sticker],
@@ -412,6 +414,24 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
       origin satisfies never;
       return null;
   }
+}
+
+/** Location counts as user text downstream and is forwarded structurally; dice is neither. */
+export type TelegramNonTextBody =
+  | { kind: "location"; text: string; location: NormalizedLocation }
+  | { kind: "dice"; text: string };
+
+/** Shared by inbound bodies, cached messages, and reply targets. */
+export function resolveTelegramNonTextBody(msg: Message): TelegramNonTextBody | undefined {
+  const location = extractTelegramLocation(msg);
+  if (location) {
+    return { kind: "location", text: formatLocationText(location), location };
+  }
+  const dice = msg.dice;
+  const emoji = normalizeOptionalString(dice?.emoji);
+  return dice && emoji && Number.isFinite(dice.value)
+    ? { kind: "dice", text: `[Dice ${emoji} = ${dice.value}]` }
+    : undefined;
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {

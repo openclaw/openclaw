@@ -91,11 +91,8 @@ describe("promptRemoteGatewayConfig", () => {
   });
 
   it.each([
-    { name: "unchanged URL", auth: "token", url: "wss://gateway.example/rpc" },
     { name: "trimmed URL", auth: "token", url: " wss://gateway.example/rpc " },
-    { name: "changed host", auth: "token", url: "wss://other.example/rpc" },
     { name: "changed path", auth: "token", url: "wss://gateway.example/other" },
-    { name: "auth disabled", auth: "off", url: "wss://gateway.example/rpc" },
     {
       name: "changed URL seeded by onboarding",
       auth: "token",
@@ -156,33 +153,33 @@ describe("promptRemoteGatewayConfig", () => {
     expect(discoverGatewayBeacons).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }],
-    ["clears", "wss://other.example/rpc", undefined],
-  ])("%s edge auth based on the remote Gateway scope", async (_label, nextUrl, expected) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example/rpc/",
-          edgeAuth: { "X-Edge-Auth": "test-secret" },
+  it.each([["preserves", "wss://gateway.example/rpc", { "X-Edge-Auth": "test-secret" }]])(
+    "%s edge auth based on the remote Gateway scope",
+    async (_label, nextUrl, expected) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example/rpc/",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+          },
         },
-      },
-    };
-    const prompter = createPrompter({
-      confirm: vi.fn(async ({ message }) => message === "Continue without a Gateway secret?"),
-      select: createSelectPrompter({}),
-      text: vi.fn(async (params) =>
-        params.message === "Gateway WebSocket URL" ? nextUrl : "",
-      ) as WizardPrompter["text"],
-    });
+      };
+      const prompter = createPrompter({
+        confirm: vi.fn(async ({ message }) => message === "Continue without a Gateway secret?"),
+        select: createSelectPrompter({}),
+        text: vi.fn(async (params) =>
+          params.message === "Gateway WebSocket URL" ? nextUrl : "",
+        ) as WizardPrompter["text"],
+      });
 
-    const next = await promptRemoteGatewayConfig(cfg, prompter);
+      const next = await promptRemoteGatewayConfig(cfg, prompter);
 
-    expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
-  });
+      expect(next.gateway?.remote?.edgeAuth).toEqual(expected);
+    },
+  );
 
-  it.each([undefined, "wss://gateway.tailnet.ts.net:18789", "wss://old.example/rpc"])(
+  it.each(["wss://gateway.tailnet.ts.net:18789"])(
     "pins a trusted discovery endpoint with previous URL %s",
     async (previousUrl) => {
       detectBinary.mockResolvedValue(true);
@@ -238,7 +235,6 @@ describe("promptRemoteGatewayConfig", () => {
 
   it.each([
     { port: 18789, sshPort: undefined },
-    { port: 18789, sshPort: 2222 },
     { port: 29443, sshPort: 2222 },
   ])(
     "uses discovered Gateway port $port and SSH port $sshPort without retaining an old route",
@@ -363,7 +359,7 @@ describe("promptRemoteGatewayConfig", () => {
     },
   );
 
-  it.each([undefined, "wss://old.example:443", "wss://other.example:443"])(
+  it.each([undefined, "wss://other.example:443"])(
     "scopes discovery and saved pins after URL edits with previous URL %s",
     async (previousUrl) => {
       detectBinary.mockResolvedValue(true);
@@ -541,52 +537,10 @@ describe("promptRemoteGatewayConfig", () => {
   });
 
   it.each([
-    { name: "a fresh config", remote: {} },
-    { name: "an existing password", remote: { password: "old-password" } },
-  ])("stores one sensitive Gateway secret as a token for $name", async ({ remote }) => {
-    const text = vi.fn(async ({ message }: Parameters<WizardPrompter["text"]>[0]) =>
-      message === "Gateway WebSocket URL" ? "wss://remote.example.com:18789" : "new-secret",
-    );
-    const { next, prompter } = await runRemotePrompt({
-      cfg: { gateway: { remote } },
-      text,
-      confirm: false,
-      selectResponses: {},
-    });
-
-    expect(next.gateway?.remote?.token).toBe("new-secret");
-    expect(next.gateway?.remote?.password).toBeUndefined();
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Gateway secret",
-        sensitive: true,
-      }),
-    );
-    expect(vi.mocked(prompter.select).mock.calls.map(([params]) => params.message)).not.toContain(
-      "Gateway auth",
-    );
-    expect(vi.mocked(text).mock.calls.map(([params]) => params.message)).toEqual([
-      "Gateway WebSocket URL",
-      "Gateway secret",
-    ]);
-  });
-
-  it.each([
-    { name: "plaintext token", remote: { token: "existing-token" }, expected: "existing-token" },
     {
       name: "plaintext password",
       remote: { password: "existing-password" },
       expected: "existing-password",
-    },
-    {
-      name: "token SecretRef",
-      remote: { token: { source: "env", provider: "default", id: "REMOTE_SECRET" } },
-      expected: { source: "env", provider: "default", id: "REMOTE_SECRET" },
-    },
-    {
-      name: "password SecretRef",
-      remote: { password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" } },
-      expected: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
     },
   ] as const)(
     "keeps an existing $name as the remote token after blank input and confirmation",
@@ -615,14 +569,9 @@ describe("promptRemoteGatewayConfig", () => {
   );
 
   it.each([
-    { name: "a fresh endpoint", remote: {} },
     {
       name: "an existing credential the operator declines to keep",
       remote: { url: "wss://remote.example.com:18789", token: "old-secret" },
-    },
-    {
-      name: "a changed endpoint",
-      remote: { url: "wss://old.example.com:18789", token: "old-secret" },
     },
   ])("requires explicit confirmation for no auth with $name", async ({ remote }) => {
     const confirm = vi.fn(

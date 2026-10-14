@@ -64,6 +64,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly gemini31LiveModel: boolean;
+  private readonly completeInputTranscripts: boolean;
   private readonly extendedThinkingModel: boolean;
   private ws: WebSocket | null = null;
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -96,6 +97,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const modelId = session.model?.replace(/^models\//, "") ?? "";
     this.gemini31LiveModel =
       !session.model || (modelId.startsWith("gemini-3.1-") && modelId.includes("-live"));
+    this.completeInputTranscripts = this.gemini31LiveModel || modelId.startsWith("gemini-3.8-live");
     this.extendedThinkingModel =
       modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
@@ -257,7 +259,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       () => this.inputPump.stop(),
       () => inputMeter?.stop(),
       () => this.camera.release(),
-      () => this.stopOutput(),
+      () => this.outputQueue.stop(this.outputContext),
       () => {
         void inputContext?.close();
       },
@@ -349,7 +351,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const content = message.serverContent;
     if (content?.interrupted) {
       this.interruptedTurn = true;
-      this.stopOutput();
+      this.outputQueue.stop(this.outputContext);
     }
     if (content?.inputTranscription && !this.appendTranscript("user", content.inputTranscription)) {
       return;
@@ -423,8 +425,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     transcript: { text?: string; finished?: boolean },
   ): boolean {
     const pending = this.pendingTranscripts[role];
-    // Live 3.1 input messages are complete utterances even without finished.
-    const completeInput = role === "user" && this.gemini31LiveModel;
+    // Live 3.1 and 3.8 send complete input utterances without a finished flag.
+    const completeInput = role === "user" && this.completeInputTranscripts;
     if (transcript.text) {
       pending.byteCount += utf8Encoder.encode(transcript.text).byteLength;
       if (pending.byteCount > GOOGLE_LIVE_MAX_TRANSCRIPT_BYTES) {
@@ -476,7 +478,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         ctx: this.ctx,
         text,
         emitTalkEvent: this.emitTalkEvent,
-        onControlResult: (result) => this.stopOutputForSuppressedControl(result),
+        onControlResult: (result) => {
+          if (shouldInterruptRealtimeTalkControlResponse(result)) {
+            this.outputQueue.stop(this.outputContext);
+          }
+        },
         speakControlResult: (message) => this.sendControlSpeechMessage(message),
         suppressSpeechForModes: ["cancel"],
       });
@@ -496,7 +502,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (result !== "overflow") {
       return;
     }
-    this.stopOutput();
+    this.outputQueue.stop(this.outputContext);
     this.emitTalkEvent({
       type: "turn.cancelled",
       final: true,
@@ -509,10 +515,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     // Google Live exposes server-driven interruption but no client response-cancel
     // frame, so closing the session is the only deterministic provider-side stop.
     this.stop();
-  }
-
-  private stopOutput(): void {
-    this.outputQueue.stop(this.outputContext);
   }
 
   private sendToolResult(callId: string, name: string, result: unknown): void {
@@ -610,27 +612,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private sendControlSpeechMessage(message: string): void {
-    this.stopOutput();
-    if (!this.gemini31LiveModel) {
-      this.send({
-        clientContent: {
-          turns: [{ role: "user", parts: [{ text: message }] }],
-          turnComplete: true,
-        },
-      });
-      return;
-    }
-    this.send({
-      realtimeInput: {
-        text: message,
-      },
-    });
-  }
-
-  private stopOutputForSuppressedControl(result: unknown): void {
-    if (shouldInterruptRealtimeTalkControlResponse(result)) {
-      this.stopOutput();
-    }
+    this.outputQueue.stop(this.outputContext);
+    this.send(
+      this.gemini31LiveModel
+        ? { realtimeInput: { text: message } }
+        : {
+            clientContent: {
+              turns: [{ role: "user", parts: [{ text: message }] }],
+              turnComplete: true,
+            },
+          },
+    );
   }
 }
 

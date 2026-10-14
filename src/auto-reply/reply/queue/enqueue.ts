@@ -239,10 +239,7 @@ function applyFollowupQueueOverflow(
 
 export function getFollowupQueueDepth(key: string): number {
   const queue = getExistingFollowupQueue(key);
-  if (!queue) {
-    return 0;
-  }
-  return countPendingQueueItems(queue.items, queue.inFlight);
+  return queue ? countPendingQueueItems(queue.items, queue.inFlight) : 0;
 }
 
 /**
@@ -307,38 +304,6 @@ function reapplyDeferredOverflow(key: string): void {
   }
 }
 
-/** Remove an exactly committed steer while preserving every sibling's FIFO position. */
-function consumeParkedFollowupRun(
-  key: string,
-  run: FollowupRun,
-  disposition?: "consumed",
-): boolean {
-  const queue = getExistingFollowupQueue(key);
-  const index = queue?.items.indexOf(run) ?? -1;
-  if (!queue || index < 0) {
-    return false;
-  }
-  queue.items.splice(index, 1);
-  run.steerPending?.settle(true);
-  delete run.steerPending;
-  delete run.protectFromQueueOverflow;
-  reapplyDeferredOverflow(key);
-  completeFollowupRunLifecycle(run, disposition);
-  if (
-    !queue.draining &&
-    queue.items.length === 0 &&
-    queue.inFlight.size === 0 &&
-    queue.droppedCount === 0 &&
-    FOLLOWUP_QUEUES.get(key) === queue
-  ) {
-    FOLLOWUP_QUEUES.delete(key);
-    clearFollowupDrainCallback(key);
-  } else {
-    kickFollowupDrainIfIdle(key);
-  }
-  return true;
-}
-
 type ParkedSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
@@ -392,7 +357,33 @@ export function parkSteerCandidate(
     },
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
     fallback: () => settleParkedSteerAcceptance(key, run, false),
-    consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
+    // Remove an exactly committed steer without changing sibling FIFO positions.
+    consume: (disposition) => {
+      const queue = getExistingFollowupQueue(key);
+      const index = queue?.items.indexOf(run) ?? -1;
+      if (!queue || index < 0) {
+        return false;
+      }
+      queue.items.splice(index, 1);
+      run.steerPending?.settle(true);
+      delete run.steerPending;
+      delete run.protectFromQueueOverflow;
+      reapplyDeferredOverflow(key);
+      completeFollowupRunLifecycle(run, disposition);
+      if (
+        !queue.draining &&
+        queue.items.length === 0 &&
+        queue.inFlight.size === 0 &&
+        queue.droppedCount === 0 &&
+        FOLLOWUP_QUEUES.get(key) === queue
+      ) {
+        FOLLOWUP_QUEUES.delete(key);
+        clearFollowupDrainCallback(key);
+      } else {
+        kickFollowupDrainIfIdle(key);
+      }
+      return true;
+    },
   };
 }
 

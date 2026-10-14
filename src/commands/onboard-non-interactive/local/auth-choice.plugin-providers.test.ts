@@ -675,6 +675,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         expect(runtime.log).toHaveBeenCalledOnce();
         expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
           ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("was not matched to a trusted provider plugin"),
+          },
           phase: "options",
           message: expect.stringContaining("was not matched to a trusted provider plugin"),
         });
@@ -712,6 +716,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         expect(runtime.log).toHaveBeenCalledOnce();
         expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
           ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("is missing a provider id"),
+          },
           phase: "options",
           message: expect.stringContaining("is missing a provider id"),
         });
@@ -863,6 +871,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(runtime.error).toHaveBeenCalledWith(message);
     expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
       ok: false,
+      error: { type: "cli_error", message },
       phase: "options",
       message,
     });

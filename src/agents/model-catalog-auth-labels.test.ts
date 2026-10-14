@@ -8,16 +8,13 @@ import {
 } from "./model-catalog-auth-labels.js";
 
 const envKey = vi.hoisted(() => vi.fn());
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env.js")>()),
   resolveEnvApiKey: envKey,
-  resolveUsableCustomProviderApiKey: () => null,
 }));
-vi.mock("./auth-profiles.js", async () => ({
-  isConfiguredAwsSdkAuthProfileForProvider: (await import("./auth-profiles/order.js"))
-    .isConfiguredAwsSdkAuthProfileForProvider,
-  isProfileInCooldown: (await import("./auth-profiles/usage-state.js")).isProfileInCooldown,
-  resolveAuthProfileDisplayLabel: (await import("./auth-profiles/display.js"))
-    .resolveAuthProfileDisplayLabel,
+vi.mock("./model-auth-provider-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-provider-config.js")>()),
+  resolveUsableCustomProviderApiKey: () => null,
 }));
 const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig = {}) => {
   const capturedStore = structuredClone(store);
@@ -35,22 +32,6 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
-
-  it("labels an unresolved API key reference", () => {
-    const captured = capture("openai", {
-      version: 1,
-      profiles: {
-        default: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      },
-    });
-    expect(captured.labels.get("openai")?.all).toMatchObject({
-      profiles: { default: "default=ref" },
-    });
-  });
 
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();

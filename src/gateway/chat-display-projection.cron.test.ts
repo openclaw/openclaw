@@ -2,12 +2,13 @@ import path from "node:path";
 import { constants } from "node:sqlite";
 import { expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -27,6 +28,7 @@ import { projectSessionMessagePayload } from "./session-transcript-message.js";
 it("batches automation names across history reads after rename and deletion without a source session", async () => {
   const jobCount = 32;
   await withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const job: CronJob = {
       id: "daily-report",
       name: "Daily report",

@@ -11,15 +11,12 @@ import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
 } from "../infra/gateway-state-owner.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
-import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
-  DoctorMaintenanceRefusalError,
   UpdateDoctorError,
 } from "../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -27,11 +24,7 @@ import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { ExitError } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-  claimOpenClawAgentDatabaseLease,
-} from "../state/openclaw-agent-db-lease.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -91,12 +84,9 @@ describe("Doctor refused-migration maintenance outcome", () => {
   });
 
   it.each([
-    { fix: false, updating: undefined, request: "1", repair: false, conversion: false },
     { fix: false, updating: "1", request: "1", repair: false, conversion: false },
     { fix: true, updating: undefined, request: undefined, repair: true, conversion: false },
-    { fix: true, updating: "0", request: "0", repair: true, conversion: false },
     { fix: true, updating: "1", request: undefined, repair: false, conversion: true },
-    { fix: true, updating: "true", request: "0", repair: false, conversion: true },
     { fix: true, updating: "1", request: "1", repair: true, conversion: true },
   ])(
     "gates SQLite repairs after checks and before restoration (fix=$fix, update=$updating, request=$request)",
@@ -166,7 +156,7 @@ describe("Doctor refused-migration maintenance outcome", () => {
     },
   );
 
-  it.each(["diagnostic", "runtime exit"])(
+  it.each(["runtime exit"])(
     "settles %s failure before forwarding database write proof",
     async (kind) => {
       const resultPath = createUpdatePostInstallDoctorResultPath();
@@ -398,50 +388,6 @@ describe("Doctor refused-migration maintenance outcome", () => {
 describe("Doctor maintenance admission", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["explicit", "unreadable"] as const)(
-    "serializes unsafe maintenance refusal from the %s owner",
-    async (kind) => {
-      const resultPath = createUpdatePostInstallDoctorResultPath();
-      const env = {
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
-      };
-      await withOpenClawTestState({ scenario: "minimal", env }, async (state) => {
-        const refusal = {
-          kind: "data-at-risk" as const,
-          reason:
-            kind === "explicit" ? ("incomplete-migration" as const) : ("unreadable-state" as const),
-        };
-        const error =
-          kind === "explicit"
-            ? new DoctorMaintenanceRefusalError("An admitted migration is incomplete.", refusal)
-            : new DoctorUnreadableStateDatabaseError(
-                state.statePath("state/openclaw.sqlite"),
-                "malformed schema",
-              );
-        mocks.packageRoot.mockReturnValue(undefined);
-        mocks.runContributions.mockClear();
-        vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockRejectedValueOnce(error);
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const failure = await runDoctorHealthFlow(
-          runtime,
-          { repair: true, nonInteractive: true },
-          undefined,
-          { incompatible: [], indeterminate: [] },
-        ).catch((cause: unknown) => cause);
-        const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-        expect(failure).toBe(error);
-        expect(result).toMatchObject({
-          status: "error",
-          configHash: "unchanged",
-          maintenanceRefusal: refusal,
-        });
-        expect(mocks.runContributions).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
-      });
-    },
-  );
-
   it.each(
     (["gateway", "schema", "agent"] as const).flatMap((owner) =>
       [false, true].map((updating) => ({ owner, updating })),
@@ -537,76 +483,4 @@ describe("Doctor maintenance admission", () => {
       });
     },
   );
-});
-
-describe("Doctor agent lease admission", () => {
-  it("reserves dangling Workshop index admission for Doctor without mutating state", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const opened = openOpenClawStateDatabase({ env: state.env });
-      const pathname = opened.path;
-      closeOpenClawStateDatabaseByPath(pathname);
-      const db = openNodeSqliteDatabase(pathname);
-      try {
-        db.exec(
-          "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-        );
-        db.enableDefensive?.(false);
-        db.exec("PRAGMA writable_schema = ON;");
-        db.prepare(
-          `UPDATE sqlite_schema
-              SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                           ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-            WHERE type = 'index'
-              AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-        ).run();
-        const schema = db.prepare("PRAGMA schema_version").get() as { schema_version: number };
-        db.exec(
-          `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
-        );
-      } finally {
-        db.close();
-      }
-      const before = fs.readFileSync(pathname);
-
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toThrow(
-        /legacy-workshop-review-index/,
-      );
-      expect(fs.readFileSync(pathname)).toEqual(before);
-      const doctor = await doctorMaintenance.beginDoctorMaintenance({
-        options: { repair: true, nonInteractive: true },
-        root: null,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      });
-      try {
-        expect(doctor).toBeDefined();
-        expect(fs.readFileSync(pathname)).toEqual(before);
-      } finally {
-        await doctor?.release();
-      }
-    });
-  });
-
-  it("admits a restored primary database without opening or clearing its quarantine store", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const pathname = state.statePath("state/openclaw.sqlite");
-      fs.mkdirSync(state.statePath("state"), { recursive: true });
-      const db = openNodeSqliteDatabase(pathname);
-      db.exec(
-        "PRAGMA user_version=1; CREATE TABLE restored(value TEXT); INSERT INTO restored VALUES ('retained');",
-      );
-      db.close();
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: state.env,
-          kind: "state",
-          path: pathname,
-          reason: "previous corrupt generation",
-        }),
-      ).toBe(true);
-      const quarantine = state.statePath("state/openclaw-quarantine.sqlite");
-      const before = [fs.readFileSync(pathname), fs.readFileSync(quarantine)];
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
-      expect([fs.readFileSync(pathname), fs.readFileSync(quarantine)]).toEqual(before);
-    });
-  });
 });

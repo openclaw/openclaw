@@ -3,6 +3,7 @@ import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.j
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { loadOpenClawAgentCanonicalValidationReceipt } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -25,7 +26,6 @@ import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import {
   withSqliteReclamationWorker,
@@ -85,17 +85,14 @@ export async function certifySessionCanonicalValidationPending(
   let oversizedRows = 0;
   try {
     const readiness = database
-      ? runSqliteReadOperationSync(
-          database.db,
-          () => {
-            const initialize = !hasOpenClawAgentCanonicalValidation(database);
-            return {
-              initialize,
-              hasWork: initialize || hasPendingCanonicalSessionValidation(database),
-            };
-          },
-          "fresh",
-        )
+      ? runSqliteReadOperationSync(database.db, () => {
+          loadOpenClawAgentCanonicalValidationReceipt(database);
+          const initialize = !hasOpenClawAgentCanonicalValidation(database);
+          return {
+            initialize,
+            hasWork: initialize || hasPendingCanonicalSessionValidation(database),
+          };
+        })
       : { initialize: pending!.initializeCanonicalValidation, hasWork: true };
     if (!readiness.hasWork) {
       return;
@@ -157,7 +154,7 @@ export async function certifySessionCanonicalValidationPending(
             claim?.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
-              async ({ assertCurrent, commitGate, signal }) =>
+              async ({ assertCurrent, signal }) =>
                 await useWorker(
                   async (worker) => {
                     if (!claim) {
@@ -172,10 +169,6 @@ export async function certifySessionCanonicalValidationPending(
                         plan: { kind: "canonical-validation" },
                         expectedSource: pending!.source,
                         assertCurrent: assertOpeningCurrent,
-                        commitGate,
-                        onCommitRequest: () => {
-                          throw new Error("Canonical source preparation cannot request a commit");
-                        },
                         withWriteAdmission: (run, reclamationAdmission) =>
                           runExclusiveSqliteSessionWrite(
                             databaseOptions,
@@ -213,44 +206,33 @@ export async function certifySessionCanonicalValidationPending(
                       assertCurrent();
                       execution?.assertCurrent();
                       worker.assertCurrent(databaseOptions, currentClaim);
-                      if (validation && readValidation() !== validation) {
-                        throw new Error("Canonical validation admission changed");
-                      }
                     };
                     assertCommitAllowed();
-                    return await withSqliteReclamationAuthorization(
-                      commitGate,
-                      database?.db ?? databaseOptions.path,
-                      assertCommitAllowed,
-                      (authorize) =>
-                        worker.runCanonicalValidation({
+                    return await worker.runCanonicalValidation({
+                      databaseOptions,
+                      claim: currentClaim,
+                      validationOwner,
+                      maxRows: MAX_BATCH_ROWS,
+                      maxBytes: MAX_BATCH_BYTES,
+                      initializeCanonicalValidation,
+                      withWriteAdmission: async (run, reclamationAdmission) =>
+                        await runExclusiveSqliteSessionWrite(
                           databaseOptions,
-                          claim: currentClaim,
-                          validationOwner,
-                          commitGate,
-                          maxRows: MAX_BATCH_ROWS,
-                          maxBytes: MAX_BATCH_BYTES,
-                          initializeCanonicalValidation,
-                          onCommitRequest: authorize,
-                          withWriteAdmission: async (run, reclamationAdmission) =>
-                            await runExclusiveSqliteSessionWrite(
-                              databaseOptions,
-                              async () => {
-                                let refusal: { error: unknown } | undefined;
-                                try {
-                                  assertCommitAllowed();
-                                } catch (error) {
-                                  refusal = { error };
-                                }
-                                await run(refusal);
-                              },
-                              "session.canonical-validation.certify",
-                              { reclamationAdmission },
-                              "worker",
-                              signal,
-                            ),
-                        }),
-                    );
+                          async () => {
+                            let refusal: { error: unknown } | undefined;
+                            try {
+                              assertCommitAllowed();
+                            } catch (error) {
+                              refusal = { error };
+                            }
+                            await run(refusal);
+                          },
+                          "session.canonical-validation.certify",
+                          { reclamationAdmission },
+                          "worker",
+                          signal,
+                        ),
+                    });
                   },
                   () => {
                     assertOwnerCurrent();
@@ -266,10 +248,11 @@ export async function certifySessionCanonicalValidationPending(
             assertReadinessCurrent();
             claim?.assertCurrent();
             const currentValidation = readValidation();
-            if (!currentValidation || (validation && validation !== currentValidation)) {
+            if (!currentValidation) {
               throw new Error("SQLite session reclamation database owner is no longer current");
             }
-            validation ??= currentValidation;
+            // A successful worker admission can renew proof for the same physical owner.
+            validation = currentValidation;
             oversizedRows += result.oversizedRows;
             if (!result.hasMore) {
               if (

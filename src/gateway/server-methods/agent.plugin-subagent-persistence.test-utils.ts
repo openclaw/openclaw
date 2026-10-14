@@ -20,6 +20,7 @@ import {
   requireValue,
   waitForAssertion,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
 
@@ -41,7 +42,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
-          storePath: "/tmp/sessions.json",
+          storePath: getAgentTestStorePath(),
           entry: {
             sessionId: "plugin-subagent-registry-fail-session",
             updatedAt: Date.now(),

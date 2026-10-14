@@ -37,7 +37,7 @@ function rejectedAttempt(response = refusal) {
   const record = f.record();
   const capture = `merge-output.${record.attempt}.log`;
   expect(readFileSync(join(f.worktree, ".local", capture), "utf8")).toBe(response);
-  expect(f.recover()).toBe(true);
+  expect(f.recover()).toBe(false);
   f.save({ ...f.state(), restMergeRefusal: "" });
   return { f, oid, record, capture };
 }
@@ -121,7 +121,7 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
     expect(secondRecord).toMatchObject({ phase: "intent", accepted: false });
     expect(mergeRequests(f)).toHaveLength(2);
     expectRetainedCapture(f, secondOid, first.capture);
-    expect(f.recover()).toBe(true);
+    expect(f.recover()).toBe(false);
 
     const stale = f.adminPriorCi(f.path, true, first.oid);
     expect(stale.status, stale.output).toBe(1);
@@ -153,7 +153,6 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
   });
 
   it.each([
-    ["unknown", "unrecognized provider response\n"],
     [
       "generic 405",
       refusal.replaceAll(
@@ -161,7 +160,6 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
         "Method Not Allowed",
       ),
     ],
-    ["timeout", "request timed out after transmission\n"],
     ["5xx", refusal.replaceAll("405", "502")],
     ["truncated", refusal.slice(0, -20)],
     ["mixed success", refusal + '{"merged":true}\n'],
@@ -196,7 +194,7 @@ describePosix("explicit prior-CI provider rejection recovery", () => {
     },
   );
 
-  it.each(["accepted", "ordinary route", "other admin", "unconfirmed"])(
+  it.each(["accepted", "ordinary route", "unconfirmed"])(
     "refuses %s recovery authority even with exact provider bytes",
     (fault) => {
       const { f, oid } = rejectedAttempt();

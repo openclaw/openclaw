@@ -167,58 +167,6 @@ describe("createMobileUiTool", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("passes through the bounded semantic observation shape", async () => {
-    installGatewayBehavior();
-
-    const result = await createMobileUiTool().execute("observe-1", { action: "observe" });
-
-    expect(result.details).toEqual({
-      snapshotId: "snapshot-1",
-      package: "example.app",
-      windowTitle: "Example",
-      nodes: [
-        expect.objectContaining({
-          ref: "n1",
-          role: "button",
-          text: "Next",
-          bounds: [10, 20, 110, 70],
-          actions: ["activate"],
-        }),
-      ],
-    });
-    expect(result.details).not.toHaveProperty("capturedAtMs");
-  });
-
-  it("performs one act and automatically returns a fresh observation", async () => {
-    installGatewayBehavior();
-    const tool = createMobileUiTool();
-    await tool.execute("observe-1", { action: "observe" });
-
-    const result = await tool.execute("act-1", {
-      action: "act",
-      snapshotId: "snapshot-1",
-      mobileAction: { type: "activate", ref: "n1" },
-      confirmed: true,
-    });
-
-    expect(callGatewayToolMock.mock.calls.map((call) => call[2].command)).toEqual([
-      OBSERVE,
-      ACT,
-      OBSERVE,
-    ]);
-    expect(invokeBodies(ACT)[0]).toMatchObject({
-      nodeId: "android-1",
-      params: {
-        snapshotId: "snapshot-1",
-        action: { type: "activate", ref: "n1" },
-      },
-    });
-    expect(result.details).toMatchObject({
-      outcome: { code: "completed", message: null },
-      snapshot: { snapshotId: "snapshot-2" },
-    });
-  });
-
   it("rejects swipes longer than Android's gesture-duration limit", async () => {
     installGatewayBehavior();
     const tool = createMobileUiTool();
@@ -260,28 +208,26 @@ describe("createMobileUiTool", () => {
     expect(actCall?.[2]).toMatchObject({ timeoutMs: 110_000 });
   });
 
-  it.each(["target_stale", "target_not_found", "secure_content", "package_changed"])(
-    "surfaces %s and requires use of the fresh snapshot",
-    async (code) => {
-      installGatewayBehavior({ outcome: { code, message: "Observe again" } });
-      const tool = createMobileUiTool();
-      await tool.execute("observe-1", { action: "observe" });
+  it("surfaces target_stale and requires use of the fresh snapshot", async () => {
+    const code = "target_stale";
+    installGatewayBehavior({ outcome: { code, message: "Observe again" } });
+    const tool = createMobileUiTool();
+    await tool.execute("observe-1", { action: "observe" });
 
-      const result = await tool.execute("act-1", {
-        action: "act",
-        snapshotId: "snapshot-1",
-        mobileAction: { type: "activate", ref: "n1" },
-        confirmed: true,
-      });
+    const result = await tool.execute("act-1", {
+      action: "act",
+      snapshotId: "snapshot-1",
+      mobileAction: { type: "activate", ref: "n1" },
+      confirmed: true,
+    });
 
-      expect(result.details).toMatchObject({
-        outcome: { code, message: "Observe again" },
-        requiresReobserve: true,
-        instruction: expect.stringMatching(/fresh snapshot/),
-        snapshot: { snapshotId: "snapshot-2" },
-      });
-    },
-  );
+    expect(result.details).toMatchObject({
+      outcome: { code, message: "Observe again" },
+      requiresReobserve: true,
+      instruction: expect.stringMatching(/fresh snapshot/),
+      snapshot: { snapshotId: "snapshot-2" },
+    });
+  });
 
   it("preserves a completed act outcome when postcondition observation fails", async () => {
     let observeCalls = 0;

@@ -1,10 +1,7 @@
 // Persists the root ownership record for one Claw-created agent and workspace.
 
 import { stableStringify } from "@openclaw/normalization-core";
-import {
-  assertAgentDeletionAllowsMutation,
-  type AgentDeletionOperation,
-} from "../agents/agent-lifecycle-registry.js";
+import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -174,11 +171,10 @@ export function updateClawInstallRecordStatus(
   options: OpenClawStateDatabaseOptions & {
     nowMs?: number;
     expectedStatuses?: ClawInstallStatus[];
-    deletionOperation?: AgentDeletionOperation;
   } = {},
 ): void {
   runOpenClawStateWriteTransaction((database) => {
-    assertAgentDeletionAllowsMutation(database, agentId, options.deletionOperation);
+    assertAgentDeletionAllowsMutation(database, agentId);
     const { db } = database;
     const expectedStatuses = options.expectedStatuses ?? [];
     let query = getNodeSqliteKysely<ClawProvenanceDatabase>(db)
@@ -193,7 +189,6 @@ export function updateClawInstallRecordStatus(
         `Claw install record for agent ${JSON.stringify(agentId)} did not match the expected phase.`,
       );
     }
-    options.deletionOperation?.handoffToRetry(database);
   }, options);
 }
 

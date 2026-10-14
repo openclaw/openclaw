@@ -244,11 +244,7 @@ async function appendResolvedMediaFromAttachments(
     errorPrefix: string;
   },
 ) {
-  const attachments = params.attachments;
-  if (!attachments || attachments.length === 0) {
-    return;
-  }
-  for (const attachment of attachments) {
+  for (const attachment of params.attachments ?? []) {
     const attachmentUrl = normalizeOptionalString(attachment.url);
     if (!attachmentUrl) {
       logVerbose(
@@ -331,11 +327,7 @@ async function appendResolvedMediaFromStickers(
     errorPrefix: string;
   },
 ) {
-  const stickers = params.stickers;
-  if (!stickers || stickers.length === 0) {
-    return;
-  }
-  for (const sticker of stickers) {
+  for (const sticker of params.stickers ?? []) {
     const candidates = resolveStickerAssetCandidates(sticker);
     let lastError: unknown;
     for (const candidate of candidates) {

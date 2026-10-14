@@ -14,7 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { TemplateContext } from "../templating.js";
 import { isKnownModelSelectionProvider } from "./model-runtime-normalization.js";
 import {
   modelKey,
@@ -32,7 +32,6 @@ export async function applyResetModelOverride(params: {
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
-  ctx: MsgContext;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;

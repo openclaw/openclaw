@@ -4,6 +4,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { getUpdateRun, recordUpdateRunDiagnostics } from "../../infra/update-run-ledger.js";
+import { isUpdatePostInstallVerificationDeferred } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -113,6 +114,25 @@ export async function verifyUpdateFailureRecovery(params: {
           diagnostics: [
             "Gateway readiness was not checked: no Gateway service or listener was present before maintenance.",
           ],
+        });
+        return;
+      }
+      if (
+        params.opts.restart === false &&
+        !params.serviceStopped &&
+        result.steps.some(isUpdatePostInstallVerificationDeferred)
+      ) {
+        result.steps.push({
+          name: "gateway recovery verification",
+          command: "gateway verification",
+          cwd: root,
+          durationMs: 0,
+          exitCode: null,
+          advisory: {
+            kind: "recoverable-maintenance",
+            message:
+              "Gateway recovery verification deferred because --no-restart leaves activation to the operator. Resolve the recorded update failure before restarting the Gateway through its service owner, then run openclaw update status and openclaw doctor.",
+          },
         });
         return;
       }

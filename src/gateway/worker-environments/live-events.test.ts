@@ -24,7 +24,7 @@ import {
   sweepStaleRunContexts,
 } from "../../infra/agent-run-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../../trajectory/runtime-store.sqlite.js";
 import type { WorkerConnectionIdentity as Identity } from "./connection-identity.js";
@@ -52,22 +52,21 @@ import {
   seedWorkerLiveSession,
   type WireEvent,
 } from "./live-events.test-support.js";
-import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
 import * as workerRunOwner from "./worker-turn-run-owner.js";
 
 describe("worker live events", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worker-live-");
   let root: string;
   let store: string;
-  const sources = new Map<string, WorkerTurnTranscriptSource>();
+  const sources = new Map<string, Awaited<ReturnType<typeof captureWorkerTranscriptSource>>>();
   let rx: Receiver;
   let events: Event[];
   let unsubscribe: (() => void) | undefined;
   let durableAckedSeq = 0;
   const readAckedSeq = () => durableAckedSeq;
 
-  const captureSource = (sessionId = SID, sessionKey = KEY) => {
-    const source = captureWorkerTranscriptSource({
+  const captureSource = async (sessionId = SID, sessionKey = KEY) => {
+    const source = await captureWorkerTranscriptSource({
       agentId: "main",
       sessionId,
       sessionKey,
@@ -76,6 +75,7 @@ describe("worker live events", () => {
     if (!source.sessionTarget.expectedLifecycleRevision) {
       throw new Error("expected admitted live-event session");
     }
+    await sources.get(sessionId)?.release();
     sources.set(sessionId, source);
     return source;
   };
@@ -134,7 +134,7 @@ describe("worker live events", () => {
     sources.clear();
     durableAckedSeq = 0;
     await create(10);
-    captureSource();
+    await captureSource();
     setRuntimeConfigSnapshot({ session: { store } });
     start();
     events = [];
@@ -144,6 +144,7 @@ describe("worker live events", () => {
   afterEach(async () => {
     unsubscribe?.();
     rx?.clear();
+    await Promise.all([...sources.values()].map((source) => source.release()));
     clearRuntimeConfigSnapshot();
     await drainStoreWriterQueuesForTest(SQLITE_SESSION_WRITER_QUEUES, "live receiver test cleanup");
     closeOpenClawAgentDatabasesForTest();
@@ -207,11 +208,11 @@ describe("worker live events", () => {
     expect(rows[2]?.event.data).toMatchObject({
       name: "write",
       success: true,
-      result: { status: "written" },
+      result: { status: "written", credential },
     });
     expect(rows[3]?.event.data).toMatchObject({ stopReason: "length" });
     expect(rows[4]?.event.data).toMatchObject({ status: "success", stopReason: "length" });
-    expect(JSON.stringify(rows)).not.toContain(credential);
+    expect(rows[1]?.event.data).toMatchObject({ args: { credential } });
   });
 
   const lifecycleCredential = ["lifecycle", "credential", "value"].join("-");
@@ -254,10 +255,15 @@ describe("worker live events", () => {
       { type: "model.completed", data: { stopReason } },
       { type: "session.ended", data: { status, stopReason } },
     ]);
-    expect(JSON.stringify(rows)).not.toContain(lifecycleCredential);
+    if (_name === "provider errors") {
+      expect(rows.slice(-2).map((row) => row.event.data?.error)).toEqual([
+        `provider failed after Bearer ${lifecycleCredential}`,
+        `provider failed after Bearer ${lifecycleCredential}`,
+      ]);
+    }
   });
 
-  it("maps and sanitizes kinds", async () => {
+  it("maps event kinds and bounds output without masking credentials", async () => {
     const credential = ["fixture", "credential", "value"].join("-");
     const output = (char: string, status: string) => ({
       content: [{ type: "image", bytes: 6, omitted: true }],
@@ -305,12 +311,18 @@ describe("worker live events", () => {
     const capped = (char: string) => `${char.repeat(8000)}\n...(live output truncated)...`;
     expect(rawEvents[4]?.data).toMatchObject({
       name: "exec",
-      result: { content: [{ bytes: 6, omitted: true }], details: { aggregated: capped("r") } },
+      result: {
+        content: [{ bytes: 6, omitted: true }],
+        details: { credential, aggregated: capped("r") },
+      },
     });
     expect(rawEvents[8]?.data).toMatchObject({
       fallbackStepFromFailureReason: "tls_certificate",
     });
-    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(rawEvents[2]?.data).toMatchObject({ args: { credential } });
+    expect(rawEvents[3]?.data).toMatchObject({
+      partialResult: { details: { credential, aggregated: capped("p") } },
+    });
   });
 
   it("settles accepted writes before returning a synchronous diagnostic failure", async () => {
@@ -361,6 +373,42 @@ describe("worker live events", () => {
       await writer.done;
       await result;
       diagnostic.mockRestore();
+    }
+  });
+
+  it("ACKs an accepted event after its source closes during trajectory settlement", async () => {
+    const source = sourceFor();
+    const writer = holdWorkerTranscriptWriter(store);
+    await writer.entered;
+    let settled = false;
+    const result = rx
+      .apply({
+        readAckedSeq,
+        identity: ID,
+        source,
+        request: live(1, lifecycle({ phase: "start", startedAt: 100 })),
+      })
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+    let released: Promise<void> | undefined;
+    try {
+      await setImmediate();
+      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+      expect(settled).toBe(false);
+      released = source.release();
+      writer.release();
+      await writer.done;
+      expect(await result).toEqual({ ok: true, result: { ackedSeq: 1 } });
+      await released;
+      await fail(msg(2, "after source closure", 1), "invalid-event");
+      expect(events.map((event) => event.data.phase)).toEqual(["start"]);
+    } finally {
+      writer.release();
+      await writer.done;
+      await result;
+      await released;
     }
   });
 
@@ -647,7 +695,7 @@ describe("worker live events", () => {
     await fail(msg(2, "after", 1), "invalid-event");
     await create(30);
     await fail(msg(2, "replacement", 1), "invalid-event");
-    captureSource();
+    await captureSource();
     start();
     await ack(msg(1, "fresh"));
     expect(deltas()).toEqual(["before", "fresh"]);

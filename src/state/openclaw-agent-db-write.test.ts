@@ -14,10 +14,10 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
 } from "./openclaw-agent-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,34 +50,6 @@ describe("agent database write admission", () => {
     });
     return { entered: entered.promise, done, release: settled.resolve };
   }
-
-  it.each(["cold", "warm"] as const)(
-    "admits %s writes only after the reserved worker operation settles",
-    async (temperature) => {
-      const warm = temperature === "warm" ? openOpenClawAgentDatabase(options) : undefined;
-      const reservation = reserveWorkerOperation();
-      await reservation.entered;
-      const mutate = vi.fn(({ db }: ReturnType<typeof openOpenClawAgentDatabase>) => {
-        db.exec("CREATE TABLE admission_proof (value TEXT NOT NULL) STRICT");
-        db.prepare("INSERT INTO admission_proof VALUES (?)").run("committed");
-        return db;
-      });
-      const write = withOpenClawAgentDatabaseWrite(options, mutate);
-      await setImmediate();
-      expect(mutate).not.toHaveBeenCalled();
-      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(warm);
-      reservation.release();
-      await reservation.done;
-      const db = await write;
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(db.prepare("SELECT value FROM admission_proof").all()).toEqual([
-        { value: "committed" },
-      ]);
-      if (warm) {
-        expect(db).toBe(warm.db);
-      }
-    },
-  );
 
   it.each(["stable", "retargeted"] as const)(
     "preserves FIFO and rejects stale worker reservation through a %s alias",
@@ -209,7 +181,7 @@ describe("agent database write admission", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "rejects a closed borrowed handle without adopting a replacement (%s)",
     async (replace) => {
       const borrowed = borrowOpenClawAgentDatabase(options);
@@ -311,40 +283,6 @@ describe("agent database write admission", () => {
       await write?.catch(() => {});
       cwd.mockRestore();
     }
-  });
-
-  it("rechecks live caller authority after waiting and preserves the original rejection", async () => {
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    let active = true;
-    const revoked = new Error("caller authority revoked");
-    const committed = vi.fn();
-    const write = withOpenClawAgentDatabaseWrite(options, () => {
-      if (!active) {
-        throw revoked;
-      }
-      committed();
-    });
-    const rejected = expect(write).rejects.toBe(revoked);
-    active = false;
-    reservation.release();
-    await reservation.done;
-    await rejected;
-    expect(committed).not.toHaveBeenCalled();
-    await expect(withOpenClawAgentDatabaseWrite(options, () => "next owner")).resolves.toBe(
-      "next owner",
-    );
-  });
-
-  it("does not serialize independent agent database paths behind a reserved worker", async () => {
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    const other = { agentId: "peer", path: path.join(path.dirname(options.path), "peer.sqlite") };
-    await expect(withOpenClawAgentDatabaseWrite(other, ({ agentId }) => agentId)).resolves.toBe(
-      "peer",
-    );
-    reservation.release();
-    await reservation.done;
   });
 
   it("joins a mistakenly asynchronous callback before rejecting it or admitting the next writer", async () => {

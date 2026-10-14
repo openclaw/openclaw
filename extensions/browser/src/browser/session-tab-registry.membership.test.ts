@@ -8,10 +8,7 @@ import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { getBrowserStateRuntime } from "../browser-runtime-state.js";
 import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
-import {
-  resolveDurableTabAlias,
-  resolveVolatileTabAlias,
-} from "./session-tab-ephemeral-aliases.js";
+import { readDurableTabAlias, readVolatileTabAlias } from "./session-tab-ephemeral-aliases.js";
 import { volatileSessionTabTargetKey, volatileTabsBySession } from "./session-tab-process-state.js";
 import {
   cdpMocks,
@@ -70,9 +67,9 @@ describe("session tab membership", () => {
     const volatileAlias = { ...identity, targetId: "alias-volatile-own" };
     const staleAlias = { ...identity, targetId: "alias-volatile-stale" };
     const aliasesBefore = [
-      resolveDurableTabAlias(durableAlias),
-      resolveVolatileTabAlias(volatileAlias),
-      resolveVolatileTabAlias(staleAlias),
+      readDurableTabAlias(durableAlias).target,
+      readVolatileTabAlias(volatileAlias).target,
+      readVolatileTabAlias(staleAlias).target,
     ];
     expect(aliasesBefore.every(Boolean)).toBe(true);
     const volatileBefore = structuredClone(volatileTabsBySession());
@@ -126,9 +123,9 @@ describe("session tab membership", () => {
       ).resolves.toEqual([]);
       expect(volatileTabsBySession()).toEqual(volatileBefore);
       expect([
-        resolveDurableTabAlias(durableAlias),
-        resolveVolatileTabAlias(volatileAlias),
-        resolveVolatileTabAlias(staleAlias),
+        readDurableTabAlias(durableAlias).target,
+        readVolatileTabAlias(volatileAlias).target,
+        readVolatileTabAlias(staleAlias).target,
       ]).toEqual(aliasesBefore);
 
       clearProcessLocalTabState();

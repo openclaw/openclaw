@@ -229,7 +229,6 @@ export async function createSandboxBackend(
           params.assertRuntimeCurrent?.();
           assertSandboxRegistryEntryCurrent(reservation);
         };
-        assertCurrent();
         try {
           const backend = await factory({
             ...params,
@@ -243,10 +242,11 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          await completeSandboxRegistryReservation(toEntry(backend), false, {
-            ...guard,
-            beforeLegacyApply: assertCurrent,
-          });
+          await completeSandboxRegistryReservation(
+            { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
+            false,
+            { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+          );
           return backend;
         } catch (error) {
           if (
@@ -255,7 +255,7 @@ export async function createSandboxBackend(
           ) {
             await completeSandboxRegistryReservation(reservation, true, {
               ...guard,
-              beforeLegacyApply: assertCurrent,
+              beforeLegacyApply: params.assertRuntimeCurrent,
             });
           }
           throw error;

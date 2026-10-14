@@ -4,7 +4,7 @@ import {
   resolveClosestSize,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -142,7 +142,7 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
     defaultModel: DEFAULT_MODEL,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "zai", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "zai", ...ctx }),
     capabilities: {
       generate: MODE_CAPABILITIES,
       imageToVideo: { ...MODE_CAPABILITIES, enabled: true, maxInputImages: 1 },

@@ -3,10 +3,12 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { renderWorkGroupSummary } from "./chat-message-stream.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderRawOutputToggle } from "./chat-tool-content.ts";
+import { ChatToolRawOutput } from "./chat-tool-content.solid.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -119,11 +121,12 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
                   )
                 : kind === "tool-output"
                   ? renderMessageGroup(output, options)
-                  : renderRawOutputToggle("Copyable output"),
+                  : solidContent(ChatToolRawOutput, { text: "Copyable output" }),
           container,
         );
       };
       draw();
+      await settleToolBridges(container);
       const button = container.querySelector<HTMLButtonElement>(".chat-inline-disclosure")!;
       const label = (button.querySelector<HTMLElement>(
         ".chat-activity-group__label, .chat-tool-msg-summary__label, .chat-tool-msg-summary__names",
@@ -166,10 +169,11 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           },
           { showReasoning: false },
         )}
-        ${renderRawOutputToggle("Copyable output")}
+        ${solidContent(ChatToolRawOutput, { text: "Copyable output" })}
       `,
       container,
     );
+    await settleToolBridges(container);
     const prose = container.querySelector<HTMLElement>(".chat-text p")!;
     await userEvent.dblClick(prose);
     expect(window.getSelection()?.toString()).not.toBe("");

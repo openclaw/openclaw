@@ -224,16 +224,66 @@ it.each([
   },
 );
 
-it("waits for admitted work to become idle before stopping", async () => {
-  const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.events).toEqual(["status", "observe:draining"]);
+it.each(["running", "stopped"] as const)(
+  "waits for resident work even when the service reports %s",
+  async (status) => {
+    const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
+    f.params.state.running = status === "running";
+    f.params.state.runtime = { status, pid: 42 };
+    const running = withGatewayMaintenanceDrain(f.params, f.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.events).toEqual(["status", "observe:draining"]);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(running).resolves.toBe("stopped");
+    expect(f.events).toEqual(["status", "observe:draining", "observe:ready", "stop"]);
+    expect(f.warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { status: "stopped", port: "free", skip: true },
+  { status: "running", port: "free", skip: false },
+  { status: "unknown", port: "free", skip: false },
+  { status: "stopped", port: "busy", skip: false },
+  { status: "stopped", port: "unknown", skip: false },
+] as const)(
+  "handles connection refusal with a $status service and $port port (skip=$skip)",
+  async ({ status, port, skip }) => {
+    const f = fixture();
+    f.params.state.running = status === "running";
+    f.params.state.runtime = { status };
+    mocks.call.mockRejectedValue(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    );
+    mocks.portUsage.mockResolvedValue({ port: 18789, status: port, listeners: [], hints: [] });
+    if (!skip) {
+      await expectNormalDeadline(f);
+      return;
+    }
+    const running = withGatewayMaintenanceDrain({ ...f.params, timeoutMs: undefined }, f.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.stop).toHaveBeenCalledOnce();
+    await expect(running).resolves.toBe("stopped");
+    expect(f.warn).not.toHaveBeenCalled();
+  },
+);
+
+it("retains stop authority after checking an offline Gateway port", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.call.mockRejectedValue(
+    Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+  );
+  mocks.portUsage.mockImplementation(async () => {
+    f.loseAuthority();
+    return { port: 18789, status: "free", listeners: [], hints: [] };
+  });
+  const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
+  expect(await outcome).toMatchObject({ message: "service operation authority lost" });
   expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(100);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.events).toEqual(["status", "observe:draining", "observe:ready", "stop"]);
-  expect(f.warn).not.toHaveBeenCalled();
 });
 
 it.each(["admitted work", "published resident", "expired observation"] as const)(
@@ -464,6 +514,25 @@ it.each([25_000, 325_000])(
     );
   },
 );
+
+it("warns when resume fails without replacing the native stop error", async () => {
+  const f = fixture();
+  const failure = new Error("native stop failed");
+  f.stop.mockRejectedValue(failure);
+  const call = mocks.call.getMockImplementation()!;
+  mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+    if (request.method === "gateway.suspend.resume") {
+      throw new Error("resume transport failed");
+    }
+    return await call(request);
+  });
+  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toBe(failure);
+  expect(f.warn).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /resident-suspension.*resume transport failed.*the Gateway reopens admission automatically when the lease expires \(within 2 minutes\)/,
+    ),
+  );
+});
 
 it.each(["authority", "boot"] as const)(
   "refuses a changed %s while observing the resident",

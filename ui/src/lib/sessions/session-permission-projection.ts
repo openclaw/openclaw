@@ -18,6 +18,17 @@ type PermissionProjectionRoster = {
   >;
 };
 
+function withPermissionMode(
+  row: GatewaySessionRow,
+  permissionMode: PermissionFields["permissionMode"],
+) {
+  const next = { ...row, permissionMode };
+  if (permissionMode === undefined) {
+    delete next.permissionMode;
+  }
+  return next;
+}
+
 // Claims and confirmed fields share one conversation owner. A row event may
 // supersede its permission choice, but never owns an unrelated roster load.
 export function createSessionPermissionProjection(
@@ -153,12 +164,7 @@ export function createSessionPermissionProjection(
     if (row.permissionMode === fact.permissionMode) {
       return row;
     }
-    const next = { ...row };
-    if (fact.permissionMode === undefined) {
-      delete next.permissionMode;
-    } else {
-      next.permissionMode = fact.permissionMode;
-    }
+    const next = withPermissionMode(row, fact.permissionMode);
     return getRoster().observations.inheritRow(next, row);
   };
   const projectPermissionList = (
@@ -196,14 +202,7 @@ export function createSessionPermissionProjection(
       row.updatedAt < projection.fact.updatedAt
     ) {
       // Another held list may have accepted a newer field than this roster has seen.
-      const corrected = {
-        ...row,
-        permissionMode: projection.fact.permissionMode,
-      };
-      if (corrected.permissionMode === undefined) {
-        delete corrected.permissionMode;
-      }
-      return corrected;
+      return withPermissionMode(row, projection.fact.permissionMode);
     }
     if (row.sessionId) {
       // Events supersede confirmed outcomes; a pending local choice still arbitrates its acknowledgment.

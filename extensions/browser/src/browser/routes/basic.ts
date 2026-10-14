@@ -9,22 +9,16 @@ import {
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
-import { BrowserError, toBrowserErrorResponse } from "../errors.js";
+import { BrowserError } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
-import { readBody, resolveProfileContext } from "./agent.shared.js";
+import { handleRouteError, readBody, resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import {
-  jsonBrowserError,
-  jsonError,
-  runProfileRouteOperation,
-  toBoolean,
-  toStringOrEmpty,
-} from "./utils.js";
+import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
@@ -32,22 +26,11 @@ const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
-function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
-  if (isProfileRestartRequiredError(err)) {
-    throw err;
-  }
-  const mapped = toBrowserErrorResponse(err);
-  if (mapped) {
-    return jsonBrowserError(res, mapped);
-  }
-  jsonError(res, 500, String(err));
-}
-
 async function sendBasicJsonResponse(res: BrowserResponse, run: () => Promise<unknown>) {
   try {
     res.json(await run());
   } catch (err) {
-    return handleBrowserRouteError(res, err);
+    return handleRouteError(res, err, { formatMessage: String });
   }
 }
 
@@ -90,7 +73,7 @@ function registerBasicProfilePost(
     try {
       await withBasicRequestAdmission(req, () => run({ req, res, profileCtx }), profileCtx.profile);
     } catch (err) {
-      return handleBrowserRouteError(res, err);
+      return handleRouteError(res, err, { formatMessage: String });
     }
   });
 }

@@ -33,7 +33,7 @@ import {
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
-const catalogTools = ["tool_call", "tool_search", "tool_describe", "sessions_yield"].map(
+const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessions_yield"].map(
   (name) => ({
     type: "function",
     name,
@@ -94,12 +94,12 @@ it.each([
     });
     const payload = await turn.request();
     expect(outputItems(payload)).toHaveLength(1);
-    const call = outputToolCall(payload, "tool_call");
+    const call = outputToolCall(payload, "dispatch_action");
     expect(call.namespace).toBe("openclaw");
     expect(callArgs(call)).toMatchObject({ id: "message", args });
     expect(await getJson(turn.server, "/debug/last-request")).toMatchObject({
       plannedToolName: "message",
-      plannedWireToolName: "tool_call",
+      plannedWireToolName: "dispatch_action",
     });
     const completed = await turn.complete(call, catalogResult("message", { ok: true }));
     expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
@@ -163,8 +163,8 @@ it.each(["sessions_spawn", "ls"])(
 it("does not mistake shell exec or discovery without invocation for spawn authority", async () => {
   const turn = await startTurn("Subagent terminal reply QA check: visible.", {
     model: "gpt-5.6-luna",
-    tools: [...catalogTools.filter((tool) => tool.name !== "tool_call"), shellExec],
-    instructions: "sessions_spawn and tool_call are mentioned but not declared.",
+    tools: [...catalogTools.filter((tool) => tool.name !== "dispatch_action"), shellExec],
+    instructions: "sessions_spawn and dispatch_action are mentioned but not declared.",
   });
   expect(outputItems(await turn.request()).some((item) => item.type === "function_call")).toBe(
     false,
@@ -186,7 +186,7 @@ it.each([true])("honors protocol failure %s over accepted catalog details", asyn
           model: "qa-model",
           max_tokens: 128,
           stream: false,
-          tools: ["tool_call", "sessions_yield"].map((name) => ({
+          tools: ["dispatch_action", "sessions_yield"].map((name) => ({
             name,
             input_schema: { type: "object" },
           })),
@@ -195,7 +195,7 @@ it.each([true])("honors protocol failure %s over accepted catalog details", asyn
       )
     ).json();
   const call = (await request()).content[0];
-  expect(call).toMatchObject({ type: "tool_use", name: "tool_call" });
+  expect(call).toMatchObject({ type: "tool_use", name: "dispatch_action" });
   messages.push(
     { role: "assistant", content: [call] },
     {
@@ -241,7 +241,7 @@ it.each([
       instructions,
     });
     turn.input.push(makeUserInput(completion));
-    const call = outputToolCall(await turn.request(), "tool_call");
+    const call = outputToolCall(await turn.request(), "dispatch_action");
     expect(callArgs(call)).toEqual({ id: target, args });
     expect(outputText(await turn.complete(call, catalogResult(target, receipt)))).toBe(reply);
   },
@@ -260,7 +260,7 @@ it("drives yielded-parent fallback through catalog spawn and namespaced yield", 
     "Subagent direct fallback QA check: spawn one worker and yield until QA-SUBAGENT-DIRECT-FALLBACK-OK is delivered.",
     { tools },
   );
-  const call = outputToolCall(await turn.request(), "tool_call");
+  const call = outputToolCall(await turn.request(), "dispatch_action");
   const args = callArgs(call);
   expect(args).toMatchObject({
     id: "sessions_spawn",
@@ -269,7 +269,7 @@ it("drives yielded-parent fallback through catalog spawn and namespaced yield", 
   expect(args.args).not.toHaveProperty("runTimeoutSeconds");
   expect(await getJson(turn.server, "/debug/last-request")).toMatchObject({
     plannedToolName: "sessions_spawn",
-    plannedWireToolName: "tool_call",
+    plannedWireToolName: "dispatch_action",
     plannedToolArgs: args.args,
   });
   turn.input.push(
@@ -307,7 +307,7 @@ it("resolves the current Telegram session through developer additional tools", a
     },
     { type: "additional_tools", role: "developer", tools: namespace },
   );
-  const call = outputToolCall(await turn.request(), "tool_call");
+  const call = outputToolCall(await turn.request(), "dispatch_action");
   expect(call.namespace).toBe("openclaw");
   expect(callArgs(call)).toEqual({ id: "session_status", args: { sessionKey: "current" } });
   expect(
@@ -322,7 +322,7 @@ it("tracks a deferred command and its poll through namespaced dynamic tools", as
     "Tool progress QA check: call the exec tool exactly once with this exact command before answering: `true`. After that command completes, reply exactly `PROGRESS_OK`.",
     { tools: [], dynamicTools: namespace },
   );
-  const command = outputToolCall(await turn.request(), "tool_call");
+  const command = outputToolCall(await turn.request(), "dispatch_action");
   expect(command.namespace).toBe("openclaw");
   expect(callArgs(command)).toEqual({ id: "exec", args: { command: "true" } });
   const poll = outputToolCall(
@@ -338,7 +338,7 @@ it("tracks a deferred command and its poll through namespaced dynamic tools", as
         details: { status: "running", sessionId: "bounded-command" },
       }),
     ),
-    "tool_call",
+    "dispatch_action",
   );
   expect(callArgs(poll)).toEqual({
     id: "process",
@@ -378,7 +378,10 @@ it("binds crossed same-case catalog responses to their matching workers", async 
       client_metadata: { session_id: parentId(n) },
       input,
     };
-    const call = outputToolCall(await expectNonStreamingResponsesJson(server, body), "tool_call");
+    const call = outputToolCall(
+      await expectNonStreamingResponsesJson(server, body),
+      "dispatch_action",
+    );
     expect(callArgs(call)).toMatchObject({ id: "sessions_spawn" });
     const callId = String(call.call_id);
     input.push(
@@ -730,7 +733,7 @@ describe("subagent-handoff", () => {
   });
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
-  const structuredTools = ["exec", "sessions_yield", "tool_call", "write"].map((name) =>
+  const structuredTools = ["exec", "sessions_yield", "dispatch_action", "write"].map((name) =>
     name === "exec"
       ? {
           type: "function",
@@ -768,7 +771,7 @@ describe("subagent-handoff", () => {
             user(kickoff),
             {
               type: "function_call",
-              name: "tool_call",
+              name: "dispatch_action",
               call_id: "dispatch",
               arguments: JSON.stringify({ id: "sessions_spawn", args: { task: "Bounded task" } }),
             },
@@ -814,7 +817,7 @@ describe("subagent-handoff", () => {
         tools: structuredTools,
       };
       const spawn = await expectNonStreamingResponsesJson(server, { ...parent, input });
-      const call = outputToolCall(spawn, "tool_call");
+      const call = outputToolCall(spawn, "dispatch_action");
       const args = outputToolArgs(spawn);
       expect(args).toEqual({
         id: "sessions_spawn",
@@ -827,7 +830,7 @@ describe("subagent-handoff", () => {
       });
       expect(await getJson(server, "/debug/last-request")).toMatchObject({
         plannedToolName: "sessions_spawn",
-        plannedWireToolName: "tool_call",
+        plannedWireToolName: "dispatch_action",
         plannedToolArgs: args.args,
         plannedToolCallId: call.call_id,
       });

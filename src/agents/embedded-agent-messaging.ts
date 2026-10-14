@@ -3,24 +3,20 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../channels/plugins/types.public.js";
 import { shouldApplyCrossContextMarker } from "../infra/outbound/outbound-policy.js";
 
+export { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
+
 const CORE_MESSAGING_TOOLS = new Set([
   "sessions_send",
   "conversations_send",
   "conversations_turn",
   "message",
-]);
-const MESSAGE_TOOL_SEND_ACTIONS = new Set([
-  "send",
-  "thread-reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
 ]);
 const MESSAGE_TOOL_READ_ONLY_ACTIONS = new Set([
   "read",
@@ -49,12 +45,6 @@ const MESSAGE_TOOL_CONVERSATION_CREATE_ACTIONS = new Set([
   "createforumtopic",
 ]);
 
-/** Return true when a message action sends or uploads user-visible content. */
-export function isMessageToolSendActionName(action: unknown): boolean {
-  const normalized = normalizeOptionalString(action) ?? "";
-  return MESSAGE_TOOL_SEND_ACTIONS.has(normalized);
-}
-
 /** Return true when a message action creates a visible destination conversation. */
 export function isMessageToolConversationCreateActionName(action: unknown): boolean {
   const normalized = normalizeOptionalString(action)?.toLowerCase() ?? "";
@@ -78,15 +68,8 @@ export function isMessagingToolSendAction(
   args: Record<string, unknown>,
 ): boolean {
   const action = normalizeOptionalString(args.action) ?? "";
-  if (
-    toolName === "sessions_send" ||
-    toolName === "conversations_send" ||
-    toolName === "conversations_turn"
-  ) {
-    return true;
-  }
-  if (toolName === "message") {
-    return isMessageToolSendActionName(action);
+  if (CORE_MESSAGING_TOOLS.has(toolName)) {
+    return toolName !== "message" || isMessageToolSendActionName(action);
   }
   const providerId = normalizeChannelId(toolName);
   return Boolean(

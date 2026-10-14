@@ -27,26 +27,14 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { listUpdateRuns } from "../infra/update-run-reader.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  collectUpdateCaptureInventory,
+  readCompletedUpdateHistory,
+} from "./update-capture-cleanup.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-type Outcome =
-  | "candidate"
-  | "verification-required"
-  | "protected"
-  | "blocked"
-  | "removed"
-  | "disposed"
-  | "failed";
-type RecoveryCleanupArtifact = {
-  path: string;
-  runs: string[];
-  bytes: number;
-  outcome: Outcome;
-  reason: string;
-  detail?: string;
-  consequence?: string;
-  removedBytes?: number;
-};
+type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
@@ -98,6 +86,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   const references = new Map<string, RecoveryArtifactReference[]>();
   const manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
+    artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
+  };
   let laterUpdateStartedAt = 0;
   const manifestsDir = resolveSessionSqliteMigrationRunsDir(params.env);
   if (hasSymbolicLinkInDirectoryPath(manifestsDir)) {
@@ -155,16 +146,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
-    try {
-      laterUpdateStartedAt = Math.max(
-        0,
-        ...listUpdateRuns({ limit: 100 }, { env: params.env })
-          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
-          .map((run) => run.createdAtMs),
-      );
-    } catch {
-      // Missing/unreadable update history cannot release rollback originals.
-    }
+    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
@@ -298,13 +280,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       if (references.has(filePath)) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: entry.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-recovery-original",
-      });
+      protectUnmanifested(
+        filePath,
+        entry.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-recovery-original",
+      );
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
@@ -328,13 +308,11 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       ) {
         continue;
       }
-      artifacts.push({
-        path: filePath,
-        runs: [],
-        bytes: item.isFile() ? fs.lstatSync(filePath).size : 0,
-        outcome: "protected",
-        reason: "unmanifested-artifact",
-      });
+      protectUnmanifested(
+        filePath,
+        item.isFile() ? fs.lstatSync(filePath).size : 0,
+        "unmanifested-artifact",
+      );
     }
   }
   if (
@@ -465,9 +443,35 @@ export function summarizeRecoveryCleanup(
   return { stateDir, artifacts, totals, status };
 }
 
+/** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
+export function collectUpdateCleanupInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
+  return withSynchronousArtifactPreservingStateSnapshot(
+    () => {
+      const inventory = collectRecoveryInventory(params);
+      const captures = collectUpdateCaptureInventory({
+        stateDir: inventory.report.stateDir,
+        env: params.env,
+      });
+      return {
+        ...inventory,
+        captureIdentities: captures.identities,
+        report: summarizeRecoveryCleanup(
+          inventory.report.stateDir,
+          [...inventory.report.artifacts, ...captures.artifacts],
+          "preview",
+        ),
+      };
+    },
+    { current: { env: params.env } },
+  );
+}
+
 export function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): RecoveryCleanupReport {
-  return collectRecoveryInventory(params).report;
+  return collectUpdateCleanupInventory(params).report;
 }

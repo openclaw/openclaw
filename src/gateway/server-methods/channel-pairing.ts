@@ -12,7 +12,11 @@ import {
   validateChannelsPairingDismissParams,
   validateChannelsPairingListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveChannelAccount } from "../../channels/account-resolution.js";
+import {
+  describeChannelAccount,
+  resolveChannelAccount,
+  resolvePluginDmPolicy,
+} from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
@@ -73,7 +77,7 @@ async function listPairingAccounts(params: {
       }
       const record = asRecord(account);
       const policy =
-        plugin.security?.resolveDmPolicy?.({ cfg: params.cfg, accountId, account })?.policy ||
+        (await resolvePluginDmPolicy({ plugin, cfg: params.cfg, accountId, account }))?.policy ||
         resolveChannelDmPolicy({
           account: record,
           parent: asRecord(record?.config),
@@ -82,7 +86,7 @@ async function listPairingAccounts(params: {
       if (policy !== "pairing") {
         continue;
       }
-      const described = plugin.config.describeAccount?.(account, params.cfg);
+      const described = await describeChannelAccount({ plugin, account, cfg: params.cfg });
       const accountLabel =
         normalizeOptionalString(described?.name) ??
         normalizeOptionalString(asRecord(account)?.name);

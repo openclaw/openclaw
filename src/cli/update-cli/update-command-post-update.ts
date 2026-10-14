@@ -1,3 +1,4 @@
+import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared/update-phase.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -16,6 +17,7 @@ import {
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
+import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 import {
   completePostUpdateMaintenance,
   parkPostUpdateService,
@@ -62,16 +64,17 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-type FinishUpdateOptions = { candidateRuntime?: boolean; onGatewayStartAttempted?: () => void };
+type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};
 
 export async function finishUpdate(
   params: FinishUpdateParams,
-  {
-    beforeFinalization,
-    ...options
-  }: FinishUpdateOptions & {
-    beforeFinalization?: () => Promise<void>;
-  } = {},
+  { beforeFinalization, ...options }: FinishUpdateOptions = {},
 ): Promise<UpdateRunResult> {
   const captured = captureUpdateFinalization(params);
   return await withUpdateProgressSettlement(params, beforeFinalization, (settled, failure) =>
@@ -83,6 +86,7 @@ async function finishSettledUpdate(
   params: FinishUpdateParams,
   {
     candidateRuntime = false,
+    adoptedFinalization,
     onGatewayStartAttempted: observeGatewayStartAttempted,
   }: FinishUpdateOptions,
   captured: ReturnType<typeof captureUpdateFinalization>,
@@ -448,6 +452,19 @@ async function finishSettledUpdate(
       }
 
       const postUpdateRoot = params.result.root ?? params.root;
+      // A current core may converge plugins online, parking before fresh Doctor.
+      // A replaced core keeps convergence in its original stopped interval.
+      const deferPluginConvergence =
+        shouldRestart &&
+        params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+        params.coreAlreadyCurrent === true &&
+        params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
+      const runsPostActivationInspections =
+        shouldRestart &&
+        (!params.coreAlreadyCurrent || deferPluginConvergence) &&
+        (!candidateRuntime ||
+          adoptedFinalization ||
+          isUpdateDoctorInspectionReportMode(process.env));
       const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
         const pluginParams = {
           ...params,
@@ -455,6 +472,7 @@ async function finishSettledUpdate(
           beforeRuntimePublication: parkForegroundOrigin,
           assertCurrent,
           candidateRuntime,
+          deferPostActivationInspections: runsPostActivationInspections,
         };
         const convergence = await forward(() => convergeUpdatePlugins(pluginParams));
         if (convergence.resultWithPostUpdate.status === "error") {
@@ -464,13 +482,6 @@ async function finishSettledUpdate(
         }
         return convergence;
       };
-      // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
-      const deferPluginConvergence =
-        shouldRestart &&
-        params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        params.coreAlreadyCurrent === true &&
-        params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       let resultWithPostUpdate = params.result;
       let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
       if (!deferPluginConvergence) {
@@ -530,6 +541,7 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      let activationVerified = false;
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -558,7 +570,10 @@ async function finishSettledUpdate(
             onPluginWarnings: (warnings) => {
               resultWithPostUpdate = appendPluginUpdateWarnings(resultWithPostUpdate, warnings);
             },
-            onVerified: recordVerifiedDowntime,
+            onVerified: (verifiedAtMs) => {
+              activationVerified = true;
+              recordVerifiedDowntime(verifiedAtMs);
+            },
           }),
         );
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
@@ -655,6 +670,27 @@ async function finishSettledUpdate(
             delete resultWithPostUpdate.reason;
           }
         }
+      }
+      // Only an observed target Doctor can leave inspections for this owner.
+      // A parking hook or unchanged plugin phase is not a Doctor receipt.
+      if (
+        resultWithPostUpdate.status === "ok" &&
+        runsPostActivationInspections &&
+        resultWithPostUpdate.steps.some((step) => step.deferredInspectionCheckIds !== undefined)
+      ) {
+        assertCurrent();
+        resultWithPostUpdate = await forward(() =>
+          runPostActivationInspections({
+            root: postUpdateRoot,
+            result: resultWithPostUpdate,
+            gatewayReady: activationVerified,
+            timeoutMs: params.updateStepTimeoutMs,
+            nodeRunner: params.packageUpdateNodeRunner,
+            ownedManagedUpdateEnv: params.ownedManagedUpdateEnv,
+          }),
+        );
+      }
+      if (deferPluginConvergence) {
         return resultWithPostUpdate;
       }
       const maintenanceFailure = await completePostUpdateMaintenance(

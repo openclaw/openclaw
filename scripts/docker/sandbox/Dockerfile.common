@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.27.0
+# syntax=docker/dockerfile:1.27.1
 
 ARG BASE_IMAGE=openclaw-sandbox:bookworm-slim
 FROM ${BASE_IMAGE}

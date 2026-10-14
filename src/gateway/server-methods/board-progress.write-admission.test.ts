@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -10,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
 import { createProgressCardHandlers } from "./progress-card.js";
@@ -40,6 +41,7 @@ const cases = methods.flatMap((method) =>
     cold: false,
   })),
 );
+const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 describe("board and progress-card database write admission", () => {
   it.each([
@@ -65,7 +67,7 @@ describe("board and progress-card database write admission", () => {
   ])(
     "queues registered $method behind a native reservation ($change, cold=$cold)",
     async ({ method, change, cold }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withOpenClawTestState(stateOptions, async () => {
         let cfg: OpenClawConfig = {
           ...rolePolicyConfig(),
           agents: { ownership: "explicit", entries: { main: {}, work: {} } },
@@ -153,6 +155,8 @@ describe("board and progress-card database write admission", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const controller = new AbortController();
+        const retiredError = new Error("request owner retired");
+        const abortError = new Error("request closed");
         let requestCurrent = true;
         const replacementPath = path.join(path.dirname(database.path), "replacement.sqlite");
         const mutation =
@@ -166,7 +170,8 @@ describe("board and progress-card database write admission", () => {
                     ? "grant"
                     : "putWidget",
               );
-        let request: Promise<void> | undefined;
+        let mutationCalls: number;
+        let requestFailure: { error: unknown } | undefined;
         let inGrant = false;
         const stages: string[] = [];
         const grantReads: string[] = [];
@@ -175,54 +180,64 @@ describe("board and progress-card database write admission", () => {
             grantReads.push(sql);
           }
         });
-        const createAdmission = admission.createSqliteWorkerOperationAdmission;
-        const grants = vi
-          .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((admissionRequest, grant) => {
-              inGrant =
-                admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
-              if (inGrant) {
-                stages.push(admissionRequest.stage);
-              }
-              try {
-                admit(admissionRequest, grant);
-              } finally {
-                inGrant = false;
-              }
-            }, attachment),
-          );
-        const reservation = runOpenClawAgentWorkerWrite(database, async () => {
-          request = handleGatewayRequest({
-            req: { type: "req", id: "admission", method, params },
-            client,
-            context: board.context,
-            respond,
-            isWebchatConnect: () => false,
-            extraHandlers: { ...board.handlers, ...createProgressCardHandlers() },
-            signal: controller.signal,
-            sessionMutationCommitGuard:
-              change === "allow-worker"
-                ? undefined
-                : () => {
-                    if (!requestCurrent) {
-                      throw new Error("request owner retired");
-                    }
-                  },
-          });
-          entered.resolve();
-          await release.promise;
+        const grants = probe.admission(admission, (admissionRequest, grant, admit) => {
+          inGrant = admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
+          if (inGrant) {
+            stages.push(admissionRequest.stage);
+          }
+          try {
+            admit(admissionRequest, grant);
+          } finally {
+            inGrant = false;
+          }
+        });
+        const handlers = { ...board.handlers, ...createProgressCardHandlers() };
+        const handler = handlers[method]!;
+        const request = handleGatewayRequest({
+          req: { type: "req", id: "admission", method, params },
+          client,
+          context: board.context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: {
+            ...handlers,
+            [method]: async (invocation) => {
+              // Authorization may read through the same writer queue before handler entry.
+              const { mutationRequest: pendingMutation } = await runOpenClawAgentWorkerWrite(
+                database,
+                async () => {
+                  const mutationRequest = Promise.resolve(handler(invocation));
+                  // Observe early failure while reserved; the await below still propagates it.
+                  void mutationRequest.catch(() => {});
+                  entered.resolve();
+                  await release.promise;
+                  return { mutationRequest };
+                },
+              );
+              await pendingMutation;
+            },
+          },
+          signal: controller.signal,
+          sessionMutationCommitGuard:
+            change === "allow-worker"
+              ? undefined
+              : () => {
+                  if (!requestCurrent) {
+                    throw retiredError;
+                  }
+                },
+        }).catch((error: unknown) => {
+          requestFailure = { error };
         });
         try {
-          await entered.promise;
-          await setImmediate();
+          await Promise.race([entered.promise, request]);
+          expect(mutation).toHaveBeenCalledOnce();
           expect(tables()).toEqual(previousTables);
           expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           expect(respond).not.toHaveBeenCalled();
           expect(board.broadcast).not.toHaveBeenCalled();
-          expect(mutation).toHaveBeenCalledOnce();
           if (change === "abort") {
-            controller.abort(new Error("request closed"));
+            controller.abort(abortError);
           } else if (change === "guard") {
             requestCurrent = false;
           } else if (change === "route") {
@@ -236,11 +251,25 @@ describe("board and progress-card database write admission", () => {
           }
         } finally {
           release.resolve();
-          await reservation;
-          await request;
-          mutation.mockRestore();
-          grants.mockRestore();
-          reads.restore();
+          try {
+            await request;
+          } finally {
+            mutationCalls = mutation.mock.calls.length;
+            mutation.mockRestore();
+            grants.mockRestore();
+            reads.restore();
+          }
+        }
+        if (requestFailure) {
+          if (change === "guard") {
+            expect(requestFailure.error).toBe(retiredError);
+          } else if (change === "abort") {
+            expect(requestFailure.error).toBe(abortError);
+          } else if (change === "lifecycle") {
+            expect(requestFailure.error).toBeInstanceOf(SessionMutationFactsUnavailableError);
+          } else {
+            throw requestFailure.error;
+          }
         }
         if (change === "allow-worker") {
           expect(stages).toContain("transaction");
@@ -276,6 +305,7 @@ describe("board and progress-card database write admission", () => {
           }
           return;
         }
+        expect(mutationCalls).toBe(1);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
         if (method === "board.update") {
           expect((await boardStore.getSnapshot(target)).tabs).toEqual([

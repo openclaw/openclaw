@@ -29,11 +29,13 @@ import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigAppliedHash,
   preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
+  resolveRuntimeModelConfigCacheKey,
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSourceSnapshotIfCurrent,
@@ -154,6 +156,43 @@ describe("runtime snapshot state", () => {
     expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
       `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
     );
+  });
+
+  it("keeps model projections across display writes but invalidates source and resolution changes", () => {
+    const initial: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "test/first" } },
+    };
+    setRuntimeConfigSnapshot(initial, initial);
+    const modelKey = resolveRuntimeModelConfigCacheKey(initial);
+    const configKey = resolveRuntimeConfigCacheKey(initial);
+    const display: OpenClawConfig = {
+      ...initial,
+      ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
+      meta: { lastTouchedVersion: "2026.10.11" },
+    };
+    setRuntimeConfigSnapshot(display, display);
+    expect(resolveRuntimeConfigCacheKey(display)).not.toBe(configKey);
+    expect(resolveRuntimeModelConfigCacheKey(display)).toBe(modelKey);
+
+    const source = {
+      ...display,
+      agents: { ...display.agents, defaults: { model: "test/second" } },
+    };
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
+        sourceConfig: source,
+      }),
+    ).toBe(true);
+    const sourceKey = resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!);
+    expect(sourceKey).not.toBe(modelKey);
+
+    const resolved = { ...display };
+    setConfigResolutionFacts(resolved, new Set());
+    setRuntimeConfigSnapshot(resolved, display);
+    expect(resolveRuntimeModelConfigCacheKey(resolved)).not.toBe(modelKey);
+    setRuntimeConfigSnapshot(source, source);
+    expect(resolveRuntimeModelConfigCacheKey(source)).not.toBe(modelKey);
   });
 
   it("hashes one captured immutable fleet only once", () => {
@@ -532,6 +571,24 @@ function gatedPreparer() {
 }
 
 describe("prepared runtime snapshots", () => {
+  it("publishes applied config and its source only after asynchronous preparation", async () => {
+    const { started, deferred } = gatedPreparer();
+    const config: OpenClawConfig = { gateway: { port: 19001 } };
+    const source: OpenClawConfig = { gateway: { port: 19002 } };
+    const facts = createConfigResolutionFacts([]);
+    setConfigResolutionFacts(source, facts);
+    const pending = setAppliedRuntimeConfigSnapshot(config, source);
+    await started;
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+    deferred.resolve(() => {});
+    await pending;
+    expect(getRuntimeConfigSnapshot()).toBe(config);
+    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
+    expect(getConfigResolutionFacts(config)).toBe(facts);
+    expect(getRuntimeConfigAppliedHash()).toBe(hashRuntimeConfigValue(source));
+  });
+
   it("keeps registration and setters synchronous when an async companion is available", () => {
     const active: OpenClawConfig = { gateway: { port: 18789 } };
     setRuntimeConfigSnapshot(active);
@@ -929,7 +986,7 @@ describe("captured async runtime reads", () => {
 describe("config environment across in-process restart", () => {
   it.each([{ operation: "replacement", nextValue: "second" }])(
     "applies config-owned value $operation after restart",
-    ({ nextValue }) => {
+    async ({ nextValue }) => {
       vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", undefined);
       vi.stubEnv("OPENCLAW_TEST_RESTART_AMBIENT", "ambient");
       const initial = {
@@ -945,7 +1002,7 @@ describe("config environment across in-process restart", () => {
       initializePublishedConfigRuntimeEnv(initial, {
         ownedEnv: collectConfigRuntimeEnvOwnership(initial, beforeStartup, process.env),
       });
-      setAppliedRuntimeConfigSnapshot(initial, initial);
+      await setAppliedRuntimeConfigSnapshot(initial, initial);
 
       clearRuntimeConfigSnapshot();
       // Server shutdown and the run loop both clear snapshots before the next boot.

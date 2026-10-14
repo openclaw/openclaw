@@ -1,5 +1,6 @@
 import { validateModelsAuthRefreshParams } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -25,6 +26,8 @@ export const modelsAuthRefreshHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
+      // Explicit refresh must observe persisted changes that supplied no in-process receipt.
+      clearRuntimeAuthProfileStoreSnapshots();
       await refreshModelAuthStateAfterMutation(context.getRuntimeConfig, scope.agentId);
       respond(true, { refreshed: true }, undefined);
     });

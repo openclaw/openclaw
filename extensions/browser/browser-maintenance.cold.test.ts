@@ -2,6 +2,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 
@@ -47,16 +48,18 @@ vi.mock("./src/browser-control-state.js", async () => {
 
 it("loads browser close runtimes only for owned tabs", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await state.writeConfig({
+    const config = {
       browser: {
         profiles: {
           remote: {
-            driver: "existing-session",
+            driver: "existing-session" as const,
             cdpUrl: "http://127.0.0.1:9222",
           },
         },
       },
-    });
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     const { initializeBrowserSessionTabStore, getBrowserSessionTabStore } =
       await import("./src/browser/session-tab-store.js");
     initializeBrowserSessionTabStore({

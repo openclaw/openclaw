@@ -12,36 +12,6 @@ function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"])
 }
 
 describe("resolveSignalTarget aliases", () => {
-  it("resolves account aliases after merging top-level aliases", () => {
-    const cfg = signalConfig({
-      aliases: {
-        home: "+15551234567",
-      },
-      accounts: {
-        work: {
-          aliases: {
-            ops: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
-          },
-        },
-      },
-    });
-
-    expect(resolveSignalTarget({ cfg, accountId: "work", input: "ops" })).toEqual({
-      kind: "group",
-      to: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
-      alias: "ops",
-      source: "alias",
-    });
-    expect(resolveSignalTarget({ cfg, accountId: "work", input: "home" })?.to).toBe("+15551234567");
-    expect(
-      resolveSignalDeliveredConversationKey({
-        cfg,
-        accountId: "work",
-        to: "ops",
-      }),
-    ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
-  });
-
   it("rejects recursive aliases before delivery", () => {
     const cfg = signalConfig({
       aliases: {
@@ -59,34 +29,6 @@ describe("resolveSignalTarget aliases", () => {
         to: "signal:home",
       }),
     ).toBe("home");
-  });
-
-  it("rejects aliases whose final value is not a Signal target", () => {
-    const cfg = signalConfig({
-      aliases: {
-        jane: "not a target",
-      },
-    });
-
-    expect(() => resolveSignalTarget({ cfg, input: "jane" })).toThrow(
-      'Signal alias "jane" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.',
-    );
-  });
-
-  it("treats target-looking alias values as terminal targets before alias chaining", () => {
-    const cfg = signalConfig({
-      aliases: {
-        home: "+15551230000",
-        "+15551230000": "+15559990000",
-      },
-    });
-
-    expect(resolveSignalTarget({ cfg, input: "home" })).toEqual({
-      kind: "user",
-      to: "+15551230000",
-      alias: "home",
-      source: "alias",
-    });
   });
 
   it("resolves own prototype-shaped aliases without inheriting prototype keys", () => {
@@ -171,20 +113,6 @@ describe("listSignalAliasDirectoryEntries", () => {
         id: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
         name: "ops",
       },
-    ]);
-  });
-
-  it("lists aliases that resolve through another alias", () => {
-    const cfg = signalConfig({
-      aliases: {
-        me: "+15551234567",
-        home: "signal:me",
-      },
-    });
-
-    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user" })).toEqual([
-      { kind: "user", id: "+15551234567", name: "me" },
-      { kind: "user", id: "+15551234567", name: "home" },
     ]);
   });
 

@@ -17,7 +17,7 @@ import {
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
-import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
+import { pruneExpiredMiniAppEntries, type TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { renderTelegramMiniAppPage, TELEGRAM_MINIAPP_EXPIRED_MESSAGE } from "./page.js";
 import {
@@ -50,13 +50,11 @@ export function registerTelegramMiniAppRoutes(
       const url = new URL(req.url ?? "", "http://openclaw.local");
       if (url.pathname === TELEGRAM_MINIAPP_PATH_PREFIX) {
         await handlePage(req, res, url);
-        return true;
-      }
-      if (url.pathname === AUTH_PATH) {
+      } else if (url.pathname === AUTH_PATH) {
         await handleAuth(api, launchTickets, req, res);
-        return true;
+      } else {
+        sendResponse(res, 404, "Not found");
       }
-      sendResponse(res, 404, "Not found");
       return true;
     },
   });
@@ -64,8 +62,7 @@ export function registerTelegramMiniAppRoutes(
 
 async function handlePage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method !== "GET") {
-    sendResponse(res, 405, "Method not allowed");
-    return;
+    return sendResponse(res, 405, "Method not allowed");
   }
   const accountId = normalizeAccountId(url.searchParams.get("accountId") ?? DEFAULT_ACCOUNT_ID);
   const nonce = crypto.randomBytes(16).toString("base64url");
@@ -87,13 +84,11 @@ async function handleAuth(
   res: ServerResponse,
 ): Promise<void> {
   if (req.method !== "POST") {
-    sendResponse(res, 405, "Method not allowed");
-    return;
+    return sendResponse(res, 405, "Method not allowed");
   }
   const contentType = (req.headers["content-type"] ?? "").toLowerCase();
   if (contentType.split(";")[0]?.trim() !== "application/json") {
-    sendResponse(res, 415, "Unsupported media type");
-    return;
+    return sendResponse(res, 415, "Unsupported media type");
   }
   const currentConfig = () => (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
   const requestConfig = currentConfig();
@@ -104,8 +99,7 @@ async function handleAuth(
       requestConfig.gateway?.allowRealIpFallback === true,
     ) ?? "unknown";
   if (rateLimit.isRateLimited(ip)) {
-    sendResponse(res, 429, "Too many requests");
-    return;
+    return sendResponse(res, 429, "Too many requests");
   }
 
   const body = await readJsonWebhookBodyOrReject({
@@ -126,8 +120,7 @@ async function handleAuth(
     typeof authBody.initData !== "string" ||
     typeof authBody.launchTicket !== "string"
   ) {
-    sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
-    return;
+    return sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
   }
   const accountId = normalizeAccountId(
     typeof authBody.accountId === "string" ? authBody.accountId : DEFAULT_ACCOUNT_ID,
@@ -139,24 +132,20 @@ async function handleAuth(
     botToken: account.token,
   });
   if (!validated) {
-    sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
-    return;
+    return sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
   }
   if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
-    sendResponse(res, 403, "Restricted to the bot owner.");
-    return;
+    return sendResponse(res, 403, "Restricted to the bot owner.");
   }
 
   let urls;
   try {
     urls = await resolveTelegramMiniAppUrls({ cfg });
   } catch {
-    sendResponse(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
-    return;
+    return sendResponse(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
   }
   if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
-    sendResponse(res, 403, "Restricted to the bot owner.");
-    return;
+    return sendResponse(res, 403, "Restricted to the bot owner.");
   }
   const authorityChanged = new Error("Telegram Mini App owner configuration changed");
   const assertCurrent = () => {
@@ -173,12 +162,10 @@ async function handleAuth(
         userId: validated.userId,
       })
     ) {
-      sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
-      return;
+      return sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     }
     if (!rememberReplay(validated.hash, validated.authDateMs + 300_000)) {
-      sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
-      return;
+      return sendResponse(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
     }
     const issued = await issueDeviceBootstrapToken({
       assertCurrent,
@@ -208,12 +195,7 @@ async function handleAuth(
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
-  const now = Date.now();
-  for (const [cachedHash, expires] of replayCache) {
-    if (expires <= now) {
-      replayCache.delete(cachedHash);
-    }
-  }
+  pruneExpiredMiniAppEntries(replayCache, (expires) => expires);
   if (replayCache.has(hash)) {
     return false;
   }

@@ -1,6 +1,7 @@
 import { on } from "node:events";
 import { performance } from "node:perf_hooks";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { serializeNativeErrorResponse } from "./native-error-response.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
@@ -13,22 +14,16 @@ import type {
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
-function nativeErrorDetails(error: Error) {
-  // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
-  const nativeError = error as Error & { code?: string; errcode?: number };
-  return { message: error.message, code: nativeError.code, errcode: nativeError.errcode };
-}
-
 if (!process.send || !process.disconnect) {
   throw new Error("SQLite integrity child requires parent IPC.");
 }
 const sendMessage = process.send.bind(process);
 const disconnect = process.disconnect.bind(process);
 
-function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+function send(message: SqliteIntegrityWorkerMessage): Promise<void> {
   return new Promise((resolve, reject) => {
     // Flush each phase before native work can block this child's event loop.
-    sendMessage({ type: "phase", phase } satisfies SqliteIntegrityWorkerMessage, (error) => {
+    sendMessage(message, (error) => {
       if (error) {
         reject(error);
       } else {
@@ -36,6 +31,10 @@ function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
       }
     });
   });
+}
+
+function sendPhase(phase: SqliteIntegrityWorkerPhase): Promise<void> {
+  return send({ type: "phase", phase });
 }
 
 async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrityWorkerResult> {
@@ -77,11 +76,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   if (failure) {
     result = {
       ok: false,
-      error: {
-        name: failure.name,
-        ...nativeErrorDetails(failure),
-        ...(failure.cause instanceof Error ? { cause: nativeErrorDetails(failure.cause) } : {}),
-      },
+      error: serializeNativeErrorResponse(failure),
     };
   }
   if (checkElapsedMs !== undefined) {
@@ -100,9 +95,7 @@ for await (const [input] of on(process, "message") as AsyncIterable<
     break;
   }
   const result = await check(input);
-  await new Promise<void>((resolve, reject) => {
-    sendMessage(result, (error) => (error ? reject(error) : resolve()));
-  });
+  await send(result);
   if (!input.reuse || !result.ok) {
     disconnect();
     break;

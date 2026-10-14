@@ -25,6 +25,10 @@ import {
   type SessionStateNotice,
 } from "./session-state-events.kernel.js";
 import { readSessionStateSequence } from "./session-state-events.read.worker.js";
+import {
+  isSessionStateWatchAddress,
+  sessionStateWatchAgentId,
+} from "./session-state-events.watch-address.js";
 import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
 import { deleteSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
@@ -49,31 +53,48 @@ export function executeSessionStateCommand(
           );
         }
       }
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .deleteFrom("session_watch_cursors")
-          .where((eb) =>
-            input.kind === "reset"
-              ? eb("watcher_session_key", "=", input.sessionKey)
-              : eb.or([
-                  eb("watcher_session_key", "=", input.sessionKey),
-                  eb("target_session_key", "=", input.sessionKey),
-                ]),
-          ),
-      );
+      const cursorOwner = sessionStateWatchAgentId(input.sessionKey);
+      const cursors =
+        cursorOwner && (input.kind === "reset" || cursorOwner === input.agentId)
+          ? executeSqliteQuerySync(
+              db,
+              kysely
+                .selectFrom("session_watch_cursors")
+                .select(["watcher_session_key", "target_session_key"])
+                .where((eb) =>
+                  input.kind === "reset"
+                    ? eb("watcher_session_key", "=", input.sessionKey)
+                    : eb.or([
+                        eb("watcher_session_key", "=", input.sessionKey),
+                        eb("target_session_key", "=", input.sessionKey),
+                      ]),
+                ),
+            ).rows
+          : [];
+      for (const cursor of cursors) {
+        if (
+          !isSessionStateWatchAddress({
+            watcherSessionKey: cursor.watcher_session_key,
+            targetSessionKey: cursor.target_session_key,
+          })
+        ) {
+          continue;
+        }
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom("session_watch_cursors")
+            .where("watcher_session_key", "=", cursor.watcher_session_key)
+            .where("target_session_key", "=", cursor.target_session_key),
+        );
+      }
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
     }, options);
   }
   if (command.type === "sessionState.sweep") {
-    const { cursors, now, sessionEntryCurrentSources } = command.input;
-    const admit = (stage: "transaction" | "commit") =>
-      requestSessionEntriesCurrentAdmission(sessionEntryCurrentSources, {
-        stage,
-        facts: undefined,
-      });
+    const { cursors, now } = command.input;
     return runOpenClawStateWriteTransaction(({ db }) => {
-      admit("transaction");
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const notices: SessionStateNotice[] = [];
       for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -101,12 +122,15 @@ export function executeSessionStateCommand(
           queueOnly: isAmbientGroupWatchCursor(row),
         });
       }
-      admit("commit");
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return notices;
     }, options);
   }
   if (command.type === "sessionState.registerWatch") {
     const input = command.input;
+    if (!isSessionStateWatchAddress(input)) {
+      return false;
+    }
     const admit = (stage: "prepare" | "transaction" | "commit") =>
       requestSessionEntriesCurrentAdmission(input.sessionEntryCurrentSources, {
         stage,

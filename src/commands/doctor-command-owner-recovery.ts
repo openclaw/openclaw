@@ -1,14 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { createCommandOwnerChannelResolver } from "./doctor-command-owner.js";
-import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
+import {
+  containsAuthoredInclude,
+  readDoctorConfigBackup,
+} from "./doctor/shared/include-migration-ownership.js";
 
 function withoutLegacyOwnerKind(entry: unknown): unknown {
   const legacy = typeof entry === "string" ? /^([^:]+):user:([^:\s*]+)$/i.exec(entry.trim()) : null;
@@ -68,22 +68,11 @@ export function recoverCommandOwnerTargetKinds(params: {
       const backupPath = `${snapshot.path}.bak${index === 0 ? "" : `.${index}`}`;
       let backup: unknown;
       try {
-        const opened = openRootFileSync({
-          absolutePath: backupPath,
-          rootPath: path.dirname(backupPath),
-          boundaryLabel: "config backup directory",
-        });
-        if (!opened.ok) {
-          if (isRootFileMissingFailure(opened)) {
-            continue;
-          }
-          throw new Error("Config backup could not be read safely");
+        const raw = readDoctorConfigBackup(backupPath);
+        if (raw === undefined) {
+          continue;
         }
-        try {
-          backup = JSON5.parse(fs.readFileSync(opened.fd, "utf8"));
-        } finally {
-          fs.closeSync(opened.fd);
-        }
+        backup = JSON5.parse(raw);
       } catch {
         result.warnings.push(`Could not inspect ${backupPath} for command-owner target recovery.`);
         break;

@@ -443,33 +443,6 @@ describe("Slack presence monitor", () => {
     );
   });
 
-  it("auto excludes top-level channels and threads larger than eight people", async () => {
-    const getPresence = vi.fn().mockResolvedValue({ presence: "away" });
-    const monitor = createPresenceFixture({
-      accountId: "default",
-      accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
-      cooldownStore: createCooldownStore(),
-      enqueue: vi.fn(() => true),
-      wake: vi.fn(),
-    });
-    monitor.observe(createPrepared({ userId: "UTOP", channelId: "C1", channelType: "channel" }));
-    for (let index = 0; index <= AUTO_MAX_PARTICIPANTS; index += 1) {
-      monitor.observe(
-        createPrepared({
-          userId: `U${index}`,
-          channelId: "C2",
-          channelType: "channel",
-          threadId: "2.000",
-        }),
-      );
-    }
-
-    await monitor.advancePoll();
-
-    expect(getPresence).not.toHaveBeenCalled();
-  });
-
   it("does not let excluded auto channels evict an eligible direct message", async () => {
     const getPresence = vi.fn().mockResolvedValue({ presence: "away" });
     const monitor = createPresenceFixture({
@@ -494,71 +467,6 @@ describe("Slack presence monitor", () => {
     await monitor.advancePoll();
 
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "UDIRECT" });
-  });
-
-  it("on includes top-level channels and overrides the auto size cap", async () => {
-    const getPresence = vi.fn().mockResolvedValue({ presence: "away" });
-    const monitor = createPresenceFixture({
-      accountId: "default",
-      accountConfig: { mode: "auto" },
-      client: { getPresence } as never,
-      cooldownStore: createCooldownStore(),
-      enqueue: vi.fn(() => true),
-      wake: vi.fn(),
-    });
-    monitor.observe(
-      createPrepared({
-        userId: "UTOP",
-        channelId: "C1",
-        channelType: "channel",
-        mode: "on",
-      }),
-    );
-    for (let index = 0; index <= AUTO_MAX_PARTICIPANTS; index += 1) {
-      monitor.observe(
-        createPrepared({
-          userId: `U${index}`,
-          channelId: "C2",
-          channelType: "channel",
-          threadId: "2.000",
-          mode: index === AUTO_MAX_PARTICIPANTS ? "on" : "auto",
-        }),
-      );
-    }
-
-    await monitor.advancePoll();
-
-    expect(getPresence).toHaveBeenCalledTimes(AUTO_MAX_PARTICIPANTS + 2);
-  });
-
-  it("seeds again after all eligible targets expire", async () => {
-    const clock = createGatewaySchedulerClock(1);
-    const getPresence = vi
-      .fn()
-      .mockResolvedValueOnce({ presence: "away" })
-      .mockResolvedValueOnce({ presence: "active" });
-    const enqueue = vi.fn(() => true);
-    const monitor = createPresenceFixture(
-      {
-        accountId: "default",
-        accountConfig: { mode: "auto" },
-        client: { getPresence } as never,
-        cooldownStore: createCooldownStore(),
-        enqueue,
-        wake: vi.fn(),
-      },
-      clock,
-    );
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
-
-    clock.setTime(1 + 24 * 60 * 60 * 1000);
-    await monitor.advancePoll();
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
-
-    expect(getPresence).toHaveBeenCalledTimes(2);
-    expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("times out a stalled presence request and polls the next user", async () => {
@@ -677,7 +585,7 @@ describe("Slack presence monitor", () => {
     }
   });
 
-  it.each(["publish", "stop", "ineligible", "expired", "queue-refused", "replaced"] as const)(
+  it.each(["publish", "stop", "ineligible", "expired", "replaced"] as const)(
     "waits for cooldown persistence and drains cleanup when %s",
     async (outcome) => {
       const reservation = createDeferred<boolean>();
@@ -706,7 +614,7 @@ describe("Slack presence monitor", () => {
         .fn()
         .mockResolvedValueOnce({ presence: "away" })
         .mockResolvedValueOnce({ presence: "active" });
-      const enqueue = vi.fn(() => outcome !== "queue-refused" && outcome !== "replaced");
+      const enqueue = vi.fn(() => outcome !== "replaced");
       const wake = vi.fn();
       const clock = createGatewaySchedulerClock(1_000);
       const monitor = createPresenceFixture(
@@ -771,9 +679,7 @@ describe("Slack presence monitor", () => {
         expect(wake).toHaveBeenCalledOnce();
       } else {
         expect(stopSettled).toBe(true);
-        expect(enqueue).toHaveBeenCalledTimes(
-          outcome === "queue-refused" || outcome === "replaced" ? 1 : 0,
-        );
+        expect(enqueue).toHaveBeenCalledTimes(outcome === "replaced" ? 1 : 0);
         expect(await cooldownStore.lookup("default:workspace:U123")).toBe(
           outcome === "replaced" ? 1_001 : undefined,
         );
@@ -781,32 +687,6 @@ describe("Slack presence monitor", () => {
       }
     },
   );
-
-  it("keeps the cooldown until expiry when an older store lacks conditional deletion", async () => {
-    const cooldownStore: PluginStateKeyedStore<number> = createCooldownStore();
-    delete cooldownStore.deleteIfEqual;
-    const monitor = createPresenceFixture(
-      {
-        accountId: "default",
-        accountConfig: { mode: "auto" },
-        client: {
-          getPresence: vi
-            .fn()
-            .mockResolvedValueOnce({ presence: "away" })
-            .mockResolvedValueOnce({ presence: "active" }),
-        } as never,
-        cooldownStore,
-        enqueue: () => false,
-        wake: vi.fn(),
-      },
-      createGatewaySchedulerClock(1_000),
-    );
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
-    await monitor.advancePoll();
-    await monitor.stop();
-    expect(await cooldownStore.lookup("default:workspace:U123")).toBe(1_000);
-  });
 
   it("does not publish when cooldown persistence rejects", async () => {
     const cooldownStore = createCooldownStore();

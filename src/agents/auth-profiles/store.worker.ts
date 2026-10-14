@@ -1,27 +1,29 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessageChannel } from "node:worker_threads";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import { readConfigMachineState } from "../../state/config-machine-state.js";
 import {
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { personalCredentialPublication } from "../../state/user-model-account-authority.js";
 import {
+  encodeUserModelAuthProfile,
   readUserModelAuthProfile,
   readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
-import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import { readAuthProfileRows } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
-import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
 import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
+import { updateAuthProfileStoreInDatabase } from "./store-update.worker.js";
 import type {
   AuthProfileUsageInput,
   AuthProfileUsageResult,
@@ -65,32 +67,38 @@ export const authProfileOperations = {
     { open, stateOptions },
   ): UserModelAuthProfile | undefined => {
     const database = open();
-    let committed: UserModelAuthProfile | undefined;
     const options = { ...stateOptions(), database };
-    updateUserModelAuthProfile(
-      input.profileId,
-      (profile) => {
-        if (!isDeepStrictEqual(profile, input.expected)) {
-          return false;
-        }
-        profile.credential = input.next.credential;
-        profile.usageStats = input.next.usageStats;
-        return true;
-      },
-      options,
-      (stage) => {
-        if (stage === "transaction") {
-          requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-        } else {
-          committed = readUserModelAuthProfileInDatabase(database.db, input.profileId);
-          if (!isDeepStrictEqual(committed, input.next)) {
-            throw new Error("Personal credential codec changed the prepared update");
+    let committed: UserModelAuthProfile | undefined;
+    personalCredentialPublication.capture(database.db, () =>
+      updateUserModelAuthProfile(
+        input.profileId,
+        (profile) => {
+          if (!isDeepStrictEqual(profile, input.expected)) {
+            return false;
           }
-          const digest = createHash("sha256").update(JSON.stringify(input.next)).digest("hex");
-          requestSqliteWorkerOperationAdmission({ stage, facts: digest });
-          deferSqliteWorkerCommitReceipt(database.db, digest);
-        }
-      },
+          profile.credential = input.next.credential;
+          profile.usageStats = input.next.usageStats;
+          return true;
+        },
+        options,
+        (operation) => {
+          if (operation.stage === "transaction") {
+            requestSqliteWorkerOperationAdmission({ stage: operation.stage, facts: undefined });
+          } else {
+            committed = operation.profile;
+            if (encodeUserModelAuthProfile(committed) !== encodeUserModelAuthProfile(input.next)) {
+              throw new Error("Personal credential codec changed the prepared update");
+            }
+            const digest = createHash("sha256").update(stableStringify(committed)).digest("hex");
+            requestSqliteWorkerOperationAdmission({ stage: operation.stage, facts: digest });
+            deferSqliteWorkerCommitReceipt(database.db, {
+              digest,
+              personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+                .receipt,
+            });
+          }
+        },
+      ),
     );
     return committed;
   },
@@ -143,7 +151,7 @@ export const authProfileOperations = {
         return true;
       },
       stateOptions(),
-      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+      ({ stage }) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
     );
     return result;
   },
@@ -184,10 +192,6 @@ export const authProfileOperations = {
       port1.close();
       port2.close();
     }
-  },
-  "authProfiles.sharedOwnership": (input: { artifactPreserving: boolean }, { stateOptions }) => {
-    const read = () => readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, stateOptions());
-    return input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
   },
   "authProfiles.personal": (
     input: { profileId: string; artifactPreserving: boolean },

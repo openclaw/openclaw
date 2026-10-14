@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { WizardStepControls } from "../pages/model-setup/wizard-step-controls.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
@@ -18,7 +21,6 @@ function linkHovercardUrl(anchor: HTMLAnchorElement) {
 import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
-import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
 if (!customElements.get(LINK_HOVERCARD_TAG)) {
   customElements.define(LINK_HOVERCARD_TAG, LinkHovercardProvider);
@@ -81,12 +83,14 @@ function card() {
   return document.querySelector<HTMLElement>(".link-hovercard");
 }
 async function hover(anchor: HTMLElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => {
+afterEach(async () => {
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.useRealTimers();
 });
 
@@ -148,21 +152,22 @@ describe("generic link hovercards", () => {
   it("leaves the real wizard sign-in action external without fetching its authorization URL", async () => {
     const view = fixture();
     const authorizationUrl = "https://provider.example/authorize?state=synthetic-state";
-    render(
-      renderWizardStepControls({
-        step: {
-          id: "sign-in",
-          type: "progress",
-          executor: "gateway",
-          externalUrl: authorizationUrl,
-        },
-        value: undefined,
-        busy: false,
-        inputId: "sign-in",
-        onValueChange: () => {},
-        onAnswer: () => {},
-      }),
-      view.pane,
+    mountSolid(
+      () =>
+        createComponent(WizardStepControls, {
+          step: {
+            id: "sign-in",
+            type: "progress",
+            executor: "gateway",
+            externalUrl: authorizationUrl,
+          },
+          value: undefined,
+          busy: false,
+          inputId: "sign-in",
+          onValueChange: () => {},
+          onAnswer: () => {},
+        }),
+      { container: view.pane },
     );
     const signIn = view.pane.querySelector<HTMLAnchorElement>(".wizard-step__external-link")!;
     await hover(signIn);
@@ -297,12 +302,14 @@ describe("generic link hovercards", () => {
     for (const image of card()!.querySelectorAll("img")) {
       image.dispatchEvent(new Event("error"));
     }
+    flush();
     expect(card()?.querySelectorAll("img").length).toBe(0);
     expect(card()?.querySelector("a")?.target).toBe("_blank");
   });
 
   it("supports shadow-root links, keyboard traversal and Escape without reopening", async () => {
     const view = fixture(true);
+    await view.provider.updateComplete;
     view.anchor.focus();
     view.provider.activateFromBootstrap(
       view.anchor,

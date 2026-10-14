@@ -281,6 +281,26 @@ function logAgentEventSubscriptionFailure(
   );
 }
 
+function snapshotAgentEventMetadata(event: AgentEventPayload): AgentEventPayload {
+  const data: Record<string, unknown> = {};
+  for (const key of Object.keys(event.data)) {
+    const descriptor = Object.getOwnPropertyDescriptor(event.data, key);
+    if (!descriptor || !("value" in descriptor)) {
+      continue;
+    }
+    const value: unknown = descriptor.value;
+    if (
+      value === null ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      (typeof value === "string" && value.length <= 256)
+    ) {
+      Object.defineProperty(data, key, { value, enumerable: true });
+    }
+  }
+  return structuredClone({ ...event, data });
+}
+
 export function dispatchPluginAgentEventSubscriptions(params: {
   registry: PluginRegistry | null | undefined;
   event: AgentEventPayload;
@@ -292,6 +312,18 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const streams = registration.subscription.streams;
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
       continue;
+    }
+    const phases = registration.subscription.phases;
+    if (phases && phases.length > 0) {
+      const data = params.event.data;
+      if (
+        !data ||
+        typeof data !== "object" ||
+        typeof data.phase !== "string" ||
+        !phases.includes(data.phase)
+      ) {
+        continue;
+      }
     }
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
@@ -326,7 +358,12 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     };
     try {
       const pending = Promise.resolve(
-        registration.subscription.handle(structuredClone(params.event), ctx),
+        registration.subscription.handle(
+          registration.subscription.payload === "metadata"
+            ? snapshotAgentEventMetadata(params.event)
+            : structuredClone(params.event),
+          ctx,
+        ),
       )
         .catch((error: unknown) => {
           logAgentEventSubscriptionFailure(pluginId, registration.subscription.id, error);

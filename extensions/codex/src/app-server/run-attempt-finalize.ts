@@ -4,10 +4,8 @@ import {
   formatErrorMessage,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  appendSessionYieldContext,
-  composeSessionTranscriptWriteAssertion,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { appendSessionYieldContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -286,9 +284,11 @@ export async function finalizeCodexAttempt(
         !effectiveTimedOut &&
         (finalPromptError === null || finalPromptError === undefined) &&
         (completedTurnStatus === "completed" || locallyCompletedTurn);
-      const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
-        (target) => target.sourceReplyFinal === true,
-      );
+      const completedSourceReply =
+        toolBridge.telemetry.finalSourceReplyDelivered ||
+        toolBridge.telemetry.messagingToolSentTargets.some(
+          (target) => target.sourceReplyFinal === true,
+        );
       if (completedSourceReply) {
         // Harness classification only sees assistant/reasoning/plan projections.
         // A reply delivered entirely through the source message tool is visible
@@ -350,7 +350,7 @@ export async function finalizeCodexAttempt(
       const mirrorTerminal = projectTerminalOutcome();
       state.pendingSettlementStage = "transcript/mirror";
       return codexTranscriptMirrorRuntime.mirrorBestEffort({
-        assertWriteCurrent: composeSessionTranscriptWriteAssertion([], () => {
+        assertWriteCurrent: createNativeSessionBindingScope(() => {
           // Expiry replaces this exact pending write; it cannot borrow the degraded final's owner.
           if (!isSettlementActive() || state.settlementWarning !== warning) {
             throw new Error("Codex transcript settlement is no longer active");
@@ -363,7 +363,7 @@ export async function finalizeCodexAttempt(
           ) {
             throw new Error("Codex transcript terminal outcome changed before write");
           }
-        }),
+        }).assertLegacyCurrent,
         params,
         settlementWarning: warning,
         agentId: sessionAgentId,

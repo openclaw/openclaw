@@ -10,6 +10,7 @@ import {
 } from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { publishPlacementWorkspaceJournalState } from "./placement-turn-authority.js";
 import type {
   WorkerWorkspaceJournalOwner,
   WorkspaceJournalChange,
@@ -117,6 +118,7 @@ export function clearWorkerWorkspaceReconciliation(
     db,
     query(db).deleteFrom("worker_workspace_reconciliations").where("session_id", "=", sessionId),
   );
+  publishPlacementWorkspaceJournalState(db, sessionId, false);
 }
 
 function getWorkspaceReconciliationPlacement(db: DatabaseSync, owner: WorkerWorkspaceJournalOwner) {
@@ -212,6 +214,7 @@ export function createPlacementWorkspaceJournalOps(
               .where("placement_generation", "=", owner.placementGeneration),
           );
           if (deleted.numAffectedRows === 1n) {
+            publishPlacementWorkspaceJournalState(db, owner.sessionId, false);
             pruned.push(owner);
             if (placement) {
               const change = { agentId: placement.agentId, sessionKey: placement.sessionKey };
@@ -258,6 +261,7 @@ export function createPlacementWorkspaceJournalOps(
             `Worker workspace reconciliation is already pending for ${owner.sessionId}`,
           );
         }
+        publishPlacementWorkspaceJournalState(db, owner.sessionId, true);
         const change = { agentId: placement.agentId, sessionKey: placement.sessionKey };
         sessionChanges.emit(change, db);
         return { owners: [owner], changes: [change] };
@@ -290,6 +294,7 @@ export function createPlacementWorkspaceJournalOps(
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
         }
+        publishPlacementWorkspaceJournalState(db, owner.sessionId, false);
         const change: WorkspaceJournalChange = { all: true, scope: "worker-placements" };
         sessionChanges.emit(change, db);
         return { owners: [owner], changes: [change] };

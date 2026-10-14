@@ -77,24 +77,6 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   return "present";
 }
 
-function formatDirectoryProblemLine(
-  dirPath: string,
-  health: ClaudeCliDirHealth,
-  label: string,
-): string | null {
-  const display = shortenHomePath(dirPath);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
-}
-
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   const agentIds = listAgentIds(cfg);
   const runtimeAgentIds = agentIds.filter(
@@ -127,10 +109,10 @@ function resolveClaudeCliWorkspaceTargets(params: {
     });
     return {
       agentId,
-      workspaceDir,
-      projectDir,
-      workspaceHealth: probeDirectoryHealth(workspaceDir),
-      projectDirHealth: probeDirectoryHealth(projectDir),
+      directories: [
+        [workspaceDir, probeDirectoryHealth(workspaceDir), "workspace"],
+        [projectDir, probeDirectoryHealth(projectDir), "Claude project dir"],
+      ] as const,
     };
   });
 }
@@ -195,32 +177,28 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    for (const [dirPath, health, label, fixHint, repairReadonly] of [
-      [
-        target.workspaceDir,
-        target.workspaceHealth,
-        agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
-        } a readable, writable directory for the gateway user.`,
-        true,
-      ],
-      [
-        target.projectDir,
-        target.projectDirHealth,
-        agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
-        `- Fix: make ${
-          agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
-        false,
-      ],
-    ] as const) {
-      const problem = formatDirectoryProblemLine(dirPath, health, label);
-      if (problem) {
-        lines.push(problem);
-        if (repairReadonly || health !== "readonly") {
-          fixHints.push(fixHint);
-        }
+    for (const [dirPath, health, subject] of target.directories) {
+      const workspace = subject === "workspace";
+      const label = agentLabel
+        ? `Agent ${agentLabel} ${subject}`
+        : workspace
+          ? "Workspace"
+          : subject;
+      const display = shortenHomePath(dirPath);
+      if (health === "present" || health === "missing") {
+        continue;
+      }
+      const problem =
+        health === "not_directory"
+          ? "exists but is not a directory."
+          : `is not ${health === "unreadable" ? "readable" : "writable"} by this user.`;
+      lines.push(`- ${label}: ${display} ${problem}`);
+      if (workspace || health !== "readonly") {
+        const targetLabel = agentLabel ? `agent ${agentLabel}'s ${subject}` : `the ${subject}`;
+        const remedy = workspace
+          ? "a readable, writable directory for the gateway user."
+          : "readable, or remove the broken path and let Claude recreate it.";
+        fixHints.push(`- Fix: make ${targetLabel} ${remedy}`);
       }
     }
   }
@@ -234,12 +212,9 @@ export function noteClaudeCliHealth(
     );
   }
 
-  if (lines.length === 0 && fixHints.length === 0) {
+  if (lines.length === 0) {
     return;
   }
-  if (fixHints.length > 0) {
-    lines.push(...fixHints);
-  }
 
-  (deps?.noteFn ?? note)(lines.join("\n"), "Claude CLI");
+  (deps?.noteFn ?? note)([...lines, ...fixHints].join("\n"), "Claude CLI");
 }

@@ -176,6 +176,8 @@ private struct ChatBubbleShape: InsettableShape {
     let cornerRadius: CGFloat
     let tail: Tail
     var insetAmount: CGFloat = 0
+    /// The messaging-app tail at the bottom corner, in place of the small side notch.
+    var cornerTail = false
 
     private let tailWidth: CGFloat = 7
     private let tailBaseHeight: CGFloat = 9
@@ -190,10 +192,44 @@ private struct ChatBubbleShape: InsettableShape {
         let rect = rect.insetBy(dx: self.insetAmount, dy: self.insetAmount)
         switch self.tail {
         case .left, .right:
-            return self.tailPath(in: rect, radius: self.cornerRadius)
+            return self.cornerTail
+                ? self.cornerTailPath(in: rect, radius: self.cornerRadius)
+                : self.tailPath(in: rect, radius: self.cornerRadius)
         case .none:
             return Path(roundedRect: rect, cornerRadius: self.cornerRadius)
         }
+    }
+
+    static let cornerTailWidth: CGFloat = 7
+
+    /// The side of the bubble sweeps out to a point at the bottom corner on the sender's side; the underside of
+    /// that point curves up to a notch and back down to the bottom edge. Drawn for the left, mirrored for the right.
+    private func cornerTailPath(in rect: CGRect, radius: CGFloat) -> Path {
+        let bodyMinX = rect.minX + Self.cornerTailWidth
+        // A very small bubble gets smaller corners and a shorter tail, so the outline never crosses itself.
+        let r = max(0, min(radius, (rect.maxX - bodyMinX) / 2, rect.height / 2))
+        let rise = min(15, max(0, rect.height - r))
+        let flatX = min(bodyMinX + 21, rect.maxX - r)
+        let notch = CGPoint(x: min(bodyMinX + 9, flatX), y: rect.maxY - min(4, rect.height / 2))
+        var path = Path()
+        path.move(to: CGPoint(x: bodyMinX + r, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: flatX, y: rect.maxY))
+        path.addQuadCurve(to: notch, control: CGPoint(x: notch.x + (flatX - notch.x) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY),
+            control: CGPoint(x: bodyMinX + (notch.x - bodyMinX) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyMinX, y: rect.maxY - rise),
+            control: CGPoint(x: bodyMinX, y: rect.maxY - rise * 0.22))
+        path.addLine(to: CGPoint(x: bodyMinX, y: rect.minY + r))
+        path.addQuadCurve(to: CGPoint(x: bodyMinX + r, y: rect.minY), control: CGPoint(x: bodyMinX, y: rect.minY))
+        path.closeSubpath()
+        guard self.tail == .right else { return path }
+        return path.applying(CGAffineTransform(translationX: rect.minX + rect.maxX, y: 0).scaledBy(x: -1, y: 1))
     }
 
     private func tailPath(in rect: CGRect, radius r: CGFloat) -> Path {
@@ -314,6 +350,9 @@ struct ChatMessageBubble: View {
                     .contentShape(.accessibility, Rectangle())
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("chat-assistant-message-body")
+                    .assistantSpeakerLabel(
+                        self.assistantName,
+                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -372,11 +411,15 @@ extension ChatMessageBubble {
                     self.messageContent(text: text, textColor: textColor)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
+                        .padding(self.isUser ? .trailing : .leading, self.tailInset)
                         .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
+                        // A round join keeps the outline of the tail's point inside the bubble's bounds.
                         .overlay(self.bubbleShape.strokeBorder(
                             self.bubbleBorderColor,
-                            lineWidth: self.bubbleBorderWidth))
+                            style: StrokeStyle(
+                                lineWidth: self.bubbleBorderWidth,
+                                lineJoin: self.style == .onboarding ? .miter : .round)))
                         .shadow(
                             color: hasOnboardingShadow ? Color.black.opacity(0.28) : .clear,
                             radius: hasOnboardingShadow ? 6 : 0,
@@ -667,9 +710,25 @@ extension ChatMessageBubble {
     }
 
     private var bubbleShape: ChatBubbleShape {
+        // SwiftUI already mirrors Shape paths in RTL on the supported OS versions.
         ChatBubbleShape(
             cornerRadius: ChatUIConstants.bubbleCorner,
-            tail: self.style == .onboarding ? (self.isUser ? .right : .left) : .none)
+            tail: self.usesTail ? (self.isUser ? .right : .left) : .none,
+            cornerTail: self.style != .onboarding)
+    }
+
+    /// Without an avatar beside it, the tail is what says whose bubble it is.
+    private var usesTail: Bool {
+        #if os(iOS)
+        self.style == .onboarding || !self.showsAssistantAvatar
+        #else
+        self.style == .onboarding
+        #endif
+    }
+
+    /// The tail is drawn inside the bubble's frame; keep the text clear of it.
+    private var tailInset: CGFloat {
+        self.usesTail && self.style != .onboarding ? ChatBubbleShape.cornerTailWidth : 0
     }
 
     private var tailPaddingLeading: CGFloat {
@@ -794,6 +853,7 @@ struct ChatTypingIndicatorBubble: View {
     let isClean: Bool
     let runIdentity: String
     let outputTokens: Int?
+    var status: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -808,7 +868,8 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 ChatWorkingIndicatorContent(
                     runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens)
+                    outputTokens: self.outputTokens,
+                    status: self.status)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -820,7 +881,7 @@ struct ChatTypingIndicatorBubble: View {
         .focusable(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            Text("Writing")
+            Text(verbatim: self.status ?? String(localized: "Writing"))
                 .font(OpenClawChatTypography.caption))
     }
 }
@@ -830,10 +891,13 @@ private struct ChatWorkingIndicatorContent: View {
     let seed: String
     let outputTokens: Int?
 
-    init(runIdentity: String, outputTokens: Int?) {
+    let status: String?
+
+    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
         self.outputTokens = outputTokens
+        self.status = status
     }
 
     var body: some View {
@@ -842,7 +906,8 @@ private struct ChatWorkingIndicatorContent: View {
             ChatWorkingStatusText(
                 startedAt: self.startedAt,
                 seed: self.seed,
-                outputTokens: self.outputTokens)
+                outputTokens: self.outputTokens,
+                status: self.status)
         }
     }
 }
@@ -924,7 +989,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens
+            lhs.outputTokens == rhs.outputTokens &&
+            lhs.status == rhs.status
     }
 }
 
@@ -1049,6 +1115,9 @@ struct ChatStreamingAssistantBubble: View {
             .contentShape(.accessibility, Rectangle())
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-streaming-assistant-body")
+            .assistantSpeakerLabel(
+                self.assistantName,
+                avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1266,5 +1335,13 @@ private struct ChatStreamingAssistantTextBody: View {
             }
             return prose
         }
+    }
+}
+
+extension View {
+    /// Without an avatar beside it, the reply's own container names the assistant for VoiceOver.
+    /// The label is empty where the avatar is shown, so a size-class change keeps the view's identity.
+    func assistantSpeakerLabel(_ name: String?, avatarHidden: Bool) -> some View {
+        self.accessibilityLabel(Text(verbatim: avatarHidden ? name ?? "" : ""))
     }
 }

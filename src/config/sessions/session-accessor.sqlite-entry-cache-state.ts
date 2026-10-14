@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import {
+  publishSqliteCommittedState,
+  stageSqliteTransactionState,
+} from "../../infra/sqlite-post-commit.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type {
   SessionEntryCacheDatabase,
@@ -28,23 +32,31 @@ export function publishTrackedCacheUpdate(
   database: SessionEntryCacheDatabase,
   publish: () => void,
   stage?: () => () => void,
+  invalidateFacts?: () => void,
 ): boolean {
   let settle: (() => void) | undefined;
+  const commit = () => {
+    publish();
+    settle?.();
+  };
+  const invalidate = () => {
+    sessionEntryCaches.delete(database.db);
+    invalidateFacts?.();
+    settle?.();
+  };
   // Committed cache state must settle before observers can reenter with newer writes.
   if (
-    stageSqliteTransactionState(database.db, {
-      stage: () => {
-        settle = stage?.();
+    stageSqliteTransactionState(
+      isPostgresSqlConnection(database.db) ? database.db.anchor : database.db,
+      {
+        stage: () => {
+          settle = stage?.();
+        },
+        rollback: () => settle?.(),
+        commit,
+        invalidate,
       },
-      rollback: () => settle?.(),
-      commit: () => {
-        try {
-          publish();
-        } finally {
-          settle?.();
-        }
-      },
-    })
+    )
   ) {
     return true;
   }
@@ -53,7 +65,7 @@ export function publishTrackedCacheUpdate(
       "SQLite session entry writes must use runOpenClawAgentWriteTransaction for cache publication",
     );
   }
-  publish();
+  publishSqliteCommittedState({ installFacts: commit, invalidate, notify() {} });
   return false;
 }
 
@@ -68,10 +80,7 @@ export function readCurrentSessionEntryCacheParticipants(
     !cached ||
     !entry ||
     !getAdmittedSqliteSchemaFacts(database) ||
-    !cacheValidityTokensEqual(
-      cached.validityToken,
-      readSessionEntryCacheValidityToken(database, "cached"),
-    )
+    !cacheValidityTokensEqual(cached.validityToken, readSessionEntryCacheValidityToken(database))
   ) {
     return undefined;
   }

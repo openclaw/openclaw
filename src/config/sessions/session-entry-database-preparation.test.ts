@@ -55,6 +55,40 @@ it("creates distinct sessions through concurrent first-store preparations", asyn
   });
 });
 
+it("retains a shared store's first creation while a sibling awaits authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("delayed-shared.sqlite");
+    const scope = { agentId: "main", sessionKey: "agent:main:first", storePath, env: state.env };
+    const followerScope = { ...scope, agentId: "other", sessionKey: "agent:other:follower" };
+    const ready = createDeferred();
+    await using first = prepareSessionEntryMutationDatabases(
+      [{ scope, assertCurrent() {} }],
+      Promise.resolve(),
+    );
+    await using follower = prepareSessionEntryMutationDatabases(
+      [{ scope: followerScope, assertCurrent() {}, relatedScopes: [scope] }],
+      ready.promise,
+    );
+    try {
+      await first.preparations[0];
+      ready.resolve();
+      const storage = await follower.preparations[0]!;
+      const created = await createSessionEntryWithTranscript(
+        followerScope,
+        () => ({ ok: true, entry: { sessionId: "delayed-follower", updatedAt: 1 } }),
+        { commitGuard: storage.assertCurrent },
+      );
+      expect(created).toMatchObject({ ok: true, entry: { sessionId: "delayed-follower" } });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      expect(readExactSessionEntryRow(database, followerScope.sessionKey)?.entry.sessionId).toBe(
+        "delayed-follower",
+      );
+    } finally {
+      ready.resolve();
+    }
+  });
+});
+
 it.each(["before-ready", "before-native-open"])(
   "prepares valid followers after initiating authority ends %s",
   async (stage) => {

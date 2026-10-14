@@ -669,12 +669,10 @@ async function runWeightedUnifiedPartitionTasks(
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
-    let finished = false;
     const finishIfSettled = () => {
-      if (finished || activeWeight > 0) {
+      if (activeWeight > 0) {
         return;
       }
-      finished = true;
       if (firstError) {
         reject(firstError);
         return;
@@ -707,26 +705,25 @@ async function runWeightedUnifiedPartitionTasks(
         if (task.exclusiveKey) {
           activeExclusiveKeys.add(task.exclusiveKey);
         }
+        const settle = () => {
+          activeWeight -= taskWeight;
+          if (task.exclusiveKey) {
+            activeExclusiveKeys.delete(task.exclusiveKey);
+          }
+          if (firstError || pending.length === 0) {
+            finishIfSettled();
+          } else {
+            launch();
+          }
+        };
         task.run().then(
           (result) => {
             results[index] = result;
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            if (pending.length === 0 && activeWeight === 0) {
-              finishIfSettled();
-              return;
-            }
-            launch();
+            settle();
           },
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            finishIfSettled();
+            settle();
           },
         );
       }

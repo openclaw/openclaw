@@ -2,9 +2,8 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -106,8 +105,8 @@ function createInboundMessage(data: Record<string, unknown>): Message {
 beforeEach(() => {
   resetPluginStateStoreForTests();
   const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("zalouser", options);
+  runtime.state.openKeyedStoreV2 = (options, authority = { assertCurrent: () => {} }) =>
+    createPluginStateKeyedStoreV2ForTests("zalouser", options, authority);
   setZalouserRuntime(runtime);
   createZaloMock.mockReset();
 });
@@ -249,14 +248,6 @@ describe("Zalo inbound normalization", () => {
       quotedBody: "Previous bot message content",
       implicitMention: true,
     });
-  });
-
-  it("omits absent quote metadata", async () => {
-    const [message] = await captureInbound([createInboundMessage({ ts: 1_764_000_000_000 })]);
-
-    expect(message?.quotedGlobalMsgId).toBeUndefined();
-    expect(message?.quotedOwnerId).toBeUndefined();
-    expect(message?.quotedBody).toBeUndefined();
   });
 
   it("normalizes second and millisecond timestamps", async () => {

@@ -186,7 +186,11 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     }
 
     try {
-      const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
+      const response = await getUpdates(
+        token,
+        { timeout: pollTimeout, signal: abortSignal },
+        fetcher,
+      );
       if (isStopped() || abortSignal.aborted) {
         return undefined;
       }

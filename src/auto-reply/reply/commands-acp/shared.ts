@@ -5,7 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
+import { toAcpRuntimeErrorText, type AcpRuntimeErrorCode } from "../../../acp/runtime/errors.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -369,12 +369,14 @@ export async function withAcpCommandErrorBoundary(params: {
   try {
     return await params.run();
   } catch (error) {
-    return commandReply(
-      toAcpRuntimeErrorText({
-        error,
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: params.fallbackMessage,
-      }),
-    );
+    return acpCommandErrorReply(error, params.fallbackMessage);
   }
+}
+
+export function acpCommandErrorReply(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackCode: AcpRuntimeErrorCode = "ACP_TURN_FAILED",
+): CommandHandlerResult {
+  return commandReply(toAcpRuntimeErrorText({ error, fallbackCode, fallbackMessage }));
 }

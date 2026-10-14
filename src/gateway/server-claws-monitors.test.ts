@@ -9,19 +9,16 @@ import { listAgentEntries } from "../agents/agent-scope.js";
 import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
+import * as clawOwnership from "../claws/provenance-async.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-  releaseLocalCronRunReceiptOwnership,
-} from "../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+} from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import * as deletionJournal from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as stateReader from "../state/openclaw-state-db-readonly.js";
 import {
@@ -30,6 +27,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { authorizeOperatorScopesForMethod, isGatewayMethodClassified } from "./method-scopes.js";
 import {
   useClawMonitorFixture,
@@ -58,9 +56,7 @@ describe("Claw serving monitor cleanup", () => {
         expect(listAgentEntries(current.getConfig()).some((agent) => agent.id === "worker")).toBe(
           true,
         );
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       });
     },
   );
@@ -82,7 +78,7 @@ describe("Claw serving monitor cleanup", () => {
     const plan = await current.plan();
     expect(plan.blockers).toEqual([]);
     expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: false });
-    expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
+    expect(deletionJournal.readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
     expect((await readClawStatus("worker", { config: current.getConfig() })).summary.claws).toBe(0);
     await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
   });
@@ -108,7 +104,7 @@ describe("Claw serving monitor cleanup", () => {
         details: { monitorInspection: "unavailable" },
       });
     }
-    expect(readAgentDeletionJournal("worker")).toBeUndefined();
+    expect(deletionJournal.readAgentDeletionJournal("worker")).toBeUndefined();
   });
 
   it("removes recorded Claw schedules alongside monitors with one disposition each", async () => {
@@ -150,37 +146,67 @@ describe("Claw serving monitor cleanup", () => {
           },
         }),
       ).rejects.toThrow("does not serve");
-      expect(readAgentDeletionJournal("worker")).toBeUndefined();
+      expect(deletionJournal.readAgentDeletionJournal("worker")).toBeUndefined();
     },
   );
 
-  it.each(["operation", "scheduler"])(
-    "revalidates the %s owner after awaited inventory",
-    async (changedOwner) => {
+  it.each([
+    { boundary: "journal", changedOwner: "operation" },
+    { boundary: "journal", changedOwner: "scheduler" },
+    { boundary: "ownership", changedOwner: "operation" },
+    { boundary: "ownership", changedOwner: "scheduler" },
+    { boundary: "inventory", changedOwner: "operation" },
+    { boundary: "inventory", changedOwner: "scheduler" },
+  ])(
+    "revalidates the $changedOwner owner after awaited $boundary",
+    async ({ boundary, changedOwner }) => {
       const current = await fixture(false);
       const database = openOpenClawAgentDatabase({ agentId: "worker" });
       const monitors = await current.gateway.inspect("worker");
       await current.withDeletion(async (deletion) => {
-        const originalList = current.cron.list.bind(current.cron);
-        const list = vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
-          const jobs = await originalList(opts);
+        const replaceOwner = () => {
           if (changedOwner === "operation") {
             beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
           } else {
             current.replaceCron();
           }
-          return jobs;
-        });
+        };
+        const originalJournal = deletionJournal.prepareAgentDeletionJournalObservation;
+        const originalOwnership = clawOwnership.readClawPackageOwnership;
+        const originalList = current.cron.list.bind(current.cron);
+        const preparation =
+          boundary === "journal"
+            ? vi
+                .spyOn(deletionJournal, "prepareAgentDeletionJournalObservation")
+                .mockImplementationOnce(async (...args) => {
+                  const journal = await originalJournal(...args);
+                  replaceOwner();
+                  return journal;
+                })
+            : boundary === "ownership"
+              ? vi
+                  .spyOn(clawOwnership, "readClawPackageOwnership")
+                  .mockImplementationOnce(async (...args) => {
+                    const ownership = await originalOwnership(...args);
+                    replaceOwner();
+                    return ownership;
+                  })
+              : vi.spyOn(current.cron, "list").mockImplementationOnce(async (opts) => {
+                  const jobs = await originalList(opts);
+                  replaceOwner();
+                  return jobs;
+                });
+        const quiesce = vi.spyOn(current.cron, "quiesceJobs");
         try {
           await expect(
             current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-          ).rejects.toThrow(changedOwner === "operation" ? "deletion fence" : "changing");
+          ).rejects.toThrow(changedOwner === "operation" ? "no longer owns" : "changing");
+          expect(quiesce).not.toHaveBeenCalled();
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
-          await expect(
-            fs.access(path.join(current.workspaceDir, "SOUL.md")),
-          ).resolves.toBeUndefined();
+          await fs.access(path.join(current.workspaceDir, "SOUL.md"));
         } finally {
-          list.mockRestore();
+          preparation.mockRestore();
+          quiesce.mockRestore();
         }
       });
     },
@@ -214,14 +240,12 @@ describe("Claw serving monitor cleanup", () => {
       try {
         await expect(
           current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
-        ).rejects.toThrow(changed === "operation" ? "deletion fence" : "cleanup state changed");
+        ).rejects.toThrow(changed === "operation" ? "no longer owns" : "cleanup state changed");
         expect(receiptReads).toBe(read);
         if (read === 1) {
           expect(database.db.prepare("SELECT 1 AS alive").get()).toEqual({ alive: 1 });
         }
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       } finally {
         reader.mockRestore();
         if (active) {
@@ -232,7 +256,7 @@ describe("Claw serving monitor cleanup", () => {
   });
 
   it.each([false, true])(
-    "retains files for a foreign receipt after its job row disappears (unverifiable=%s)",
+    "retains files until startup recovers a removed job's receipt (unverifiable=%s)",
     async (unverifiable) => {
       const current = await fixture(false);
       const monitor = (await current.cron.list({ includeDisabled: true })).find(
@@ -273,15 +297,12 @@ describe("Claw serving monitor cleanup", () => {
             .prepare("UPDATE cron_run_receipts SET started_at_ms = ? WHERE receipt_id = ?")
             .run(Date.now() - 24 * 60 * 60_000, handle.receiptId);
         }
-        releaseLocalCronRunReceiptOwnership(handle);
         database.db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run(monitor.id);
         expect(getSuspensionVisibleCronTaskRunCount({ agentId: "worker" })).toBe(0);
         const plan = await current.plan();
         const result = await withMonitorDrainClock(() => current.apply(plan));
         expect(result).toMatchObject({ status: "partial", agentRemoved: false });
-        await expect(
-          fs.access(path.join(current.workspaceDir, "SOUL.md")),
-        ).resolves.toBeUndefined();
+        await fs.access(path.join(current.workspaceDir, "SOUL.md"));
         const exit = once(holder, "exit");
         holder.kill("SIGTERM");
         await exit;
@@ -290,6 +311,12 @@ describe("Claw serving monitor cleanup", () => {
             .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
             .get(handle.receiptId),
         ).toEqual({ status: "running" });
+        await current.cron.start();
+        expect(
+          database.db
+            .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+            .get(handle.receiptId),
+        ).toEqual({ status: "interrupted" });
         expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
       } finally {
         if (holder.pid && holder.exitCode === null && holder.signalCode === null) {
@@ -297,7 +324,6 @@ describe("Claw serving monitor cleanup", () => {
           holder.kill("SIGTERM");
           await exit;
         }
-        releaseLocalCronRunReceiptOwnership(handle);
       }
     },
   );
@@ -321,7 +347,7 @@ describe("Claw serving monitor cleanup", () => {
       await expect(
         withMonitorDrainClock(() => current.gateway.drain("worker", deletion.entry.operationId)),
       ).rejects.toThrow("config convergence is incomplete");
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await fs.access(path.join(current.workspaceDir, "SOUL.md"));
     });
     expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
   });
@@ -386,12 +412,14 @@ describe("Claw serving monitor cleanup", () => {
       if (failure === "config-write") {
         expect(result.error?.message).toContain("synthetic config persistence failure");
       }
-      const firstJournal = readAgentDeletionJournal("worker");
+      const firstJournal = deletionJournal.readAgentDeletionJournal("worker");
       expect(firstJournal).toBeDefined();
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await fs.access(path.join(current.workspaceDir, "SOUL.md"));
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
-      expect(readAgentDeletionJournal("worker")?.operationId).toBe(firstJournal?.operationId);
+      expect(deletionJournal.readAgentDeletionJournal("worker")?.operationId).toBe(
+        firstJournal?.operationId,
+      );
       current.setReloadSettled(true);
       if (failure === "cron-persistence") {
         expect(
@@ -426,8 +454,8 @@ describe("Claw serving monitor cleanup", () => {
       0,
     );
     await expect(current.apply(plan)).rejects.toMatchObject({ code: "remove_changed" });
-    expect(readAgentDeletionJournal("worker")).toBeUndefined();
-    await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+    expect(deletionJournal.readAgentDeletionJournal("worker")).toBeUndefined();
+    await fs.access(path.join(current.workspaceDir, "SOUL.md"));
   });
 
   it("does not cancel or wait for a surviving agent's ordinary runner", async () => {
@@ -462,26 +490,6 @@ describe("Claw serving monitor cleanup", () => {
       await run;
     }
   });
-
-  it.each([false, true])(
-    "removes the config-owned heartbeat monitor (enabled=%s)",
-    async (enabled) => {
-      const current = await fixture(enabled);
-      const plan = await current.plan();
-      expect(plan.blockers).toEqual([]);
-      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([
-        expect.objectContaining({ action: "remove", blocked: false }),
-      ]);
-      const result = await current.apply(plan);
-      expect(result).toMatchObject({ status: "complete", agentRemoved: true });
-      expect(
-        (await current.cron.list({ includeDisabled: true })).every(
-          (job) => job.agentId !== "worker",
-        ),
-      ).toBe(true);
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
-    },
-  );
 
   it.each([
     "ordinary",

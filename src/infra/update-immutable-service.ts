@@ -9,6 +9,7 @@ import { inspectSystemdProcessMembershipSync } from "../daemon/service-process-m
 import { fingerprintGatewayServiceDefinition } from "../daemon/service-rebind.js";
 import type { GatewayServiceState, SystemdServiceIdentity } from "../daemon/service-types.js";
 import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
+import { isSystemdControlGroupEmpty } from "../daemon/systemd-cgroup.js";
 import { execSystemctl } from "../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../daemon/systemd-lifecycle.js";
 import {
@@ -17,10 +18,13 @@ import {
 } from "../daemon/systemd-service-files.js";
 import { captureSystemdServiceIdentity } from "../daemon/systemd-service-identity.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
-import { hasErrnoCode } from "./errno.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 
-async function readImmutableService(
+function showImmutableService(unit: string, properties: string) {
+  return execSystemctl(["--system", "show", unit, `--property=${properties}`], undefined, 5_000);
+}
+
+export async function readImmutableService(
   service: ImmutableInstallDescriptor["service"],
   root: string,
   generationPath: string,
@@ -64,15 +68,9 @@ async function readImmutableService(
     throw new Error("The immutable Gateway service definition could not be verified.");
   }
   target.unitPath = command.sourcePath;
-  const runtime = await execSystemctl(
-    [
-      "--system",
-      "show",
-      service.unit,
-      "--property=Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage,Job",
-    ],
-    undefined,
-    5_000,
+  const runtime = await showImmutableService(
+    service.unit,
+    "Id,LoadState,ActiveState,SubState,MainPID,ControlGroup,TasksCurrent,KillMode,DynamicUser,RootDirectory,RootImage,Job",
   );
   activation?.assertCurrent();
   const properties = parseKeyValueOutput(runtime.stdout, "=");
@@ -119,16 +117,14 @@ async function readImmutableService(
     );
   }
   const entry = resolveServiceEntrypoint(command);
+  const generationEntry = path.join(generationPath, "dist", "index.js");
   if (
     !executable ||
     !path.isAbsolute(executable) ||
     (await fs.realpath(executable)) !== runtimePath ||
     !entry ||
-    ![
-      path.join(generationPath, "dist", "index.js"),
-      path.join(root, "current", "dist", "index.js"),
-    ].includes(entry) ||
-    (await fs.realpath(entry)) !== path.join(generationPath, "dist", "index.js")
+    ![generationEntry, path.join(root, "current", "dist", "index.js")].includes(entry) ||
+    (await fs.realpath(entry)) !== generationEntry
   ) {
     throw new Error(
       "The systemd Gateway command must use the adopted Node executable and current immutable generation.",
@@ -193,38 +189,6 @@ function assertOutsideService(controlGroup: string): void {
   }
 }
 
-function immutableCgroupEventsPath(controlGroup: string): string {
-  if (
-    !controlGroup.startsWith("/") ||
-    controlGroup === "/" ||
-    controlGroup
-      .split("/")
-      .slice(1)
-      .some((part) => !part || part === ".." || part === ".")
-  ) {
-    throw new Error("The immutable Gateway cgroup cannot be verified.");
-  }
-  return path.join("/sys/fs/cgroup", controlGroup, "cgroup.events");
-}
-
-function cgroupEmpty(controlGroup: string): boolean {
-  const file = immutableCgroupEventsPath(controlGroup);
-  try {
-    // cgroup v2 populated includes descendants, unlike MainPID or cgroup.procs.
-    const events = fsSync.readFileSync(file, "utf8");
-    const populated = /^populated ([01])$/mu.exec(events)?.[1];
-    if (populated === undefined) {
-      throw new Error("The immutable Gateway cgroup population is unavailable.");
-    }
-    return populated === "0";
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return true;
-    }
-    throw error;
-  }
-}
-
 /** Recorded process facts are evidence only; the executor supplies live authority. */
 export function assertImmutableServiceStoppedCurrent(
   observed: Pick<ImmutableServiceObservation, "pid" | "processStartTicks" | "controlGroup">,
@@ -238,7 +202,7 @@ export function assertImmutableServiceStoppedCurrent(
       throw new Error("The original immutable Gateway process is still alive.");
     }
   }
-  if (!cgroupEmpty(observed.controlGroup)) {
+  if (!isSystemdControlGroupEmpty(observed.controlGroup)) {
     throw new Error("The immutable Gateway cgroup is populated; pointer publication is refused.");
   }
   assertOutsideService(observed.controlGroup);
@@ -304,7 +268,7 @@ export async function inspectImmutableActivationService(params: {
       );
     }
     assertOutsideService(controlGroup);
-    if (cgroupEmpty(controlGroup)) {
+    if (isSystemdControlGroupEmpty(controlGroup)) {
       throw new Error("The running immutable Gateway requires an observable populated cgroup v2.");
     }
     assertCurrent();
@@ -318,7 +282,7 @@ export async function inspectImmutableActivationService(params: {
     !/^(?:0|)$/.test(properties.job ?? "missing")
   ) {
     throw new Error("The immutable Gateway is neither running nor fully stopped.");
-  } else if (controlGroup && !cgroupEmpty(controlGroup)) {
+  } else if (controlGroup && !isSystemdControlGroupEmpty(controlGroup)) {
     throw new Error("The stopped immutable Gateway still has processes in its cgroup.");
   }
   const phase = starting ? "starting" : pid === null ? "stopped" : "running";
@@ -392,7 +356,7 @@ export async function controlImmutableService(
   params: ImmutableServiceAction,
 ) {
   const { descriptor, expected } = params;
-  if (descriptor.version !== 2 || descriptor.activationEnabled !== true) {
+  if (descriptor.version === 1 || descriptor.activationEnabled !== true) {
     throw new Error("Immutable service activation requires explicitly enabled adoption.");
   }
   await withGatewayServiceOperationLock(expected.state.env, async (assertNative) => {
@@ -479,19 +443,13 @@ export async function controlImmutableService(
         if (action === "stop") {
           const deadline = performance.now() + (params.timeoutMs ?? 360_000);
           while (true) {
-            const result = await execSystemctl(
-              [
-                "--system",
-                "show",
-                descriptor.service.unit,
-                "--property=Id,ActiveState,MainPID,Job",
-              ],
-              undefined,
-              5_000,
+            const result = await showImmutableService(
+              descriptor.service.unit,
+              "Id,ActiveState,MainPID,Job",
             );
             assertCurrent();
             const current = parseKeyValueOutput(result.stdout, "=");
-            const empty = cgroupEmpty(expected.controlGroup);
+            const empty = isSystemdControlGroupEmpty(expected.controlGroup);
             assertCurrent();
             if (
               result.code === 0 &&

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
@@ -9,7 +10,7 @@ import {
   rowLink,
   sessionMenu,
 } from "./multi-select-support.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar new group dialog", () => {
   it("moves captured sessions even when both leave the bounded list mid-write", async () => {

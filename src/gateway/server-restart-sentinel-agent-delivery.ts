@@ -56,7 +56,7 @@ import {
 } from "./managed-image-attachments.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
@@ -339,7 +339,15 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   };
   const readRequester = async (): Promise<SessionEntry | undefined> => {
     if (!binding) {
-      return loadSessionEntry(entry.sessionKey).entry;
+      return (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: params.resolveGatewayContext?.()?.getRuntimeConfig() ?? getRuntimeConfig(),
+          key: entry.sessionKey,
+          env: params.queueContext.environment,
+          assertActive: params.queueContext.admission.assertCurrent,
+          excludeInternalEffects: true,
+        })
+      ).entry;
     }
     try {
       return await withSessionEntryReadOnlyInWorker(
@@ -387,6 +395,14 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
             throw new Error("queued internal generated-media delivery has no owning session");
           }
           const stateDir = params.queueContext.environment.OPENCLAW_STATE_DIR;
+          const attachMedia = async (
+            messageId: string,
+            blocks: Parameters<typeof attachManagedOutgoingMediaToMessage>[0]["blocks"],
+          ) => {
+            if (!(await attachManagedOutgoingMediaToMessage({ messageId, blocks, stateDir }))) {
+              throw new Error("queued internal generated-media artifact attachment failed");
+            }
+          };
           const preparedMediaBlocks = { ...entry.preparedMediaBlocks };
           const content: Array<Record<string, unknown>> = [];
           for (const mediaUrl of mediaUrls) {
@@ -485,17 +501,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                 idempotencyKey: `${queuedRunId}:generated-media-transcript`,
                 updateMode: "inline",
                 onMessageCommitted: (receipt, acceptCompletion) => {
-                  acceptCompletion(async () => {
-                    if (
-                      !(await attachManagedOutgoingMediaToMessage({
-                        messageId: receipt.messageId,
-                        blocks: readAssistantDisplayContent(receipt.message),
-                        stateDir,
-                      }))
-                    ) {
-                      throw new Error("queued internal generated-media artifact attachment failed");
-                    }
-                  });
+                  acceptCompletion(() =>
+                    attachMedia(receipt.messageId, readAssistantDisplayContent(receipt.message)),
+                  );
                 },
               });
           if (!appended.ok) {
@@ -512,15 +520,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
           }
           params.queueContext.admission.assertCurrent();
           if (enriched) {
-            if (
-              !(await attachManagedOutgoingMediaToMessage({
-                messageId: enriched.messageId,
-                blocks: content,
-                stateDir,
-              }))
-            ) {
-              throw new Error("queued internal generated-media artifact attachment failed");
-            }
+            await attachMedia(enriched.messageId, content);
             await publishAssistantTranscriptRewrite({ scope, rewritten: [enriched] });
           }
         }
@@ -674,7 +674,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       response && typeof response === "object"
         ? (response as { status?: unknown }).status
         : undefined;
-    const latestEntry = binding ? await readRequester() : loadSessionEntry(entry.sessionKey).entry;
+    const latestEntry = await readRequester();
     if (responseStatus === "accepted") {
       accepted = true;
     }

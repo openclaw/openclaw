@@ -25,10 +25,7 @@ export type WhatsAppSendKind =
   | "sticker"
   | "text";
 
-type WhatsAppSendKey = Omit<
-  Pick<WAMessageKey, "fromMe" | "id" | "participant" | "remoteJid">,
-  "id"
-> & {
+type WhatsAppSendKey = Pick<WAMessageKey, "fromMe" | "participant" | "remoteJid"> & {
   id: string;
 };
 

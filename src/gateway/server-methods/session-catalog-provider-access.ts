@@ -40,49 +40,26 @@ export function allowProcessHomeFallback(logGateway?: {
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// executing work globally with headroom for independent providers. Each provider
-// owns one active step and its own bounded queue of waiting callers.
+// executing work and waiting callers globally. A slow provider may delay other
+// providers; the response budget still returns cached or pending results.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,
 );
 
-// Publication tails must not retain the source operation's entry snapshot or node hook.
-function createCatalogListCompletionOwner(
-  registerCompletion: SessionCatalogListProviderParams["waitUntil"],
-) {
-  let registrationOpen = true;
-  const completions = new Set<Promise<void>>();
-  return {
-    waitUntil: (completion: Promise<void>) => {
-      if (!registrationOpen) {
-        throw new Error("Session catalog completion registration is closed");
-      }
-      const settled = completion.then(
-        () => undefined,
-        () => undefined,
-      );
-      completions.add(settled);
-      void settled.then(() => completions.delete(settled));
-      registerCompletion?.(completion);
-    },
-    finishRegistration() {
-      registrationOpen = false;
-    },
-    async release(consumer: PluginInstanceConsumer | undefined) {
-      if (!consumer) {
-        return;
-      }
-      // Keep admitted publication callbacks live without delaying the filled result.
-      const released = Promise.all(completions).then(() => consumer.release());
-      try {
-        registerCompletion?.(released);
-      } catch (error) {
-        await released;
-        throw error;
-      }
-    },
-  };
+async function registerCatalogListCompletion(
+  completion: Promise<void>,
+  waitUntil: SessionCatalogListProviderParams["waitUntil"],
+): Promise<void> {
+  if (!waitUntil) {
+    return completion;
+  }
+  try {
+    waitUntil(completion);
+  } catch (error) {
+    await completion;
+    throw error;
+  }
 }
 
 async function runSessionCatalogListSteps(
@@ -96,7 +73,7 @@ async function runSessionCatalogListSteps(
   const registry = resolveSessionCatalogRegistry() ?? undefined;
   let consumer: PluginInstanceConsumer | undefined;
   let operation: ReturnType<typeof createListOperation> | undefined;
-  const completionOwner = createCatalogListCompletionOwner(params.waitUntil);
+  const completions: Promise<void>[] = [];
   const run = <T>(work: () => T): T => (consumer ? consumer.run(work) : work());
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -108,7 +85,6 @@ async function runSessionCatalogListSteps(
   };
   try {
     return await sessionCatalogListAdmission.runSteps(
-      provider.id,
       async () => {
         assertCurrent();
         if (!operation) {
@@ -117,31 +93,34 @@ async function runSessionCatalogListSteps(
           operation = run(() =>
             createListOperation.call(provider, {
               ...params,
-              waitUntil: completionOwner.waitUntil,
+              waitUntil: (completion) => {
+                completions.push(completion.catch(() => {}));
+                params.waitUntil?.(completion);
+              },
             }),
           );
         }
         assertCurrent();
         const current = operation;
         const step = await run(() => current.next());
-        assertCurrent();
         return step.done ? { done: true, value: step.hosts } : step;
       },
       params.signal,
       diagnostics?.timing,
     );
   } finally {
-    completionOwner.finishRegistration();
     try {
       const closing = operation;
       if (closing) {
         run(() => closing.close());
       }
     } finally {
-      operation = undefined;
-      const retained = consumer;
-      consumer = undefined;
-      await completionOwner.release(retained);
+      if (consumer) {
+        // Registered publications retain their plugin until ordinary completion.
+        const retained = consumer;
+        const released = Promise.allSettled(completions).then(() => retained.release());
+        await registerCatalogListCompletion(released, params.waitUntil);
+      }
     }
   }
 }
@@ -162,7 +141,6 @@ export function listSessionCatalogProvider(
         assertOwnerCurrent,
       )
     : sessionCatalogListAdmission.run(
-        provider.id,
         () => {
           params.signal?.throwIfAborted();
           diagnostics?.providerStarted();

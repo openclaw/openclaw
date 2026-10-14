@@ -16,7 +16,11 @@ import {
 } from "../../state/openclaw-state-db-read-connection.js";
 import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db-schema-version.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { buildAcpDatabaseSessionKey, upsertAcpSessionMetaRow } from "./session-meta-keys.js";
+import {
+  buildAcpDatabaseSessionKey,
+  deleteAcpSessionMetaRows,
+  upsertAcpSessionMetaRow,
+} from "./session-meta-keys.js";
 import type { AcpSessionReadCommand } from "./session-meta-read.types.js";
 import {
   prepareAcpSessionMetadataRead,
@@ -86,13 +90,13 @@ function fixture() {
   return { writer, pathname, read };
 }
 
-it("reuses admitted ACP rows while observing foreign inserts, updates and deletion on the next read", () => {
+it("reuses admitted ACP rows until an ACP write without freshness probes", () => {
   const { writer, read } = fixture();
   expect(read().rows).toEqual([null]);
   expect(read().rows).toEqual([null]);
   const observation = observeSqliteReadSql(StatementSync.prototype);
   const metadataReads = () =>
-    observation.queries.filter((sql) => /(?:from|join) "acp_sessions"/iu.test(sql));
+    observation.queries.filter((sql) => /^select\b.*(?:from|join) "acp_sessions"/isu.test(sql));
   try {
     expect(read().rows).toEqual([null]);
     expect(read().rows).toEqual([null]);
@@ -110,11 +114,15 @@ it("reuses admitted ACP rows while observing foreign inserts, updates and deleti
       read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
     ).toEqual([null]);
     expect(metadataReads()).toHaveLength(1);
-    writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'second'").run();
+    writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
+    expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
+    expect(metadataReads()).toHaveLength(1);
+    insert(writer, "second");
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "second" });
-    writer.prepare("DELETE FROM acp_sessions").run();
+    deleteAcpSessionMetaRows(writer, [key]);
     expect(read().rows).toEqual([null]);
     expect(metadataReads()).toHaveLength(3);
+    expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
   } finally {
     observation.restore();
   }
@@ -143,7 +151,7 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
         expect(readPinned().rows[0]).toMatchObject({
           runtime_session_name: "before",
         });
-        writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'after'").run();
+        insert(writer, "after");
         expect(readPinned().rows[0]).toMatchObject({
           runtime_session_name: "before",
         });
@@ -168,11 +176,11 @@ it("invalidates admitted ACP rows after local native writes and reader retiremen
   const localRead = () =>
     runSqliteReadOperationSync(writer, () => readAcpSessionCommand(writer, command));
   expect(localRead().rows[0]).toMatchObject({ runtime_session_name: "initial" });
-  writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'local'").run();
+  insert(writer, "local");
   expect(localRead().rows[0]).toMatchObject({ runtime_session_name: "local" });
   expect(read().rows[0]).toMatchObject({ runtime_session_name: "local" });
   closeRetainedOpenClawStateReadConnections();
-  writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'reopened'").run();
+  insert(writer, "reopened");
   expect(read().rows[0]).toMatchObject({ runtime_session_name: "reopened" });
 });
 

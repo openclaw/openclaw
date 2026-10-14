@@ -25,6 +25,7 @@ import {
   FakeChild,
   renderSteps,
   stubHealthyGateway,
+  canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { createUpdateRun, finishUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
@@ -393,7 +394,8 @@ describe("update candidate Doctor lint", () => {
     const options = { ...canaryStateOptions(3_000), env, onStep };
     const result = await validateUpdateCandidateCanary(options);
     expect(result).toMatchObject({ status: "error", phase: "lint" });
-    expect(result.steps.at(-1)).toMatchObject({
+    const failed = canaryOutcomeStep(result.steps);
+    expect(failed).toMatchObject({
       failureFacts: Array.from({ length: 5 }, (_, index) => ({
         check: `config.invalid.${index}`,
         code: "doctor-failed",
@@ -401,9 +403,9 @@ describe("update candidate Doctor lint", () => {
         message: expect.stringContaining("Invalid server"),
       })),
     });
-    expect(onStep).toHaveBeenLastCalledWith(result.steps.at(-1));
-    expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
-    const findings = result.steps.at(-1)?.doctorLintFindings;
+    expect(onStep).toHaveBeenCalledWith(failed);
+    expect(failed?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
+    const findings = failed?.doctorLintFindings;
     expect(findings).toHaveLength(48);
     expect(findings?.map((finding) => finding.checkId)).toEqual([
       ...Array.from({ length: 40 }, (_, index) => `optional.warning.${index}`),

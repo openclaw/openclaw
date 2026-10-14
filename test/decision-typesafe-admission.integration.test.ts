@@ -23,9 +23,9 @@ import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 it("lets admitted TypeSafe work finish after opt-out while preserving independent final-I/O guards", async () => {
   const loading = createDeferredCore();
   const release = createDeferredCore();
-  // Only suspend the cold import; the public plugin, client and guarded transport run unchanged.
-  vi.doMock("../extensions/typesafe/src/client.js", async (importOriginal) => {
-    const original = await importOriginal();
+  // Prepare the real client outside the request deadline; suspend only its lazy import.
+  const original = await vi.importActual("../extensions/typesafe/src/client.js");
+  vi.doMock("../extensions/typesafe/src/client.js", async () => {
     loading.resolve();
     await release.promise;
     return original;

@@ -148,7 +148,7 @@ function* loadConfigWithEffects(
     const { deferredPluginMigrations, validated } = yield* resolveConfigIoEffect({
       sync: () =>
         withSynchronousArtifactPreservingStateSnapshot(() => {
-          const pending = context.resolveDeferredPluginMigrations();
+          const pending = context.options.deferredPluginMigrations;
           return {
             deferredPluginMigrations: pending,
             validated: validateConfigObjectWithPlugins(effectiveConfigRaw, {

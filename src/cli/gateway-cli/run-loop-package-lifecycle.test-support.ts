@@ -391,14 +391,14 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     await stop.expectHostedPending();
                   } else if (!uncertain && !closeFailure && phase !== "completion") {
                     const persistedReads =
-                      fixtures.consumeGatewayRestartIntentPayloadSync.mock.calls.length;
-                    fixtures.consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+                      fixtures.consumeGatewayRestartIntentPayload.mock.calls.length;
+                    fixtures.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
                       reason: "update.run",
                     });
                     captureSignal("SIGTERM")();
                     await fixtures.waitForLoopCondition(
                       () =>
-                        fixtures.consumeGatewayRestartIntentPayloadSync.mock.calls.length ===
+                        fixtures.consumeGatewayRestartIntentPayload.mock.calls.length ===
                         persistedReads + 1,
                       "persisted SIGTERM restart was not consumed",
                     );

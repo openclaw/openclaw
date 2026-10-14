@@ -18,7 +18,11 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { getTranscriptLibrary, listTranscriptLibrary } from "../transcripts/library.js";
+import {
+  exportTranscriptLibrary,
+  getTranscriptLibrary,
+  listTranscriptLibrary,
+} from "../transcripts/library.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -34,6 +38,7 @@ import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/stor
 import { summarizeTranscripts } from "../transcripts/summary.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const dirs = useStateDatabaseTempDirs();
 
@@ -153,10 +158,10 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
     expect(await store.readSession("missing")).toBeUndefined();
     expect(
       await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-        type: "plugins.metadata.read",
-        input: { selector: "installed-index", artifactPreservingReadOnly: true },
+        type: "claws.install-schema-versions",
+        input: { artifactPreservingReadOnly: true },
       }),
-    ).toBeUndefined();
+    ).toEqual([]);
   });
   expect(existsSync(databasePath)).toBe(true);
   expect(existsSync(exportRoot)).toBe(false);
@@ -251,9 +256,31 @@ it("persists session metadata off thread with typed conflicts and durable ID ori
     metadata: { sessionIdOrigin: "generated", ignored: () => "host-only", label: "雪" },
   };
   await withoutParentTranscriptSql(async () => {
-    await store.writeSession(session);
+    const inserted = await store.writeSession(session);
     const revision = await store.readSummaryInputRevision(session);
-    await store.writeSession({ ...session, title: "Updated", metadata: { label: "é" } });
+    expect(inserted).toEqual({
+      inserted: true,
+      inputRevision: revision,
+      sessionRevision: revision,
+    });
+    await store.appendUtteranceForSession(session, { text: "Retained speech" });
+    const updated = await store.writeSession(
+      { ...session, title: "Updated", metadata: { label: "é" } },
+      { expectedSessionRevision: inserted.sessionRevision },
+    );
+    const updatedRevision = await store.readSummaryInputRevision(session);
+    expect(updated).toEqual({
+      inserted: false,
+      inputRevision: updatedRevision,
+      sessionRevision: JSON.stringify({ ...JSON.parse(updatedRevision!), next_utterance_seq: 0 }),
+    });
+    await expect(
+      store.writeSession(
+        { ...session, title: "Stale descriptor" },
+        { expectedSessionRevision: inserted.sessionRevision },
+      ),
+    ).rejects.toBeInstanceOf(TranscriptsSummaryChangedError);
+    expect(JSON.parse(updated.inputRevision).next_utterance_seq).toBe(1);
     await expect(
       store.writeSession({ ...session, title: "Stale" }, { expectedInputRevision: revision }),
     ).rejects.toBeInstanceOf(TranscriptsSummaryChangedError);
@@ -267,6 +294,37 @@ it("persists session metadata off thread with typed conflicts and durable ID ori
     title: "Updated",
     metadata: { sessionIdOrigin: "generated", label: "é" },
   });
+});
+
+it("returns SQLite-normalized text in the committed session receipt", async () => {
+  const { store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "normalized-receipt",
+    startedAt: "2026-10-04T12:00:00.000Z",
+    stoppedAt: "2026-10-04T12:00:01.000Z",
+    source: { providerId: "manual-transcript" },
+    title: "Unpaired \ud800",
+  };
+  const inserted = await store.writeSession(session);
+  expect(inserted).toEqual({
+    inserted: true,
+    inputRevision: await store.readSummaryInputRevision(session),
+    sessionRevision: await store.readSummaryInputRevision(session),
+  });
+  const updated = await store.writeSession(
+    { ...session, title: "Changed \udfff" },
+    { expectedInputRevision: inserted.inputRevision },
+  );
+  expect(updated).toEqual({
+    inserted: false,
+    inputRevision: await store.readSummaryInputRevision(session),
+    sessionRevision: await store.readSummaryInputRevision(session),
+  });
+  await store.deleteEmptySessionCandidate(session, {
+    expectedInputRevision: updated.inputRevision,
+    assertCurrent: () => undefined,
+  });
+  expect(await store.readSession(session.sessionId)).toBeUndefined();
 });
 
 it("retains the captured session input and database through export preparation", async () => {
@@ -318,6 +376,54 @@ it("retains the captured session input and database through export preparation",
   });
   expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
 });
+
+it.each(["transaction", "commit"] as const)(
+  "preserves an empty candidate when its discard owner retires at the worker %s grant",
+  async (stage) => {
+    const { store } = fixture();
+    const session: TranscriptSessionDescriptor = {
+      sessionId: `session-revoked-${stage}`,
+      startedAt: "2026-09-21T12:00:00.000Z",
+      stoppedAt: "2026-09-21T12:00:01.000Z",
+      source: { providerId: "manual-transcript" },
+      title: "Original",
+    };
+    await store.writeSession(session);
+    const expectedInputRevision = await store.readSummaryInputRevision(session);
+    if (expectedInputRevision === undefined) {
+      throw new Error("Expected stored transcript admission");
+    }
+    let current = true;
+    const failure = new TranscriptsSummaryChangedError();
+    const requests: workerAdmission.SqliteWorkerAdmissionRequest["stage"][] = [];
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const observer = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          requests.push(request.stage);
+          if (request.stage === stage) {
+            current = false;
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    const assertCurrent = () => {
+      if (!current) {
+        throw failure;
+      }
+    };
+    try {
+      await expect(
+        store.deleteEmptySessionCandidate(session, { expectedInputRevision, assertCurrent }),
+      ).rejects.toBe(failure);
+    } finally {
+      observer.mockRestore();
+    }
+    expect(requests).toContain(stage);
+    expect(await store.readSession(session.sessionId)).toEqual(session);
+  },
+);
 
 it("publishes captured summary notes without caller-thread transcript SQL", async () => {
   const { env, store } = fixture();
@@ -371,18 +477,13 @@ it.each(
     const failure = new TranscriptsSummaryChangedError();
     let current = true;
     const requests: workerAdmission.SqliteWorkerAdmissionRequest["stage"][] = [];
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const observer = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          requests.push(request.stage);
-          if (request.stage === stage) {
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const observer = probe.admission(workerAdmission, (request, grant, admit) => {
+      requests.push(request.stage);
+      if (request.stage === stage) {
+        current = false;
+      }
+      admit(request, grant);
+    });
     const assertCurrent = () => {
       if (!current) {
         throw failure;
@@ -537,6 +638,50 @@ it("returns complete stored reads and typed errors after existing-only status an
     await expect(result).rejects.toMatchObject({
       type: "transcript_result_too_large",
       maxBytes: TRANSCRIPTS_RESULT_MAX_BYTES,
+    });
+  });
+});
+
+it("exports cold and warm library rows and notes without caller-thread SQLite", async () => {
+  const { store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "export-worker",
+    title: "Export meeting",
+    startedAt: "2026-09-18T12:00:00.000Z",
+    source: { providerId: "manual-transcript" },
+  };
+  await store.writeSession(session);
+  const utterance = {
+    text: "Saved speech",
+    speaker: { label: "Sam" },
+    metadata: { private: true },
+  };
+  await store.appendUtteranceForSession(session, utterance);
+  await store.writeSummary(summarizeTranscripts({ session, utterances: [utterance] }), session);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  const selector = transcriptSessionSelector(session);
+  await withoutParentSql(async () => {
+    for (const format of ["jsonl", "markdown", "jsonl"] as const) {
+      const exported = await exportTranscriptLibrary(store, { selector, format });
+      const text = Buffer.from(exported.data, "base64").toString("utf8");
+      expect(text).toContain("Saved speech");
+      expect(text).not.toContain("private");
+      if (format === "markdown") {
+        expect(text).toContain("Export meeting");
+        expect(text).toContain("Sam");
+      } else {
+        expect(JSON.parse(text)).toEqual({
+          sequence: 0,
+          text: "Saved speech",
+          speakerLabel: "Sam",
+        });
+      }
+    }
+    await expect(
+      exportTranscriptLibrary(store, { selector: "missing", format: "jsonl" }),
+    ).rejects.toMatchObject({
+      type: "transcript_session_not_found",
     });
   });
 });

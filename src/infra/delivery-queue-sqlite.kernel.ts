@@ -1,6 +1,7 @@
 // Connection-bound delivery queue operations shared by standalone and compound owners.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import {
   bindDeliveryQueueEntry,
   deliveryQueueEntriesQuery,
@@ -170,11 +171,7 @@ function selectDeliveryQueueEntryOwners(
       ).rows;
     };
     // Bound parameter counts while retaining one transaction across the complete batch.
-    const rows = readChunk(uniqueIds.slice(0, 500));
-    for (let offset = 500; offset < uniqueIds.length; offset += 500) {
-      rows.push(...readChunk(uniqueIds.slice(offset, offset + 500)));
-    }
-    return rows;
+    return chunkItems(uniqueIds, 500).flatMap(readChunk);
   };
   let rows = readExact();
   let pruned = false;

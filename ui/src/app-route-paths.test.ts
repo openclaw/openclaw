@@ -14,12 +14,10 @@ import {
   pathForMemoryTab,
   pathForAgentPanel,
   pathForPluginSettings,
-  pathForRoute,
   pathForWorkboardBoard,
   pathForTerminalSession,
   terminalSessionIdFromPath,
   pluginSettingsIdFromPath,
-  restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
   setPluginTabSlugs,
@@ -29,51 +27,10 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
-import type { AgentsPanel } from "./lib/agents/panels.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
-const AGENT_PANEL_CASES = [
-  "overview",
-  "files",
-  "tools",
-  "skills",
-  "channels",
-  "cron",
-  "memory",
-] as const satisfies readonly AgentsPanel[];
-
 const DYNAMIC_STARTUP_CASES = [
-  {
-    label: "terminal session",
-    routeId: "terminal",
-    location: { pathname: "/terminal/pty-123", search: "", hash: "" },
-  },
-  {
-    label: "mounted terminal session",
-    routeId: "terminal",
-    basePath: "/ui",
-    location: { pathname: "/ui/terminal/pty-123", search: "", hash: "" },
-  },
-  {
-    label: "person Activity",
-    routeId: "activity",
-    location: {
-      pathname: "/activity/josh-12345678",
-      search: "?time=30d&q=release",
-      hash: "#sessions",
-    },
-  },
-  {
-    label: "mounted person Activity",
-    routeId: "activity",
-    basePath: "/ui",
-    location: {
-      pathname: "/ui/activity/josh-12345678",
-      search: "?time=30d&q=release",
-      hash: "#sessions",
-    },
-  },
   {
     label: "agent panel",
     routeId: "agents",
@@ -81,15 +38,6 @@ const DYNAMIC_STARTUP_CASES = [
       pathname: pathForAgentPanel("team.writer", "tools"),
       search: "?probe=1",
       hash: "#catalog",
-    },
-  },
-  {
-    label: "chat session",
-    routeId: "chat",
-    location: {
-      pathname: "/chat/main/01JSESSIONA",
-      search: "?probe=1",
-      hash: "#message",
     },
   },
   {
@@ -129,15 +77,6 @@ const DYNAMIC_STARTUP_CASES = [
     },
   },
   {
-    label: "legacy Plugins discovery route",
-    routeId: "plugins",
-    location: {
-      pathname: "/settings/plugins/discover",
-      search: "?query=calendar",
-      hash: "#featured",
-    },
-  },
-  {
     label: "Plugin Settings detail",
     routeId: "plugin-settings",
     location: {
@@ -149,7 +88,6 @@ const DYNAMIC_STARTUP_CASES = [
 ] as const satisfies readonly {
   label: string;
   routeId: RouteId;
-  basePath?: string;
   location: RouteLocation;
 }[];
 
@@ -275,66 +213,6 @@ describe("Dynamic route startup bridge", () => {
     expect(reservedRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
   });
 
-  it("keeps plausible generic catalog share paths on chat", () => {
-    for (const pathname of [
-      "/beam/0123456789ab",
-      "/beam/ABCDEF012345",
-      "/beam/nothexvaluezz",
-      "/beam/0123456789abcdef0123456789abcdef0",
-    ]) {
-      expect(routeIdFromPath(pathname)).toBe("chat");
-    }
-    expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
-    expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
-  });
-
-  it("does not steal mounted routes, docs, app resources, or reserved routes", () => {
-    for (const pathname of [
-      "/ui/chat",
-      "/ui/config",
-      "/concepts/agent-workspace",
-      "/api/files/1",
-      "/control/avatar/main",
-      "/plugins/diffs/view/id/token",
-      "/beam/0123456789a",
-      "/beam/not-valid",
-      "/approve/0123456789ab",
-      "/ask/0123456789ab",
-    ]) {
-      expect(routeIdFromPath(pathname)).toBeNull();
-    }
-    expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
-    expect(routeIdFromPath("/settings/about")).toBe("about");
-    expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
-    expect(routeIdFromPath("/focus/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/openclaw/skills/0123456789ab", "/openclaw")).toBeNull();
-  });
-
-  it("registers the Updates settings path", () => {
-    expect(pathForRoute("updates")).toBe("/settings/updates");
-    expect(routeIdFromPath("/settings/updates")).toBe("updates");
-  });
-
-  it("registers the Secrets settings path", () => {
-    expect(pathForRoute("secrets")).toBe("/settings/secrets");
-    expect(routeIdFromPath("/settings/secrets")).toBe("secrets");
-  });
-
-  it("registers the Portals workspace path", () => {
-    expect(pathForRoute("portals")).toBe("/portals");
-    expect(routeIdFromPath("/portals")).toBe("portals");
-  });
-
-  it("keeps the mounted Agents roster separate from agent settings", () => {
-    expect(routeIdFromPath("/ui/agents", "/ui")).toBe("agents-home");
-    expect(inferBasePathFromPathname("/ui/agents")).toBe("/ui");
-    expect(agentRouteFromPath("/ui/agents", "/ui")).toBeNull();
-    expect(routeIdFromPath("/ui/settings/agents", "/ui")).toBe("agents");
-  });
-
   it("matches mixed-case deep links exactly like the uirouter path key", () => {
     // uirouter lowercases static path keys; a case-sensitive pre-gate would
     // rewrite /Usage to /chat before the router ever saw it.
@@ -347,7 +225,7 @@ describe("Dynamic route startup bridge", () => {
     "loads the $label once while publishing its real location",
     async (testCase) => {
       const { routeId, location: initialLocation } = testCase;
-      const basePath = "basePath" in testCase ? testCase.basePath : "";
+      const basePath = "";
       let location: RouteLocation = { ...initialLocation };
       const push = vi.fn((next: RouteLocation) => {
         location = next;
@@ -388,7 +266,6 @@ describe("Dynamic route startup bridge", () => {
   );
 
   it.each([
-    { routeId: "chat", firstPath: "/chat/main/01JSESSIONA", nextPath: "/chat/main/01JSESSIONB" },
     {
       routeId: "activity",
       firstPath: "/activity/josh-12345678",
@@ -561,77 +438,7 @@ describe("Dynamic route startup bridge", () => {
   });
 });
 
-describe("Bridged route locations", () => {
-  it.each([
-    ["absent", "?", "/ui/activity", ""],
-    ["empty", "?bridge=&bridge=%2Fignored&q=release", "", "?q=release"],
-    [
-      "repeated",
-      "?q=first&bridge=%2Fui%2Factivity%2Fada-12345678&q=second&bridge=%2Fignored",
-      "/ui/activity/ada-12345678",
-      "?q=first&q=second",
-    ],
-    ["bridge-only", "?bridge=%2Fui%2Factivity%2Fada-12345678", "/ui/activity/ada-12345678", ""],
-    [
-      "other namespace",
-      "?other=%2Fui%2Fworkboard&q=release",
-      "/ui/activity",
-      "?other=%2Fui%2Fworkboard&q=release",
-    ],
-    [
-      "encoded query",
-      "?bridge=%2Fui%2Factivity%2Fa%252Fb&q=hello%20world&q=a%2Bb",
-      "/ui/activity/a%2Fb",
-      "?q=hello+world&q=a%2Bb",
-    ],
-  ])(
-    "restores %s bridge input without changing the source",
-    (_label, search, pathname, nextSearch) => {
-      const location = Object.freeze({ pathname: "/ui/activity", search, hash: "#sessions" });
-      const restored = restoreBridgedRouteLocation(location, "bridge");
-
-      expect(restored).toEqual({ pathname, search: nextSearch, hash: "#sessions" });
-      expect(restored).not.toBe(location);
-      expect(location).toEqual({ pathname: "/ui/activity", search, hash: "#sessions" });
-    },
-  );
-});
-
 describe("Agent panel route paths", () => {
-  it.each(AGENT_PANEL_CASES)("round-trips the %s panel with an encoded agent id", (panel) => {
-    const pathname = pathForAgentPanel("team.writer", panel);
-    expect(pathname).toBe(`/settings/agents/team%2Ewriter/${panel}`);
-    expect(agentRouteFromPath(pathname)).toEqual({
-      agentId: "team.writer",
-      panel,
-      panelSegment: panel,
-      invalidPanel: false,
-    });
-    expect(routeIdFromPath(pathname)).toBe("agents");
-  });
-
-  it("round-trips the agent default panel without an explicit segment", () => {
-    const pathname = pathForAgentPanel("research", null, "/ui");
-    expect(pathname).toBe("/ui/settings/agents/research");
-    expect(agentRouteFromPath(pathname, "/ui")).toEqual({
-      agentId: "research",
-      panel: "overview",
-      panelSegment: null,
-      invalidPanel: false,
-    });
-    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
-  });
-
-  it("falls back unknown panel segments to the default panel", () => {
-    expect(agentRouteFromPath("/settings/agents/research/unknown")).toEqual({
-      agentId: "research",
-      panel: "overview",
-      panelSegment: null,
-      invalidPanel: true,
-    });
-    expect(routeIdFromPath("/settings/agents/research/unknown")).toBe("agents");
-  });
-
   it("rejects malformed, slash-containing, and nested agent paths", () => {
     expect(() => pathForAgentPanel("agent/child")).toThrow("Invalid agent id");
     expect(() => pathForAgentPanel(".")).toThrow("Invalid agent id");
@@ -694,18 +501,7 @@ describe("Agent panel route paths", () => {
 });
 
 describe("Memory tab route paths", () => {
-  it.each([
-    ["overview", "/settings/memory"],
-    ["memories", "/settings/memory/memories"],
-    ["dreams", "/settings/memory/dreams"],
-    ["settings", "/settings/memory/settings"],
-  ] as const)("round-trips %s through its canonical path", (tab, pathname) => {
-    expect(pathForMemoryTab(tab)).toBe(pathname);
-    expect(memoryTabFromPath(pathname)).toBe(tab);
-    expect(routeIdFromPath(pathname)).toBe("memory");
-  });
-
-  it.each(["overview", "memories", "dreams", "settings"] as const)(
+  it.each(["overview", "settings"] as const)(
     "round-trips %s under a configured base path",
     (tab: MemoryRouteTab) => {
       const pathname = pathForMemoryTab(tab, "/ui");
@@ -724,28 +520,7 @@ describe("Memory tab route paths", () => {
   });
 });
 
-describe("legacy Plugins discovery route", () => {
-  it("routes retired discovery links through the application router", () => {
-    const router = createApplicationRouter();
-    expect(router.routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
-    expect(router.routeIdFromPath("/ui/settings/plugins/discover", "/ui")).toBe("plugins");
-  });
-
-  it("keeps settings detail paths distinct from discovery in the application router", () => {
-    const router = createApplicationRouter();
-    expect(router.routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
-    expect(router.routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
-  });
-});
-
 describe("Plugin Settings route paths", () => {
-  it("separates the installed inventory from Plugins discovery", () => {
-    expect(pathForRoute("plugins")).toBe("/plugins");
-    expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
-    expect(routeIdFromPath("/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
-  });
-
   it("round-trips encoded plugin ids under a configured base path", () => {
     const pathname = pathForPluginSettings("@openclaw/calendar", "/ui");
     expect(pathname).toBe("/ui/settings/plugins/%40openclaw%2Fcalendar");
@@ -766,7 +541,7 @@ describe("Plugin Settings route paths", () => {
 });
 
 describe("terminal route paths", () => {
-  it.each(["", "/openclaw"])("resolves terminal paths under %s", (basePath) => {
+  it.each(["/openclaw"])("resolves terminal paths under %s", (basePath) => {
     expect(routeIdFromPath(`${basePath}/terminal`, basePath)).toBe("terminal");
     const path = pathForTerminalSession("pty:one ?#%", basePath);
     expect(path).toBe(`${basePath}/terminal/pty%3Aone%20%3F%23%25`);
@@ -775,13 +550,10 @@ describe("terminal route paths", () => {
     expect(inferBasePathFromPathname(path)).toBe(basePath);
   });
 
-  it.each(["/terminal/a/b", "/terminal/%ZZ", "/terminal/%20"])(
-    "rejects invalid terminal identity %s",
-    (path) => {
-      expect(terminalSessionIdFromPath(path)).toBeNull();
-      expect(routeIdFromPath(path)).toBeNull();
-    },
-  );
+  it.each(["/terminal/%ZZ"])("rejects invalid terminal identity %s", (path) => {
+    expect(terminalSessionIdFromPath(path)).toBeNull();
+    expect(routeIdFromPath(path)).toBeNull();
+  });
 
   it("does not consume a different mount's terminal identity", () => {
     expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();

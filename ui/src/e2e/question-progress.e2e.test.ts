@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -56,8 +57,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep this draft.");
-        const progressCard = page.locator(".session-progress-card--composer");
+        const progressCard = page.locator('[data-progress-card-placement="details"]');
         if (progress !== "absent") {
+          await openChatDetails(page);
           await progressCard.waitFor();
           const open = await progressCard.evaluate(
             (element) => (element as HTMLDetailsElement).open,
@@ -66,7 +68,7 @@ suite.define(() => {
             await progressCard.locator("summary").click();
           }
         }
-        await page.locator(".chat-thread").hover();
+        await page.locator(".chat-thread").hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, 10_000);
         await waitForChatScrollIdle(page);
         await expect
@@ -76,8 +78,12 @@ suite.define(() => {
         await requestQuestion("question-progress-follow");
         const panel = page.locator(".chat-question-panel");
         await panel.waitFor();
-        expect(await progressCard.isVisible()).toBe(false);
+        // The question owns the composer; it must not take over or auto-open Details.
+        expect(await progressCard.isVisible()).toBe(progress !== "absent");
         expect(await composer.count()).toBe(0);
+        expect(await page.locator(".chat-details:popover-open").count()).toBe(
+          progress === "absent" ? 0 : 1,
+        );
         expect(await panel.evaluate((element) => document.activeElement === element)).toBe(true);
         await waitForChatScrollIdle(page);
         await expect
@@ -106,12 +112,12 @@ suite.define(() => {
         expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
 
         const thread = page.locator(".chat-thread");
-        await thread.hover();
+        await thread.hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, -700);
         await waitForChatScrollIdle(page);
         await requestQuestion("question-progress-reader");
         await panel.waitFor();
-        await thread.hover();
+        await thread.hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, -200);
         await page.waitForTimeout(201); // Separate gestures exceed the disclosure burst boundary.
         await page.mouse.wheel(0, -200);
@@ -124,9 +130,18 @@ suite.define(() => {
         expect(await thread.evaluate((element) => element.scrollTop)).toBeCloseTo(readingOffset, 0);
         await page.getByRole("button", { name: "Scroll to latest" }).waitFor();
         if (progress !== "absent") {
+          await openChatDetails(page);
+          await progressCard.waitFor();
           expect(
             await progressCard.evaluate((element) => (element as HTMLDetailsElement).open),
           ).toBe(progress === "expanded");
+          expect(await thread.evaluate((element) => element.scrollTop)).toBeCloseTo(
+            readingOffset,
+            0,
+          );
+        } else {
+          await openChatDetails(page);
+          expect(await progressCard.count()).toBe(0);
         }
       } finally {
         await suite.closeBrowserContext(context);

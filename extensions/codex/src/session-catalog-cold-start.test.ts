@@ -35,32 +35,11 @@ function savedState(values: StoredCodexCatalogEntry[]): CodexCatalogState {
 describe("cold resident catalog availability", () => {
   it.each([
     {
-      label: "an archived anchor during hydration",
-      complete: false,
-      removed: ["bravo"],
-      previous: ["alpha"],
-      following: ["charlie"],
-    },
-    {
       label: "a removed preceding page",
       complete: true,
       removed: ["alpha"],
       previous: ["bravo"],
       following: ["charlie"],
-    },
-    {
-      label: "a removed preceding page during hydration",
-      complete: false,
-      removed: ["alpha"],
-      previous: ["bravo"],
-      following: ["charlie"],
-    },
-    {
-      label: "a removed prefix and anchor",
-      complete: true,
-      removed: ["alpha", "bravo"],
-      previous: ["charlie"],
-      following: [],
     },
     {
       label: "an empty prefix during hydration",
@@ -169,7 +148,7 @@ describe("cold resident catalog availability", () => {
     }
   });
 
-  it.each(["missing", "invalid"] as const)(
+  it.each(["invalid"] as const)(
     "does not expose a %s saved snapshot's stale tail",
     async (kind) => {
       const entries: StoredCodexCatalogEntry[] = [

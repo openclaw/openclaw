@@ -1,6 +1,10 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type {
+  IsolatedCompletionBoundaryFixture,
+  IsolatedCompletionBoundaryFixtureParams,
+} from "../agents/isolated-completion.adapter.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -229,6 +233,14 @@ export async function createAdmittedHostCapabilityTestFixture(
 ): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
   const fixture = await import("../agents/harness/host-capability.test-support.js");
   return fixture.createAdmittedHostCapabilityTestFixture(...args);
+}
+
+// Load the core fixture only for adapter tests that need the real isolated entrypoint.
+export async function createIsolatedCompletionBoundaryFixture(
+  params: IsolatedCompletionBoundaryFixtureParams,
+): Promise<IsolatedCompletionBoundaryFixture> {
+  const fixture = await import("../agents/isolated-completion.adapter.test-support.js");
+  return fixture.createIsolatedCompletionBoundaryFixture(params);
 }
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;

@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -7,6 +13,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
+  registerAgentRunContextMock,
   resolveConfiguredModelRefMock,
   resolveCronDeliveryPlanMock,
   resolveCronSessionMock,
@@ -37,6 +44,31 @@ describe("cron source delivery policy", () => {
       accountId: "acct-1",
       threadId: "thread-99",
     });
+    const registeredRunIds = new Set<string>();
+    registerAgentRunContextMock.mockImplementation(
+      (...args: Parameters<typeof registerAgentRunContext>) => {
+        const [runId] = args;
+        registeredRunIds.add(runId);
+        expect(getAgentRunContext(runId)).toBeDefined();
+        registerAgentRunContext(...args);
+      },
+    );
+    onTestFinished(() => {
+      for (const runId of registeredRunIds) {
+        clearAgentRunContext(runId);
+      }
+      registerAgentRunContextMock.mockReset();
+    });
+    const embeddedRun = expectDefined(
+      runEmbeddedAgentMock.getMockImplementation(),
+      "embedded result",
+    );
+    runEmbeddedAgentMock.mockImplementationOnce((params) => {
+      expect(getAgentRunContext(params.runId)?.sessionEventDelivery).toBe(
+        row.mode === "none" || row.mode === "webhook" ? false : undefined,
+      );
+      return embeddedRun(params);
+    });
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
@@ -45,7 +77,7 @@ describe("cron source delivery policy", () => {
         }),
       }),
     );
-    expect(result.status).toBe("ok");
+    expect(result.status, result.error).toBe("ok");
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       sourceReplyDeliveryMode: undefined,

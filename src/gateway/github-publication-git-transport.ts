@@ -94,27 +94,21 @@ export function createGitHubPublicationCommandRunner(
     assertCurrent?.();
     return result;
   };
-  const run = async (argv: string[], options: GitCommandOptions = {}) => {
-    const result = await runPublicationCommand(argv, {
-      ...options,
-      operation: gitOperation,
-      beforeRun: assertCurrent,
-    });
-    assertCurrent?.();
-    return result;
-  };
-  return {
-    step,
-    run,
-    require: async (argv: string[], options: GitCommandOptions = {}) => {
-      const result = await requirePublicationCommand(argv, {
+  const guarded =
+    <T>(command: (argv: string[], options: GitCommandOptions) => Promise<T>) =>
+    async (argv: string[], options: GitCommandOptions = {}): Promise<T> => {
+      const result = await command(argv, {
         ...options,
         operation: gitOperation,
         beforeRun: assertCurrent,
       });
       assertCurrent?.();
       return result;
-    },
+    };
+  return {
+    step,
+    run: guarded(runPublicationCommand),
+    require: guarded(requirePublicationCommand),
   };
 }
 

@@ -118,12 +118,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           (guarded.status === "running" && !isWorkboardClaimReclaimable(existingClaim, now)))
           ? existingClaim
           : undefined;
-      if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {
-        throw new Error(
-          guarded.status === "blocked"
-            ? "card is blocked; use workboard_unblock before claiming."
-            : "card dependencies are not done.",
-        );
+      const parentIds = cardParentIds(guarded);
+      if (parentIds.length > 0 && guarded.status !== "ready" && !activeClaim) {
+        if (guarded.status === "blocked") {
+          throw new Error("card is blocked; use workboard_unblock before claiming.");
+        }
+        // Dependency promotion skips review and running cards, so judge the parents.
+        if (!(await this.parentsDone(parentIds))) {
+          throw new Error("card dependencies are not done.");
+        }
       }
       if (guarded.status === "scheduled") {
         throw new Error("card is scheduled for later.");
@@ -198,10 +201,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
       const existing = await this.requireCard(id);
-      const status =
-        input.status === undefined
-          ? existing.status
-          : normalizeStatus(input.status, existing.status);
+      const status = normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
         assertClaimIdentity(claim, input);
@@ -365,10 +365,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const agentId =
         input.agentId === undefined ? existing.agentId : normalizeOptionalString(input.agentId);
-      const status =
-        input.status === undefined
-          ? existing.status
-          : normalizeStatus(input.status, existing.status);
+      const status = normalizeStatus(input.status, existing.status);
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "reassign reason");
       const shouldResetFailures = input.resetFailures !== false;
       const baseMetadata = shouldResetFailures

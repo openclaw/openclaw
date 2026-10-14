@@ -29,7 +29,6 @@ final class CronJobsStore {
     private var refreshTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
-    private var jobsGeneration: UInt64 = 0
     private let gateway: GatewayConnection
     private let interval: TimeInterval = 30
     private let isPreview: Bool
@@ -53,7 +52,6 @@ final class CronJobsStore {
     }
 
     func stop() {
-        self.jobsGeneration &+= 1
         SimpleTaskSupport.stop(task: &self.refreshTask)
         SimpleTaskSupport.stop(task: &self.eventTask)
         SimpleTaskSupport.stop(task: &self.pollTask)
@@ -72,21 +70,19 @@ final class CronJobsStore {
 
     private func loadJobs() async {
         guard !Task.isCancelled else { return }
-        self.jobsGeneration &+= 1
-        let generation = self.jobsGeneration
         let sourceRevision = self.gateway.selectedEndpointRevision
 
         var requestLease: GatewayConnection.ServerLease?
         do {
             let lease = try await self.gateway.acquireServerLease()
             requestLease = lease
-            guard self.ownsJobsRequest(generation, lease: lease) else { return }
+            guard !Task.isCancelled, self.gateway.serverLeaseMatchesCurrentState(lease) else { return }
             self.adoptSource(lease)
             let summary = try await self.gateway.cronSummary(ifCurrentServerLease: lease)
-            guard self.ownsJobsRequest(generation, lease: lease) else { return }
+            guard !Task.isCancelled, self.gateway.serverLeaseMatchesCurrentState(lease) else { return }
             self.cachedSnapshot = Snapshot(source: lease, summary: summary)
         } catch {
-            guard self.jobsGeneration == generation, !Task.isCancelled,
+            guard !Task.isCancelled,
                   requestLease.map(self.gateway.serverLeaseMatchesCurrentState) ??
                   (self.gateway.selectedEndpointRevision == sourceRevision)
             else { return }
@@ -97,7 +93,6 @@ final class CronJobsStore {
     private func handle(delivery: GatewayConnection.PushDelivery) {
         guard let push = delivery.push else {
             guard self.cachedSnapshot?.source == delivery.serverLease else { return }
-            self.jobsGeneration &+= 1
             SimpleTaskSupport.stop(task: &self.refreshTask)
             self.cachedSnapshot = nil
             return
@@ -105,7 +100,6 @@ final class CronJobsStore {
         guard delivery.isCurrent else { return }
         if self.cachedSnapshot?.source != delivery.serverLease {
             self.adoptSource(delivery.serverLease)
-            self.jobsGeneration &+= 1
             self.scheduleRefresh(delayMs: 0)
         }
         switch push {
@@ -130,10 +124,6 @@ final class CronJobsStore {
         }
         self.refreshTask = task
         return task
-    }
-
-    private func ownsJobsRequest(_ generation: UInt64, lease: GatewayConnection.ServerLease) -> Bool {
-        self.jobsGeneration == generation && self.gateway.serverLeaseMatchesCurrentState(lease) && !Task.isCancelled
     }
 
     private func adoptSource(_ lease: GatewayConnection.ServerLease) {

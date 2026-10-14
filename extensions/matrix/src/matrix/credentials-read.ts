@@ -33,6 +33,10 @@ function matrixCredentialsStoreOptions(env: NodeJS.ProcessEnv) {
   };
 }
 
+/**
+ * Retained only for the released synchronous channel-account compatibility callbacks.
+ * @deprecated Use openMatrixCredentialsAsyncStore; removed in the next Plugin SDK major.
+ */
 export function openMatrixCredentialsStore(env: NodeJS.ProcessEnv = process.env) {
   return createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>(
     "matrix",
@@ -44,7 +48,7 @@ export function openMatrixCredentialsAsyncStore(env: NodeJS.ProcessEnv = process
   const options = matrixCredentialsStoreOptions(env);
   const runtime = getOptionalMatrixRuntime();
   return runtime
-    ? runtime.state.openKeyedStore<MatrixCredentialStateRecord>(options)
+    ? runtime.state.openKeyedStoreV2<MatrixCredentialStateRecord>(options)
     : createPluginStateKeyedStore<MatrixCredentialStateRecord>("matrix", options);
 }
 
@@ -68,6 +72,10 @@ export async function loadMatrixCredentialsAsync(
   return decodeMatrixCredentials(stored, accountId);
 }
 
+/**
+ * Retained only for the released synchronous channel-account compatibility callbacks.
+ * @deprecated Use loadMatrixCredentialsAsync; removed in the next Plugin SDK major.
+ */
 export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
@@ -89,18 +97,21 @@ function decodeMatrixCredentials(
   return credentials;
 }
 
-export function clearMatrixCredentials(
+export async function clearMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
-): void {
+): Promise<void> {
   const normalizedAccountId = normalizeAccountId(accountId);
   // Keep a durable revocation marker so doctor cannot resurrect explicitly
   // cleared credentials from a legacy file left by an interrupted migration.
-  openMatrixCredentialsStore(env).register(matrixCredentialsStoreKey(normalizedAccountId), {
-    accountId: normalizedAccountId,
-    kind: "revoked",
-    revokedAt: new Date().toISOString(),
-  });
+  await openMatrixCredentialsAsyncStore(env).register(
+    matrixCredentialsStoreKey(normalizedAccountId),
+    {
+      accountId: normalizedAccountId,
+      kind: "revoked",
+      revokedAt: new Date().toISOString(),
+    },
+  );
 }
 
 export function credentialsMatchConfig(

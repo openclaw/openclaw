@@ -68,17 +68,6 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const config = logbookConfigSchema.parse(api.pluginConfig);
     let service: LogbookService | null = null;
-    let opening: LogbookService | null = null;
-    let generation = 0;
-    let stopping: Promise<void> | undefined;
-    let retired = false;
-    const stopService = () => {
-      generation++;
-      const current = service ?? opening;
-      service = null;
-      opening = null;
-      return (stopping ??= current?.stop());
-    };
 
     const requireService = () => {
       if (!service) {
@@ -135,15 +124,6 @@ export default definePluginEntry({
       id: "logbook",
       apiVersion: 2,
       start: async (ctx) => {
-        if (retired) {
-          throw new Error("Logbook plugin runtime has been retired");
-        }
-        const currentGeneration = ++generation;
-        await stopping;
-        if (retired || currentGeneration !== generation) {
-          return;
-        }
-        stopping = undefined;
         if (!api.runtimeSource) {
           throw new Error("Logbook requires an OpenClaw host with runtime entrypoint metadata");
         }
@@ -158,38 +138,19 @@ export default definePluginEntry({
             pathToFileURL(api.runtimeSource),
           ),
         });
-        opening = next;
         try {
           await next.start();
-          if (retired || currentGeneration !== generation) {
-            await next.stop();
-            return;
-          }
           service = next;
         } catch (error) {
           await next.stop();
           throw error;
-        } finally {
-          if (opening === next) {
-            opening = null;
-          }
         }
       },
-      stop: stopService,
-    });
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "logbook-service",
-      cleanup: ({ reason, sessionKey, runId }) => {
-        // Registry-only retirement does not run service.stop; scoped session cleanup stays local.
-        if (
-          sessionKey === undefined &&
-          runId === undefined &&
-          (reason === "restart" || reason === "disable")
-        ) {
-          retired = true;
-          return stopService();
-        }
-        return undefined;
+      async stop() {
+        // The host joins startup before stop; the service retains admitted database and model work.
+        const current = service;
+        service = null;
+        await current?.stop();
       },
     });
 

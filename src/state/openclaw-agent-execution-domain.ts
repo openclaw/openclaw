@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isPromise } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteCacheDataVersion } from "../infra/sqlite-schema-facts.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   type SqliteWorkerPreparedBackend,
@@ -95,8 +94,6 @@ export function createAgentDatabaseDomainOwner(context: {
     if (!prepared || prepared.id !== input.id || binding) {
       throw new Error("Agent publication module was not prepared for this scope");
     }
-    // Factories can inspect optional tables before starting their first transaction.
-    readSqliteCacheDataVersion(database, "fresh");
     const factory = prepared.factory;
     prepared = undefined;
     failedBinding = true;

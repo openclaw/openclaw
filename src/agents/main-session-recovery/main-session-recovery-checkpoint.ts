@@ -28,7 +28,8 @@ export function selectMainSessionRecoveryCheckpoint(
         replaySafe = false;
         switch (provenance?.kind) {
           case "internal_system":
-            source = "internal_system";
+          case "external_user":
+            source = provenance.kind;
             break;
           case "inter_session":
             source =
@@ -37,9 +38,6 @@ export function selectMainSessionRecoveryCheckpoint(
                 : isCompletionReportInputProvenance(provenance)
                   ? "completion"
                   : "inter_session";
-            break;
-          case "external_user":
-            source = "external_user";
             break;
           default:
             // A later unverified input cannot inherit an earlier human sender's evidence.

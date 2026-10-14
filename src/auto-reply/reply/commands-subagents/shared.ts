@@ -4,11 +4,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ControlledSubagentRunsReadContext } from "../../../agents/subagents/registry/subagent-control-scope.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../../agents/tools/sessions-helpers.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
@@ -81,24 +76,6 @@ export function resolveSubagentEntryForToken(
     ) ??
     fail(`Unknown subagent id: ${trimmed}`)
   );
-}
-
-export function resolveRequesterSessionKey(
-  params: SubagentsCommandParams,
-  opts?: { preferCommandTarget?: boolean },
-): string | undefined {
-  const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
-  const commandSession = normalizeOptionalString(params.sessionKey);
-  const shouldPreferCommandTarget =
-    opts?.preferCommandTarget ?? isNativeCommandTurn(resolveCommandTurnContext(params.ctx));
-  const raw = shouldPreferCommandTarget
-    ? commandTarget || commandSession
-    : commandSession || commandTarget;
-  if (!raw) {
-    return undefined;
-  }
-  const { alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias });
 }
 
 export function buildSubagentsHelp() {

@@ -6,7 +6,7 @@ import { clawWorkspaceActionsById } from "./application-provenance.js";
 import { digestClawBytes } from "./digest.js";
 import type { ClawAddPlan } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
-import { collectClawRollbackFailures } from "./update-rollback.js";
+import { rollbackClawUpdate } from "./update-rollback.js";
 import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   deleteClawWorkspaceFileRecord,
@@ -61,12 +61,7 @@ export async function applyClawWorkspaceUpdate(
   const targetActions = clawWorkspaceActionsById(targetAddPlan.actions);
   const undo: Array<() => Promise<void>> = [];
 
-  const rollback = async () => {
-    const failures = await collectClawRollbackFailures(undo.toReversed());
-    if (failures.length > 0) {
-      throw new ClawWorkspaceUpdateError(failures.join("; "), true);
-    }
-  };
+  const rollback = () => rollbackClawUpdate(undo, ClawWorkspaceUpdateError, true);
 
   try {
     for (const action of actions) {

@@ -32,6 +32,7 @@ import {
   chatSendOwner,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -272,18 +273,21 @@ test("sessions.create commits no session after delegated authority closes", asyn
   const sessionKey = "agent:main:dashboard:authority-race";
   let authorityCurrent = true;
   const firstGuard = createDeferredCore();
+  const context = {
+    validateAgentRuntimeApprovalAuthority: () => {
+      firstGuard.resolve();
+      return authorityCurrent;
+    },
+  };
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
 
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => {
-          firstGuard.resolve();
-          return authorityCurrent;
-        },
-      },
+      context,
       client: {
         connect: { scopes: ["operator.write"] },
         internal: {
@@ -354,18 +358,29 @@ test("sessions.create commits no child after its worker turn closes", async () =
     runId: "worker-run",
     owner: { kind: "worker", environmentId: "worker-environment", ownerEpoch: 7 },
   });
-  const firstGuard = createDeferredCore();
+  const context = {};
+  const listed = await directSessionReq("sessions.list", {}, { context });
+  expect(listed.ok, JSON.stringify(listed.error)).toBe(true);
+  const readStarted = createDeferredCore();
+  const readEntry = sessionStoreWorker.loadGatewaySessionEntryReadOnlyInWorker;
+  const lookup = vi
+    .spyOn(sessionStoreWorker, "loadGatewaySessionEntryReadOnlyInWorker")
+    .mockImplementation((input) => {
+      const reading = readEntry(input);
+      readStarted.resolve();
+      return reading;
+    });
   const { releaseWriter, heldWriter } = await holdSessionWriter(storePath);
   const creating = directSessionReq(
     "sessions.create",
     { agentId: "main", key: sessionKey },
     {
+      context,
       sessionMutationAuthorization: {
         assertCurrent: () => {
           if (!placements.validateTurnClaim(turnClaim)) {
             throw new Error("worker turn authority changed");
           }
-          firstGuard.resolve();
         },
         assertTargetCurrent: vi.fn(),
       },
@@ -375,7 +390,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
   const rejected = expect(creating).rejects.toThrow("worker turn authority changed");
 
   try {
-    await firstGuard.promise;
+    await awaitGateBeforeSettlement(readStarted.promise, creating, "Session read was not queued");
     await placements.releaseTurn(turnClaim);
     releaseWriter.resolve();
     await heldWriter;
@@ -385,6 +400,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
   } finally {
     releaseWriter.resolve();
     await Promise.allSettled([heldWriter, creating]);
+    lookup.mockRestore();
   }
 });
 

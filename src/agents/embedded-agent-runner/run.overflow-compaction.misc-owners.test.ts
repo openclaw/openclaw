@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { markAuthProfileSuccess } from "../auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearAllRuntimeAuthMaterializations,
   getPreparedRuntimeAuthMaterializations,
@@ -42,6 +43,10 @@ describe("markEmbeddedRunAuthProfileSuccess", () => {
 });
 
 describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
+  beforeEach(() => {
+    prepareSharedAuthStoreOwnershipForNative();
+  });
+
   const profileStore = {
     version: 1 as const,
     profiles: {

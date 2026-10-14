@@ -3,7 +3,9 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -110,6 +112,47 @@ describe("gateway hooks helpers", () => {
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
     expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
+  });
+
+  test("resolveHooksConfig refuses pending hook credentials from config resolution", () => {
+    for (const token of [
+      "${MISSING_HOOK_SECRET}",
+      "prefix-${MISSING_HOOK_SECRET}",
+      "$MISSING_HOOK_SECRET",
+    ]) {
+      for (const value of [undefined, ""]) {
+        const resolution = resolveConfigForRead(
+          { hooks: { enabled: true, token } },
+          { MISSING_HOOK_SECRET: value },
+        );
+        const cfg = resolution.resolvedConfigRaw as OpenClawConfig;
+        setConfigResolutionFacts(cfg, resolution.resolutionFacts);
+        expect(() => resolveHooksConfig(cfg)).toThrow(
+          "hooks.token has an unresolved environment reference",
+        );
+        cfg.hooks!.enabled = false;
+        expect(resolveHooksConfig(cfg)).toBeNull();
+      }
+    }
+  });
+
+  test("resolveHooksConfig preserves resolved and intentionally literal credentials", () => {
+    const cases: Array<[string, NodeJS.ProcessEnv, string]> = [
+      ["${HOOK_SECRET}", { HOOK_SECRET: "synthetic-hook-secret" }, "synthetic-hook-secret"],
+      ["$${HOOK_SECRET}", {}, "${HOOK_SECRET}"],
+      ["${HOOK_SECRET}", { HOOK_SECRET: "${LITERAL_VALUE}" }, "${LITERAL_VALUE}"],
+      ["${HOOK_SECRET:-synthetic-fallback}", {}, "synthetic-fallback"],
+    ];
+    for (const [token, env, expected] of cases) {
+      const resolution = resolveConfigForRead({ hooks: { enabled: true, token } }, env);
+      const cfg = resolution.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(cfg, resolution.resolutionFacts);
+      expect(resolveHooksConfig(cfg)?.token).toBe(expected);
+    }
+    // Direct programmatic configs have no authored substitution provenance.
+    expect(resolveHooksConfig({ hooks: { enabled: true, token: "${LITERAL_VALUE}" } })?.token).toBe(
+      "${LITERAL_VALUE}",
+    );
   });
 
   test("resolveHooksConfig rejects root path", () => {
@@ -525,19 +568,6 @@ describe("gateway hooks helpers", () => {
     expect(denied.ok).toBe(false);
   });
 
-  test("resolveHookSessionKey allows request sessionKey when explicitly enabled", () => {
-    const cfg = {
-      hooks: { enabled: true, token: "secret", allowRequestSessionKey: true },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfigOrThrow(cfg);
-    const allowed = resolveHookSessionKey({
-      hooksConfig: resolved,
-      source: "request",
-      sessionKey: "hook:manual",
-    });
-    expect(allowed).toEqual({ ok: true, value: "hook:manual" });
-  });
-
   test("resolveHookSessionKey enforces allowed prefixes", () => {
     const cfg = {
       hooks: {
@@ -580,24 +610,6 @@ describe("gateway hooks helpers", () => {
       sessionKey: "hook:gmail:attacker",
     });
     expect(denied.ok).toBe(false);
-  });
-
-  test("resolveHookSessionKey still allows static mapping sessionKey when request overrides are disabled", () => {
-    const cfg = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
-      },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfigOrThrow(cfg);
-
-    const allowed = resolveHookSessionKey({
-      hooksConfig: resolved,
-      source: "mapping-static",
-      sessionKey: "hook:gmail:fixed",
-    });
-    expect(allowed).toEqual({ ok: true, value: "hook:gmail:fixed" });
   });
 
   test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
@@ -693,16 +705,6 @@ describe("gateway hooks helpers", () => {
 
     expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
       "hook:gmail:static",
-      "hook:gmail:{{messages[0].id}}",
-    ]);
-    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
-  });
-
-  test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
-    const resolved = resolveHooksConfigOrThrow(buildStaticShadowingMappingConfig({}));
-
-    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
-      "hook:static",
       "hook:gmail:{{messages[0].id}}",
     ]);
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();

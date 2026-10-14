@@ -1,3 +1,4 @@
+import "./test-helpers.mocks.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,10 +33,7 @@ import type {
 } from "../infra/worker-task-pool.resources.test-support.js";
 import { registerMemoryCapability } from "../plugins/memory-state.js";
 import { disposePluginRegistryInstances, requireActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  beginAgentDeletionJournal,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -45,6 +43,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
@@ -298,8 +297,9 @@ describe("agent database recreation product proof", () => {
           }
         } finally {
           releaseRead.resolve();
+          // The body observes read failures; cleanup must preserve an earlier failure.
+          await pendingRead.catch(() => {});
           await readers.close();
-          await pendingRead;
         }
 
         await expect(
@@ -413,7 +413,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
                 },
               };
               let memoryCloses = 0;
-              const createMemory = await createGatewayMemoryCloseRegistryFactory(memoryConfig);
+              const createMemory = createGatewayMemoryCloseRegistryFactory(memoryConfig);
               const memory = createMemory(async () => {
                 memoryCloses += 1;
               });

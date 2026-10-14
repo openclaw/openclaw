@@ -135,20 +135,14 @@ export function queryWindowsRegistryValue(
 }
 
 function getRegistryProgramFilesRoots(): Partial<WindowsInstallRoots> {
+  const readRoot = (valueName: string) =>
+    normalizeWindowsInstallRoot(
+      queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, valueName) ?? undefined,
+    ) ?? undefined;
   return {
-    programFiles:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir") ?? undefined,
-      ) ?? undefined,
-    programFilesX86:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)") ??
-          undefined,
-      ) ?? undefined,
-    programW6432:
-      normalizeWindowsInstallRoot(
-        queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir") ?? undefined,
-      ) ?? undefined,
+    programFiles: readRoot("ProgramFilesDir"),
+    programFilesX86: readRoot("ProgramFilesDir (x86)"),
+    programW6432: readRoot("ProgramW6432Dir"),
   };
 }
 

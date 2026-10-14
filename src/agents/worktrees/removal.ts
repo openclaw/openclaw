@@ -7,7 +7,6 @@ import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
-import { repairWorktreePackIndex } from "./git-maintenance.js";
 import { commandError, requireGit } from "./git.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -159,11 +158,6 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
-    timing?.markRemovalStage("packRepair");
-    await repairWorktreePackIndex(record.repoRoot, {
-      signal: params.signal,
-      commitGuard: params.commitGuard,
-    });
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;

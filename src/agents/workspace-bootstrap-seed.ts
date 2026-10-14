@@ -102,6 +102,7 @@ async function seedWorkspaceBootstrapOwned(
   }
 
   if (!created) {
+    const readOptions = { filePath: bootstrapPath, workspaceDir: dir, useCache: false };
     const statExistingBootstrap = () =>
       fs.stat(bootstrapPath).catch((error: unknown) => {
         throw new WorkspaceBootstrapSeedConflictError(
@@ -112,11 +113,7 @@ async function seedWorkspaceBootstrapOwned(
     await retryAsync(
       async () => {
         const statBefore = await statExistingBootstrap();
-        const existing = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
+        const existing = await readWorkspaceFileWithGuards(readOptions);
         if (!existing.ok) {
           throw new WorkspaceBootstrapSeedConflictError(
             "Existing BOOTSTRAP.md could not be read safely.",
@@ -138,11 +135,7 @@ async function seedWorkspaceBootstrapOwned(
             "Existing BOOTSTRAP.md write has not stabilized.",
           );
         }
-        const stable = await readWorkspaceFileWithGuards({
-          filePath: bootstrapPath,
-          workspaceDir: dir,
-          useCache: false,
-        });
+        const stable = await readWorkspaceFileWithGuards(readOptions);
         if (!stable.ok || !Buffer.from(stable.content, "utf8").equals(params.content)) {
           throw new WorkspaceBootstrapSeedConflictError(
             "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",

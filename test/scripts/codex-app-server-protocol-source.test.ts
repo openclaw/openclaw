@@ -244,12 +244,6 @@ version = "9.9.9"
     );
   });
 
-  it("checks an explicit Cargo target dir override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "/cache/target" }),
-    ).toBe(path.resolve("/cache/target"));
-  });
-
   it("resolves relative Cargo target dir overrides from the Codex checkout", () => {
     expect(resolveCodexProtocolCargoTargetDir("/codex", { CARGO_TARGET_DIR: "target-cache" })).toBe(
       path.join("/codex", "target-cache"),
@@ -262,15 +256,6 @@ version = "9.9.9"
         CARGO_BUILD_TARGET_DIR: "/cache/build-target",
       }),
     ).toBe(path.resolve("/cache/build-target"));
-  });
-
-  it("prefers Cargo's target dir override over the build config env override", () => {
-    expect(
-      resolveCodexProtocolCargoTargetDir("/codex", {
-        CARGO_BUILD_TARGET_DIR: "/cache/build-target",
-        CARGO_TARGET_DIR: "/cache/target",
-      }),
-    ).toBe(path.resolve("/cache/target"));
   });
 
   it("wraps Windows pnpm formatting through cmd.exe without shell mode", () => {

@@ -36,6 +36,18 @@ function parseArrayLeafTarget(
   return { array: cursor, index: requireArrayIndexSegment(String(leaf), segments.join(".")) };
 }
 
+function setLeafValueIfChanged<Key extends string | number>(
+  target: Record<Key, unknown>,
+  key: Key,
+  value: unknown,
+): boolean {
+  if (isDeepStrictEqual(target[key], value)) {
+    return false;
+  }
+  target[key] = value;
+  return true;
+}
+
 function traverseToLeafParent(params: {
   root: unknown;
   segments: string[];
@@ -150,20 +162,12 @@ export function setPathCreateStrict(
   }
   const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
   if (arrayTarget) {
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      changed = true;
-    }
-    return changed;
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value) || changed;
   }
   if (!isRecord(cursor) || typeof leaf !== "string") {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    changed = true;
-  }
-  return changed;
+  return setLeafValueIfChanged(cursor, leaf, value) || changed;
 }
 
 /**
@@ -183,11 +187,7 @@ export function setPathExistingStrict(
     if (arrayTarget.index < 0 || arrayTarget.index >= arrayTarget.array.length) {
       throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
     }
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      return true;
-    }
-    return false;
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value);
   }
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
@@ -195,11 +195,7 @@ export function setPathExistingStrict(
   if (!Object.hasOwn(cursor, leaf)) {
     throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    return true;
-  }
-  return false;
+  return setLeafValueIfChanged(cursor, leaf, value);
 }
 
 /**

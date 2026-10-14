@@ -72,7 +72,11 @@ function describeExclusion(params: {
   const label = params.event.step.label;
   const listed = findAgent(params.config, params.agentId);
   const agent = listed?.entry.tools
-    ? { path: `${listed.path}.tools`, tools: listed.entry.tools }
+    ? {
+        path: `${listed.path}.tools`,
+        profile: listed.entry.tools.profile,
+        ownsAlsoAllow: Array.isArray(listed.entry.tools.alsoAllow),
+      }
     : undefined;
   const globalProvider = providerPolicyPath({
     tools: params.config.tools,
@@ -80,43 +84,35 @@ function describeExclusion(params: {
     capabilityProfile: params.capabilityProfile,
   });
   const agentProvider = providerPolicyPath({
-    tools: agent?.tools,
+    tools: listed?.entry.tools,
     basePath: agent?.path ?? "agents.entries.*.tools",
     capabilityProfile: params.capabilityProfile,
   });
 
-  if (label.startsWith("tools.profile")) {
-    const policyPath = agent?.tools.profile ? agent.path : "tools";
-    const source = `${policyPath}.profile`;
-    const grantOwner = Array.isArray(agent?.tools.alsoAllow)
-      ? agent.path
-      : Array.isArray(params.config.tools?.alsoAllow)
-        ? "tools"
-        : policyPath;
-    return {
-      source,
-      detail: `${source}: ${JSON.stringify(params.capabilityProfile.policy.profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
-      fix: `Add ${grantOwner}.alsoAllow: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`,
-    };
-  }
-
-  if (label.startsWith("tools.byProvider.profile")) {
-    const policyPath = agentProvider?.profile ? agentProvider.path : globalProvider?.path;
+  const providerProfile = label.startsWith("tools.byProvider.profile");
+  if (providerProfile || label.startsWith("tools.profile")) {
+    const scopes = providerProfile
+      ? [agentProvider, globalProvider]
+      : [
+          agent,
+          {
+            path: "tools",
+            profile: params.config.tools?.profile,
+            ownsAlsoAllow: Array.isArray(params.config.tools?.alsoAllow),
+          },
+        ];
+    const policyPath = scopes[0]?.profile ? scopes[0].path : scopes[1]?.path;
     const source = policyPath ? `${policyPath}.profile` : "tools.byProvider.profile";
-    const grantOwner = agentProvider?.ownsAlsoAllow
-      ? agentProvider.path
-      : globalProvider?.ownsAlsoAllow
-        ? globalProvider.path
-        : policyPath;
-    const grant = policyPath
-      ? `${grantOwner}.alsoAllow`
-      : "the matching tools.byProvider alsoAllow";
+    const grantOwner = scopes.find((scope) => scope?.ownsAlsoAllow)?.path ?? policyPath;
+    const profile = providerProfile
+      ? params.capabilityProfile.policy.providerProfile
+      : params.capabilityProfile.policy.profile;
     return {
       source,
-      detail: `${source}: ${JSON.stringify(params.capabilityProfile.policy.providerProfile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
+      detail: `${source}: ${JSON.stringify(profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
       fix: policyPath
-        ? `Add ${grant}: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`
-        : `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to ${grant} list.`,
+        ? `Add ${grantOwner}.alsoAllow: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`
+        : `Add ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} to the matching tools.byProvider alsoAllow list.`,
     };
   }
 
@@ -130,14 +126,6 @@ function describeExclusion(params: {
       : label
           .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
           .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
-  if (!isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { deny: params.event.policy.deny })) {
-    const source = normalizedLabel.replace(/\.allow$/, ".deny");
-    return {
-      source,
-      detail: `${source} denies ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
-      fix: `Remove the matching ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} deny entry from ${source}.`,
-    };
-  }
   return {
     source: normalizedLabel,
     detail: `${normalizedLabel} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
@@ -196,6 +184,21 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     return null;
   }
   const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: params.config,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  // A deny is an intentional opt-out, even when a profile excludes the tool first.
+  if (
+    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
+      deny: capabilityProfile.policy.explicitToolDenylist,
+    })
+  ) {
+    return null;
+  }
   const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
   const sandbox = resolveSandboxConfigForAgent(params.config, agentId);
   const constructionBlock = resolveSkillWorkshopToolConstructionBlock({
@@ -215,13 +218,6 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
       message: `${prefix} ${detail} ${constructionBlock.fix}`,
     };
   }
-  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
-  const capabilityProfile = resolveConversationCapabilityProfile({
-    config: params.config,
-    agentId,
-    modelProvider: model.provider,
-    modelId: model.model,
-  });
   const availability = resolveSkillWorkshopToolPolicyAvailability({
     config: params.config,
     conversationCapabilityProfile: capabilityProfile,

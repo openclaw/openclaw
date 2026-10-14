@@ -481,7 +481,9 @@ suite.define(() => {
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("0");
       expect(await pullLink.getAttribute("aria-haspopup")).toBeNull();
       await captureArtifact(page, "github-hovercard-pending-silent");
-      expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+      expect(
+        await page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count(),
+      ).toBe(0);
       expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
       expect(await pullLink.getAttribute("title")).toBeFalsy();
       expect(await pullLink.getAttribute("href")).toBe(PULL_HREF);
@@ -609,7 +611,9 @@ suite.define(() => {
     expect(await externalLink.getAttribute("href")).toBe(PULL_HREF);
     expect(await page.locator("body").getAttribute("data-preview-empty-mounts")).toBe("0");
     expect(await page.locator("body").getAttribute("data-title-tooltip-mounts")).toBe("0");
-    expect(await page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    expect(
+      await page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count(),
+    ).toBe(0);
     expect((await gateway.getRequests("forge.preview")).length).toBe(1);
     expect(await pullLink.getAttribute("aria-haspopup")).toBe("dialog");
 
@@ -778,7 +782,9 @@ suite.define(() => {
     await expectText(card, "−12");
     await page.clock.runFor(300);
     await captureArtifact(page, "github-hovercard-title-tooltip");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     expect(await pullLink.getAttribute("title")).toBeNull();
     await expect.poll(() => card.locator("img").count()).toBe(4);
     expect(await previewRequestsFor(99816)).toHaveLength(1);
@@ -794,7 +800,9 @@ suite.define(() => {
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");
     await expectText(card, "Comments: 4");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect(await previewRequestsFor(99815)).toHaveLength(1);
 
@@ -812,7 +820,11 @@ suite.define(() => {
     const fileLink = page.getByRole("link", { name: "SKILL.md" });
     await fileLink.hover();
     await expect
-      .poll(() => page.locator("openclaw-tooltip[open]").textContent())
+      .poll(() =>
+        page
+          .locator("openclaw-tooltip .tooltip-surface[popover]:popover-open .tooltip-content")
+          .textContent(),
+      )
       .toContain("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const missingLink = page.getByRole("link", { name: "missing item" });
@@ -837,7 +849,9 @@ suite.define(() => {
 
     await pullLink.focus();
     await expectText(card, "Merged");
-    await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
+    await expect
+      .poll(() => page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").count())
+      .toBe(0);
     await page.keyboard.press("Escape");
     await expect.poll(() => card.count()).toBe(0);
     await expect

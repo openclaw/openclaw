@@ -1,9 +1,9 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import {
   SessionRowFactsPending,
@@ -24,6 +24,7 @@ export function createSessionRowRelationReads(owner: {
   env: NodeJS.ProcessEnv;
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   isReady: () => boolean;
+  assertCurrent: () => void;
   preparedContext: () => SessionRowReadView["state"]["rowContext"] | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
@@ -39,10 +40,7 @@ export function createSessionRowRelationReads(owner: {
       if (!owner.isReady()) {
         return undefined;
       }
-      const binding = captureIncognitoSessionBinding({
-        ...query,
-        sessionKey: query.key,
-      });
+      const memory = getSessionActorStorageBinding({});
       return owner.inOwnerContext(() => {
         const { key, value: entry } = selectStoredSessionLineage({
           cfg: owner.config(),
@@ -53,23 +51,14 @@ export function createSessionRowRelationReads(owner: {
               const row = owner.lookup({ ...query, agentId, key: storedKey });
               return row?.key === storedKey ? row.sharingEntry : undefined;
             }
-            if (binding && binding.actor.agentId === agentId) {
-              binding.admissionSignal?.throwIfAborted();
-              binding.actor.assertReadable();
-              return binding.actor.sessions.readSharing(storedKey)?.entry;
-            }
-            const database = getOpenIncognitoAgentDatabase(
-              agentId,
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: owner.env }),
+            const selected = captureSessionActorStorageOwner(
+              { agentId, sessionKey: storedKey, sessionActor: memory, env: owner.env },
+              memory?.authority ?? {
+                assertCurrent: owner.assertCurrent,
+                authorize: owner.assertCurrent,
+              },
             );
-            try {
-              return (
-                database && readCommittedIncognitoSessionSharing(database.db, storedKey)?.entry
-              );
-            } catch {
-              // A pending private write cannot supply optional display enrichment yet.
-              return undefined;
-            }
+            return selected?.owner?.readSession(storedKey, selected.authority)?.entry;
           },
         });
         if (!entry) {
@@ -191,7 +180,6 @@ export function createSessionRowAncestorReads(owner: {
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
   prepareSelection: () => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
-  assertExactRowsPrepared: (queries: readonly records.Lookup[]) => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
@@ -297,7 +285,6 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
-                owner.assertExactRowsPrepared(targets);
                 return consume(read);
               },
               options?.selection ? owner.prepareSelection : undefined,

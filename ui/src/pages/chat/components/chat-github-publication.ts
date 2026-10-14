@@ -1,15 +1,18 @@
-import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import {
   personalGitHubPublicationSelection,
   selectedGitHubPublisher,
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-controller.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
+
+registerGitHubEnglish();
 
 function sourceLabel(source: string): string {
   return t(
@@ -21,7 +24,29 @@ function sourceLabel(source: string): string {
   );
 }
 
-export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
+function sharedUnavailableMessage(
+  reason: NonNullable<GitHubPublicationView["options"]>["sharedUnavailableReason"],
+): string {
+  switch (reason) {
+    case "unavailable":
+      return t("githubPublication.sharedUnavailable.unavailable");
+    case "changed":
+      return t("githubPublication.sharedUnavailable.changed");
+    case "rate_limited":
+      return t("githubPublication.sharedUnavailable.rate_limited");
+    case "unverified":
+      return t("githubPublication.sharedUnavailable.unverified");
+    case "unsupported_workspace":
+      return t("githubPublication.sharedUnavailable.unsupported_workspace");
+    default:
+      return t("githubPublication.sharedUnavailable.unknown");
+  }
+}
+
+export function renderGitHubPublicationAction(
+  publication: GitHubPublicationView,
+  presented: PresentationValue = true,
+) {
   if (publication.result?.status === "published") {
     return html`<a
         class="chat-pr__create"
@@ -45,6 +70,13 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
           : nothing
       }`;
   }
+  // Nothing can be published without discovered accounts; offer a retry, not a dead button.
+  if (publication.optionsUnavailable) {
+    return renderPublicationRefresh(
+      publication,
+      `${t("githubPublication.statusUnavailable")}: ${publication.error}`,
+    );
+  }
   const personal = personalGitHubPublicationSelection(publication.options);
   const shared = publication.options?.shared;
   if (publication.result || publication.locked || !publication.onSelect || !shared || !personal) {
@@ -56,47 +88,18 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
   ];
   return html`
     ${renderPublicationButton(publication)}
-    <wa-dropdown
-      class="chat-pr__accounts"
-      placement="top-end"
-      aria-label=${t("githubPublication.account")}
-      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        const source = event.detail.item.value;
-        if (source === "shared" || source === "personal") {
-          publication.onSelect?.(source);
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        class="btn btn--ghost btn--icon chat-icon-btn"
-        type="button"
-        aria-label=${t("githubPublication.account")}
-        ?disabled=${publication.activity !== null}
-      >
-        ${icons.chevronDown}
-      </button>
-      ${choices.map(({ source, account, label }) => {
-        const selected = publication.selection?.source === source;
-        return html`
-          <wa-dropdown-item
-            class="session-menu__item"
-            value=${source}
-            role="menuitemradio"
-            aria-checked=${String(selected)}
-            ?disabled=${publication.activity !== null}
-            ${ref((element) => syncDropdownItemRadio(element, selected))}
-          >
-            <span class="session-menu__text"
-              >@${account.login}${shared.login === personal.account.login ? html` · ${label}` : nothing}</span
-            >
-            <span slot="details" class="session-menu__icon" aria-hidden="true">
-              ${selected ? icons.check : nothing}
-            </span>
-          </wa-dropdown-item>
-        `;
-      })}
-    </wa-dropdown>
+    ${solidContent(GitHubPublicationMenu, {
+      choices: choices.map(({ source, account, label }) => ({
+        source,
+        login: account.login,
+        label,
+      })),
+      selected: publication.selection?.source,
+      duplicateLogin: shared.login === personal.account.login,
+      busy: publication.activity !== null,
+      presented,
+      onSelect: (source: "shared" | "personal") => publication.onSelect?.(source),
+    })}
   `;
 }
 
@@ -173,9 +176,9 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
     : nothing;
 }
 
-function renderPublicationRefresh(publication: GitHubPublicationView) {
+function renderPublicationRefresh(publication: GitHubPublicationView, tooltip?: string) {
   const label = t("githubPublication.refresh");
-  return html`<openclaw-tooltip content=${label}>
+  return html`<openclaw-tooltip content=${tooltip ?? label}>
     <button
       class="btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
       type="button"
@@ -247,7 +250,8 @@ export function renderGitHubPublicationDetails(
 ) {
   const { result, confirmation, activity, locked, error, options } = publication;
   const selection = publicationButtonSelection(publication);
-  if (result?.status === "published" && !error) {
+  // The row action already carries the retry and the reason.
+  if ((result?.status === "published" && !error) || publication.optionsUnavailable) {
     return nothing;
   }
   const busy = activity !== null;
@@ -269,6 +273,7 @@ export function renderGitHubPublicationDetails(
   const refresh =
     !busy &&
     (error ||
+      noAccount ||
       result?.status === "failed" ||
       (result?.status === "needs_confirmation" && !publication.onConfirm));
   const more =
@@ -303,7 +308,14 @@ export function renderGitHubPublicationDetails(
           : nothing
     }
     ${refresh ? renderPublicationRefresh(publication) : nothing}
-    ${noAccount ? html`<span class="chat-pr__publication-note">${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
+    ${
+      noAccount
+        ? html`<span class="chat-pr__publication-note"
+            >${sharedUnavailableMessage(options.sharedUnavailableReason)}
+            ${options.personal === null ? t("githubPublication.unidentified") : nothing}</span
+          >`
+        : nothing
+    }
     ${
       confirmation
         ? html`<div class="chat-pr__publication-note">

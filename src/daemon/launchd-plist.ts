@@ -103,17 +103,14 @@ export function resolveGeneratedEnvWrapperLayout(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): { envFilePath: string; commandStartIndex: number } | null {
-  if (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL) {
-    const wrapperPath = programArguments[1];
-    const envFilePath = programArguments[2];
+  for (const wrapperIndex of programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL
+    ? [1, 0]
+    : [0]) {
+    const wrapperPath = programArguments[wrapperIndex];
+    const envFilePath = programArguments[wrapperIndex + 1];
     if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-      return { envFilePath, commandStartIndex: 3 };
+      return { envFilePath, commandStartIndex: wrapperIndex + 2 };
     }
-  }
-  const wrapperPath = programArguments[0];
-  const envFilePath = programArguments[1];
-  if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
-    return { envFilePath, commandStartIndex: 2 };
   }
   return null;
 }

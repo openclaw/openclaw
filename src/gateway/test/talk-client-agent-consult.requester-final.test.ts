@@ -79,11 +79,14 @@ function createRunner(isRunCurrent: (runId: string) => boolean = () => true) {
       sessionKey: "main",
       canonicalKey: "agent:researcher:talk",
       storePath: "/tmp/sessions",
+      assertCurrent: vi.fn(),
     },
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
-    registerRun: vi.fn(),
-    isRunCurrent,
+    registerRun: vi.fn(async ({ runId }) => ({
+      release: vi.fn(),
+      isCurrent: () => isRunCurrent(runId),
+    })),
   });
 }
 
@@ -104,7 +107,11 @@ describe("Talk requester-final consult ownership", () => {
     );
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
-      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 60_000 });
+      await params.onRunStarted?.({
+        runId: "run-talk",
+        sessionId: "session-talk",
+        timeoutMs: 60_000,
+      });
       await params.agentRuntime.runEmbeddedAgent(coreParams);
       return { text: "done" };
     });

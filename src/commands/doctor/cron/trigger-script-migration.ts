@@ -244,13 +244,12 @@ export function migrateLegacyCronTriggerScript(script: string): TriggerScriptMig
     if (!declaration || declaration === node) {
       continue;
     }
-    const result = parent;
     const details = ancestors.at(-2);
     if (
-      !isNamedMember(result, "result") ||
-      result.object !== node ||
+      !isNamedMember(parent, "result") ||
+      parent.object !== node ||
       !isNamedMember(details, "details") ||
-      details.object !== result
+      details.object !== parent
     ) {
       return { kind: "unsupported" };
     }

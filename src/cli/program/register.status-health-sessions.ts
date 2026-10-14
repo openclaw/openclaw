@@ -5,7 +5,7 @@ import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { throwExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import type { SessionsImportOptions } from "../sessions-import.js";
 
@@ -24,10 +24,6 @@ const SESSIONS_PARENT_OPTION_FLAGS = {
   limit: "--limit",
 } satisfies Record<keyof SessionsListCliOptions, string>;
 
-function throwSessionsCliError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
 function rejectUnsupportedSessionsParentOptions(
   subcommand: string,
   parentOpts: SessionsListCliOptions | undefined,
@@ -44,7 +40,7 @@ function rejectUnsupportedSessionsParentOptions(
     return;
   }
   const plural = unsupportedFlags.length > 1 ? "options" : "option";
-  throwSessionsCliError(
+  throwExpectedCliError(
     `\`sessions ${subcommand}\` does not support the parent \`sessions\` ${plural} ${unsupportedFlags.join(", ")}; ${reason}.`,
   );
 }
@@ -183,14 +179,12 @@ function registerSessionsLifecycleCommand(
       );
       const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
-        throwSessionsCliError("--timeout must be a positive integer (milliseconds).");
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const lifecycleCommands = await import("../../commands/sessions-lifecycle.js");
-        const handler = destructive
-          ? lifecycleCommands.sessionsDeleteCommand
-          : lifecycleCommands.sessionsArchiveCommand;
-        await handler(
+        const { sessionsLifecycleCommand } = await import("../../commands/sessions-lifecycle.js");
+        await sessionsLifecycleCommand(
+          operation,
           {
             ...opts,
             keys,
@@ -504,11 +498,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
       const maxLines = parseStrictPositiveInteger(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
-        throwSessionsCliError("--max-lines must be a positive integer.");
+        throwExpectedCliError("--max-lines must be a positive integer.");
       }
       const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
-        throwSessionsCliError("--timeout must be a positive integer (milliseconds).");
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { sessionsCompactCommand } = await import("../../commands/sessions-compact.js");

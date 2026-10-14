@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { joinJsonlFrames, claudeStreamEvent, claudeTextDelta } from "./cli-output.test-helpers.js";
 
@@ -47,6 +47,9 @@ function toolStart(id = "tool-1", index?: number) {
       ...(index === undefined ? {} : { input: {} }),
     },
   });
+}
+function itemMessage(text: string) {
+  return { type: "item.completed", item: { type: "agent_message", text } };
 }
 function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
   return {
@@ -240,6 +243,69 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
+      name: "raw tool protocol",
+      text: '<invoke name="Bash">\n<parameter name="command">echo 1</parameter>\n</invoke>',
+      rejected: true,
+    },
+    {
+      name: "incomplete tool protocol",
+      text: '<invoke name="Bash">\n<parameter name="command">echo 1',
+      rejected: true,
+    },
+    {
+      name: "incomplete opening tag",
+      text: '<invoke name="Ba',
+      rejected: true,
+    },
+    {
+      name: "plain prose",
+      text: "partial answer",
+      rejected: false,
+    },
+    {
+      name: "fenced example",
+      text: 'Example:\n```xml\n<invoke name="Bash">\n<parameter name="command">echo 1',
+      rejected: false,
+    },
+    {
+      name: "first-line indented example",
+      text: '    <invoke name="Bash">\n    <parameter name="command">echo 1',
+      rejected: false,
+    },
+  ])("retains only usable interrupted $name without synthetic callbacks", ({ text, rejected }) => {
+    const parseJsonlEvent = vi.fn(() => null);
+    const parser = createClaudeParser({ parseJsonlEvent });
+    const frame = claudeTextDelta(text);
+    finishFrames(parser, frame);
+    expect(parser.hasTerminalResult()).toBe(false);
+    expect(parser.getOutput()).toMatchObject({ text: rejected ? "" : text.trim() });
+    expect(parser.getOutput()?.errorText).toEqual(rejected ? expect.any(String) : undefined);
+    expect(parseJsonlEvent).toHaveBeenCalledOnce();
+    expect(parseJsonlEvent).toHaveBeenCalledWith(
+      JSON.stringify(frame),
+      expect.objectContaining({ backendId: "claude-cli" }),
+    );
+  });
+
+  it("keeps incomplete tool markup in a completed explanation", () => {
+    const text = 'Example:\n<invoke name="Bash">\n<parameter name="command">echo 1';
+    const parser = createClaudeParser();
+    finishFrames(parser, claudeTextDelta(text), result(text));
+    expect(parser.getOutput()).toMatchObject({ text });
+    expect(parser.getOutput()?.errorText).toBeUndefined();
+  });
+
+  it("rejects interrupted protocol projected by a custom Claude parser", () => {
+    const text = '<invoke name="Bash">\n<parameter name="command">echo 1';
+    const parser = createClaudeParser({
+      parseJsonlEvent: () => ({ kind: "text", text }),
+    });
+    finishFrames(parser, { type: "custom-assistant", text });
+    expect(parser.getOutput()).toMatchObject({ text: "", errorText: expect.any(String) });
+  });
+
+  it.each([
+    {
       name: "no result envelope",
       frames: [claudeTextDelta("hello")],
       expectedText: "hello",
@@ -260,6 +326,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "toolless closer after tool-using message",
@@ -274,6 +341,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nAfter.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "existing newlines at message boundaries",
@@ -286,6 +354,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "tool split after an ordinary boundary",
@@ -300,6 +369,7 @@ describe("createCliJsonlStreamingParser", () => {
         result("DONE"),
       ],
       expectedText: "Before.\n\nDONE",
+      expectedRawFinalText: "DONE",
     },
     {
       name: "fresh message starting with a tool call",
@@ -340,25 +410,100 @@ describe("createCliJsonlStreamingParser", () => {
       frames: [claudeTextDelta("draft wording"), result("authoritative result")],
       expectedText: "authoritative result",
     },
-  ])("resolves streamed/result precedence for $name", ({ frames, expectedText, checkDelta }) => {
-    const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
-    const sessionIds: string[] = [];
-    const parser = createParser({
-      onAssistantDelta: (delta) => deltas.push(delta),
-      onSessionId: (id) => sessionIds.push(id),
-    });
-    finishFrames(parser, init("session-stream"), ...frames);
-    expect(parser.getOutput()).toEqual({
-      text: expectedText,
-      sessionId: "session-stream",
-      usage: undefined,
-    });
-    if (checkDelta) {
-      expect(deltas).toEqual([
-        { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
-      ]);
-      expect(sessionIds).toEqual(["session-stream"]);
-    }
+  ])(
+    "resolves streamed/result precedence for $name",
+    ({ frames, expectedText, expectedRawFinalText, checkDelta }) => {
+      const deltas: Parameters<ParserOptions["onAssistantDelta"]>[0][] = [];
+      const sessionIds: string[] = [];
+      const parser = createParser({
+        onAssistantDelta: (delta) => deltas.push(delta),
+        onSessionId: (id) => sessionIds.push(id),
+      });
+      finishFrames(parser, init("session-stream"), ...frames);
+      expect(parser.getOutput()).toEqual({
+        text: expectedText,
+        ...(expectedRawFinalText === undefined ? {} : { rawFinalText: expectedRawFinalText }),
+        sessionId: "session-stream",
+        usage: undefined,
+      });
+      if (checkDelta) {
+        expect(deltas).toEqual([
+          { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
+        ]);
+        expect(sessionIds).toEqual(["session-stream"]);
+      }
+    },
+  );
+
+  it.each([
+    { name: "final text", finalText: "Done", expected: "Done" },
+    { name: "no final text", finalText: undefined, expected: "" },
+  ])(
+    "records only the final message when the stream ends without a result ($name)",
+    ({ finalText, expected }) => {
+      const parser = createParser();
+      finishFrames(
+        parser,
+        init("session-no-result"),
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart(),
+        messageStop,
+        ...(finalText ? [messageStart, claudeTextDelta(finalText)] : []),
+      );
+      expect(parser.getOutput()?.rawFinalText).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "a tool call after stored item text",
+      frames: [itemMessage("Checking now."), toolStart()],
+      expected: "",
+    },
+    {
+      name: "a new message after stored item text",
+      frames: [itemMessage("Checking now."), messageStart],
+      expected: "",
+    },
+    {
+      name: "a tool item after stored item text",
+      frames: [
+        itemMessage("Checking now."),
+        { type: "item.completed", item: { type: "command_execution" } },
+      ],
+      expected: "",
+    },
+    {
+      name: "item text after an earlier boundary",
+      frames: [messageStart, toolStart(), itemMessage("All done.")],
+      expected: "All done.",
+    },
+  ])(
+    "checks message boundaries before reusing stored item text ($name)",
+    ({ frames, expected }) => {
+      const parser = createParser();
+      finishFrames(parser, init("session-items"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
+
+  it("records an empty final message after pre-tool narration", () => {
+    const parser = createParser();
+    finishFrames(
+      parser,
+      init("session-empty-final"),
+      messageStart,
+      claudeTextDelta("Checking now."),
+      toolStart(),
+      messageStop,
+      messageStart,
+      messageStop,
+      result(""),
+    );
+    expect(parser.getOutput()?.rawFinalText).toBe("");
   });
 
   it("keeps pre-tool text and reconstructible deltas without a commentary consumer", () => {
@@ -377,6 +522,7 @@ describe("createCliJsonlStreamingParser", () => {
     );
     expect(parser.getOutput()).toEqual({
       text: "Before.\n\nDONE",
+      rawFinalText: "DONE",
       sessionId: "session-tool-split",
       usage: undefined,
     });
@@ -433,6 +579,46 @@ describe("createCliJsonlStreamingParser", () => {
     finishFrames(parser, init("session-commentary"), ...frames);
     expect(commentaryTexts).toEqual(expected);
   });
+
+  it.each([
+    {
+      name: "a streamed final answer",
+      frames: [messageStart, claudeTextDelta("Final answer"), messageStop],
+      expected: "Final answer",
+    },
+    {
+      name: "a final answer after pre-tool commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+        messageStart,
+        claudeTextDelta("Final answer"),
+        messageStop,
+      ],
+      expected: "Final answer",
+    },
+    {
+      name: "a tool-only ending after commentary",
+      frames: [
+        messageStart,
+        claudeTextDelta("Checking now."),
+        toolStart("toolu_1", 1),
+        messageStop,
+      ],
+      expected: "",
+    },
+  ])(
+    "records the final message with commentary classification on ($name)",
+    ({ frames, expected }) => {
+      const parser = createClaudeParser({ onCommentaryText: () => undefined });
+      finishFrames(parser, init("session-commentary-final"), ...frames, result(""));
+      // rawFinalText is omitted when the final message equals the reply text.
+      const output = parser.getOutput();
+      expect(output?.rawFinalText ?? output?.text.trim()).toBe(expected);
+    },
+  );
 });
 
 it.each([

@@ -130,9 +130,7 @@ function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
   // Prevent relay housekeeping text from leaking into user-visible channels.
   return (
-    /^no channel reply\.?$/i.test(normalized) ||
-    /^replied in-thread\.?$/i.test(normalized) ||
-    /^replied in #[-\w]+\.?$/i.test(normalized) ||
+    /^(?:no channel reply|replied in-thread|replied in #[-\w]+)\.?$/i.test(normalized) ||
     /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
       normalized,
     )
@@ -369,10 +367,7 @@ export function formatOutboundPayloadLog(
     mediaUrls: readonly string[];
   },
 ): string {
-  const lines: string[] = [];
-  if (payload.text) {
-    lines.push(payload.text.trimEnd());
-  }
+  const lines = payload.text ? [payload.text.trimEnd()] : [];
   for (const url of payload.mediaUrls) {
     lines.push(`Attachment: ${url}`);
   }

@@ -13,7 +13,10 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { readUserProfileIdentity, prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  readResidentUserProfileIdentity,
+  prepareUserProfileCatalog,
+} from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -35,7 +38,7 @@ import { listProjectedSessions } from "./session-utils-list.js";
 afterEach(() => vi.restoreAllMocks());
 
 it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     cfg.gateway!.roles!.definitions.write!.sandbox = "required";
     cfg.gateway!.roles!.definitions.restricted = {
@@ -49,10 +52,12 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     const clients = ["write", "view", "suggest", "restricted"].map((role) => {
       const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
       setUserProfileRole(profile.id, role);
-      const client = sharingPolicyClient({ user: profile.id });
-      prepareGatewayRecipientProfile(client);
-      return client;
+      return sharingPolicyClient({ user: profile.id });
     });
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const client of clients) {
+      prepareGatewayRecipientProfile(client);
+    }
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
     const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
@@ -111,7 +116,7 @@ it.each(["running", "queued", "capacity-wait"] as const)(
   "projects %s follow-up activity through completed subagent lineage outside the selected list page",
   async (state) => {
     using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       const parent = "agent:main:parent";
       const child = "agent:main:subagent:child";
@@ -286,12 +291,14 @@ it.each(["running", "queued", "capacity-wait"] as const)(
 );
 
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
-  using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("owner@presentation.test");
     const member = ensureProfileForEmail("member@presentation.test");
     const viewer = ensureProfileForEmail("viewer@presentation.test");
     setUserProfileRole(viewer.id, "none");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = [owner, member, viewer].map((profile) => {
       const client = Object.assign(sharingPolicyClient({ user: profile.id }), {
         connId: profile.id,
@@ -575,7 +582,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
 });
 
 it("preserves selected account across role changes but rejects a changed merge identity without SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
@@ -605,7 +612,7 @@ it("preserves selected account across role changes but rejects a changed merge i
       const afterMerge = vi.spyOn(DatabaseSync.prototype, "prepare");
       expect(() => binding.assertCurrent()).toThrow(ExpectedProfileMismatchError);
       expect(() => targetBinding.assertCurrent()).not.toThrow();
-      expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(afterMerge).not.toHaveBeenCalled();
     } finally {
       release();

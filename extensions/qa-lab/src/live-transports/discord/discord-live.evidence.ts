@@ -114,17 +114,38 @@ export function collectSeenReactionSequence(
   expectedSequence: readonly string[],
 ) {
   const seen = new Set<string>();
-  const sequence: string[] = [];
   for (const snapshot of snapshots) {
     const snapshotEmojis = new Set(snapshot.reactions.map((reaction) => reaction.emoji));
     for (const emoji of expectedSequence) {
-      if (snapshotEmojis.has(emoji) && !seen.has(emoji)) {
+      if (snapshotEmojis.has(emoji)) {
         seen.add(emoji);
-        sequence.push(emoji);
       }
     }
   }
-  return sequence;
+  return [...seen];
+}
+
+function renderDiscordEvidenceHtml(title: string, styles: string, content: string) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: 1040px; padding: 32px; }
+    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
+    .sub { color: #b5bac1; margin-bottom: 24px; }
+${styles}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+${content}
+  </main>
+</body>
+</html>`;
 }
 
 export function renderDiscordStatusReactionHtml(params: {
@@ -144,17 +165,9 @@ export function renderDiscordStatusReactionHtml(params: {
       return `<tr><td>${snapshot.elapsedMs}ms</td><td>${escapeHtml(snapshot.observedAt)}</td><td>${reactions || '<span class="muted">none</span>'}</td></tr>`;
     })
     .join("\n");
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(params.scenarioTitle)}</title>
-  <style>
-    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: 1040px; padding: 32px; }
-    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
-    .sub { color: #b5bac1; margin-bottom: 24px; }
-    .message { background: #2b2d31; border-left: 4px solid #5865f2; padding: 20px; border-radius: 8px; margin-bottom: 24px; }
+  return renderDiscordEvidenceHtml(
+    params.scenarioTitle,
+    `    .message { background: #2b2d31; border-left: 4px solid #5865f2; padding: 20px; border-radius: 8px; margin-bottom: 24px; }
     .author { color: #f2f3f5; font-weight: 700; margin-bottom: 8px; }
     .content { color: #dbdee1; line-height: 1.45; }
     .sequence { display: flex; gap: 12px; margin-top: 18px; align-items: center; }
@@ -166,13 +179,8 @@ export function renderDiscordStatusReactionHtml(params: {
     .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #4e5058; border-radius: 14px; padding: 4px 9px; margin: 0 8px 8px 0; background: #383a40; }
     .emoji { font-size: 18px; }
     .count { color: #b5bac1; font-size: 13px; }
-    .muted { color: #949ba4; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(params.scenarioTitle)}</h1>
-    <div class="sub">Expected: ${params.expectedSequence.map(escapeHtml).join(" → ")} · Seen: ${params.seenSequence.map(escapeHtml).join(" → ") || "none"}</div>
+    .muted { color: #949ba4; }`,
+    `    <div class="sub">Expected: ${params.expectedSequence.map(escapeHtml).join(" → ")} · Seen: ${params.seenSequence.map(escapeHtml).join(" → ") || "none"}</div>
     <section class="message">
       <div class="author">Mantis Discord QA</div>
       <div class="content">Reaction timeline captured from the real Discord triggering message via REST polling.</div>
@@ -188,10 +196,8 @@ export function renderDiscordStatusReactionHtml(params: {
     <table>
       <thead><tr><th>Elapsed</th><th>Observed At</th><th>Reactions</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table>
-  </main>
-</body>
-</html>`;
+    </table>`,
+  );
 }
 
 export function renderDiscordThreadReplyAttachmentHtml(params: {
@@ -209,17 +215,9 @@ export function renderDiscordThreadReplyAttachmentHtml(params: {
           .map((filename) => `<span class="attachment">${escapeHtml(filename)}</span>`)
           .join("")
       : '<span class="missing">No attachments on the SUT thread reply</span>';
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(params.scenarioTitle)}</title>
-  <style>
-    body { margin: 0; background: #313338; color: #f2f3f5; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    main { width: 1040px; padding: 32px; }
-    h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; letter-spacing: 0; }
-    .sub { color: #b5bac1; margin-bottom: 24px; }
-    .message { background: #2b2d31; border-left: 4px solid ${hasAttachment ? "#23a55a" : "#da373c"}; padding: 20px; border-radius: 8px; }
+  return renderDiscordEvidenceHtml(
+    params.scenarioTitle,
+    `    .message { background: #2b2d31; border-left: 4px solid ${hasAttachment ? "#23a55a" : "#da373c"}; padding: 20px; border-radius: 8px; }
     .author { color: #f2f3f5; font-weight: 700; margin-bottom: 8px; }
     .content { color: #dbdee1; line-height: 1.45; margin-bottom: 16px; }
     .badge { display: inline-flex; align-items: center; border-radius: 16px; padding: 6px 10px; font-size: 13px; font-weight: 700; background: ${hasAttachment ? "#1f3b2d" : "#4a2527"}; border: 1px solid ${hasAttachment ? "#2d7d46" : "#a1282e"}; color: #f2f3f5; margin-bottom: 18px; }
@@ -228,21 +226,14 @@ export function renderDiscordThreadReplyAttachmentHtml(params: {
     .attachment::before { content: "file"; color: #b5bac1; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 12px; text-transform: uppercase; }
     .missing { color: #ffb4b4; border: 1px solid #a1282e; background: #3a2023; border-radius: 6px; padding: 10px 12px; }
     .expected { color: #b5bac1; margin-top: 18px; font-size: 14px; }
-    code { color: #f2f3f5; background: #1e1f22; border-radius: 4px; padding: 2px 5px; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(params.scenarioTitle)}</h1>
-    <div class="sub">Thread: ${escapeHtml(params.threadName)}</div>
+    code { color: #f2f3f5; background: #1e1f22; border-radius: 4px; padding: 2px 5px; }`,
+    `    <div class="sub">Thread: ${escapeHtml(params.threadName)}</div>
     <section class="message">
       <div class="author">OpenClaw Discord SUT</div>
       <div class="badge">${params.status === "pass" ? "Attachment found" : "Attachment missing"}</div>
       <div class="content">${escapeHtml(params.messageContent ?? "No SUT reply content captured")}</div>
       <div class="attachments">${attachmentRows}</div>
       <div class="expected">Expected attachment: <code>${escapeHtml(params.expectedAttachmentFilename)}</code></div>
-    </section>
-  </main>
-</body>
-</html>`;
+    </section>`,
+  );
 }

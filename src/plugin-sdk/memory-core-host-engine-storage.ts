@@ -1,6 +1,7 @@
 /**
  * Private runtime facade for memory host storage, indexing, and search primitives.
  */
+export { encodeSqliteStringSet, sqliteStringSetEntries } from "../infra/kysely-sync.js";
 export {
   ensureMemoryEntryOriginsSchema,
   readMemoryEntryOriginsInDatabase,
@@ -39,6 +40,7 @@ export {
   MEMORY_INDEX_VECTOR_TABLE,
   normalizeExtraMemoryPathEntries,
   readMemoryFile,
+  readMemorySearchManagerStatus,
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,
   readMemoryRecallMetadata,
@@ -75,6 +77,9 @@ export type MemoryEmbeddingProbeResult = {
 };
 
 export type {
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+  MemoryCliSearchOutcome,
   MemoryChunk,
   MemoryFileEntry,
   MemoryIndexIdentityDiagnostic,

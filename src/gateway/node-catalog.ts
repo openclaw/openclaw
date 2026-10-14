@@ -90,6 +90,7 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  deviceFolderNodeIds?: ReadonlySet<string>;
   workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
@@ -162,6 +163,9 @@ export function createKnownNodeCatalog(params: {
     );
     const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
     const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
+    const nodeMetadata = (
+      key: "version" | "coreVersion" | "uiVersion" | "deviceFamily" | "modelIdentifier",
+    ) => firstNormalizedString(live?.[key], nodePairing?.[key], pendingNodePairing?.[key]);
     catalog.set(nodeId, {
       nodeId,
       displayName: firstNormalizedString(
@@ -178,21 +182,9 @@ export function createKnownNodeCatalog(params: {
         devicePairing?.platform,
         pendingNodePairing?.platform,
       ),
-      version: firstNormalizedString(
-        live?.version,
-        nodePairing?.version,
-        pendingNodePairing?.version,
-      ),
-      coreVersion: firstNormalizedString(
-        live?.coreVersion,
-        nodePairing?.coreVersion,
-        pendingNodePairing?.coreVersion,
-      ),
-      uiVersion: firstNormalizedString(
-        live?.uiVersion,
-        nodePairing?.uiVersion,
-        pendingNodePairing?.uiVersion,
-      ),
+      version: nodeMetadata("version"),
+      coreVersion: nodeMetadata("coreVersion"),
+      uiVersion: nodeMetadata("uiVersion"),
       clientId: firstNormalizedString(
         live?.clientId,
         devicePairing?.clientId,
@@ -203,16 +195,8 @@ export function createKnownNodeCatalog(params: {
         devicePairing?.clientMode,
         pendingNodePairing?.clientMode,
       ),
-      deviceFamily: firstNormalizedString(
-        live?.deviceFamily,
-        nodePairing?.deviceFamily,
-        pendingNodePairing?.deviceFamily,
-      ),
-      modelIdentifier: firstNormalizedString(
-        live?.modelIdentifier,
-        nodePairing?.modelIdentifier,
-        pendingNodePairing?.modelIdentifier,
-      ),
+      deviceFamily: nodeMetadata("deviceFamily"),
+      modelIdentifier: nodeMetadata("modelIdentifier"),
       remoteIp: firstNormalizedString(
         live?.remoteIp,
         nodePairing?.remoteIp,
@@ -229,6 +213,9 @@ export function createKnownNodeCatalog(params: {
       sessionHost: live
         ? params.sessionHostNodeIds?.has(nodeId) === true
         : nodePairing?.sessionHost === true,
+      ...(live && params.deviceFolderNodeIds?.has(nodeId)
+        ? { workerHost: { deviceFolders: true as const } }
+        : {}),
       ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
       ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
       ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),

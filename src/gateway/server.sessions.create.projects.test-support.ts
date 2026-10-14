@@ -15,6 +15,14 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 const execFileAsync = promisify(execFile);
 
+async function addWorkspaceOrigin(workspace: string): Promise<void> {
+  const remote = `${workspace}.git`;
+  await execFileAsync("git", ["clone", "--bare", workspace, remote]);
+  await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
+  await execFileAsync("git", ["-C", workspace, "fetch", "origin"]);
+  await execFileAsync("git", ["-C", workspace, "remote", "set-head", "origin", "main"]);
+}
+
 export async function createGitWorkspace(root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.mkdir(workspace, { recursive: true });
@@ -32,6 +40,7 @@ export async function createGitWorkspace(root: string): Promise<string> {
     "-m",
     "initial",
   ]);
+  await addWorkspaceOrigin(workspace);
   return await fs.realpath(workspace);
 }
 
@@ -41,6 +50,11 @@ export async function copyGitWorkspace(template: string, root: string): Promise<
     recursive: true,
     mode: fsConstants.COPYFILE_FICLONE,
   });
+  await fs.cp(`${template}.git`, `${workspace}.git`, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  await execFileAsync("git", ["-C", workspace, "remote", "set-url", "origin", `${workspace}.git`]);
   return await fs.realpath(workspace);
 }
 
@@ -67,6 +81,7 @@ export async function initializeRepository(root: string, name: string): Promise<
   await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
   await execFileAsync("git", ["-C", repo, "add", "README.md"]);
   await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
+  await addWorkspaceOrigin(repo);
   return await fs.realpath(repo);
 }
 

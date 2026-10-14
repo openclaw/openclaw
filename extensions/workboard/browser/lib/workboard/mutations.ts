@@ -20,7 +20,7 @@ import {
   invalidateWorkboardLoads,
   workboardHasActiveWrites,
   workboardMutationsReady,
-  type WorkboardHost,
+  type WorkboardClientContext,
 } from "./runtime.ts";
 import type {
   WorkboardCard,
@@ -42,11 +42,7 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-export async function saveWorkboardCardDraft(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-}) {
+export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   const state = getWorkboardState(params.host);
   const cardId = state.editingCardId;
   const base = cardId ? state.editingCardBase : null;
@@ -106,13 +102,12 @@ export async function saveWorkboardCardDraft(params: {
   }
 }
 
-export async function addWorkboardCardComment(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  cardId?: string;
-  body?: string;
-  requestUpdate?: () => void;
-}) {
+export async function addWorkboardCardComment(
+  params: WorkboardClientContext & {
+    cardId?: string;
+    body?: string;
+  },
+) {
   const draftState = getWorkboardState(params.host);
   const cardId = params.cardId ?? draftState.editingCardId;
   const draftField = params.body === undefined ? "draftCommentBody" : "detailCommentBody";
@@ -165,17 +160,14 @@ function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, erro
 }
 
 export async function moveWorkboardCard(
-  params: {
-    host: WorkboardHost;
-    client: GatewayBrowserClient | null;
+  params: WorkboardClientContext & {
     cardId: string;
     status: WorkboardStatus;
     expectedUpdatedAt?: number;
-    requestUpdate?: () => void;
   } & (
-    | { position: number; beforeCardId?: never }
-    | { beforeCardId: string | null; boardFilter: string; position?: never }
-  ),
+      | { position: number; beforeCardId?: never }
+      | { beforeCardId: string | null; boardFilter: string; position?: never }
+    ),
 ) {
   const state = getWorkboardState(params.host);
   if (
@@ -258,11 +250,8 @@ export async function moveWorkboardCard(
   }
 }
 
-type WorkboardCardMutationParams = {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
+type WorkboardCardMutationParams = WorkboardClientContext & {
   cardId: string;
-  requestUpdate?: () => void;
 };
 
 export async function runWorkboardCardMutation<T>(
@@ -296,13 +285,12 @@ export async function runWorkboardCardMutation<T>(
   }
 }
 
-export async function updateWorkboardCardProperties(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  card: WorkboardCard;
-  patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
-  requestUpdate?: () => void;
-}) {
+export async function updateWorkboardCardProperties(
+  params: WorkboardClientContext & {
+    card: WorkboardCard;
+    patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
+  },
+) {
   return runWorkboardCardMutation({ ...params, cardId: params.card.id }, async (state, client) => {
     const payload = await client.request("workboard.cards.update", {
       id: params.card.id,
@@ -355,11 +343,7 @@ export async function archiveWorkboardCard(
   });
 }
 
-export async function dispatchWorkboard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-}) {
+export async function dispatchWorkboard(params: WorkboardClientContext) {
   const state = getWorkboardState(params.host);
   if (
     !params.client ||

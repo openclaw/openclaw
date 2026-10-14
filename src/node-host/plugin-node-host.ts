@@ -2,6 +2,7 @@ import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
 import { logDebug } from "../logger.js";
 import {
   parseComputerUseCapabilityDescriptor,
@@ -20,6 +21,8 @@ import type {
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
@@ -148,12 +151,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "node-host watcher cleanup failed");
-        }
+        throwNodeHostCleanupErrors(failures, "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;
@@ -273,20 +271,33 @@ export async function invokeRegisteredNodeHostCommand(
       throw new Error("node plugin invocation authority is closed");
     }
   };
-  const invokeContext = context
-    ? {
-        ...context,
-        prepareExecAuthorization: (source: "human-approved" | "session-full") =>
-          preparePluginExecAuthorization({
-            source,
-            command,
-            sessionKey: context.sessionKey,
-            assertActive,
-          }),
-      }
-    : undefined;
   try {
+    const readCurrent = context
+      ? await prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext()).catch(
+          (error: unknown) => () => {
+            // Non-exec commands can proceed; using their optional exec guard fails closed.
+            throw error;
+          },
+        )
+      : undefined;
+    const invokeContext =
+      context && readCurrent
+        ? {
+            ...context,
+            prepareExecAuthorization: (source: "human-approved" | "session-full") =>
+              preparePluginExecAuthorization({
+                source,
+                command,
+                sessionKey: context.sessionKey,
+                assertActive,
+                readCurrent,
+              }),
+          }
+        : undefined;
     return await withPluginRuntimeRegistryScope(registry, async () => {
+      if (context) {
+        assertActive();
+      }
       if (match.command.duplex === true || match.command.duplex === "optional") {
         if (match.command.duplex === true && !io) {
           throw new Error(`node command requires duplex transport: ${command}`);

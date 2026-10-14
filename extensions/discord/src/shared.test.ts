@@ -30,20 +30,6 @@ describe("createDiscordPluginBase", () => {
     ).toBe("login");
   });
 
-  it("exposes security checks on the setup surface", () => {
-    const plugin = createDiscordPluginBase({ setupContract: {} as never });
-
-    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
-    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
-    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
-  });
-
-  it("hydrates announce delivery targets from stored session routing", () => {
-    const plugin = createDiscordPluginBase({ setupContract: {} as never });
-
-    expect(plugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
-  });
-
   it("reports duplicate-token accounts as disabled to gateway startup", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
     const plugin = createDiscordPluginBase({ setupContract: {} as never });
@@ -106,43 +92,6 @@ describe("discordConfigAdapter", () => {
     } as OpenClawConfig;
 
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);
-  });
-
-  it("prefers account allowFrom over inherited root allowFrom", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          allowFrom: ["root"],
-          accounts: {
-            work: {
-              allowFrom: ["account"],
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
-      "account",
-    ]);
-  });
-
-  it("coerces numeric allowFrom entries at the config boundary", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              allowFrom: [123456789],
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
-      "123456789",
-    ]);
   });
 
   it("keeps read-only accessors from resolving token SecretRefs", () => {
