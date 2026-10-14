@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
 import {
+  applyLocaleNavLabelOverlay,
   composeDocsConfig,
   parseArgs,
   reportOrphanLocaleDocs,
@@ -167,6 +168,51 @@ describe("docs-sync-publish", () => {
     } finally {
       fs.rmSync(docsDir, { recursive: true, force: true });
     }
+  });
+
+  it("overlays deep groups without changing the input or ambiguously labeling siblings", () => {
+    const source = {
+      tabs: [
+        {
+          tab: "Tools",
+          groups: [
+            {
+              group: "Guides",
+              pages: [
+                { group: "Browser", pages: [{ group: "Setup", pages: ["tr/browser/setup"] }] },
+                { group: "Search", pages: ["tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const before = structuredClone(source);
+    const result = applyLocaleNavLabelOverlay(source, {
+      tabs: [
+        {
+          tab: "Araçlar",
+          groups: [
+            {
+              group: "Kılavuzlar",
+              pages: [
+                { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+                { group: "Combined", pages: ["tr/browser/setup", "tr/search"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(source).toEqual(before);
+    expect(collectPages(result)).toEqual(collectPages(source));
+    expect(result.tabs[0].groups[0]).toEqual({
+      group: "Kılavuzlar",
+      pages: [
+        { group: "Tarayıcı", pages: [{ group: "Kurulum", pages: ["tr/browser/setup"] }] },
+        { group: "Search", pages: ["tr/search"] },
+      ],
+    });
   });
 
   it("keeps generated locale navigation aligned with English routes", () => {

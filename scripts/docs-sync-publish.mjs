@@ -437,14 +437,17 @@ function collectNavPages(entry, pages = new Set()) {
   return pages;
 }
 
-function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new Set()) {
+function findBestNavMatchIndex(
+  candidates,
+  overlayEntry,
+  excludedIndexes = new Set(),
+  requireUniqueMatch = false,
+) {
   const overlayPages = collectNavPages(overlayEntry);
   let bestIndex = -1;
   let bestScore = 0;
+  let matches = 0;
   for (const [index, candidate] of candidates.entries()) {
-    if (excludedIndexes.has(index)) {
-      continue;
-    }
     const candidatePages = collectNavPages(candidate);
     let score = 0;
     for (const page of overlayPages) {
@@ -452,31 +455,20 @@ function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new S
         score += 1;
       }
     }
-    if (score > bestScore) {
+    if (score > 0) {
+      matches += 1;
+    }
+    if (!excludedIndexes.has(index) && score > bestScore) {
       bestIndex = index;
       bestScore = score;
     }
   }
-  return bestIndex;
-}
-
-function hasAmbiguousNavMatch(candidates, overlayEntry) {
-  const overlayPages = collectNavPages(overlayEntry);
-  const matches = candidates.filter((candidate) => {
-    const candidatePages = collectNavPages(candidate);
-    return [...overlayPages].some((page) => candidatePages.has(page));
-  });
-  return matches.length > 1;
+  return requireUniqueMatch && matches > 1 ? -1 : bestIndex;
 }
 
 export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
-  const tabs = Array.isArray(fullNav.tabs)
-    ? fullNav.tabs.map((tab) => ({
-        ...tab,
-        groups: Array.isArray(tab.groups) ? tab.groups.map((group) => ({ ...group })) : tab.groups,
-      }))
-    : fullNav.tabs;
-  const composed = { ...fullNav, tabs };
+  const composed = structuredClone(fullNav);
+  const { tabs } = composed;
   if (!Array.isArray(tabs) || !Array.isArray(labelOverlay?.tabs)) {
     return composed;
   }
@@ -514,10 +506,14 @@ function applyNavGroupLabelOverlay(candidateGroups, overlayGroups, requireUnique
 
   const matchedGroupIndexes = new Set();
   for (const overlayGroup of overlayGroups) {
-    if (requireUniqueMatch && hasAmbiguousNavMatch(candidateGroups, overlayGroup)) {
-      continue;
-    }
-    const groupIndex = findBestNavMatchIndex(candidateGroups, overlayGroup, matchedGroupIndexes);
+    // An aggregate overlay can span sibling groups. Do not give one child's
+    // translated name to an arbitrary sibling just because it shares a route.
+    const groupIndex = findBestNavMatchIndex(
+      candidateGroups,
+      overlayGroup,
+      matchedGroupIndexes,
+      requireUniqueMatch,
+    );
     if (groupIndex < 0) {
       continue;
     }
