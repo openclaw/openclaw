@@ -61,6 +61,7 @@ import {
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
+import { codeModeWaitRunUnavailableMessage } from "./code-mode-wait-errors.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { resolveCatalog } from "./tool-search-catalog.js";
@@ -625,11 +626,13 @@ export async function runWait(params: {
 }) {
   removeExpiredRuns();
   if (resumingRunIds.has(params.runId)) {
-    throw new ToolInputError("code mode run is already being resumed.");
+    throw new ToolInputError(
+      "code mode run is already being resumed by another wait. Use that wait’s result before deciding the next step; do not issue another concurrent wait or replay earlier actions.",
+    );
   }
   const state = activeRuns.get(params.runId);
   if (!state) {
-    throw new ToolInputError("code mode run is unavailable or expired.");
+    throw new ToolInputError(codeModeWaitRunUnavailableMessage(params.ctx));
   }
   if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
     throw new ToolInputError("code mode run belongs to a different agent run.");
