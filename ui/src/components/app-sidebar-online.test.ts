@@ -273,10 +273,6 @@ describe("sidebar people workload", () => {
       view.setStatusFilter("running");
       view.setSortMode("running");
       await settle(sidebar);
-      const toggle = ".sidebar-online .sidebar-session-group-toggle";
-      if (sidebar.querySelector(toggle)?.getAttribute("aria-expanded") === "false") {
-        await click(sidebar, toggle);
-      }
       expect(names(sidebar)).toEqual(["bea", "ada"]);
       expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
 

@@ -2213,6 +2213,9 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    usersTitle: "Users",
+    allUsers: "All users",
+    directoryFailed: "Could not load all users. Retry",
     filters: {
       label: "Filter & sort people",
       noMatches: "No people match this filter",

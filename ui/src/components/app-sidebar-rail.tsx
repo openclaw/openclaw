@@ -71,7 +71,7 @@ export function renderSidebarRail(
       ? t("nav.pages")
       : view === "sessions"
         ? titleForRoute("sessions")
-        : t("presence.rosterTitle");
+        : t("presence.usersTitle");
   return (
     <nav
       class="sidebar-rail"
@@ -111,7 +111,7 @@ export function renderSidebarRail(
               type="button"
               class="sidebar-rail__button"
               title={
-                host.navigationView === view
+                host.navigationView === view && view !== "online"
                   ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
                   : viewLabel(view)
               }
@@ -125,13 +125,10 @@ export function renderSidebarRail(
               onClick={() => {
                 const active = host.navigationView === view;
                 host.navigationView = view;
-                if (view === "online") {
-                  host.teamOnlineExpanded = true;
-                  if (host.collapsedSessionSections.has("online")) {
-                    host.toggleSection("online");
-                  }
-                }
-                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
+                if (
+                  !isMobileNavLayout() &&
+                  ((active && view !== "online") || host.navigationCollapsed)
+                ) {
                   host.onToggleSidebar?.();
                 }
                 host.requestUpdate();

@@ -37,7 +37,6 @@ import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-pre
 import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
