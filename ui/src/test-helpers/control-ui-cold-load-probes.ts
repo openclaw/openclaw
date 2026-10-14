@@ -29,48 +29,9 @@ export function installColdLoadProbes(
   const liveUpdates = new Map<string, Map<string, { count: number; ms: number }>>();
   const liveStacks = new Map<string, number>();
   const liveOrigins = new Map<string, number>();
-  let liveInvalidatorOwner: SessionDataProbeOwner | undefined;
-  let originalLiveInvalidator: ProbeMethod | undefined;
-  type SessionDataProbeOwner = {
-    requestSessionDataUpdate: (...args: unknown[]) => unknown;
-  };
-  type SolidSidebarProbeOwner = {
-    readonly hostElement: HTMLElement;
-    readonly isConnected: boolean;
-    sessionData: SessionDataProbeOwner;
-    requestUpdate(): void;
-    prepareRender(): void;
-    commitRender(): void;
-  };
-  type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
-  type ProbeMethod = (...args: unknown[]) => unknown;
-  type ChatMethod =
-    | "requestUpdate"
-    | "performUpdate"
-    | "render"
-    | "prepareRender"
-    | "commitRender"
-    | "afterCommit";
-  type ChatProbeOwner = {
-    readonly isConnected: boolean;
-    requestUpdate: ProbeMethod;
-    performUpdate: ProbeMethod;
-    render: ProbeMethod;
-    prepareRender?: ProbeMethod;
-    commitRender?: ProbeMethod;
-    afterCommit?: ProbeMethod;
-  };
-  type ChatOwnerRecord = {
-    host: HTMLElement;
-    owner: ChatProbeOwner;
-    originals: Map<ChatMethod, ProbeMethod>;
-    pending: Map<string, number>;
-    pendingRequests: Map<number, string>;
-    queuedRequests: Map<number, string>;
-    publicationRequests: Map<number, string>;
-    publicationPending: boolean;
-  };
-  const chatOwners = new Map<HTMLElement, ChatOwnerRecord>();
+  let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
+  let originalLiveInvalidator: ProbeInit.ProbeMethod | undefined;
+  const chatOwners = new Map<HTMLElement, ProbeInit.ChatOwnerRecord>();
   const chatLifecycle = new Map<string, Map<string, Map<string, { count: number; ms: number }>>>();
   const chatProducerStacks = new Map<string, number>();
   const frameProbe = createFrameProbe(() => ({
@@ -95,7 +56,7 @@ export function installColdLoadProbes(
   }> = [];
   const chatProbe = {
     installed: false,
-    matches(host: unknown, owner: unknown): owner is ChatProbeOwner {
+    matches(host: unknown, owner: unknown): owner is ProbeInit.ChatProbeOwner {
       return (
         host instanceof HTMLElement &&
         typeof owner === "object" &&
@@ -133,7 +94,7 @@ export function installColdLoadProbes(
       chatLifecycle.set(tag, kinds);
       lastActivity = performance.now();
     },
-    producer(record: ChatOwnerRecord, source: string) {
+    producer(record: ProbeInit.ChatOwnerRecord, source: string) {
       const stack = new Error().stack?.split("\n").slice(3, 18).join(" <- ") ?? "";
       const key = `${liveKind} :: ${record.host.localName} :: ${source} :: ${stack}`;
       if (!chatProducerStacks.has(key) && chatProducerStacks.size >= 1000) {
@@ -198,7 +159,7 @@ export function installColdLoadProbes(
             continue;
           }
           record.originals.set(method, original);
-          owner[method] = function (this: ChatProbeOwner, ...args: unknown[]) {
+          owner[method] = function (this: ProbeInit.ChatProbeOwner, ...args: unknown[]) {
             const connected = this.isConnected;
             if (connected && method === "requestUpdate") {
               const property = args[0];
@@ -314,15 +275,19 @@ export function installColdLoadProbes(
       };
     },
   };
-  let solidSidebarOwner: SolidSidebarProbeOwner | undefined;
-  const sidebarLifecycleOriginals = new Map<SidebarLifecycle, () => void>();
-  const sidebarPasses: Array<{ method: SidebarLifecycle; kind: string; atMs: number }> = [];
-  const sidebarLifecycle = new Map<string, Map<SidebarLifecycle, { count: number; ms: number }>>();
+  let solidSidebarOwner: ProbeInit.SolidSidebarProbeOwner | undefined;
+  const sidebarLifecycleOriginals = new Map<ProbeInit.SidebarLifecycle, () => void>();
+  const sidebarPasses: Array<{ method: ProbeInit.SidebarLifecycle; kind: string; atMs: number }> =
+    [];
+  const sidebarLifecycle = new Map<
+    string,
+    Map<ProbeInit.SidebarLifecycle, { count: number; ms: number }>
+  >();
   const sidebarOwnerStacks = new Map<string, number>();
   const sidebarRegistration = {
     // oxlint-disable-next-line typescript/unbound-method -- Save the native method for restoration; Reflect.apply forwards each WeakMap receiver.
     originalSet: WeakMap.prototype.set,
-    matches(host: unknown, owner: unknown): owner is SolidSidebarProbeOwner {
+    matches(host: unknown, owner: unknown): owner is ProbeInit.SolidSidebarProbeOwner {
       return (
         host instanceof HTMLElement &&
         host.localName === "openclaw-app-sidebar" &&
@@ -585,7 +550,7 @@ export function installColdLoadProbes(
         for (const method of ["requestUpdate", "prepareRender", "commitRender"] as const) {
           const original = owner[method];
           sidebarLifecycleOriginals.set(method, original);
-          owner[method] = function (this: SolidSidebarProbeOwner) {
+          owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
             if (method === "requestUpdate" && connected) {
               const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
@@ -612,7 +577,7 @@ export function installColdLoadProbes(
           };
         }
       }
-      const owner: SessionDataProbeOwner | undefined =
+      const owner: ProbeInit.SessionDataProbeOwner | undefined =
         solidSidebarOwner?.sessionData ??
         (sidebar ? Reflect.get(sidebar, "sessionData") : undefined);
       if (owner) {
