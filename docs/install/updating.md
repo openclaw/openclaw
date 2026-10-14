@@ -146,6 +146,11 @@ Post-install Doctor also accepts older updaters, including `2026.8.2`, that do n
 provide an update run ID. Its commands retain invocation-specific custody without
 requiring an environment-variable workaround.
 
+Doctor keeps a command's captured birth identity through native custody binding.
+If a command finishes before that identity can be captured, its original spawning
+owner still joins the command and confirms its process group has exited before
+releasing the reservation. A live or unreadable command remains protected.
+
 When the installed `2026.9.2` updater runs the candidate's early Doctor check,
 shared-state and agent schema changes are rehearsed on private copies. Plugin
 inspection cannot publish native admission metadata to live state during this
