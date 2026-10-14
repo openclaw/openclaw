@@ -207,6 +207,18 @@ describe("vLLM provider thinking composition", () => {
     });
   });
 
+  it("disables thinking for an underscore-prefixed Nemotron alias", () => {
+    expect(
+      captureProviderPayload({
+        thinkingLevel: "off",
+        contextModelId: "yk_nemotron-3-super",
+        model: { id: "yk_nemotron-3-super" },
+      }),
+    ).toEqual({
+      chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true },
+    });
+  });
+
   it("composes Qwen thinking with runtime Nemotron payload defaults", () => {
     expect(
       captureProviderPayload({

@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import type {
@@ -31,7 +31,7 @@ function rowToState(row: {
 }
 
 export function readScratchStateFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   jobId: string,
 ): CronJobScratchState {
@@ -48,7 +48,7 @@ export function readScratchStateFromDatabase(
 }
 
 export function readHeartbeatMonitorScratchFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   storeKey: string,
   agentId: string,
 ): { jobId: string; state: CronJobScratchState } | undefined {
@@ -92,7 +92,7 @@ export function readHeartbeatMonitorScratchFromDatabase(
 
 /** The authorized definition and private content belong to one native read snapshot. */
 export function readCronScratchSnapshotInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: CronScratchReadCommand,
 ): CronScratchSnapshot | undefined {
   return runSqliteDeferredTransactionSync(db, () => {

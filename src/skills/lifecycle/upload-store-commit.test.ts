@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import {
   beginSkillUploadInDatabase,
@@ -335,7 +336,7 @@ describe("skill upload transaction kernels", () => {
       database: openOpenClawStateDatabase({ path: databasePath }),
       path: databasePath,
     };
-    const db = stateDatabase(databasePath);
+    const db = requireNativeSqliteDatabase(stateDatabase(databasePath));
     const archiveReads: Array<{ bytes: number; inTransaction: boolean }> = [];
     const nativeBlobs = new WeakSet<Uint8Array>();
     const bufferFrom = vi.spyOn(Buffer, "from");

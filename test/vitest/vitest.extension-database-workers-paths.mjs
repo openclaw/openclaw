@@ -426,6 +426,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/reef/src/flow.test.ts",
   "extensions/reef/src/friends.test.ts",
   "extensions/reef/src/inbox-cursor.test.ts",
+  "extensions/reef/src/outbound.test.ts",
   "extensions/reef/src/setup.test.ts",
   "extensions/reef/src/state.test.ts",
   "extensions/reef/src/replay-state.test.ts",

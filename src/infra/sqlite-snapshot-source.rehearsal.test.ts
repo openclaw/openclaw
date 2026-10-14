@@ -13,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
@@ -89,7 +90,7 @@ it("reuses prepared shared state without granting inspection write authority", a
       withArtifactPreservingStateReads(
         () => {
           withOpenClawStateDatabaseReadOnly(({ db }) => {
-            expect(db.location()).toBe(options.path);
+            expect(requireNativeSqliteDatabase(db).location()).toBe(options.path);
             expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value });
           }, options);
           expect(() => runOpenClawStateWriteTransaction(() => {}, options)).toThrow(

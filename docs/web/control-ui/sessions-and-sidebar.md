@@ -85,6 +85,8 @@ or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the **My sessions** default.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
+The filtered session list loads before custom group metadata, so a slow group
+catalog does not hold up session rows. Group names and ordering update when that catalog arrives.
 On a single-user installation without ownership filters, the header is a plain
 **Sessions** title and the list includes sessions without owner metadata.
 
@@ -109,6 +111,34 @@ New session previews the first prompt immediately while the Gateway accepts it.
 The submitted browser draft is retired before the confirmed conversation URL is
 committed, so closing the tab does not restore a sent prompt. Saved worktree-name
 preferences can finish clearing alongside navigation.
+
+## Move an existing session
+
+Right-click one session in the sidebar or Sessions page, or open its chat-header
+actions. **Move to cloud…** opens the destination picker for a local session;
+**Move session…** does the same for an active cloud or device session. Choose a
+configured cloud profile or eligible paired device. Active remote sessions can
+also move back to the **Gateway**. The conversation keeps its session identity.
+
+Moving requires a session-owned worktree or repository workspace. Local sessions
+with an active turn must finish that turn first; a busy refusal does not interrupt
+it or start provisioning. Moving an active remote session warns before interrupting
+its turn and does not replay it. Continuing from an offline device requires an
+explicit confirmation because unsynced files and in-flight work may be lost.
+
+If an accepted move fails with a draining source,
+**Retry move** resumes its saved destination and original source. It does not
+open another destination picker or replay the interrupted turn. The same retry
+is available from the **Move failed** chip. An offline-device abandonment retry
+requires the destructive confirmation again. Wait for that move to finish before
+choosing a different destination.
+
+Device moves require write access; configured cloud profiles require administrator
+access. Unavailable or runtime-incompatible destinations remain disabled. A
+[deployment-required worker profile](/gateway/cloud-workers/placement-and-machine-selection#a-deployment-required-openclaw-destination)
+cannot be overridden by this menu: only that profile without operating-system or
+machine-class overrides is selectable. If placement or the connection changes while
+the picker is open, reopen the action rather than applying a stale selection.
 
 ## New session names
 

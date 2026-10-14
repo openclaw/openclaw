@@ -1136,9 +1136,8 @@ authority before they queue; online foreign database writers are unsupported.
 This path adds no freshness or schema probes between operation steps. External
 guard and transport work remain outside SQLite transactions.
 
-Hosts without the optional operation capability retain their original native
-adapters until an approved minimum-host increase permits removal. Capability
-selection precedes awaits; worker errors never activate that compatibility path.
+Bundled Reef requires the current host's operation capability. Its former
+older-host native adapters are removed; worker errors propagate to the caller.
 Stored registration JSON, reservation expiry, namespace limits, and Doctor imports
 remain unchanged.
 
@@ -1146,8 +1145,8 @@ Reef delivered-message markers use the shared-state worker for lookup and atomic
 insert-if-absent confirmation on current hosts. The inbound flow awaits ingress,
 then durable confirmation, then relay acknowledgment. Capacity failures keep the
 entry parked for retry without evicting live markers. The existing marker JSON,
-expiry, namespace and plugin-wide limits are unchanged; older hosts keep the
-behavior of their existing asynchronous keyed-store adapter. These markers retain their existing owner alongside the compound operations above.
+expiry, namespace and plugin-wide limits are unchanged. These markers retain
+their existing owner alongside the compound operations above.
 
 Reef replay claims, renewals, completion, consumption, release, and reads use the
 shared-state worker. The replay owner preserves invocation order through durable
@@ -1156,10 +1155,8 @@ claim and reuse prepared completion bytes. Inbound processing joins admitted
 heartbeat renewals before returning. Existing-row refusal paths still renew the
 stored TTL, and an expired claim remains usable by its matching owner until a
 successor replaces it. Stored JSON, encryption, quotas, and retention are unchanged.
-Hosts without both comparison methods retain the atomic native callback path until
-an approved minimum host version guarantees both methods. Available worker failures
-never fall back. Modern domain validation errors surface
-directly, while older hosts retain their native callback error wrapping.
+The current host supplies both comparison methods. Worker failures never fall
+back to a native callback, and domain validation errors surface directly.
 
 Plugin BLOB mutations execute in the shared-state worker with the existing physical
 byte and row quotas, namespace eviction, and atomic expiry-metadata claims.

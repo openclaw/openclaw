@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   createSqliteQueryCache,
   prepareSqliteQueryTakeFirstSync,
@@ -13,7 +14,7 @@ import {
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 
 // Cache SQL by native handle, never session facts or native statements.
-const transcriptPresenceQuery = createSqliteQueryCache((database) => {
+const transcriptPresenceQuery = createSqliteQueryCache((database: DatabaseSync) => {
   const db = getSessionKysely(database);
   // Archive and restore move events atomically; both stores must share one statement snapshot.
   // A cold descriptor guarantees a nonempty transcript, even when its archive needs repair.

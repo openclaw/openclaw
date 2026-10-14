@@ -28,9 +28,6 @@ import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 import { WebSocket } from "./ws-runtime.js";
 
-// The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
-const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureWsEventAsync">> = proxyCaptureSdk;
-
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation = false;
 
@@ -61,7 +58,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
       },
-      capture: captureHost.captureWsEventAsync,
+      capture: proxyCaptureSdk.captureWsEventAsync,
       onOpen: () => {
         this.resetRealtimeSessionState({
           preserveToolCallState: config.sessionResumption === true && this.conversationId !== null,
