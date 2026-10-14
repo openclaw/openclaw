@@ -217,8 +217,8 @@ export function appendTranscriptEventInTransaction(
             serializedBytes: utf8Bytes,
           });
           actor.transcript.navigation = writableSessionActorNavigation(actor.transcript.navigation);
-          // SAFETY: The same canonical event feeds the existing projection and tree codecs.
           const navigation = projectSessionModelContextNavigation({
+            // SAFETY: The same canonical event feeds the existing projection and tree codecs.
             ...(stored as SessionTreeEntry),
           });
           actor.transcript.navigation.push(Object.assign(navigation, { seq }));
