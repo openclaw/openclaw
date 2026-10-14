@@ -66,7 +66,8 @@ const captureHost = vi.hoisted(() => ({
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
   captureWsEventAsync: captureHost.capture,
   resolveEffectiveDebugProxyUrl: () => undefined,

@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("ws", () => ({ default: FakeWebSocket }));
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureWsEventAsync: mocks.capture,
   resolveDebugProxySettings: () => ({ enabled: true }),
   createDebugProxyWebSocketAgent: () => mocks.proxyAgent,

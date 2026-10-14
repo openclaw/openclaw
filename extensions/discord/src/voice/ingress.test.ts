@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", () => ({
+vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-bootstrap-context")>()),
   resolveRealtimeVoiceAgentContextInstructions: mocks.agentContext,
 }));
 

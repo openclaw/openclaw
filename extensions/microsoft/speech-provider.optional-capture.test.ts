@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: mocks.capture,
   isDebugProxyGlobalFetchPatchInstalled: () => false,
 }));

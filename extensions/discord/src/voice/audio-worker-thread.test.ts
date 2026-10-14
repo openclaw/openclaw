@@ -7,7 +7,8 @@ const host = vi.hoisted(() => ({
   createTrackedWorker: vi.fn<(...args: ConstructorParameters<typeof Worker>) => Worker>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
   createCpuTrackedWorker: host.createTrackedWorker,
   resolveRuntimeWorkerUrl: () =>
     new URL(

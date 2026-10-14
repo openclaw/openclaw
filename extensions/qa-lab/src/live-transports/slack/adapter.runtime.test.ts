@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   prepareFlow: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   acquireDebugProxyCaptureStoreAsync: mocks.acquireCaptureStore,
   createDebugProxyCaptureReaderAsync: mocks.createCaptureReader,
 }));
