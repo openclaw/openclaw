@@ -631,7 +631,8 @@ describe("worktree Git maintenance", () => {
         createdAt: 1,
         lastActiveAt: 1,
       });
-      const service = new ManagedWorktreeService({ env, now: () => 3 });
+      let now = 3;
+      const service = new ManagedWorktreeService({ env, now: () => now });
       const writer = await fs.open(active, "r+");
       try {
         await service.gc();
@@ -640,6 +641,7 @@ describe("worktree Git maintenance", () => {
       } finally {
         await writer.close();
       }
+      now += WORKTREE_GC_INTERVAL_MS;
       await service.gc();
       await expect(fs.access(old)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(active)).rejects.toMatchObject({ code: "ENOENT" });
