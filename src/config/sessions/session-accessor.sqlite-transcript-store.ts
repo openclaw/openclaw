@@ -56,6 +56,7 @@ import {
 } from "./session-actor-transaction.js";
 import { withSessionActorTranscriptRewrite } from "./session-actor-transcript-publication.worker.js";
 import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -621,9 +622,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         for (const row of rewrites) {
           const result = rewrite(row);
           if (result.numAffectedRows !== 1n) {
-            throw new Error(
-              `Transcript row ${resolved.sessionId}:${row.seq} changed before exact rewrite`,
-            );
+            throw new SqliteTranscriptMutationConflictError(resolved.sessionId);
           }
         }
         // Correlation and identical prompt captures preserve admitted input; other

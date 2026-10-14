@@ -103,6 +103,20 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+Queued requester finals also retain their original completion source alongside the
+final-delivery intent. Command admission snapshots the source, session lifecycle,
+and route before execution; a refreshed cache cannot lend a successor’s source to
+a finishing run. An identified send on that captured route records a durable
+receipt before queue acknowledgement, including when terminal cleanup has already
+retired the active recovery claim. Every logical final and every physical payload
+in its batch must have successful identified delivery evidence. Reported recipients
+and threads, including nested aggregate receipt parts, must match the captured route;
+omitted provider metadata retains the existing channel contract.
+Later cleanup cannot replace that receipt with an earlier capture, and a newer
+requester or different route cannot borrow it. Empty, unsent, suppressed, or
+uncertain results do not establish delivery. Existing missing-receipt records are
+not retroactively treated as delivered.
+
 An interrupted admitted completion keeps its complete recovery claim even when
 the saved run status is failed, timed out, or killed. The next visible message or queued
 follow-up resumes that recovery before taking foreground ownership or entering
@@ -387,9 +401,14 @@ admitted before shutdown; normal authorization checks still apply. New question
 and approval requests remain fenced.
 
 Work that cannot finish inside the drain budget is marked for recovery before
-the shutdown owner aborts it. Restart cancellation from an earlier cleanup step
-does not remove that run from the marker's candidates. If no supplied candidate
-can be marked, a warning reports the counts and dominant skip reason.
+the shutdown owner aborts it. The close prelude fences new request entry and
+background producers without canceling received execution or retiring its internal
+principals. The run-shutdown owner records recovery, then cancels queued turns,
+replies, and received execution before disposal starts. This keeps the live admission
+available to the recovery marker instead of depending on already-released owners.
+A prior restart cancellation does not remove a still-owned run from the marker's
+candidates. If no supplied candidate can be marked, a warning reports the counts
+and dominant skip reason.
 
 Restart cancellation also preserves recoverability when the bulk shutdown marker
 cannot be written. Native runtime preparation interrupted by the same Gateway
@@ -741,6 +760,9 @@ If recovery fails during preparation before the agent starts, the Gateway restor
 the interrupted state and releases that attempt's delivery claim. The next recovery
 attempt uses a fresh run ID while retaining the original interrupted turn and retry
 budget, so a rejected pending input cannot leave the conversation permanently busy.
+This includes an accepted continuation refused by shutdown before its runtime turn
+starts. Its charged attempt remains in the same retry budget across startups;
+exhaustion still produces the normal recovery notice.
 
 ## Automatic resume
 
@@ -765,6 +787,13 @@ new key or rotates its session ID. Claim validation and cleanup read only those
 candidate sessions, so stale recovery claims do not load unrelated saved prompts
 while interactive session changes wait. Claim authority, retry budgets, stored
 data, and upgrade behavior are unchanged.
+
+The Control UI shows a neutral system notice: “Gateway restarted. Resuming your
+interrupted request.” Expected restart interruptions do not create a terminal
+reply-failure card or ask you to send the request again. A restart refusal during
+an active turn retains its recovery claim, even if the admission fence closes
+before the shutdown owner cancels that turn. Genuine provider failures, explicit
+Stop actions, and exhausted recovery remain separate outcomes.
 
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
@@ -923,6 +952,10 @@ the breaker's recovery window ends.
 Startup restores completed runs directly from the registry. Any retained delivery
 keeps its normal session and ownership checks. Unfinished runs still reconcile
 the current child session before resuming.
+Human follow-ups in retained child sessions take native custody under the actual
+executing run ID and follow-up prompt, including browser chat. The completed
+original run keeps its own outcome. Human ownership and dashboard nesting do not
+turn a child into a main-session replay candidate.
 They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
 For native children with completion notifications disabled, recovery sends a

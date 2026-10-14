@@ -463,6 +463,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:

@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -378,11 +379,15 @@ export class SqliteReclamationWorker {
           validationOwner: params.validationOwner,
           validationPath: this.options.path,
           readOpeningValidation: params.readOpeningValidation,
-          dispatch: () =>
+          dispatch: () => {
             transport.channel.postMessage(params.request(operationId, coordination), [
               ...params.transferList,
               ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
-            ]),
+            ]);
+            if (transport.kind === "pooled") {
+              recordWorkerMessage("sqlite_request", "to_worker");
+            }
+          },
         }).then(
           (value) => ({ value }),
           (error: unknown) => {
@@ -573,6 +578,9 @@ export class SqliteReclamationWorker {
                     } satisfies SqliteReclamationWorkerCloseRequest,
                     [],
                   );
+                  if (transport.kind === "pooled") {
+                    recordWorkerMessage("lifecycle", "to_worker");
+                  }
                 } catch (error) {
                   await terminateSqliteMutationWorker(transport);
                   throw error;
@@ -588,6 +596,7 @@ export class SqliteReclamationWorker {
               // The task cannot yield its slot until the parent's native close has settled.
               try {
                 worker.postMessage({ type: "release", operationId }, []);
+                recordWorkerMessage("lifecycle", "to_worker");
               } catch (error) {
                 await terminateSqliteMutationWorker(transport);
                 throw error;

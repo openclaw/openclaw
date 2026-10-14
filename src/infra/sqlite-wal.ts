@@ -206,8 +206,7 @@ function enableWalJournalMode(
   try {
     while (true) {
       try {
-        db.exec("PRAGMA journal_mode = WAL;");
-        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode = WAL;").get());
         if (journalMode === "wal") {
           return true;
         }

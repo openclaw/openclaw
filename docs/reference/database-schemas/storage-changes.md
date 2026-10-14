@@ -113,10 +113,10 @@ foreign key is retained and installed only after both tables exist. Generating a
 fragment does not activate PostgreSQL shared-state runtime support.
 
 `state.postgres.sql` and each manifest `file` contain the single runtime form of
-their state DDL. They omit transaction wrappers and fixed schema qualification;
-the owning connection supplies the namespace and transaction. The separate
-`agent.postgres.sql` readiness artifact retains its schema and transaction
-wrappers until the agent-store cutover.
+their state DDL. The generated `runtime.ts` module packages that same SQL with
+fragment activation/dependencies and the expected catalog for the state owner;
+it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
+the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
@@ -197,13 +197,18 @@ See [Database engines (experimental)](/reference/database-engines) for SecretRef
 configuration, isolation and durability, matched anchor/schema backups,
 limitations, and engine-boundary observation. Missing secrets, connection failures,
 and admission errors never fall back to SQLite. Existing SQLite workboard data
-refuses the switch until a port tool is available.
+requires the supported offline `openclaw database port` flow before switching engines.
 
 `pnpm db:postgres:gen --target workboard` generates the workboard DDL from its
 SQLite schema; `pnpm db:postgres:check` verifies freshness. Admission installs the
-tables and records the current store version in one transaction. There are no
-PostgreSQL migrations yet: an existing version mismatch refuses to open and names
-the expected version. Opening a PostgreSQL anchor with the SQLite engine also
+tables and records the current store version in one transaction. Owners supply
+consecutive forward migrations, each with its source and destination generated DDL.
+The engine retains writer custody and rolls back all pending steps on failure,
+including a result that differs from the generated destination;
+newer versions and missing migrations refuse with recovery guidance. Catalog
+fingerprints detect exact schema drift, while generated DDL hashes fence build
+mismatches. A server-major change performs one scratch comparison using
+PostgreSQL's own deparser before replacing the fingerprint. Opening a PostgreSQL anchor with the SQLite engine also
 refuses; it never creates SQLite workboard tables in the anchor.
 
 ### Keep operations at the owning store
@@ -2409,6 +2414,16 @@ the Gateway installs bindings against the pairing revision without reopening
 SQLite. A lookup or receipt at a newer revision marks the published set incomplete
 but keeps other devices' bindings; only a full list replaces the set.
 Historical inspection snapshots never publish live node authority.
+
+The pairing owner stores its monotonically increasing publication revision in
+`config_machine_state` under `devicePairing.revision`. Each paired-device write
+increments that row in the same transaction and carries the returned revision in
+its commit receipt. Pending-only and bootstrap writes leave it unchanged. An
+absent revision row means revision zero until the first paired-device write;
+existing databases need no schema migration. Exact lookups read only the keyed
+device and this revision in one statement, without loading pending requests or
+hashing all paired records. Full lists retain their complete snapshot, and connection authorization
+still looks up the device after awaited pairing work.
 
 Pairing, approval, role-token, bootstrap, and node-surface mutations execute in
 the shared-state writer. Each synchronous transaction reads the authoritative

@@ -103,6 +103,24 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list())[0]?.key).toBe(second);
       const archived = await listProjectedSessions({ projection, opts: { archived: true } });
       expect(archived.sessions.map((row) => row.key)).toEqual([third]);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3 },
+      );
+      expect((await list())[0]?.key).toBe(third);
+      expect(await listProjectedSessions({ projection, opts: { archived: true } })).toMatchObject({
+        sessions: [],
+        totalCount: 0,
+      });
+      // Archive membership is presence, including a zero timestamp.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3, archivedAt: 0 },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      expect(
+        await listProjectedSessions({ projection, opts: { archived: true, limit: 1 } }),
+      ).toMatchObject({ sessions: [{ key: third }], totalCount: 1, hasMore: false });
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -379,12 +397,12 @@ it.each([false, true])(
           includeGlobal: true,
           includeUnknown: true,
         });
-        expect(prepared.entries.map(([, entry]) => entry.sessionId)).toEqual(
+        expect(prepared.entries("all").map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly
             ? ["ordinary", "main-global", "ops-global", "unknown-winner", "unknown-shadow"]
             : ["ordinary", "main-global", "unknown-winner"],
         );
-        for (const [key, entry] of prepared.entries) {
+        for (const [key, entry] of prepared.entries("all")) {
           const target = prepared.getTarget(key)!;
           const original = rows.find((row) => row.entry === entry)!;
           expect(target.entry).toBe(entry);

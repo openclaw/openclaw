@@ -94,8 +94,10 @@ describe("buildMinimaxSpeechProvider", () => {
       await rm(tempStateDir, { recursive: true, force: true });
     });
 
-    it("returns false when no apiKey anywhere", () => {
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    it("returns false when no apiKey anywhere", async () => {
+      expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(
+        false,
+      );
     });
 
     it("returns true when a MiniMax portal auth profile is available", async () => {

@@ -62,7 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  withSubagentRequesterSource,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -123,23 +123,10 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterSource(
+  return withSubagentRequesterDelivery(
     params.targetRequesterSessionKey,
-    params.requesterAgentId,
-    async (
-      isRequesterCurrent,
-    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
-      const guardedParams = isRequesterCurrent
-        ? {
-            ...params,
-            isSourceSessionEffectsAllowed: () =>
-              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
-            isSourceSessionAdmissionAllowed: () =>
-              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
-          }
-        : params;
-      return sendSubagentAnnounceDirectlyBound(guardedParams);
-    },
+    params,
+    sendSubagentAnnounceDirectlyBound,
   );
 }
 

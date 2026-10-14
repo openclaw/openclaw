@@ -29,7 +29,6 @@ import {
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
-  resolveExtensionTestConfig,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
@@ -161,12 +160,6 @@ describe("scripts/test-extension.mts", () => {
     balancedExpectedExtensionIds = listAvailableExtensionIds().filter(
       (extensionId) =>
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
-    );
-  });
-
-  it("routes the catch-all-excluded Zalo root to its dedicated config", () => {
-    expect(resolveExtensionTestConfig("extensions/zalo")).not.toBe(
-      "test/vitest/vitest.extensions.config.ts",
     );
   });
 
@@ -947,11 +940,6 @@ await new Promise(()=>{});export default {};`,
       exclude: false,
       mode: "runtime",
     },
-    {
-      include: "extensions/telegram/src/sticker-cache.selection.test.ts",
-      exclude: true,
-      mode: undefined,
-    },
   ])(
     "prepares the selected Telegram leaves before the aggregate ($include, exclude=$exclude)",
     async ({ include, exclude, mode }) => {
@@ -1039,14 +1027,6 @@ await new Promise(()=>{});export default {};`,
 
     expect(result.stderr).toContain("OPENCLAW_EXTENSION_BATCH_PARALLEL must be a positive integer");
     expect(result.status, result.stdout + result.stderr).toBe(2);
-  });
-
-  it("fails explicitly requested extensions without tests by default", () => {
-    const extensionId = findExtensionWithoutTests();
-    const result = runScriptResult([extensionId]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });
 

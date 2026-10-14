@@ -47,6 +47,7 @@ export function runSessionMaintenanceMetadataInWorker(params: {
               preparationId,
               protection: {
                 activeSessionKeys: plan.input.activeSessionKeys,
+                preparedAgeFactCurrent: plan.input.preparedAgeFactCurrent,
                 preservation: plan.input.preservation,
               },
             }

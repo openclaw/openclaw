@@ -27,8 +27,8 @@ import {
   updateRegistryWorktree,
 } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, SNAPSHOT_RETENTION_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,

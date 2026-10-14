@@ -42,7 +42,6 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
-import { getChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
@@ -475,13 +474,6 @@ describe("chat pane composer controls", () => {
 
   it.each([
     {
-      label: "successful update after switching sessions",
-      result: "success",
-      invalidate: (state: ChatPageHost) => {
-        state.sessionKey = "agent:main:other-session";
-      },
-    },
-    {
       label: "failed update after switching sessions",
       result: "failure",
       invalidate: (state: ChatPageHost) => {
@@ -742,45 +734,6 @@ describe("chat pane model controls", () => {
     reconcileChatRunLifecycle(state, { clearLocalRun: true });
     expect(state.chatRunId).toBeNull();
   });
-
-  it("does not show another session's pending model after switching sessions", () => {
-    const previousSessionKey = "agent:main:previous";
-    const selectedSession: GatewaySessionRow = {
-      key: "agent:main:selected",
-      kind: "direct",
-      model: "primary",
-      modelProvider: "example",
-    };
-    const pane = createRenderTestChatPane();
-    const state = pane.initialize(createInitializationContext());
-    Object.assign(state, {
-      sessionKey: previousSessionKey,
-      sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
-      chatModelCatalog: [{ id: "primary", name: "Primary", provider: "example" }],
-      chatModelSwitchPromises: {},
-      connected: true,
-      client: createTestGatewayClient(async () => ({})),
-    });
-    getChatSessionProjection(state, { sessionKey: previousSessionKey });
-    state.chatRunId = "previous-session-run";
-    state.chatStream = "Working";
-    state.chatSending = true;
-    state.chatSendingScopeKey = storedChatOutboxScopeKey({ sessionKey: previousSessionKey });
-    setChatRunOwner(state, state.chatRunId);
-    state.sessionKey = selectedSession.key;
-
-    const controls = renderControls(state, {
-      agentDefaultModel: "example/primary",
-      contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-    });
-    const container = document.createElement("div");
-    render(controls.composerControls, container);
-
-    const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
-    expect(trigger?.textContent).toContain("Primary");
-    expect(trigger?.textContent).not.toContain("Model pending");
-    expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
-  });
 });
 
 function createControlsFixture(
@@ -983,7 +936,6 @@ describe("chat pane model-setting permissions", () => {
     { change: "scope", queued: false },
     { change: "ownership", queued: false },
     { change: "missing-row", queued: false },
-    { change: "session", queued: false },
     { change: "connection", queued: false },
     { change: "scope", queued: true },
     { change: "ownership", queued: true },

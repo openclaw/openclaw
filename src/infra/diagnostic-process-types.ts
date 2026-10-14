@@ -1,5 +1,6 @@
 import type { HeapSpaceInfo } from "node:v8";
 import type { GcSample } from "./gc-observer.js";
+import type { WorkerMessageMetric } from "./worker-message-metrics.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type DiagnosticRuntimeMeasurementFields =
@@ -100,6 +101,8 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
+  /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
+  workerMessages?: WorkerMessageMetric[];
 };
 
 export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [

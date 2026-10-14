@@ -188,15 +188,10 @@ export function isPluginMetadataSnapshotCompatible(params: {
 }
 
 function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: string): void {
-  const existing = owners.get(ownedId);
-  if (existing) {
-    if (existing.includes(pluginId)) {
-      return;
-    }
-    existing.push(pluginId);
-    return;
+  const existing = owners.get(ownedId) ?? [];
+  if (!existing.includes(pluginId)) {
+    owners.set(ownedId, [...existing, pluginId]);
   }
-  owners.set(ownedId, [pluginId]);
 }
 
 function buildPluginMetadataOwnerMaps(
@@ -274,7 +269,11 @@ function buildPluginMetadataOwnerMaps(
       }
     }
   }
-  return { ...owners, channelAccountKeyPolicies, ...buildPluginMetadataProviderFacts(plugins) };
+  return {
+    ...owners,
+    channelAccountKeyPolicies,
+    ...buildPluginMetadataProviderFacts(plugins, enabledPluginIds),
+  };
 }
 
 function buildPluginMetadataManifestFacts(

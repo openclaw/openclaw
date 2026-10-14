@@ -16,6 +16,48 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports cumulative worker traffic without recounting repeated memory samples", () => {
+    const metrics = createMetricsHarness();
+    try {
+      const sample = {
+        ...baseEvent(),
+        type: "diagnostic.memory.sample" as const,
+        memory: {
+          rssBytes: 1000,
+          heapTotalBytes: 500,
+          heapUsedBytes: 300,
+          externalBytes: 200,
+          arrayBuffersBytes: 100,
+          workerMessages: [
+            {
+              kind: "sqlite_reply" as const,
+              direction: "from_worker" as const,
+              messages: 4,
+              payloadBytes: 1234,
+              unmeasuredMessages: 2,
+            },
+          ],
+        },
+      };
+      metrics.record(sample, untrusted);
+      expect(metrics.render()).not.toContain("openclaw_worker_messages_total");
+      metrics.record(sample, trusted);
+      metrics.record(sample, trusted);
+      const rendered = metrics.render();
+      for (const [metric, value] of [
+        ["messages_total", 4],
+        ["message_payload_bytes_total", 1234],
+        ["message_unmeasured_total", 2],
+      ] as const) {
+        expect(rendered).toContain(
+          `openclaw_worker_${metric}{direction="from_worker",kind="sqlite_reply"} ${value}\n`,
+        );
+      }
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("exports isolate and native memory plus bounded successful spawn counts", () => {
     const metrics = createMetricsHarness();
     try {
@@ -227,7 +269,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      const firstWindow = {
+        type: "gateway.event_loop.sample",
+        intervalMs: 2_000,
+        delayMaxMs: 1_250,
+      } as const;
+      // Scrapes cannot publish a producer's window before diagnostics delivers it.
+      const beforeDelivery = await scrape();
+      expect(beforeDelivery).not.toContain("openclaw_gateway_event_loop_");
+      expect(await scrape()).toBe(beforeDelivery);
+      metrics.record(firstWindow);
       metrics.record({
         type: "diagnostic.gc",
         kind: "scavenge",
@@ -235,8 +286,9 @@ describe("diagnostics-prometheus runtime metrics", () => {
         durationMs: 1_250,
       });
       const first = await scrape();
-      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
-      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1\n");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.25\n");
+      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2\n");
       expect(first).toContain(
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
       );
@@ -270,9 +322,18 @@ describe("diagnostics-prometheus runtime metrics", () => {
         'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
         'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
       ]) {
-        expect(second).toContain(expected);
+        expect(second).toContain(`${expected}\n`);
       }
       expect(await scrape()).toBe(second);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 });
+      const third = await scrape();
+      expect(third).toContain(
+        'openclaw_gateway_event_loop_delay_max_seconds_bucket{le="0.005"} 1\n',
+      );
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 3\n");
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.27\n");
+      expect(third).toContain("openclaw_gateway_event_loop_observed_seconds_total 11\n");
+      expect(await scrape()).toBe(third);
       metrics.record({
         type: "diagnostic.gc",
         kind: "mark_sweep_compact",

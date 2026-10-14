@@ -274,6 +274,8 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
 
+A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
+
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
 <AccordionGroup>
@@ -533,6 +535,8 @@ While recovery is in progress, the Control UI updates the working claw with **Re
 If the run ultimately fails after its available recovery attempts, the Control UI shows one terminal failure notice, not one warning per attempt. Partial output and media remain visible, and the raw transcript retains attempt diagnostics for troubleshooting. The latest failed run offers **Try again** to send a continuation that checks completed work before retrying actions, and **Change model** opens the existing model picker. Neither action silently replays the original prompt or clears an unsent draft.
 
 ## Observability and failure summaries
+
+Each admitted retry or fallback request gets its own start-relative diagnostic recovery allowance. Earlier failed attempts remain in cumulative no-progress evidence, but that evidence cannot cancel a fresh request before its recorded allowance expires. User cancellation, retry limits, and overall run budgets still apply.
 
 `runWithModelFallback(...)` records per-attempt details that feed logs and user-facing cooldown messaging:
 

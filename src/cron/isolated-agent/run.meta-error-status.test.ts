@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
+import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   callGatewayMock,
   dispatchCronDeliveryMock,
+  listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
@@ -14,6 +16,11 @@ import {
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
+
+// mock-isolation: Keep the database-backed descendant registry outside the fixed child-run fixture.
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  hasUnsettledCronDescendants: async () => false,
+}));
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const runTurn = (overrides = {}) =>
@@ -227,6 +234,34 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expectObjectFields(result, { status: "error", error, delivered: false });
     expect(result.summary).not.toBe(heartbeatPayload.text);
     expect(result.outputText).not.toBe(heartbeatPayload.text);
+  });
+
+  it("records the child result after a no-delivery parent returns only a heartbeat", async () => {
+    await useRealOutcome();
+    const reply = "Finished the delegated report";
+    mockChildRun([{ text: "HEARTBEAT_OK" }]);
+    resolveCronDeliveryPlanMock.mockReturnValue({ mode: "none", requested: false });
+    listDescendantRunsForRequesterMock.mockResolvedValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:default:child",
+        requesterSessionKey: "agent:default:cron:test",
+        requesterDisplayKey: "agent:default:cron:test",
+        createdAt: Date.now(),
+        task: "delegated report",
+        cleanup: "keep",
+        execution: { status: "terminal", endedAt: Date.now() + 1_000, outcome: { status: "ok" } },
+        completion: { required: true, terminalReply: { disposition: "visible", text: reply } },
+      },
+    ]);
+    dispatchCronDeliveryMock.mockImplementation(dispatchCronDelivery);
+
+    const result = await runTurn({
+      job: makeIsolatedAgentJobFixture({ delivery: { mode: "none" } }),
+    });
+
+    expectObjectFields(result, { status: "ok", outputText: reply });
+    expect(result.deliveryState?.status).toBe("not-requested");
   });
 
   it("preserves structured-parent delivery failures after accepting a child", async () => {

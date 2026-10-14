@@ -4,9 +4,11 @@ import { queryObjects } from "node:v8";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import {
   createAnthropicMessagesTransportStreamFn,
+  createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
@@ -153,7 +155,7 @@ describe("prepared session fork provider boundary", () => {
 
   function guardedTransport(
     beforeDns?: () => void,
-    api: "openai-responses" | "anthropic-messages" = "openai-responses",
+    api: "openai-responses" | "anthropic-messages" | "openai-completions" = "openai-responses",
   ) {
     const physicalFetch = vi.fn<typeof fetch>(async () => {
       if (api === "anthropic-messages") {
@@ -186,6 +188,20 @@ describe("prepared session fork provider boundary", () => {
           { headers: { "content-type": "text/event-stream" } },
         );
       }
+      if (api === "openai-completions") {
+        return new Response(
+          `data: ${JSON.stringify({
+            id: "completion-fork",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              { index: 0, delta: { role: "assistant", content: "Answer" }, finish_reason: "stop" },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
       return new Response(responsesBody(), {
         headers: { "content-type": "text/event-stream" },
       });
@@ -206,14 +222,16 @@ describe("prepared session fork provider boundary", () => {
       parent: wrapStreamFnWithSessionFork(
         api === "anthropic-messages"
           ? createAnthropicMessagesTransportStreamFn()
-          : createOpenAIResponsesTransportStreamFn(),
+          : api === "openai-completions"
+            ? createOpenAICompletionsTransportStreamFn()
+            : createOpenAIResponsesTransportStreamFn(),
         identity,
       ),
     };
   }
 
   it.each(["bigint", "cycle"])(
-    "keeps the parent request working when optional replay cannot encode %s tool metadata",
+    "replays wire history without traversing transport-irrelevant %s tool metadata",
     async (kind) => {
       const { parent, physicalFetch } = guardedTransport();
       const completed = await (
@@ -264,7 +282,7 @@ describe("prepared session fork provider boundary", () => {
         expect(assistant.stopReason).toBe("stop");
         expect(onPayload).toHaveBeenCalledOnce();
         expect(physicalFetch).toHaveBeenCalledTimes(3);
-        await expect(fork()).rejects.toThrow("requires a parent turn");
+        await expect(fork()).resolves.toBe("Answer");
       } finally {
         releaseFork.resolve();
         await runningFork;
@@ -384,6 +402,82 @@ describe("prepared session fork provider boundary", () => {
       api === "anthropic-messages" ? '"content":"3"' : '"output":"3"',
     );
   });
+
+  it.each([
+    ["openai-responses", "github-copilot", "earlier:call", "earlier_call"],
+    ["openai-responses", "custom", "earlier:call", "earlier:call"],
+    ["anthropic-messages", "anthropic", "earlier:call", "earlier_call"],
+    ["openai-completions", "openai", "earlier:call|fc_item", "earlier_call"],
+  ] as const)(
+    "keeps late %s/%s tool results paired with the captured prefix",
+    async (api, provider, sourceId, wireId) => {
+      const { parent, physicalFetch } = guardedTransport(undefined, api);
+      const requestModel = {
+        ...model,
+        api,
+        provider,
+      };
+      const completed = await (
+        await parent(requestModel, context, { apiKey: "synthetic-key" })
+      ).result();
+      await (
+        await parent(
+          requestModel,
+          {
+            ...context,
+            messages: [
+              ...context.messages,
+              {
+                ...completed,
+                ...(api !== "openai-responses"
+                  ? { provider: "prior-provider", model: "prior-model" }
+                  : {}),
+                content: [
+                  { type: "text", text: "Starting lookup" },
+                  {
+                    type: "toolCall",
+                    id: sourceId,
+                    name: "lookup",
+                    arguments: {},
+                    async: true,
+                  },
+                ],
+              },
+            ],
+          },
+          { apiKey: "synthetic-key" },
+        )
+      ).result();
+      recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+        role: "toolResult",
+        toolCallId: sourceId,
+        toolName: "lookup",
+        content: [{ type: "text", text: "LATE_RESULT_1119" }],
+        isError: false,
+        timestamp: 3,
+      });
+      await expect(fork(requestModel)).resolves.toBe("Answer");
+      const call = physicalFetch.mock.calls.at(-1)!;
+      const body = await new Request(call[0], call[1]).text();
+      expect(body).toContain("LATE_RESULT_1119");
+      const replay = JSON.parse(body);
+      const results =
+        api === "openai-responses"
+          ? replay.input
+          : api === "anthropic-messages"
+            ? replay.messages.flatMap((message: { content: unknown }) => message.content)
+            : replay.messages;
+      expect(results).toContainEqual(
+        expect.objectContaining(
+          api === "openai-responses"
+            ? { type: "function_call_output", call_id: wireId, output: "LATE_RESULT_1119" }
+            : api === "anthropic-messages"
+              ? { type: "tool_result", tool_use_id: wireId, content: "LATE_RESULT_1119" }
+              : { role: "tool", tool_call_id: wireId, content: "LATE_RESULT_1119" },
+        ),
+      );
+    },
+  );
 
   it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
     let revoked = false;
@@ -584,6 +678,48 @@ describe("prepared session fork provider boundary", () => {
     expect(replay.messages).toHaveLength(original.messages.length + 1);
   });
 
+  it("retains the full parent prefix when HTTP continuation sends only a suffix", async () => {
+    const { parent, physicalFetch } = guardedTransport();
+    const requestModel: Model = { ...model, compat: { supportsResponsesContinuation: true } };
+    const options = {
+      apiKey: "synthetic-key",
+      sessionId: identity.sessionId,
+      transport: "sse" as const,
+      onPayload: (payload: unknown) => {
+        if (!isRecord(payload)) {
+          throw new Error("Expected request");
+        }
+        return { ...payload, store: true };
+      },
+    };
+    const completed = await (await parent(requestModel, context, options)).result();
+    await (
+      await parent(
+        requestModel,
+        {
+          ...context,
+          messages: [
+            ...context.messages,
+            completed,
+            { role: "user", content: "Continue parent", timestamp: 3 },
+          ],
+        },
+        options,
+      )
+    ).result();
+    const second = physicalFetch.mock.calls[1]!;
+    const continuation = await new Request(second[0], second[1]).json();
+    expect(continuation.previous_response_id).toBe("resp_fork");
+    expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
+    await expect(fork(requestModel)).resolves.toBe("Answer");
+    const last = physicalFetch.mock.calls.at(-1)!;
+    const replay = await new Request(last[0], last[1]).json();
+    expect(replay.previous_response_id).toBeUndefined();
+    expect(JSON.stringify(replay.input)).toContain("Parent question");
+    expect(JSON.stringify(replay.input)).toContain("Continue parent");
+    expect(JSON.stringify(replay.input)).toContain("Review only");
+  });
+
   it("rejects Bedrock forks before dispatch with an actionable unsupported API error", async () => {
     await expect(
       runEmbeddedSessionFork({
@@ -625,17 +761,46 @@ describe("prepared session fork provider boundary", () => {
 
   it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
     const { parent, physicalFetch } = guardedTransport();
-    const metadata = { acknowledged: "review", unicode: "🦞" };
+    const unicode = "🦞 café e\u0301 \u0000 \ud800";
+    let encodings = 0;
+    const metadata = {
+      acknowledged: "review",
+      unicode,
+      toJSON() {
+        return { acknowledged: this.acknowledged, unicode, encoding: ++encodings };
+      },
+    };
+    const codeModeOptions = {
+      openclawCodeModeToolSurface: true,
+      openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
+    };
+    const tools = ["exec", "wait"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
+    const parentText = "Unicode parent 🦞 café e\u0301";
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
       }
-      if (!isRecord(payload)) {
+      if (!isRecord(payload) || !Array.isArray(payload.tools)) {
         throw new Error("Expected request");
       }
-      return { ...payload, client_metadata: metadata };
+      return {
+        ...payload,
+        client_metadata: metadata,
+        tools: [...payload.tools, { type: "web_search" }],
+      };
     });
-    await (await parent(model, context, { apiKey: "synthetic-key", onPayload })).result();
+    await (
+      await parent(
+        model,
+        { ...context, tools, messages: [{ role: "user", content: parentText, timestamp: 1 }] },
+        { ...codeModeOptions, apiKey: "synthetic-key", onPayload },
+      )
+    ).result();
+    expect(encodings).toBe(1);
     metadata.acknowledged = "changed after parent send";
     await expect(fork()).resolves.toBe("Answer");
     await expect(fork()).resolves.toBe("Answer");
@@ -645,8 +810,20 @@ describe("prepared session fork provider boundary", () => {
     );
     expect(bodies).toHaveLength(3);
     for (const body of bodies) {
-      expect(body).toMatchObject({ client_metadata: { acknowledged: "review", unicode: "🦞" } });
+      expect(body).toMatchObject({
+        client_metadata: { acknowledged: "review", unicode, encoding: 1 },
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: [{ type: "input_text", text: parentText }],
+          }),
+        ]),
+      });
     }
     expect(bodies[2]).toEqual(bodies[1]);
+    for (const body of bodies.slice(1)) {
+      expect(body.tools).toEqual(bodies[0].tools);
+      expect(body.tool_choice).toBe("none");
+    }
   });
 });

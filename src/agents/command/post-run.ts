@@ -35,7 +35,11 @@ import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
 import { buildMainSessionRecoverySettlementPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { inspectMainSessionRecoveryLifecycleEvent } from "../main-session-recovery/main-session-recovery-lifecycle.js";
-import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
+import {
+  advancePendingFinalDeliveryCompletion,
+  persistPendingFinalDeliveryMarker,
+} from "../pending-final-delivery-marker.js";
+import type { PendingFinalRecoverySource } from "../pending-final-recovery-source.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import {
   createAgentRunRestartAbortError,
@@ -66,6 +70,7 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 const log = createSubsystemLogger("agents/agent-command");
 
 export async function finalizeEmbeddedAgentCommand(params: {
+  admittedRecoverySource: PendingFinalRecoverySource | undefined;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   deps: CliDeps;
@@ -227,6 +232,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         // internal-event turns must not re-flag the session unread.
         touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
         preserveRuntimeModel:
+          result.meta.providerStarted === false ||
           fallbackExhausted ||
           fallbackProvider !== provider ||
           fallbackModel !== model ||
@@ -306,6 +312,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+      admittedRecoverySource: params.admittedRecoverySource,
+      compactionTransitions: compactionFact?.admissionTransitions,
       assertCurrent: () => {
         assertSourceCurrent?.();
         operatorAuthority?.assertCurrent();
@@ -429,6 +437,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
         );
       };
       const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
+        advancePendingFinalDeliveryCompletion({
+          payloads,
+          intentId: pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId,
+          transition: accepted.admissionTransition,
+          entry: accepted.entry,
+        });
         sessionEntry = accepted.entry;
         maintenanceLifecycleRevision = accepted.entry.lifecycleRevision;
         deliveryLifecycleRevision = accepted.entry.lifecycleRevision;
@@ -437,11 +451,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
           accepted.previousSessionId === undefined ? undefined : accepted.sessionId,
         );
       };
-      const assertActive = () => {
+      const assertActive = composeSessionSourceAssertion([assertSourceCurrent], (assertSources) => {
+        assertSources();
         if (!authorize()) {
           throw new Error("Command compaction is no longer active");
         }
-      };
+      });
       try {
         if (maintenance.remainingMs() > 0) {
           const { runCliTurnCompactionLifecycle } = await loadCliCompactionRuntime();

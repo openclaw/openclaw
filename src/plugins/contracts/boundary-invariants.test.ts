@@ -18,6 +18,7 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/advisor/index.ts",
   "extensions/browser/plugin-registration.ts",
   "extensions/clickclack/src/discussions/register.ts",
   "extensions/codex/index.ts",
@@ -38,6 +39,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/advisor/index.ts": ["before_agent_reply"],
   "extensions/browser/plugin-registration.ts": ["session_end"],
   "extensions/clickclack/src/discussions/register.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["inbound_claim", "session_end"],

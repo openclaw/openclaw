@@ -32,7 +32,6 @@ import {
 } from "./crabbox-worker-provider.test-support.js";
 import { runCrabboxSetupEgress } from "./crabbox-worker-setup-egress.js";
 import {
-  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
@@ -1044,7 +1043,7 @@ describe("Crabbox worker provider", () => {
         }
         if (argv[1] === "run" || argv[1] === "stop") {
           commandTimeouts.push(options.timeoutMs);
-          elapsedMs += options.timeoutMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS;
+          elapsedMs += options.timeoutMs + 10_000;
         }
         return argv[1] === "stop"
           ? commandResult({ code: null, killed: true, termination: "timeout" })
@@ -1461,9 +1460,7 @@ describe("Crabbox worker provider", () => {
       setupEnv: ["ARTIFACT_TOKEN"],
     };
     try {
-      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(
-        CRABBOX_STOP_TIMEOUT_MS + 2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
-      );
+      expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(CRABBOX_STOP_TIMEOUT_MS + 20_000);
       await expect(provider.inspect(lifecycleLease(LEASE_ID, profile))).resolves.toEqual(active);
       await provider.destroy(lifecycleLease(LEASE_ID, profile));
       expect(calls.map((argv) => argv[1])).toEqual(["inspect", "stop"]);

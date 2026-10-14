@@ -9,8 +9,8 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -21,7 +21,6 @@ import {
   sessionAttentionIconName,
   resolveSessionIdleBadge,
 } from "../session-attention-presentation.ts";
-import type { SessionCreatedActor, SessionOwnerOption } from "../session-owner-chip.ts";
 import {
   resolveSessionRowBadges,
   type SessionRowBadgesParams,
@@ -30,9 +29,7 @@ import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { SessionRunVisibilityController } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
 import { Icon } from "./icon.tsx";
-import { AgentIdentityAvatar } from "./identity-avatar.tsx";
-import { SessionOwnerChip } from "./session-owner-chip.tsx";
-import { ViewerAvatar } from "./viewer-facepile.tsx";
+import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 import "../tooltip.ts";
 
 export type SessionRunVisibility = typeof sessionRunVisibility;
@@ -278,35 +275,7 @@ export function renderSessionOwnerChip(
 export function renderSessionOwnerAvatar(
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">,
 ): JSX.Element {
-  if (owner.identity?.type === "agent") {
-    const avatar = resolveAvatar({
-      id: owner.id,
-      identity: owner.identity,
-      name: owner.label,
-      profileAvatarUrl: owner.avatarUrl,
-    });
-    return (
-      <span class="viewer-avatar viewer-avatar--session" aria-label={owner.label || owner.id}>
-        <AgentIdentityAvatar
-          agent={{ id: owner.identity.id, avatar: avatar.kind === "profile" ? avatar.url : null }}
-        />
-      </span>
-    );
-  }
-  return (
-    <ViewerAvatar
-      identity={owner.identity}
-      user={{
-        id: owner.id,
-        name: owner.label,
-        avatarUrl: owner.avatarUrl,
-        watchedSessions: [],
-      }}
-      markAsViewer={false}
-      variant="session"
-      aria-hidden="true"
-    />
-  );
+  return <SessionOwnerAvatar owner={owner} />;
 }
 
 function SessionIdleState(props: { session: SidebarRecentSession }) {
@@ -334,15 +303,6 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
       </Show>
     </Show>
   );
-}
-export function renderSessionIdleState(session: SidebarRecentSession): JSX.Element {
-  if (!session.isChild && !session.unread) {
-    return undefined;
-  }
-  if (session.isChild && !resolveSessionIdleBadge(session.status, t)) {
-    return undefined;
-  }
-  return <SessionIdleState session={session} />;
 }
 
 export type TeamSessionSlotsProps = {

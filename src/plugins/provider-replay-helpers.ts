@@ -213,7 +213,7 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
-/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removal follows a stable deprecation period. */
+/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; final compatibility day: 2026-12-31. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {

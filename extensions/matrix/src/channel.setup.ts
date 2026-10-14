@@ -54,7 +54,7 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   ...matrixPluginBase,
   config: {
     ...matrixPluginBase.config,
-    /** @deprecated Use hasConfiguredStateAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use hasConfiguredStateAsync. Final compatibility day: 2026-12-31. */
     hasConfiguredState: ({ cfg, env }) => resolveMatrixAccount({ cfg, env }).configured,
     hasConfiguredStateAsync: async ({ cfg, env }) =>
       (await resolveMatrixAccountAsync({ cfg, env })).configured,
