@@ -4,6 +4,7 @@ import { queryObjects } from "node:v8";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import * as privateTempFile from "../sessions/tools/private-temp-file.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 const { fetchWithWebToolsNetworkGuardMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
@@ -85,6 +86,7 @@ describe("web_fetch output contract", () => {
   afterEach(async () => {
     await Promise.all([...spillPaths].map(async (path) => await rm(path, { force: true })));
     spillPaths.clear();
+    vi.restoreAllMocks();
   });
 
   it("declares the exact schema and promotes its complete compact hint", () => {
@@ -359,6 +361,42 @@ describe("web_fetch output contract", () => {
     expect(second.cached).toBeUndefined();
     expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["cancelled during spill write", "guard release failed"])(
+    "removes an unpublished spill when %s",
+    async (failure) => {
+      const controller = new AbortController();
+      const reason = new Error(failure);
+      const writePrivateTempFile = privateTempFile.writePrivateTempFile;
+      vi.spyOn(privateTempFile, "writePrivateTempFile").mockImplementation(async (...args) => {
+        const filePath = await writePrivateTempFile(...args);
+        spillPaths.add(filePath);
+        if (failure === "cancelled during spill write") {
+          controller.abort(reason);
+        }
+        return filePath;
+      });
+      fetchWithWebToolsNetworkGuardMock.mockResolvedValueOnce({
+        response: new Response("web fetch content ".repeat(400), {
+          headers: { "content-type": "text/plain" },
+        }),
+        finalUrl: "https://example.com/unpublished-spill",
+        release: async () => {
+          if (failure === "guard release failed") {
+            throw reason;
+          }
+        },
+      });
+      const tool = createContractTool({ maxChars: 500 });
+      await expect(
+        tool?.execute("call", { url: "https://example.com/unpublished-spill" }, controller.signal),
+      ).rejects.toBe(reason);
+      expect(spillPaths.size).toBe(1);
+      for (const filePath of spillPaths) {
+        await expect(readFile(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it("spills truncated fetched text to a private temp file", async () => {
     const fullText = "web fetch content ".repeat(400);
