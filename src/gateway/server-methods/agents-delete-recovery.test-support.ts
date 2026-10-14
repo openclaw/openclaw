@@ -5,12 +5,14 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { AgentDeletionAuthorityRollbackError } from "../../agents/agent-lifecycle-registry.js";
+import { EMBEDDED_RUN_WAITERS } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearActiveEmbeddedRun,
   resolveEmbeddedAgentRunProgressState,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import {
   deletionJournal,
   expectRespondErrorContaining,
@@ -66,6 +68,44 @@ type AgentDeleteRecoveryHarness = {
 
 export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecoveryHarness): void {
   const { mocks, makeCall, call, resume, expectTrashedWithinParent, expectNotTrashed } = harness;
+  it.each([
+    { sessionKey: undefined, isAbortable: false },
+    { sessionKey: undefined, isAbortable: true },
+    { sessionKey: "agent:test-agent:stuck", isAbortable: false },
+    { sessionKey: "agent:test-agent:stuck", isAbortable: true },
+  ])(
+    "agents.delete bounds a never-ending run (key: $sessionKey, abortable: $isAbortable)",
+    async ({ sessionKey, isAbortable }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const sessionId = "stuck-deletion-session";
+      const handle = createEmbeddedRunHandle({ runId: "stuck-run", isAbortable });
+      setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "test-agent");
+      const deletion = makeCall("agents.delete", { agentId: "test-agent" });
+      const failed = vi.fn();
+      const completed = Promise.resolve(deletion.promise).catch(failed);
+      try {
+        await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+        expect(failed).toHaveBeenCalledOnce();
+        expect(failed).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringMatching(/stuck-deletion-session.*retry agents.delete/),
+          }),
+        );
+        expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
+        expect(mocks.beginAgentDeletionRetire).not.toHaveBeenCalled();
+        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalled();
+        expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+        expect(mocks.beginAgentDeletionRollback).not.toHaveBeenCalled();
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        await completed;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.for(["agent:test-agent:active", "global", undefined])(
     "drains an active %s run before retirement and permits recreation without a deletion retry",
     async (sessionKey, { signal }) => {
@@ -109,6 +149,7 @@ export function registerAgentDeleteDrainRecoveryTests(harness: AgentDeleteRecove
           ]),
         );
         expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+        expect(EMBEDDED_RUN_WAITERS.has(sessionId)).toBe(false);
         expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
         expect(resolveEmbeddedAgentRunProgressState("other-session")).toBeDefined();
         mocks.loadConfigReturn = { agents: { entries: { main: {} } } };
