@@ -93,3 +93,4 @@ export {
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./auth-profiles/usage.js";
+export { clearAuthProfileCooldown } from "./auth-profiles/usage-owner-write.js";

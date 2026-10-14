@@ -33,7 +33,6 @@ import {
 import {
   loadAuthProfileStoreWithoutExternalProfilesAsync,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
-  updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { applyScopedAuthReadThrough } from "./store.js";
 import type {
@@ -46,6 +45,7 @@ import type {
 } from "./types.js";
 import { resolveUsageWindowUntil } from "./usage-failure-state.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
+import { updateOwnedAuthProfileUsage } from "./usage-owner-write.js";
 import {
   isSameWhamCredential,
   matchesWhamBlockGeneration,
@@ -81,33 +81,6 @@ const testing = {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileUsageTestApi")] =
     testing;
-}
-
-async function updateOwnedAuthProfileUsage(
-  store: AuthProfileStore,
-  profileId: string,
-  update: Parameters<typeof updateAuthProfileStoreWithLock>[0],
-) {
-  // Inherited credentials exist only in the owner's SQLite store. A child lock
-  // cannot persist their health state, so resolve the owner before the write.
-  let changed = false;
-  const updated = await updateAuthProfileStoreWithLock({
-    ...update,
-    profileId,
-    agentDir: await resolvePersistedAuthProfileOwnerAgentDirAsync({
-      agentDir: update.agentDir,
-      profileId,
-    }),
-    updater: (freshStore) => {
-      changed = update.updater(freshStore);
-      return changed;
-    },
-  });
-  const usage = changed ? updated?.usageStats?.[profileId] : undefined;
-  if (usage) {
-    store.usageStats = { ...store.usageStats, [profileId]: usage };
-  }
-  return updated;
 }
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";

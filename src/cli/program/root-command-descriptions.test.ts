@@ -172,6 +172,7 @@ const JSON_NOT_APPLICABLE = {
       "models image-fallbacks remove",
       "models image-fallbacks clear",
       "models auth activate",
+      "models auth clear-cooldown",
       "models auth logout",
       "models auth order set",
       "models auth order clear",

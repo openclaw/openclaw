@@ -23,7 +23,11 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import { writePersistedAuthProfileStateRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import {
+  resolveAuthProfileDatabasePath,
+  writePersistedAuthProfileStateRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import {
   findPersistedAuthProfileCredential,
@@ -31,6 +35,7 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+import { clearAuthProfileCooldown } from "./usage-owner-write.js";
 import { markAuthProfileBlockedUntil, markAuthProfileFailure } from "./usage.js";
 
 const PRIMARY_ID = "openai:primary";
@@ -354,5 +359,109 @@ describe("inherited auth-profile usage persistence", () => {
     expect(persistedChild?.profiles[PRIMARY_ID]).toBeUndefined();
     expect(persistedChild?.usageStats?.[PRIMARY_ID]).toBeUndefined();
     expect(persistedChild?.lastGood?.openai).toBeUndefined();
+  });
+
+  it("clears an inherited billing disable in its owner so the next child run selects it", async () => {
+    const lastUsed = Date.now() - 60_000;
+    const mainStore = createMainStore();
+    mainStore.lastGood = { openai: BACKUP_ID };
+    mainStore.usageStats = {
+      [PRIMARY_ID]: {
+        lastUsed,
+        errorCount: 2,
+        disabledUntil: Date.now() + 5 * 60 * 60 * 1000,
+        disabledReason: "billing",
+        failureCounts: { billing: 2 },
+      },
+    };
+    saveAuthProfileStore(mainStore, mainAgentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    const childStore = ensureAuthProfileStore(childAgentDir);
+    expect(resolveAuthProfileOrder({ store: childStore, provider: "openai" })).toEqual([
+      BACKUP_ID,
+      PRIMARY_ID,
+    ]);
+
+    await expect(
+      clearAuthProfileCooldown({
+        store: childStore,
+        profileId: PRIMARY_ID,
+        agentDir: childAgentDir,
+      }),
+    ).resolves.toBe(true);
+
+    const persistedMain = loadPersistedAuthProfileStore(mainAgentDir);
+    expect(persistedMain?.usageStats?.[PRIMARY_ID]).toEqual({ lastUsed, errorCount: 0 });
+    expect(persistedMain?.lastGood?.openai).toBe(BACKUP_ID);
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.usageStats?.[PRIMARY_ID]).toBeUndefined();
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(
+      resolveAuthProfileOrder({ store: ensureAuthProfileStore(childAgentDir), provider: "openai" }),
+    ).toEqual([PRIMARY_ID, BACKUP_ID]);
+  });
+
+  it("clears a child's own health row for an inherited credential so it stops shadowing the owner", async () => {
+    const mainStore = createMainStore();
+    saveAuthProfileStore(mainStore, mainAgentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, childAgentDir);
+    writePersistedAuthProfileStateRaw(
+      {
+        version: 1,
+        usageStats: {
+          [PRIMARY_ID]: {
+            disabledUntil: Date.now() + 60 * 60 * 1000,
+            disabledReason: "billing",
+            errorCount: 1,
+          },
+        },
+      },
+      childAgentDir,
+    );
+    const childStore = ensureAuthProfileStore(childAgentDir);
+    expect(childStore.usageStats?.[PRIMARY_ID]?.disabledReason).toBe("billing");
+
+    await expect(
+      clearAuthProfileCooldown({
+        store: childStore,
+        profileId: PRIMARY_ID,
+        agentDir: childAgentDir,
+      }),
+    ).resolves.toBe(true);
+
+    expect(childStore.usageStats?.[PRIMARY_ID]?.disabledUntil).toBeUndefined();
+    expect(
+      loadPersistedAuthProfileStore(childAgentDir)?.usageStats?.[PRIMARY_ID]?.disabledUntil,
+    ).toBeUndefined();
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(
+      ensureAuthProfileStore(childAgentDir).usageStats?.[PRIMARY_ID]?.disabledUntil,
+    ).toBeUndefined();
+  });
+
+  it("does not shadow the owner's later failures when the child has no health row", async () => {
+    writeMainStore();
+    const childStore = ensureAuthProfileStore(childAgentDir);
+    await markAuthProfileFailure({
+      store: childStore,
+      profileId: PRIMARY_ID,
+      reason: "billing",
+      agentDir: childAgentDir,
+    });
+
+    await expect(
+      clearAuthProfileCooldown({
+        store: childStore,
+        profileId: PRIMARY_ID,
+        agentDir: childAgentDir,
+      }),
+    ).resolves.toBe(true);
+
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.usageStats?.[PRIMARY_ID]).toBeUndefined();
+    expect(fs.existsSync(resolveAuthProfileDatabasePath(childAgentDir))).toBe(false);
   });
 });
