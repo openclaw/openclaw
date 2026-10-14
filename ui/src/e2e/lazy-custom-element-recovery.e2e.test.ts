@@ -901,40 +901,54 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installNativeWebChrome(page);
+        let releaseProbe = () => {};
+        const manualProbe = new Promise<void>((resolve) => {
+          releaseProbe = resolve;
+        });
         const failure = await installChunkFailure(
           page,
           controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+          { manualProbe },
         );
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-        });
-        const response = await page.goto(suite.server.baseUrl, {
-          waitUntil: "domcontentloaded",
-        });
-        expect(response?.status()).toBe(200);
-        await page.locator(".sidebar-rail").waitFor({ state: "attached" });
-        const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-        await expect.poll(failure.headCount).toBe(1);
-        expect(failure.chunkRequestCount()).toBe(1);
-        if (railProofDir) {
-          await page.screenshot({
-            path: path.join(railProofDir, "native-titlebar-failed.png"),
+        try {
+          await installMockGateway(page, {
+            featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
           });
-        }
+          const response = await page.goto(suite.server.baseUrl, {
+            waitUntil: "domcontentloaded",
+          });
+          expect(response?.status()).toBe(200);
+          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
+          const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
+          // Automatic recovery may probe again while a busy runner paints the error.
+          // Keep those probes blocked until the user has actually clicked Retry.
+          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+          expect(failure.chunkRequestCount()).toBe(1);
+          if (railProofDir) {
+            await page.screenshot({
+              path: path.join(railProofDir, "native-titlebar-failed.png"),
+            });
+          }
 
-        await retryThroughReload(page, error);
-        const toolbar = page.locator(".macos-titlebar-controls");
-        await toolbar.waitFor({ state: "visible" });
-        await page.locator(".sidebar-session-toolbar__collapse").click();
-        await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-        await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-        expect(await error.count()).toBe(0);
-        expect(failure.chunkRequestCount()).toBe(2);
-        if (railProofDir) {
-          await page.screenshot({
-            path: path.join(railProofDir, "native-titlebar-recovered.png"),
-          });
+          const reloaded = page.waitForEvent("domcontentloaded");
+          await error.getByRole("button", { name: "Retry", exact: true }).click();
+          releaseProbe();
+          await reloaded;
+          const toolbar = page.locator(".macos-titlebar-controls");
+          await toolbar.waitFor({ state: "visible" });
+          await page.locator(".sidebar-session-toolbar__collapse").click();
+          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+          expect(await error.count()).toBe(0);
+          expect(failure.chunkRequestCount()).toBe(2);
+          if (railProofDir) {
+            await page.screenshot({
+              path: path.join(railProofDir, "native-titlebar-recovered.png"),
+            });
+          }
+        } finally {
+          releaseProbe();
         }
       },
     );
