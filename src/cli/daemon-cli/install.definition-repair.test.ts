@@ -154,15 +154,23 @@ async function fixture(
     | "foreign-unit"
     | "foreign-root"
     | "old-installation"
-    | "native-policy",
-  layout: "direct" | "user-prefix shim" = "direct",
+    | "native-policy"
+    | "retired-pnpm-generation"
+    | "foreign-pnpm-generation",
+  layout: "direct" | "user-prefix shim" | "pnpm global" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
   const state = path.join(home, ".openclaw");
   const cliBinDir = layout === "user-prefix shim" ? path.join(home, "npm", "bin") : undefined;
+  // pnpm 12 (global/v11) installs each generation in its own project behind a hash link.
+  const pnpmGlobalRoot = path.join(home, "pnpm", "global", "v11");
+  const pnpmStoreRoot = (project: string, version: string) =>
+    path.join(project, "node_modules", ".pnpm", `openclaw@${version}`, "node_modules", "openclaw");
   native.root = cliBinDir
     ? path.join(home, "npm", "lib", "node_modules", "openclaw")
-    : path.join(home, "candidate");
+    : layout === "pnpm global"
+      ? pnpmStoreRoot(path.join(pnpmGlobalRoot, "2026.9.33-0"), "2026.9.33")
+      : path.join(home, "candidate");
   await fs.mkdir(path.join(native.root, "dist"), { recursive: true, mode: 0o700 });
   await fs.mkdir(state, { mode: 0o700 });
   const entry = path.join(native.root, "dist", "index.js");
@@ -175,6 +183,15 @@ async function fixture(
       ...(cliBinDir ? { bin: { openclaw: "openclaw.mjs" } } : {}),
     }),
   );
+  if (layout === "pnpm global") {
+    const project = path.join(pnpmGlobalRoot, "2026.9.33-0");
+    await fs.writeFile(
+      path.join(project, "package.json"),
+      JSON.stringify({ dependencies: { openclaw: "2026.9.33" } }),
+    );
+    await fs.symlink(native.root, path.join(project, "node_modules", "openclaw"));
+    await fs.symlink(project, path.join(pnpmGlobalRoot, "hash-a1b2"));
+  }
   process.env = {
     NODE_ENV: "test",
     HOME: home,
@@ -285,6 +302,30 @@ async function fixture(
     await fs.writeFile(path.join(foreign, "dist", "index.js"), "// foreign package\n");
     original = original.replace(entry, path.join(foreign, "dist", "index.js"));
   }
+  if (edit === "retired-pnpm-generation" || edit === "foreign-pnpm-generation") {
+    // 2026.8.35 recorded the versioned store realpath; pnpm deleted that project on update.
+    const retiredGlobalRoot =
+      edit === "retired-pnpm-generation"
+        ? pnpmGlobalRoot
+        : path.join(home, "other-pnpm", "global", "v11");
+    const retiredEntry = path.join(
+      pnpmStoreRoot(path.join(retiredGlobalRoot, "2026.8.35-0"), "2026.8.35"),
+      "dist",
+      "index.js",
+    );
+    const planned = plan.programArguments.find((arg) =>
+      arg.endsWith(path.join("dist", "index.js")),
+    );
+    expect(planned).toBe(
+      path.join(pnpmGlobalRoot, "hash-a1b2", "node_modules", "openclaw", "dist", "index.js"),
+    );
+    // Render the 2026.8.35 unit policy for the same command and environment.
+    original = original
+      .replace(planned!, retiredEntry)
+      .replace("StartLimitBurst=10", "StartLimitBurst=5")
+      .replace("StartLimitIntervalSec=300", "StartLimitIntervalSec=60")
+      .replace("OOMPolicy=continue\n", "OOMPolicy=continue\nKillMode=control-group\n");
+  }
   await fs.writeFile(native.source, original, { mode: 0o600 });
   if (edit === "foreign-unit") {
     const managedSource = resolveSystemdUnitPath(process.env);
@@ -311,6 +352,7 @@ async function fixture(
   const run = createUpdateRun({ trigger: "cli" });
   process.env.OPENCLAW_UPDATE_RUN_ID = run.runId;
   return {
+    home,
     original,
     source: native.source,
     runId: run.runId,
@@ -577,6 +619,48 @@ it.skipIf(process.platform === "win32")(
     expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
     expect(native.serviceRuntime).toHaveBeenCalled();
     expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "moves a 2026.8.35 unit off its deleted pnpm generation onto the durable install link",
+  async () => {
+    const f = await fixture("retired-pnpm-generation", "pnpm global");
+    await runDaemonInstall({ force: true, json: true }).catch((error: unknown) => {
+      if (!(error instanceof Error) || error.message !== "fixture-exit:1") {
+        throw error;
+      }
+    });
+    const result = response();
+    expect(result.ok, `${result.error} ${JSON.stringify(result.warnings)}`).toBe(true);
+    const repaired = await native.command();
+    expect(repaired.programArguments).toContain(
+      path.join(
+        f.home,
+        "pnpm",
+        "global",
+        "v11",
+        "hash-a1b2",
+        "node_modules",
+        "openclaw",
+        "dist",
+        "index.js",
+      ),
+    );
+    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
+    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "leaves a deleted pnpm generation from another global directory unchanged",
+  async () => {
+    const f = await fixture("foreign-pnpm-generation", "pnpm global");
+    const before = await fs.readdir(path.dirname(f.source));
+    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
+    expect(response().error).toContain("unknown or foreign installation");
+    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
   },
 );
 

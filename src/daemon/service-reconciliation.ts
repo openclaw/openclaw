@@ -8,6 +8,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import {
   gatewayServiceCommandMatchesRoot,
   resolveGatewayServiceInstallationRefreshRoot,
+  resolveServiceEntrypoint,
 } from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { settleGatewayServiceRebind } from "./service-rebind.js";
@@ -83,7 +84,15 @@ export async function reconcileGatewayServiceDefinition(params: {
           roots.map((root) => gatewayServiceCommandMatchesRoot(root, command)),
         );
         assertCurrent();
-        if (!ownership.includes(true)) {
+        const entrypoint = resolveServiceEntrypoint(command);
+        let owned = ownership.includes(true);
+        if (!owned && params.root && entrypoint) {
+          // Older updaters recorded pnpm store generations that the update then deleted.
+          const { isRetiredPnpmGenerationOfInstall } = await import("../infra/update-global.js");
+          owned = await isRetiredPnpmGenerationOfInstall({ entrypoint, activeRoot: params.root });
+          assertCurrent();
+        }
+        if (!owned) {
           const state = await readGatewayServiceState(resolveGatewayService(), {
             env: params.env,
             requireEffective: true,
@@ -97,10 +106,10 @@ export async function reconcileGatewayServiceDefinition(params: {
             state,
           });
           assertCurrent();
-          const owned =
+          const refreshed =
             refreshRoot && (await gatewayServiceCommandMatchesRoot(refreshRoot, command));
           assertCurrent();
-          if (!owned) {
+          if (!refreshed) {
             throw new Error("Gateway service belongs to an unknown or foreign installation.");
           }
         }
