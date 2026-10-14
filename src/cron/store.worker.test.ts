@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -240,8 +240,8 @@ it.each([false, true])(
       const storePath = state.statePath("cron", "jobs.json");
       const store = cronWorkerFixture();
       const order: string[] = [];
-      let beforeDatabase: DatabaseSync | undefined;
-      let afterDatabase: DatabaseSync | undefined;
+      let beforeDatabase: EngineConnection | undefined;
+      let afterDatabase: EngineConnection | undefined;
       const before = getCronJobsStoreRevision(storePath);
       const failure = new Error("post-commit observer failed");
       const save = saveCronJobsStore(storePath, store, {

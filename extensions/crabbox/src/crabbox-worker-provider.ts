@@ -7,10 +7,10 @@ import {
   type WorkerProfile,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import {
   type CrabboxCommandRunner,
   type LeaseCommandContext,
@@ -107,7 +107,7 @@ export function createCrabboxWorkerProvider(
   dependencies: CrabboxWorkerProviderDependencies,
 ): WorkerProvider & { dispose: () => Promise<void>; images: CrabboxSnapshotActions } {
   const wallpaperBase64 = loadCrabboxWorkerWallpaperBase64(dependencies.wallpaperPath);
-  const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
+  const runCommand = dependencies.runCommand ?? runCrabboxProcess;
   const warn = dependencies.warn ?? (() => {});
   const sleep =
     dependencies.sleep ?? ((milliseconds, signal) => delay(milliseconds, undefined, { signal }));

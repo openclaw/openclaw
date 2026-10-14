@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -21,7 +22,7 @@ type DebugProxyCaptureDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "capture_sessions" | "capture_events" | "capture_blobs"
 >;
-type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
+type NodeSqliteDatabase = EngineConnection;
 
 /** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. */
 export type DebugProxyCaptureReader = {
