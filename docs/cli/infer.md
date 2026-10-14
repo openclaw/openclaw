@@ -136,9 +136,9 @@ Use full `<provider/model>` refs with `--local` to smoke-test one provider witho
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
 openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json

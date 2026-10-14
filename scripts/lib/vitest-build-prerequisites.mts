@@ -20,6 +20,7 @@ const aiPackageConsumer = {
 // These real CLI repairs can build Control UI assets even when the fixture's
 // Gateway UI is disabled. Finish that shared write before admitting readers.
 const doctorUiConsumers = [
+  "src/commands/doctor.auth-profile-consumers.e2e.test.ts",
   "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
   "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
@@ -356,6 +357,7 @@ const runtimeConsumers = [
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
+    "src/gateway/gateway.sessions-send-recovery.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],

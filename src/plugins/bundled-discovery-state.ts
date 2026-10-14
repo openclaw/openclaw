@@ -144,39 +144,43 @@ export async function prepareBundledDiscoveryMode(
   readPreparedRow?: (databasePath: string) => Promise<{ value_json: string } | undefined>,
 ): Promise<() => void> {
   const owner = getPluginCache();
+  const key = resolveBundledDiscoveryMemoKey(env);
   const options = resolveBundledDiscoveryOptions({ env });
   const snapshot = isArtifactPreservingStateRead()
     ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
     : undefined;
   if (snapshot) {
     const existing = discoveryState.snapshotModes.get(snapshot);
-    if (existing) {
-      return () => discoveryState.snapshotModes.set(snapshot, existing);
-    }
     // The read worker retains these snapshot bytes; derivation consumes its result locally.
-    let value: BundledDiscoveryMode;
-    try {
-      const row = readPreparedRow
-        ? await readPreparedRow(resolveBundledDiscoveryMemoKey(env))
-        : await readPluginMetadataStateRow("bundled-discovery", options);
-      value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
-    } catch (error) {
-      if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-        throw new PluginCacheFactInvalidatedError(
-          "Plugin discovery read admission changed during preparation; retry the operation.",
-          { cause: error },
-        );
+    let value = existing?.value;
+    if (!existing) {
+      try {
+        const row = readPreparedRow
+          ? await readPreparedRow(key)
+          : await readPluginMetadataStateRow("bundled-discovery", options);
+        value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
+      } catch (error) {
+        if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+          throw new PluginCacheFactInvalidatedError(
+            "Plugin discovery read admission changed during preparation; retry the operation.",
+            { cause: error },
+          );
+        }
+        throw error;
       }
-      throw error;
     }
     const activate = () => {
       discoveryState.snapshotModes.set(snapshot, { value });
+      // Startup adopts this operation cache after releasing its private snapshot.
+      // Private inspection must not replace an already live process fact.
+      if (owner.kind === "operation") {
+        owner.preparedBundledDiscoveryModes.set(key, { value: { value, generation: owner } });
+      }
     };
     activate();
     return activate;
   }
   const cache = owner.preparedBundledDiscoveryModes;
-  const key = resolveBundledDiscoveryMemoKey(env);
   const prepared = await preparePluginCacheFact(owner, cache, key, async () => {
     let value: BundledDiscoveryMode;
     if (discoveryState.memoized?.key === key) {

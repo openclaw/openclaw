@@ -76,6 +76,8 @@ async function mountReadyPanel(client: TerminalGatewayClient) {
   panel.available = true;
   document.body.append(panel);
   panel.toggle();
+  await panel.updateComplete;
+  await vi.dynamicImportSettled();
   await waitForFast(() => {
     expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
   });

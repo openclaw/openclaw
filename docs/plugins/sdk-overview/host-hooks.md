@@ -290,6 +290,35 @@ plugin code that calls
 `api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
 `api.unscheduleSessionTurnsByTag` directly.
 
+`api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
+and `phases` filters:
+
+```typescript
+api.agent.events.registerAgentEventSubscription({
+  id: "tool-starts",
+  streams: ["tool"],
+  phases: ["start"],
+  handle(event, ctx) {
+    ctx.setRunContext("lastToolStart", { timestamp: event.ts });
+  },
+});
+```
+
+Both filters must match for delivery. Omit a filter or pass an empty array to
+leave that dimension unrestricted. `phases` must be an array of non-empty
+strings; registration trims each string. A non-empty phase filter matches only
+events whose `data` is an object with a string `phase` in that list. Events with
+no phase or a non-string phase are excluded.
+Set `payload: "metadata"` to retain only own enumerable top-level `data` fields
+containing strings of at most 256 characters, numbers, booleans, or `null`, without
+reading accessors; omitted `payload` or `"full"` preserves the full cloned payload.
+
+Subscribe narrowly: event payloads are cloned per matching subscription. The
+host applies stream and phase filters before cloning payloads or allocating
+handler context. Filtering out terminal lifecycle events does not prevent
+host-owned terminal bookkeeping or run-context cleanup; cleanup still waits
+for pending subscription handlers within the host's bounded grace period.
+
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
 Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
 the target session, plugin-owned naming, and cleanup.

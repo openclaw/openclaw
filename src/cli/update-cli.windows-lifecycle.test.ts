@@ -897,11 +897,7 @@ describe("update-cli", () => {
 
       await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      if (failureKind === "post-core exception") {
-        expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
-          expect.objectContaining({ kind: "update", error: failure.message }),
-        );
-      }
+      expect(triageAfterFailure).not.toHaveBeenCalled();
       expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0]).toBeLessThan(

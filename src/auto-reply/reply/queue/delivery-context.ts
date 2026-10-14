@@ -364,6 +364,11 @@ export function collectRuntimeMetadata(
   // Delivery-key equality proves every source has the same turn authority.
   // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
   const authoritySource = items.at(-1);
+  const terminalObservers = items.flatMap((item) =>
+    item.runObservers?.onAgentRunTerminalOutcome
+      ? [item.runObservers.onAgentRunTerminalOutcome]
+      : [],
+  );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -397,7 +402,25 @@ export function collectRuntimeMetadata(
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
-    runObservers: items.at(-1)?.runObservers,
+    runObservers:
+      terminalObservers.length === 0
+        ? authoritySource?.runObservers
+        : {
+            ...authoritySource?.runObservers,
+            onAgentRunTerminalOutcome: (outcome) => {
+              const failures: unknown[] = [];
+              for (const observer of terminalObservers) {
+                try {
+                  observer(outcome);
+                } catch (error) {
+                  failures.push(error);
+                }
+              }
+              if (failures.length > 0) {
+                throw failures[0];
+              }
+            },
+          },
   };
 }
 

@@ -1,0 +1,59 @@
+{
+  "id": "advisor",
+  "categories": [
+    "agent-orchestration"
+  ],
+  "name": "Advisor",
+  "description": "Experimental: reviews ongoing agent work on the session's own model and offers one short correction.",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "configGroups": [
+    {
+      "id": "reviews",
+      "title": "Reviews",
+      "order": 10,
+      "properties": ["everyToolCalls", "everyMinutes", "reviewInstructions"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "everyToolCalls": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000,
+        "default": 10
+      },
+      "everyMinutes": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1440,
+        "default": 20
+      },
+      "reviewInstructions": {
+        "type": "string",
+        "maxLength": 4000
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "everyToolCalls": {
+      "label": "Review every N tool calls",
+      "help": "Review after this many tool calls start in a conversation, including during a run and commands still running in the background. 0 turns this trigger off."
+    },
+    "everyMinutes": {
+      "label": "Review every N minutes",
+      "help": "Review after this many minutes of accumulated agent run time in a conversation. 0 turns this trigger off."
+    },
+    "reviewInstructions": {
+      "label": "Review instructions",
+      "help": "Optional guidance for what to review and when to stay quiet (up to 4000 characters). Leave blank to use the built-in guidance shown in the empty field; copy it as a starting point. Changes apply to the next review without restarting. The output format and safety rules stay fixed; the second-stage verification prompt is not editable. Custom guidance is not covered by the default prompt evaluation.",
+      "multiline": true,
+      "placeholder": "Only correct a clear wrong turn when a cheaper authorized next step still fulfills the user's request. Look for unrequested loops with unchanged failures, polling finished work, waiting after a producer exited, ignored corrections, scope drift or success claims contradicted by results.\nCalibration: \"Four of five required checks done; next do the fifth\" needs NO_CHANGE. \"Fetched all pages; next consolidate them\" needs NO_CHANGE, even if tool output summarizes the data. \"Producer exited with bad config; keep waiting for its output\" needs CORRECTION: fix the available config and restart, not keep waiting.\nA snapshot ending never means the agent stopped. Never remind it to perform its already-planned work. Preserve requested repetition, waiting, ordering and timing. Reproduce BEFORE fixing permits fixing afterward; reproduce ONLY and diagnose-only do not.\nName concrete evidence and the different next action. Fix recoverable causes using available authorized inputs, then continue within scope, including known test updates and requested verification. Report a blocker only if no viable path remains; never invent permissions or weaken safety. If unsure there is a wrong turn, choose NO_CHANGE."
+    }
+  },
+  "version": "2026.9.9"
+}

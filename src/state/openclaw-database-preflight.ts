@@ -1,9 +1,9 @@
 import { realpathSync } from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import {
   isConfiguredAgentDatabaseTarget,
+  listConfiguredSessionStoreAgentIds,
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -64,7 +64,6 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
-  type StateSchemaInspection,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
 
@@ -200,7 +199,9 @@ export async function preflightOpenClawDatabaseSchemas(
     ? getAgentDatabaseStartupAdmission()
     : undefined;
   const admissionConfig = options.agentAdmissionConfig;
-  const admittedAgentIds = new Set(admissionConfig ? listAgentIds(admissionConfig) : []);
+  const admittedAgentIds = new Set(
+    admissionConfig ? listConfiguredSessionStoreAgentIds(admissionConfig) : [],
+  );
   const scheduling = startup?.scheduling(
     options.env,
     admissionConfig
@@ -248,16 +249,6 @@ export async function preflightOpenClawDatabaseSchemas(
       const cleanClose = purpose === "runtime" && readSqliteDatabaseCleanClose(statePath);
       let stateLocation =
         activeSnapshot?.location ?? (cleanClose || assertStateSource ? statePath : undefined);
-      if (stateLocation === undefined) {
-        stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
-          preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
-          allowLiveOwner: options.preserveSourceArtifacts !== false,
-          signal: options.signal,
-          // Any failed removal refuses admission; keep its cause for the Bun EBUSY deferral.
-          requireCleanup: true,
-        });
-        stateLocation = stateSnapshot.location;
-      }
       options.signal?.throwIfAborted();
       const input: StateSchemaInspectionInput = {
         pathname: statePath,
@@ -267,39 +258,60 @@ export async function preflightOpenClawDatabaseSchemas(
         scope: options.scope,
         purpose,
       };
-      let inspection: StateSchemaInspection;
-      if (
+      const inspectSource =
+        stateLocation === undefined && options.preserveSourceArtifacts === false;
+      await using reader =
         !assertStateSource &&
-        purpose === "runtime" &&
+        (purpose === "runtime" || inspectSource) &&
         !options.requireStartupMigrationReadiness &&
         !options.openStateSchemaReadAdmission
-      ) {
-        await using reader = createAgentSchemaInspectionWorker();
-        inspection = await reader.inspectState(
-          { ...input, schemaContracts: captureStateSchemaInspectionContracts() },
-          options.signal,
-          stateLocation,
-        );
-        adoptSqliteSchemaContracts(inspection.schemaContracts ?? []);
-      } else {
-        // Boot admission exposes this native handle to its enclosing migration owner.
-        stateDatabase = openNodeSqliteDatabase(
-          cleanClose ? resolveImmutableSqliteFileUri(stateLocation) : stateLocation,
-          { readOnly: true },
-        );
-        closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
-        stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        const admittedDatabase = stateDatabase;
-        assertStateSource?.();
-        inspection = assertStateSource
-          ? runSqliteDeferredTransactionSync(
-              admittedDatabase,
-              () => inspectStateDatabaseSchema(admittedDatabase, input),
-              { operationLabel: "state.startup-prepared-schema" },
-            )
-          : inspectStateDatabaseSchema(stateDatabase, input);
-        assertStateSource?.();
+          ? createAgentSchemaInspectionWorker()
+          : undefined;
+      if (reader) {
+        input.schemaContracts = captureStateSchemaInspectionContracts();
       }
+      // Online inspection needs one native read transaction, not a payload-sized copy.
+      // Keep it in the child: closing a source here could release this process's writer locks.
+      let inspection =
+        reader && inspectSource ? await reader.inspectState(input, options.signal) : null;
+      if (!inspection) {
+        if (stateLocation === undefined) {
+          stateSnapshot = await prepareSqliteReadOnlyLocation(realpathSync.native(statePath), {
+            preserveSourceArtifacts: options.preserveSourceArtifacts ?? true,
+            allowLiveOwner: options.preserveSourceArtifacts !== false,
+            signal: options.signal,
+            // Any failed removal refuses admission; keep its cause for the Bun EBUSY deferral.
+            requireCleanup: true,
+          });
+          stateLocation = stateSnapshot.location;
+        }
+        options.signal?.throwIfAborted();
+        if (reader) {
+          inspection = await reader.inspectState(input, options.signal, stateLocation);
+        } else {
+          // Boot admission exposes this native handle to its enclosing migration owner.
+          stateDatabase = openNodeSqliteDatabase(
+            cleanClose ? resolveImmutableSqliteFileUri(stateLocation) : stateLocation,
+            { readOnly: true },
+          );
+          closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
+          stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+          const admittedDatabase = stateDatabase;
+          assertStateSource?.();
+          inspection = assertStateSource
+            ? runSqliteDeferredTransactionSync(
+                admittedDatabase,
+                () => inspectStateDatabaseSchema(admittedDatabase, input),
+                { operationLabel: "state.startup-prepared-schema" },
+              )
+            : inspectStateDatabaseSchema(stateDatabase, input);
+          assertStateSource?.();
+        }
+      }
+      if (!inspection) {
+        throw new Error("Missing state schema inspection result");
+      }
+      adoptSqliteSchemaContracts(inspection.schemaContracts ?? []);
       Object.assign(result, inspection.schemas);
       stateInspectionErrors.push(...inspection.inspectionErrors);
       if (

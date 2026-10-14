@@ -127,10 +127,12 @@ export async function dispatchSqliteWorkerJob(
     if (request.timing) {
       request.timing.posted = performance.now();
     }
-    slot.worker.postMessage(
-      request,
-      request.operationAdmission ? [request.operationAdmission] : [],
-    );
+    // Serialized commands are owned by this dispatch; custody keeps their byte charge until settlement.
+    slot.worker.postMessage(request, [
+      ...(request.operationAdmission ? [request.operationAdmission] : []),
+      ...("input" in request ? [request.input.buffer] : []),
+      ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
+    ]);
     if (request.timing) {
       request.timing.postFinished = performance.now();
     }
@@ -404,6 +406,9 @@ export function receiveSqliteWorkerReply(
     owner.fail(new Error("SQLite worker returned an unexpected response"));
     return;
   }
+  if (reply.transactionCount !== undefined) {
+    job.observation.recordTransactions?.(reply.transactionCount);
+  }
   if (job.observation.timing && reply.timing) {
     Object.assign(job.observation.timing, reply.timing, { replyReceived: performance.now() });
   }
@@ -474,7 +479,10 @@ export function receiveSqliteWorkerReply(
     );
     if (result.type === "continue") {
       // Continuations retain the current job and its reserved transport credits through drain.
-      slot.worker.postMessage(result.request, []);
+      slot.worker.postMessage(
+        result.request,
+        result.request.type === "execute-frame" ? [result.request.input.buffer] : [],
+      );
       return;
     }
     value = result.value;

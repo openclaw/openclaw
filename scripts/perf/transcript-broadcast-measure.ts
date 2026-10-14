@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -14,14 +15,28 @@ import {
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { readGatewayCpuUsage, measureGatewayCpuUsage } from "../lib/gateway-bench-profile.ts";
-import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import {
+  readGatewayCpuUsage,
+  measureGatewayCpuUsage,
+  measureGatewayAllocations,
+} from "../lib/gateway-bench-profile.ts";
+import {
+  buildGatewayBenchChildArgs,
+  createGatewayBenchEnv,
+  writePluginFixtures,
+} from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
+    allocations: { type: "boolean", default: false },
+    scenario: { type: "string", default: "transcript-broadcast" },
+    revision: { type: "string" },
+    operations: { type: "string" },
+    limit: { type: "string", default: "100" },
+    "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string", default: "41034" },
@@ -41,8 +56,31 @@ const mockPort = integer(values["mock-port"], "--mock-port", 40000);
 if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and <= 65535");
 }
-const clientCount = integer(values.clients, "--clients");
-const runCount = integer(values.runs, "--runs");
+const scenario = values.scenario;
+if (
+  !["sessions.list", "subscribe", "chat.send", "transcript-broadcast", "plugins.reload"].includes(
+    scenario,
+  )
+) {
+  throw new Error(
+    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, or plugins.reload",
+  );
+}
+const turnScenario = scenario === "chat.send" || scenario === "transcript-broadcast";
+if (!values.allocations && scenario !== "transcript-broadcast") {
+  throw new Error("--scenario requires --allocations");
+}
+const operations = integer(
+  values.operations ?? (scenario === "plugins.reload" ? "1" : "100"),
+  "--operations",
+);
+const limit = integer(values.limit, "--limit");
+const rowMode = values["row-mode"];
+if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
+  throw new Error("--row-mode must be compact, sidebar, or dashboard");
+}
+const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
 const chunkCount = integer(values.chunks, "--chunks");
 const root = path.resolve(values["state-dir"]);
@@ -73,6 +111,14 @@ cfg.plugins = {
   ...cfg.plugins,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
+let reloadPluginId: string | undefined;
+if (scenario === "plugins.reload") {
+  const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
+  reloadPluginId = plugin.pluginIds[0];
+  cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
+}
+const toolPath = path.join(root, "workspace", "synthetic-tool-input.txt");
+writeFileSync(toolPath, "Synthetic allocation benchmark tool result.\n");
 const configPath = path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = "Synthetic streamed answer. ";
@@ -125,10 +171,13 @@ let streamRequests = 0;
 let primaryStreamRequests = 0;
 let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
+let toolCalls = 0;
+let toolResults = 0;
 let cohort:
   | {
       id: string;
       arrivals: Set<number>;
+      toolCallIds: Set<string>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -158,10 +207,29 @@ const mock = createServer((req, res) => {
           .find((text) => text !== undefined)
       : undefined;
     const index = facts.turnIndex;
+    const toolOutput =
+      Array.isArray(input) && cohort
+        ? input.findLast(
+            (item) =>
+              item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
+          )
+        : undefined;
+    const continuation =
+      scenario === "chat.send" && facts.purpose === "benchmark-turn" && toolOutput !== undefined;
+    if (continuation) {
+      if (
+        typeof toolOutput.output !== "string" ||
+        !toolOutput.output.includes("Synthetic allocation benchmark tool result.")
+      ) {
+        throw new Error("synthetic read tool did not return its fixture text");
+      }
+      toolResults++;
+    }
     const primary =
       cohort &&
       facts.purpose === "benchmark-turn" &&
       !facts.hasToolOutput &&
+      !continuation &&
       index !== undefined &&
       index >= 1 &&
       index <= runCount &&
@@ -188,12 +256,45 @@ const mock = createServer((req, res) => {
         await cohort.ready;
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of primary ? events : utilityEvents) {
+      let toolAnswer;
+      if (primary && scenario === "chat.send" && cohort) {
+        const callId = `call_allocation_${cohort.id}`;
+        cohort.toolCallIds.add(callId);
+        const item = {
+          type: "function_call",
+          id: `fc_${cohort.id}`,
+          call_id: callId,
+          name: "read",
+          arguments: JSON.stringify({ path: toolPath }),
+        };
+        toolCalls++;
+        toolAnswer = [
+          { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
+          {
+            type: "response.function_call_arguments.delta",
+            item_id: item.id,
+            output_index: 0,
+            delta: item.arguments,
+          },
+          { type: "response.output_item.done", output_index: 0, item },
+          {
+            type: "response.completed",
+            response: {
+              id: `resp_${cohort.id}`,
+              status: "completed",
+              output: [item],
+              usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
+            },
+          },
+        ];
+      }
+      const answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      for (const event of answer) {
         if (res.destroyed) {
           break;
         }
         res.write(`data: ${JSON.stringify(event)}\n\n`);
-        if (primary && event.type === "response.output_text.delta") {
+        if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(10);
         }
       }
@@ -317,7 +418,14 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     release = resolve;
     reject = rejectReady;
   });
-  cohort = { id: randomUUID(), arrivals: new Set(), ready: cohortReady, release, reject };
+  cohort = {
+    id: randomUUID(),
+    arrivals: new Set(),
+    toolCallIds: new Set(),
+    ready: cohortReady,
+    release,
+    reject,
+  };
   const current = cohort;
   const timeout = setTimeout(
     () =>
@@ -333,7 +441,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
       cohortReady,
       ...keys.map(async (sessionKey, index) => {
         const runId = randomUUID();
-        await rpc(client, "agent", {
+        await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
           sessionKey,
           message: `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.`,
           deliver: false,
@@ -495,7 +603,49 @@ try {
     throw new Error("no sender client");
   }
   console.log("PHASE subscribed-and-reset");
-  await runRound(sender);
+  const runScenario = async () => {
+    if (turnScenario) {
+      await runRound(sender);
+      return;
+    }
+    for (let operation = 0; operation < operations; operation++) {
+      if (scenario === "sessions.list" || scenario === "subscribe") {
+        const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+        const result = await rpc(sender, method, {
+          limit,
+          rowMode,
+          archived: "all",
+        });
+        const page =
+          scenario === "subscribe"
+            ? isRecord(result) && result.subscribed === true
+              ? result.list
+              : undefined
+            : result;
+        if (
+          !isRecord(page) ||
+          typeof page.totalCount !== "number" ||
+          page.count !== Math.min(limit, page.totalCount)
+        ) {
+          throw new Error(`${method} did not return the requested page`);
+        }
+      } else {
+        const result = await rpc(sender, "plugins.reload", {
+          plugins: [{ pluginId: reloadPluginId }],
+          waitForDrain: true,
+        });
+        if (
+          !result ||
+          typeof result !== "object" ||
+          !("restartRequired" in result) ||
+          result.restartRequired !== false
+        ) {
+          throw new Error("synthetic plugin reload did not apply live");
+        }
+      }
+    }
+  };
+  await runScenario();
   console.log("PHASE warmed");
   await drainEvents();
   const samples = [];
@@ -508,21 +658,41 @@ try {
     peakPrimaryStreams = 0;
     streamRequests = 0;
     primaryStreamRequests = 0;
+    toolCalls = 0;
+    toolResults = 0;
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
-    await runRound(sender);
-    await drainEvents();
+    const workload = async () => {
+      await runScenario();
+      await drainEvents();
+    };
+    const allocation = values.allocations
+      ? await measureGatewayAllocations(
+          gateway,
+          path.join(output, `allocation-${round}.heapprofile`),
+          turnScenario ? runCount : operations,
+          workload,
+        )
+      : undefined;
+    if (!values.allocations) {
+      await workload();
+    }
     measuring = false;
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
     }
-    if (peakPrimaryStreams !== runCount || primaryStreamRequests !== runCount) {
+    if (turnScenario && (peakPrimaryStreams !== runCount || primaryStreamRequests !== runCount)) {
       throw new Error(
         `expected ${runCount} primary streams: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
       );
     }
-    for (const event of ["session.message", "sessions.changed"]) {
+    if (scenario === "chat.send" && (toolCalls !== 1 || toolResults !== 1)) {
+      throw new Error(
+        `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
+      );
+    }
+    for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
         throw new Error(
@@ -537,26 +707,48 @@ try {
     const sourceEvents = deliveredSessionEvents / clientCount;
     const sample = {
       round,
+      scenario,
+      allocation,
+      toolCalls,
+      toolResults,
       ...cpu,
       eventCounts: Object.fromEntries(counters),
       perClientEventCounts: perClientCounters.map((counts) => Object.fromEntries(counts)),
       peakStreams,
       peakPrimaryStreams,
       primaryStreamRequests,
-      utilityStreamRequests: streamRequests - primaryStreamRequests,
+      utilityStreamRequests: streamRequests - primaryStreamRequests - toolResults,
       streamRequests,
       deliveredEvents,
       deliveredSessionEvents,
       sourceEvents,
-      mainThreadMsPerSessionEvent: cpu.mainThread.totalMs / sourceEvents,
+      mainThreadMsPerSessionEvent: sourceEvents ? cpu.mainThread.totalMs / sourceEvents : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
     samples.push(sample);
     console.log(JSON.stringify(sample));
+    if (allocation) {
+      console.table([
+        {
+          scenario,
+          round,
+          operations: allocation.operationCount,
+          "estimated bytes/op": Math.round(allocation.estimatedAllocatedBytesPerOperation),
+          "GC ms": allocation.gcMs.toFixed(2),
+          "GC ms/op": allocation.gcMsPerOperation.toFixed(3),
+          "GC count": allocation.gcCount,
+        },
+      ]);
+    }
   }
   const result = {
     output,
+    scenario,
+    revision: values.revision ?? null,
+    operationsPerRound: turnScenario ? runCount : operations,
+    limit,
+    rowMode,
     clientCount,
     runCount,
     chunks: chunkCount,

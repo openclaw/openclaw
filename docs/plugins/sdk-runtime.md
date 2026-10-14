@@ -112,7 +112,11 @@ followed by its completed messages and the side question, preserving its system 
 settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
 payload data without re-running the parent's one-shot continuation hooks.
 Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order. The replay uses the current prepared model's proxy and TLS policy. Session read
+conversation order.
+If a published tool call is still running when the fork starts, the built-in
+runtime includes a non-error placeholder saying its result is not available yet.
+This does not cancel the parent call or persist a result in the parent session.
+The replay uses the current prepared model's proxy and TLS policy. Session read
 authority is checked immediately before every network send, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
@@ -300,6 +304,14 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+Diagnostic subscriptions made while a managed plugin is loading, registering,
+or running belong to that instance. OpenClaw automatically unsubscribes them
+when the instance is disposed, including after a failed load or replacement.
+The unsubscribe handle still releases a subscription early and removes its
+cleanup registration. This covers `onDiagnosticEvent` and
+`onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
+as host-owned diagnostic subscriptions created on the plugin's behalf.
 
 ### Instance-bound background context
 
@@ -680,6 +692,16 @@ after consumer retirement. See [decision models](/plugins/sdk-overview/capabilit
 for provider selection, lifecycle, failure handling, limits, and diagnostics.
 
 ## Setup secret egress
+
+Worker providers can optionally implement `runSetupCommand` to run repository
+binding lifecycle commands over their owned lease transport. The host supplies
+the prepared workspace and HOME, a script factory accepting only the bounded
+remote environment, and a live attached-environment/repository authority guard.
+The provider rechecks that guard after awaits and immediately before launch.
+Returning `undefined` retains the normal node tunnel; a protected transport error
+must reject instead of falling back. Project preparation's script factory accepts
+the same bounded prepared environment. Secrets and host proxy credentials remain
+owned by the setup-egress capability below.
 
 The private official-plugin entrypoint `openclaw/plugin-sdk/secret-egress-runtime`
 exports `withSetupSecretEgress(options, run)` alongside `withConfiguredModelEgress`.

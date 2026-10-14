@@ -139,6 +139,36 @@ describe("isSilentReplyPayloadText", () => {
       ),
     ).toBe(false);
   });
+
+  it("keeps reasoning bodies that mention the token mid-text and close with it", () => {
+    // Mixed reasoning + prose bodies stay deliverable: a standalone in-body
+    // mention of the token is never treated as a silence decision, matching
+    // the answer-preservation contract (#165025 untagged path: #138662).
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe runtime context confirms another continuation event -- same inbound (msg 24682), and my reply already went out successfully (msg 24683).\n\nThe correct move: NO_REPLY. The user already has my response. Adding more text would be noise.\n\nNO_REPLY.",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "analysis\nMeeting moved to 3 pm. The NO_REPLY token is a control marker.\nNO_REPLY",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([".", "!", "?"])("suppresses reasoning text with trailing NO_REPLY%s", (punctuation) => {
+    expect(isSilentReplyPayloadText(`think\ninternal reasoning\nNO_REPLY${punctuation}`)).toBe(
+      true,
+    );
+  });
+
+  it("keeps reasoning bodies that mention the token but decide to answer", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe user asked me to reply NO_REPLY only when there is nothing new.\nHere is the answer: 2+2=4.\nNO_REPLY",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
@@ -160,6 +190,7 @@ describe("custom silent tokens", () => {
     const upper = token.toUpperCase();
     for (let pass = 0; pass < 2; pass++) {
       expect(isSilentReplyText(`${upper} ${token}`, token)).toBe(true);
+      expect(isSilentReplyPayloadText(`think\ninternal reasoning\n${token}!`, token)).toBe(true);
       expect(stripSilentToken(`done ${upper}\n`, token)).toBe("done");
       expect(startsWithSilentToken(`${upper}你好`, token)).toBe(true);
       expect(stripLeadingSilentToken(`${upper}你好`, token)).toBe("你好");

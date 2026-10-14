@@ -1,17 +1,17 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isJobEnabled } from "../service/jobs-scheduling.js";
+import { isJobEnabled, recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -36,14 +36,15 @@ import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 
 const ownerStartTime = getFileLockProcessStartTime(process.pid);
 
-function query(db: DatabaseSync) {
+function query(db: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(db);
 }
 
-function loadJobs(db: DatabaseSync, storeKey: string) {
+function loadJobs(db: EngineConnection, storeKey: string) {
   const jobs = loadedCronStoreFromRows(
     loadCronRows(db, storeKey, undefined, { includeGrantDefinitionProjection: true }),
   ).store.jobs;
@@ -63,7 +64,7 @@ function matchingExit(job: CronJob, context: CronRunRequestContext): boolean {
 }
 
 function skipRequest(
-  db: DatabaseSync,
+  db: EngineConnection,
   receiptSchema: CronRunReceiptWriteSchema,
   handle: CronRunReceiptHandle,
   job: CronJob | undefined,
@@ -121,7 +122,7 @@ export function requestCronRunsInWorker(
 }
 
 function requestCronRunsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
   jobs: Map<string, CronJob>,
   receiptSchema: CronRunReceiptWriteSchema,
@@ -152,6 +153,18 @@ function requestCronRunsInDatabase(
     const timed = parseCronScheduledRunId(request.receiptId);
     let reason: string | undefined;
     if (existing) {
+      if (existing.status !== "running" && job && timed && request.mode === "scheduled") {
+        if (timed.scheduledSlotMs === job.state.nextRunAtMs) {
+          recomputeJobNextRunAtMs({
+            state: { deps: { nowMs: () => input.nowMs, log: createCronMutationLogger([]) } },
+            job,
+            nowMs: input.nowMs,
+            deferredNotifications: [],
+            skipScheduleErrorHandling: true,
+          });
+          updateCronRuntimeRow(db, input.storeKey, job);
+        }
+      }
       reason = "already-requested";
     } else if (
       !job ||
@@ -223,6 +236,8 @@ function requestCronRunsInDatabase(
       delete job.state.forcePreservedNextRunAtMs;
     } else if (request.preserveSchedule) {
       retainManualOneShotOccurrence(job, request.scheduleOwnershipAtMs ?? input.nowMs);
+    } else {
+      delete job.state.forcePreservedNextRunAtMs;
     }
     job.state.queuedAtMs = input.nowMs;
     if (persistQueuedState) {
@@ -248,7 +263,7 @@ export function drainCronQueueInWorker(
 }
 
 function drainCronQueueInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: CronRunQueueOperations["cron.drainQueue"]["input"],
   jobs: Map<string, CronJob>,
   receiptSchema: CronRunReceiptWriteSchema,

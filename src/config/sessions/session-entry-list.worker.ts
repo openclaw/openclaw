@@ -38,6 +38,7 @@ export function readSessionEntryList(
   let revision: string | undefined;
   let unchanged: true | undefined;
   let nextCronRunUpdatedAt: number | null = null;
+  let nextCronRunSessionKey: string | null = null;
 
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -49,7 +50,10 @@ export function readSessionEntryList(
               database,
               resolveSqliteScope({ ...scope, sessionKey: "" }),
               scope,
-              { captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value) },
+              {
+                captureCronRunUpdatedAt: (value) => (nextCronRunUpdatedAt = value),
+                captureCronRunSessionKey: (value) => (nextCronRunSessionKey = value),
+              },
             );
           if (
             scope.projection !== "list" ||
@@ -122,5 +126,6 @@ export function readSessionEntryList(
     revision,
     unchanged,
     ...(scope.expiredCronRuns ? { nextCronRunUpdatedAt } : {}),
+    ...(scope.cronRetention ? { nextCronRunSessionKey } : {}),
   };
 }

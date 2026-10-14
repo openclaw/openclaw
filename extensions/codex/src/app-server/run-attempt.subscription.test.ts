@@ -11,6 +11,7 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
@@ -18,7 +19,6 @@ import {
   assistantMessage,
   createParams,
   createStartedThreadHarness,
-  fastWait,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
@@ -42,6 +42,8 @@ setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
   it("revokes native submission custody when an unstamped parent session is replaced", async () => {
+    // Worker preparation must not race this authority check's execution deadline.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const params = createParams(path.join(tempDir, "unstamped-parent.jsonl"), tempDir);
     const target = {
       agentId: "main",
@@ -96,6 +98,9 @@ describe("Codex attempt subscription recovery", () => {
     let turns = 0;
     const harness = createStartedThreadHarness(
       async (method) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
         if (method === "thread/start") {
           return threadStartResult(++starts === 1 ? "thread-1" : "thread-sibling");
         }
@@ -109,6 +114,7 @@ describe("Codex attempt subscription recovery", () => {
       },
       { persistedThreads: [] },
     );
+    ownCodexInferenceClient(harness.client);
     const first = runCodexAppServerAttempt(params);
     await first.waitForTurnAccepted();
     const sibling = runCodexAppServerAttempt(siblingParams);
@@ -303,7 +309,8 @@ describe("Codex attempt subscription recovery", () => {
       });
 
       const retry = runCodexAppServerAttempt({ ...params, runId: "run-retry" });
-      await vi.waitFor(() => expect(turnCount).toBe(2), fastWait);
+      await retry.waitForTurnAccepted();
+      expect(turnCount).toBe(2);
       await harness.completeTurn({ threadId, turnId: "turn-2" });
       await retry;
       expect(

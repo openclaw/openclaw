@@ -1,4 +1,5 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
+import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
@@ -262,7 +263,6 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     return output.humanOutputWritten ? [] : output.humanOutput.trimEnd().split("\n");
   }
 
-  // Default output stays terse; causes and stack traces require explicit debug intent.
   const errors = collectNestedErrorCandidates(options.error);
   const stateBusy = errors.some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
@@ -289,7 +289,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand;
+      : isUpdateCommand || isPluginUpdateCommand || isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,
       ...(showReason ? [reason(options.error)] : []),

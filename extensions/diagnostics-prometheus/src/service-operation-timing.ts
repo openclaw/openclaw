@@ -75,8 +75,8 @@ export function recordOperationTimingEvent(
     case "diagnostic.gc":
       store.histogram(
         "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds for the hosting JavaScript isolate.",
-        {},
+        "Elapsed garbage collection duration in seconds by collection kind and isolate role.",
+        { kind: evt.kind ?? "unknown", thread: evt.thread ?? "main" },
         seconds(evt.durationMs),
       );
       return;

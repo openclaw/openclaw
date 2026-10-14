@@ -267,7 +267,7 @@ export function hydrateSessionActorState(
               "seq",
               "navigation_type",
               "navigation_valid",
-              transcriptEventModelNavigationSql().as("navigation_json"),
+              transcriptEventModelNavigationSql(database.db).as("navigation_json"),
               /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])

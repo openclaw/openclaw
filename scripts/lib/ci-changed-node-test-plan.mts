@@ -53,6 +53,7 @@ import {
   type NodeTestShard,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
+import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -83,6 +84,7 @@ import {
 
 // The manifest protocol also reads this policy from historical target planners.
 export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
+export { isCiDocumentationPath } from "../ci-changed-scope.mjs";
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
@@ -255,7 +257,9 @@ export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
   options: CwdOptions = {},
 ) {
-  const sources = changedPaths.filter((file) => !isTestOnlyPath(file));
+  const sources = changedPaths.filter(
+    (file) => !isTestOnlyPath(file) && !isDocumentationPath(file),
+  );
   if (sources.some((file) => CONTROL_UI_PERFORMANCE_SURFACE_RE.test(file))) {
     return true;
   }
@@ -293,10 +297,11 @@ const GLOBAL_NODE_TEST_INPUT_RE =
  */
 export function hasPromptSnapshotAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+  const relevantPaths = changedPaths.filter((changedPath) => !isDocumentationPath(changedPath));
+  if (relevantPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
     return true;
   }
-  const sourcePaths = changedPaths.filter(
+  const sourcePaths = relevantPaths.filter(
     (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
   );
   if (sourcePaths.length === 0) {
@@ -692,6 +697,18 @@ function createChangedTargetShards(
     }
     return shard;
   });
+}
+
+/** One shared E2E build keeps hourly coverage inside the existing main matrix cap. */
+export function createNodeWorkerE2eTestShards() {
+  return createChangedTargetShards(
+    resolvePreciseChangedTargets(NODE_WORKER_E2E_TEST_FILES, process.cwd()),
+    {
+      checkName: "checks-node-worker-e2e",
+      shardName: "node-worker-e2e",
+    },
+    1,
+  ).map((shard) => Object.assign(shard, { planConcurrency: 1 }));
 }
 
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */

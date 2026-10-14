@@ -19,6 +19,8 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
@@ -177,6 +179,7 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
+  transcriptFile?: UsageCostTranscriptFile;
 };
 
 export type SessionLogEntry = {

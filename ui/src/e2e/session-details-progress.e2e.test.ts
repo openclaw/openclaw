@@ -6,7 +6,6 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requ
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -73,6 +72,31 @@ suite.define(() => {
                 { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
               ],
             },
+            "cron.list": {
+              jobs: [
+                {
+                  id: "details-watcher",
+                  name: "Watch pull request checks",
+                  agentId: "main",
+                  enabled: true,
+                  updatedAtMs: 1,
+                  nextRunAt: null,
+                  nextRunAtMs: null,
+                  scheduleKind: "every",
+                  schedule: { kind: "every", everyMs: 300_000 },
+                  lastRunAt: null,
+                  lastRunAtMs: null,
+                  lastRunStatus: null,
+                  lastRunError: null,
+                },
+              ],
+              snapshotRevision: "details-1",
+              offset: 0,
+              limit: 50,
+              total: 1,
+              hasMore: false,
+              nextOffset: null,
+            },
             "progressCard.get": {
               card: {
                 sessionKey,
@@ -136,8 +160,10 @@ suite.define(() => {
         await composer.fill("Keep my draft while I inspect Details.");
         await expect.poll(() => details.isVisible()).toBe(true);
         await expect.poll(() => progress.isVisible()).toBe(true);
-        expect(await prGroup.getAttribute("open")).toBeNull();
-        await prGroup.locator(":scope > summary").click();
+        await expect.poll(() => prGroup.getAttribute("open")).not.toBeNull();
+        const automations = details.locator('[data-details-group="automations"]');
+        await expect.poll(() => automations.getAttribute("open")).not.toBeNull();
+        expect(await automations.textContent()).toContain("Watch pull request checks");
         const pullRequest = details.locator(".chat-pr").first();
         await pullRequest.waitFor();
         const capture = async (name: string) => {
@@ -145,9 +171,10 @@ suite.define(() => {
             page,
             page.locator(".chat").first(),
             [details, progress, composer],
-            { animations: "disabled" },
+            { animations: "disabled", elements: [details] },
           );
           await writeFile(path.join(suite.artifactDir, name), frame.png);
+          await writeFile(path.join(suite.artifactDir, "panel-" + name), frame.elements[0]!.png);
         };
         const geometry = async (docked: boolean) => {
           const bounds = await details.boundingBox();
@@ -191,8 +218,7 @@ suite.define(() => {
           .toBe(true);
         await geometry(false);
         await capture("overlay.png");
-        await session.locator(":scope > summary").click();
-        await expect.poll(() => session.getAttribute("open")).toBeNull();
+        expect(await session.locator(":scope > summary").count()).toBe(0);
         expect(await progress.getAttribute("open")).not.toBeNull();
         await progressToggle.click();
         await expect.poll(() => progress.getAttribute("open")).toBeNull();
@@ -201,8 +227,7 @@ suite.define(() => {
             .getByRole("button", { name: "Task progress options", exact: true })
             .isVisible(),
         ).toBe(false);
-        await session.locator(":scope > summary").click();
-        expect(await progress.getAttribute("open")).toBeNull();
+        expect(await session.isVisible()).toBe(true);
         await progressToggle.click();
         const checks = pullRequest.locator(".chat-pr__checks-pill");
         await checks.click();
@@ -307,7 +332,8 @@ suite.define(() => {
         expect(await trigger.getAttribute("aria-expanded")).toBe("false");
         await page.setViewportSize({ width: 430, height: 900 });
         expect(await details.isVisible()).toBe(false);
-        await openChatDetails(page);
+        await page.getByRole("button", { name: "Panels", exact: true }).waitFor();
+        await selectChatLayoutAction(page, "Details");
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
         await geometry(false);
         await capture("narrow.png");
@@ -366,6 +392,24 @@ suite.define(() => {
         await page.mouse.wheel(0, -600);
         await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBeLessThan(threadTop);
         expect(await details.evaluate((el) => el.scrollTop)).toBe(detailsTop);
+        await gateway.setMethodResponse("cron.list", {
+          jobs: [],
+          snapshotRevision: "details-empty",
+          offset: 0,
+          limit: 50,
+          total: 0,
+          hasMore: false,
+          nextOffset: null,
+        });
+        await gateway.emitGatewayEvent("cron", { action: "removed" });
+        await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+          sessions: { [sessionKey]: { pullRequests: [] } },
+        });
+        await expect.poll(() => details.locator("[data-details-group]").count()).toBe(0);
+        await details.evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await capture("empty.png");
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
       },
     );

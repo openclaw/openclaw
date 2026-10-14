@@ -36,7 +36,7 @@ describe("Reef inbox cursor persistence", () => {
     resetPluginStateStoreForTests();
   });
 
-  function createRuntime(host: "worker" | "native" = "worker") {
+  function createRuntime() {
     const runtime = createPluginRuntimeMock();
     const commands: string[] = [];
     const hooks: { before?: () => Promise<void> | void; after?: () => Promise<void> | void } = {};
@@ -45,29 +45,25 @@ describe("Reef inbox cursor persistence", () => {
         ...storeOptions,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-      if (host === "native") {
-        delete store.createOperation;
-      } else {
-        const createOperation = store.createOperation!;
-        store.createOperation = <Operations extends PluginStateOperationDefinitions>(
-          ...args: Parameters<typeof createOperation>
-        ): PluginStateOperation<Operations> => {
-          const operation = createOperation<Operations>(...args);
-          return {
-            async execute(command, selection) {
-              commands.push(command.type);
-              const before = hooks.before;
-              hooks.before = undefined;
-              await before?.();
-              const result = await operation.execute(command, selection);
-              const after = hooks.after;
-              hooks.after = undefined;
-              await after?.();
-              return result;
-            },
-          };
+      const createOperation = store.createOperation!;
+      store.createOperation = <Operations extends PluginStateOperationDefinitions>(
+        ...args: Parameters<typeof createOperation>
+      ): PluginStateOperation<Operations> => {
+        const operation = createOperation<Operations>(...args);
+        return {
+          async execute(command, selection) {
+            commands.push(command.type);
+            const before = hooks.before;
+            hooks.before = undefined;
+            await before?.();
+            const result = await operation.execute(command, selection);
+            const after = hooks.after;
+            hooks.after = undefined;
+            await after?.();
+            return result;
+          },
         };
-      }
+      };
       return store;
     };
     runtime.state.openSyncKeyedStore = <T>(storeOptions: OpenKeyedStoreOptions) =>
@@ -78,18 +74,15 @@ describe("Reef inbox cursor persistence", () => {
     return Object.assign(runtime, { commands, hooks });
   }
 
-  it.each(["worker", "native"] as const)(
-    "preserves monotonic progress on a %s host",
-    async (host) => {
-      const runtime = createRuntime(host);
-      const first = new ReefInboxCursorStore(runtime, binding);
-      const second = new ReefInboxCursorStore(runtime, binding);
-      await Promise.all([first.advance(12), second.advance(7), second.advance(20)]);
-      await expect(new ReefInboxCursorStore(runtime, binding).load()).resolves.toBe(20);
-      await expect(first.advance(-1)).rejects.toThrow("invalid Reef inbox cursor");
-      await expect(first.load()).resolves.toBe(20);
-    },
-  );
+  it("preserves monotonic progress", async () => {
+    const runtime = createRuntime();
+    const first = new ReefInboxCursorStore(runtime, binding);
+    const second = new ReefInboxCursorStore(runtime, binding);
+    await Promise.all([first.advance(12), second.advance(7), second.advance(20)]);
+    await expect(new ReefInboxCursorStore(runtime, binding).load()).resolves.toBe(20);
+    await expect(first.advance(-1)).rejects.toThrow("invalid Reef inbox cursor");
+    await expect(first.load()).resolves.toBe(20);
+  });
 
   it("uses one operation per cursor call without application-thread SQL", async () => {
     const runtime = createRuntime();
@@ -181,28 +174,15 @@ describe("Reef inbox cursor persistence", () => {
     await expect(store.load()).resolves.toBe(12);
   });
 
-  it.each(["worker", "native"] as const)(
-    "refuses invalid stored state on a %s host",
-    async (host) => {
-      const runtime = createRuntime(host);
-      const raw = runtime.state.openKeyedStore(options);
-      await raw.register("current", { ...binding, cursor: "invalid" });
-      const store = new ReefInboxCursorStore(runtime, binding);
-      if (host === "native") {
-        await expect(store.load()).rejects.toThrow("invalid Reef inbox cursor state");
-        await expect(store.advance(12)).rejects.toMatchObject({
-          code: "PLUGIN_STATE_WRITE_FAILED",
-          operation: "register",
-          message: "Failed to update plugin state entry.",
-          cause: expect.objectContaining({ message: "invalid Reef inbox cursor state" }),
-        });
-      } else {
-        await expectReefStateOperationError(store.load(), "invalid Reef inbox cursor state");
-        await expectReefStateOperationError(store.advance(12), "invalid Reef inbox cursor state");
-      }
-      await expect(raw.lookup("current")).resolves.toEqual({ ...binding, cursor: "invalid" });
-    },
-  );
+  it("refuses invalid stored state", async () => {
+    const runtime = createRuntime();
+    const raw = runtime.state.openKeyedStore(options);
+    await raw.register("current", { ...binding, cursor: "invalid" });
+    const store = new ReefInboxCursorStore(runtime, binding);
+    await expectReefStateOperationError(store.load(), "invalid Reef inbox cursor state");
+    await expectReefStateOperationError(store.advance(12), "invalid Reef inbox cursor state");
+    await expect(raw.lookup("current")).resolves.toEqual({ ...binding, cursor: "invalid" });
+  });
 
   it("propagates a failed operation without falling back to native writes", async () => {
     const runtime = createRuntime();

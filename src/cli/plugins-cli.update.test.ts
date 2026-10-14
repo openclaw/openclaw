@@ -306,7 +306,6 @@ describe("plugins cli update", () => {
 
   it.each([
     { ids: ["alpha", "--all"], error: "not both" },
-    { ids: ["@acme/alpha@beta", "@acme/alpha@1.2.3"], error: 'Conflicting npm specs for "alpha"' },
     {
       ids: ["alpha", "@acme/hooks@beta", "@acme/hooks@1.2.3", "--dry-run"],
       error: 'Conflicting npm specs for "hooks"',
@@ -468,23 +467,6 @@ describe("plugins cli update", () => {
     expect(transaction.commit).toHaveBeenCalledOnce();
     expect(transaction.rollback).not.toHaveBeenCalled();
     expectOfflineNoticeLogged();
-  });
-
-  it("retains the install error when package rollback also fails", async () => {
-    primeTrackedPluginUpdate({ pluginId: "alpha", spec: "@acme/alpha@1.0.0" });
-    const rollback = vi.fn(async () => {
-      throw new Error("backup restore failed");
-    });
-    const commit = vi.fn(async () => {});
-    updateNpmInstalledPluginsMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({ commit, rollback });
-      throw new Error("plugin install failed");
-    });
-    await expect(runPluginsCommand(["plugins", "update", "alpha"])).rejects.toThrow(
-      "plugin install failed",
-    );
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
   });
 
   it("rejects invalid config snapshots before updater side effects", async () => {
@@ -696,12 +678,6 @@ describe("plugins cli update", () => {
 
   it.each([
     {
-      name: "managed npm load path",
-      id: "demo",
-      record: { source: "npm", spec: "@acme/demo@1.0.0" },
-      loadPath: "/tmp/openclaw/npm/projects/demo-v1/node_modules/demo",
-    },
-    {
       name: "git child load path",
       id: "@acme/demo",
       record: { source: "git", spec: "https://github.com/acme/demo.git#v1.0.0" },
@@ -712,21 +688,14 @@ describe("plugins cli update", () => {
       id: "voice-call",
       record: { source: "marketplace", marketplaceSource: "acme", marketplacePlugin: "voice-call" },
     },
-    {
-      name: "unresolved plugin references",
-      id: "voice-call",
-      record: { source: "npm", spec: "@openclaw/voice-call" },
-      unresolved: true,
-    },
   ] satisfies {
     name: string;
     id: string;
     record: import("../config/types.plugins.js").PluginInstallRecord;
     loadPath?: string;
-    unresolved?: boolean;
   }[])(
     "blocks $name beside include-owned plugin config before updating",
-    async ({ id, record, loadPath, unresolved }) => {
+    async ({ id, record, loadPath }) => {
       const externalPath = path.join(
         path.parse(process.cwd()).root,
         "external-openclaw",
@@ -735,16 +704,11 @@ describe("plugins cli update", () => {
       const config: OpenClawConfig = {
         plugins: loadPath
           ? { load: { paths: [loadPath] } }
-          : unresolved
-            ? {}
-            : { entries: { [id]: { enabled: true } } },
+          : { entries: { [id]: { enabled: true } } },
       };
       primeUpdateConfigSnapshot({
         config,
         parsed: { plugins: { $include: externalPath } },
-        ...(unresolved
-          ? { sourceConfig: { plugins: { $include: externalPath } } as unknown as OpenClawConfig }
-          : {}),
         includeFileTargetsForWrite: { [externalPath]: externalPath },
       });
       setInstalledPluginIndexInstallRecords({

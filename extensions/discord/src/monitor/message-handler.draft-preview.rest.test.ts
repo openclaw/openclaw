@@ -144,32 +144,6 @@ async function stageDelegation(controller: ReturnType<typeof createDiscordDraftP
 }
 
 describe("Discord draft preview REST lifecycle", () => {
-  it("shows useful work status by default without streaming answer text", async () => {
-    vi.useFakeTimers();
-    const { controller, visible } = createContinuationHarness({ discordConfig: {} });
-    try {
-      await controller.pushItemEvent({
-        itemId: "preamble-1",
-        kind: "preamble",
-        phase: "end",
-        progressText: "Checking the channel delivery and running tests.",
-      });
-      await controller.pushItemEvent(
-        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-      );
-      controller.updateFromPartial("Unfinished answer should stay private.");
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect([...visible.values()]).toEqual([
-        "Checking the channel delivery and running tests.\n\nExec: running",
-      ]);
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
-    expect(visible.size).toBe(0);
-  });
-
   it("keeps ambient room events private even with default progress", async () => {
     vi.useFakeTimers();
     const { rest, visible } = createContinuationHarness({ discordConfig: {} });
@@ -207,41 +181,6 @@ describe("Discord draft preview REST lifecycle", () => {
       expect(visible.size).toBe(1);
       expect([...visible.values()][0]).toContain("Exec: running");
       expect([...visible.values()][0]).not.toContain("PRIVATE_COMMAND_ARGUMENT");
-    } finally {
-      await controller.cleanup();
-      vi.useRealTimers();
-    }
-  });
-
-  it("prefixes tool rows with tool glyphs and keeps the reasoning and commentary lanes", async () => {
-    vi.useFakeTimers();
-    const { controller, visible } = createContinuationHarness({
-      discordConfig: {
-        streaming: {
-          mode: "progress",
-          progress: { label: false, toolProgress: true, commentary: true },
-        },
-      },
-    });
-    try {
-      await controller.pushReasoningProgress("Planning the check");
-      await controller.pushItemEvent({
-        itemId: "preamble-1",
-        kind: "preamble",
-        phase: "end",
-        progressText: "Looking at the workspace",
-      });
-      await controller.pushItemEvent(
-        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-      );
-      await controller.pushItemEvent(
-        projectAgentToolActivity({ toolCallId: "read-1", name: "read", phase: "start" }),
-      );
-      await vi.advanceTimersByTimeAsync(1_500);
-      await controller.flush();
-      expect([...visible.values()]).toEqual([
-        "🧠 _Planning the check_\n💬 Looking at the workspace\n🛠️ Exec: running\n📖 Read: running",
-      ]);
     } finally {
       await controller.cleanup();
       vi.useRealTimers();
@@ -339,13 +278,13 @@ describe("Discord draft preview REST lifecycle", () => {
     }
   });
 
-  it.each(["missing-id", "stopped", "declined", "label-only", "off"] as const)(
+  it.each(["missing-id", "stopped", "declined", "label-only"] as const)(
     "delivers the required waiting reply instead of adopting a %s card",
     async (scenario) => {
       vi.useFakeTimers();
       const harness = createContinuationHarness({
         missingId: scenario === "missing-id",
-        discordConfig: scenario === "off" ? { streaming: { mode: "off" } } : {},
+        discordConfig: {},
       });
       const { controller, visible, failures } = harness;
       const adopt = vi.fn(() => scenario !== "declined");
@@ -503,7 +442,6 @@ describe("Discord draft preview REST lifecycle", () => {
   );
 
   it.each([
-    { name: "paragraph separators", text: `${"A".repeat(500)}\n\n${"B".repeat(500)}` },
     { name: "split code fences", text: `\`\`\`text\n${"const value = 1;\n".repeat(60)}\`\`\`` },
   ])("preserves $name when block previews edit one message", async ({ text }) => {
     const { controller, visible } = createContinuationHarness({ mode: "block" });

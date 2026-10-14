@@ -134,7 +134,10 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     await page.addInitScript(() => {
-      sessionStorage.setItem("openclaw.controlUi.staleChunkReloadBuildId", "replacement-build");
+      sessionStorage.setItem(
+        "openclaw.controlUi.staleChunkReloadBuildId",
+        JSON.stringify({ buildId: "replacement-build", at: Date.now() }),
+      );
     });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 

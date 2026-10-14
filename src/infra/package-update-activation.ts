@@ -97,7 +97,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
     throw new Error(
-      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+      `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
     );
   }
   assertPackageActivationLayout(anchor);
@@ -125,7 +125,9 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
     [record.descriptor.previous.identity, record.descriptor.candidate.identity].includes(
       packageActivationIdentity(installKey, true),
     ) &&
-    inspectPackageActivationLease(record.descriptor.authority).changed
+    (inspectPackageActivationLease(record.descriptor.authority).changed ||
+      (record.phase === "publication-complete" &&
+        packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity))
   ) {
     return undefined;
   }
@@ -135,7 +137,7 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   }
   if (record.phase !== "publication-complete") {
     throw new Error(
-      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+      `Package publication is incomplete; its original continuation cannot run. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
   return record;
@@ -159,7 +161,7 @@ export function assertNoPendingPackageActivation(
     return;
   }
   throw new Error(
-    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. Run openclaw update repair. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -310,7 +312,15 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  if (options?.onlyStaleLease && !leaseIdentityChanged) {
+  // A completed publication can settle through the same verified repair owner even on this lease.
+  if (
+    options?.onlyStaleLease &&
+    !leaseIdentityChanged &&
+    !(
+      initial.phase === "publication-complete" &&
+      replacementIdentity === initial.descriptor.candidate.identity
+    )
+  ) {
     return undefined;
   }
   const previousIdentity =

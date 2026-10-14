@@ -17,6 +17,44 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each(["delta", "message"] as const)(
+    "keeps Groq parsed %s reasoning in thinking blocks",
+    async (field) => {
+      const model = makeCompletionsModel({
+        provider: "groq",
+        id: "qwen/qwen3.6-27b",
+        baseUrl: "https://api.groq.com/openai/v1",
+      });
+      const output = createAssistantOutput(model);
+      const events: CapturedStreamEvent[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          {
+            ...makeCompletionsChunk({}, "stop"),
+            choices: [
+              {
+                index: 0,
+                [field]: { role: "assistant", reasoning: "Multiply 17 by 23.", content: "391" },
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+      );
+      expect(output.content).toEqual([
+        { type: "thinking", thinking: "Multiply 17 by 23.", thinkingSignature: "reasoning" },
+        { type: "text", text: "391" },
+      ]);
+      expect(
+        events.filter((event) => event.type === "thinking_delta").map((event) => event.delta),
+      ).toEqual(["Multiply 17 by 23."]);
+      expect(collectVisibleText(output)).toBe("391");
+    },
+  );
+
   it.each([false, true])(
     "publishes cumulative tool input before execution (direct=%s)",
     async (direct) => {

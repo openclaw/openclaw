@@ -1,3 +1,5 @@
+import { z } from "zod";
+import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { EnvironmentRecipe, LifecycleCommand } from "./environment-recipe.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
@@ -7,6 +9,19 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+
+const PreparedSetupEnvironment = z
+  .record(
+    z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
+    z
+      .string()
+      .max(4096)
+      .refine((value) => !value.includes("\0")),
+  )
+  .refine(
+    (env) => Object.keys(env).length <= 32 && Buffer.byteLength(JSON.stringify(env)) <= 32768,
+    "Prepared setup environment exceeds its limit",
+  );
 
 export type PreparedProjectVerification = {
   baseCommit: string;
@@ -174,7 +189,7 @@ const removeSetupOutputs = (workspaceDir, previous) => {
 const runSetup = (command, workspaceDir, homeDir) => {
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs > 2147483647) throw new Error("Prepared project command budget exhausted");
   return (${RUN_ENVIRONMENT_COMMAND_JS})(command, {
-    workspaceDir, homeDir, env: { PATH: setupPath, ...input.recipe?.env },
+    workspaceDir, homeDir, env: { PATH: setupPath, ...input.recipe?.env, ...input.setupEnv },
     timeoutMs: input.timeoutMs - (performance.now() - startedAt),
   });
 };
@@ -320,13 +335,22 @@ export function createProjectSetupScript(
     runSetupScript?: boolean;
     recipe?: EnvironmentRecipe;
     timeoutMs?: number;
+    setupEnv?: Record<string, string>;
     verifiedRetained?: PreparedProjectVerification | null;
   },
   inspectOnly = false,
 ): string {
-  return `${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
+  const setupEnv =
+    input.setupEnv === undefined ? undefined : PreparedSetupEnvironment.parse(input.setupEnv);
+  // Inspection also bootstraps Node before its canonical directory checks can run.
+  return `set -eu
+if [ -n "\${HOME:-}" ] && [ -L "$HOME/.openclaw-worker" ]; then
+  echo 'Prepared project directory escaped its owner' >&2
+  exit 1
+fi
+${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SETUP_SCRIPT'
-(${PREPARE_PROJECT_WORKSPACE_JS})(${JSON.stringify(input)}, ${inspectOnly})
+(${PREPARE_PROJECT_WORKSPACE_JS})(${JSON.stringify({ ...input, ...(setupEnv ? { setupEnv } : {}) })}, ${inspectOnly})
   .then((result) => {
     process.stdout.write(JSON.stringify(result ?? null));
   })
@@ -339,6 +363,11 @@ export async function runWorkerProjectLifecycle(params: {
   recipe: EnvironmentRecipe;
   tunnel: Pick<WorkerTunnelHandle, "runWorkspaceCommand">;
   postCreate: boolean;
+  workspaceDir?: string;
+  homeDir?: string;
+  runSetupCommand?: (
+    command: Parameters<NonNullable<WorkerProvider["runSetupCommand"]>>[1],
+  ) => Promise<import("../../process/exec.js").SpawnResult | undefined>;
   assertCurrent: () => void;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -354,20 +383,40 @@ export async function runWorkerProjectLifecycle(params: {
   }
   params.assertCurrent();
   const timeoutMs = 10 * 60_000;
-  const script = `const run = ${RUN_ENVIRONMENT_COMMAND_JS};
+  const createScript = (setupEnv: Record<string, string> = {}) => {
+    PreparedSetupEnvironment.parse(setupEnv);
+    return `const run = ${RUN_ENVIRONMENT_COMMAND_JS};
 const startedAt = performance.now();
 (async () => {
   for (const command of ${JSON.stringify(phases)}) {
-    await run(command, { workspaceDir: process.cwd(), homeDir: process.env.HOME, env: ${JSON.stringify(params.recipe.env)}, settleDescendants: false, timeoutMs: ${timeoutMs} - (performance.now() - startedAt) });
+    await run(command, { workspaceDir: process.cwd(), homeDir: process.env.HOME, env: ${JSON.stringify({ ...params.recipe.env, ...setupEnv })}, settleDescendants: false, timeoutMs: ${timeoutMs} - (performance.now() - startedAt) });
   }
 })().catch((error) => { console.error(error.message + (error.outputTail ? ": " + error.outputTail : "")); process.exitCode = 1; });`;
-  const result = await params.tunnel.runWorkspaceCommand({
-    argv: ["node", "-e", script],
-    transportRetry: "never",
-    assertCurrent: params.assertCurrent,
-    timeoutMs,
-    signal: params.signal,
-  });
+  };
+  if (params.runSetupCommand && (!params.workspaceDir || !params.homeDir)) {
+    throw new Error("Cloud lifecycle setup requires the owned prepared workspace and HOME paths");
+  }
+  const providerResult =
+    params.runSetupCommand && params.workspaceDir && params.homeDir
+      ? await params.runSetupCommand({
+          createScript,
+          workspaceDir: params.workspaceDir,
+          homeDir: params.homeDir,
+          timeoutMs,
+          assertCurrent: params.assertCurrent,
+          signal: params.signal,
+        })
+      : undefined;
+  params.assertCurrent();
+  const result =
+    providerResult ??
+    (await params.tunnel.runWorkspaceCommand({
+      argv: ["node", "-e", createScript()],
+      transportRetry: "never",
+      assertCurrent: params.assertCurrent,
+      timeoutMs,
+      signal: params.signal,
+    }));
   params.assertCurrent();
   if (result.code !== 0) {
     throw new Error(`Cloud environment lifecycle command failed: ${result.stderr || result.code}`);

@@ -57,6 +57,45 @@ function createService(
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it.each([
+    [true, true],
+    [true, false],
+    [false, false],
+  ])(
+    "rejects unmapped repository secrets before provisioning (supported=%s, target=%s)",
+    async (supported, hasTarget) => {
+      const git = await repository("unmapped-secrets");
+      await fs.writeFile(
+        path.join(git.root, ".devcontainer.json"),
+        JSON.stringify({
+          secrets: { PACKAGE_TOKEN: {}, OTHER_TOKEN: {} },
+          onCreateCommand: "must-never-run",
+        }),
+      );
+      await requireGit(git.root, ["add", ".devcontainer.json"]);
+      await requireGit(git.root, ["commit", "--quiet", "-m", "declare secrets"]);
+      const provision = vi.fn<WorkerProvider["provision"]>();
+      const service = support.createService(
+        support.createProvider({
+          supportsProjectPreparation: () => supported,
+          runSetupCommand: async () => undefined,
+          resolvePreparationTarget: () =>
+            hasTarget ? { machineClass: "small", platform: "linux" } : undefined,
+          provision,
+        }),
+        { projectNamespace: "gateway" },
+      );
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "unmapped-secrets",
+          projectPath: git.root,
+        }),
+      ).rejects.toThrow("unmapped setup secrets: OTHER_TOKEN, PACKAGE_TOKEN");
+      expect(provision).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps separate empty session workspaces on the same project-free allocation profile", async () => {
     const worktrees = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: support.testState.root },
