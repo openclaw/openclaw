@@ -332,7 +332,29 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
+type PageSummaryScan = ReturnType<typeof scanWikiPageSummary>;
+
+type PageSummaryReadResult = {
+  scan:
+    | Omit<Extract<PageSummaryScan, { status: "valid" }>, "parsed">
+    | Exclude<PageSummaryScan, { status: "valid" }>;
+  importInsight: ReturnType<typeof projectMemoryWikiImportInsight> | null;
+  overviewItem: ReturnType<typeof projectMemoryWikiOverviewItem> | null;
+};
+
+/**
+ * Per-compile memo of scanned pages, keyed by relative path and validated by
+ * exact raw-content equality. A compile re-scans the vault up to four times;
+ * every pass still reads each file, but a page whose text is unchanged since
+ * the previous pass skips the markdown parse.
+ */
+type PageSummaryScanCache = Map<string, { raw: string; result: PageSummaryReadResult }>;
+
+async function readPageSummaries(
+  rootDir: string,
+  signal?: AbortSignal,
+  scanCache?: PageSummaryScanCache,
+) {
   const filePaths = (
     await Promise.all(
       WIKI_PAGE_GROUPS.map(async (group) =>
@@ -357,16 +379,24 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
       signal?.throwIfAborted();
-      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
-      if (scan.status !== "valid") {
-        return { scan, importInsight: null, overviewItem: null };
+      const cached = scanCache?.get(relativePath);
+      if (cached && cached.raw === raw) {
+        return cached.result;
       }
-      const { parsed, ...summaryScan } = scan;
-      return {
-        scan: summaryScan,
-        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
-        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
-      };
+      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      let result: PageSummaryReadResult;
+      if (scan.status !== "valid") {
+        result = { scan, importInsight: null, overviewItem: null };
+      } else {
+        const { parsed, ...summaryScan } = scan;
+        result = {
+          scan: summaryScan,
+          importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+          overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+        };
+      }
+      scanCache?.set(relativePath, { raw, result });
+      return result;
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -1061,7 +1091,8 @@ async function compileMemoryWikiVaultUnlocked(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  let scan = await readPageSummaries(rootDir, options?.signal);
+  const scanCache: PageSummaryScanCache = new Map();
+  let scan = await readPageSummaries(rootDir, options?.signal, scanCache);
   let pages = scan.pages;
   const updatedFiles =
     options?.sourcePageWrites === "preserve"
@@ -1072,7 +1103,7 @@ async function compileMemoryWikiVaultUnlocked(
           ...(options?.signal ? { signal: options.signal } : {}),
         });
   if (updatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir, options?.signal);
+    scan = await readPageSummaries(rootDir, options?.signal, scanCache);
     pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
@@ -1083,7 +1114,7 @@ async function compileMemoryWikiVaultUnlocked(
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir, options?.signal);
+    scan = await readPageSummaries(rootDir, options?.signal, scanCache);
     pages = scan.pages;
   }
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
@@ -1134,7 +1165,7 @@ async function compileMemoryWikiVaultUnlocked(
         "Memory Wiki vault changed while its compiled cache was being built.",
       );
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      const verifiedScan = await readPageSummaries(rootDir, options?.signal);
+      const verifiedScan = await readPageSummaries(rootDir, options?.signal, scanCache);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
         buildCompiledCacheSnapshot(verifiedScan),
       );
