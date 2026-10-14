@@ -551,72 +551,80 @@ describe("memory source index session delta", () => {
   const readHash = (db: DatabaseSync) =>
     db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(pathname);
 
-  it("keeps unchanged rows, writes new rows, and removes stale rows with derived data", async () => {
-    const database = await createDatabase();
-    const db = database.db;
-    write(database, session("v1", [1, 2, 3, 4]));
-    const [first, second] = readChunks(db);
-
-    const vectorDeletes = new Set<string>();
-    const statements = observeHostDataSql((sql, preparingDatabase) => {
-      if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
-        vectorDeletes.add(sql);
-      }
-    });
-    try {
-      // Two removals expose sqlite-vec's full scan for multi-value IN predicates.
-      writeDelta(database, { ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
-    } finally {
-      statements.restore();
-    }
-
-    const pointLookup = db
-      .prepare("EXPLAIN QUERY PLAN DELETE FROM memory_index_chunks_vec WHERE id = ?")
-      .all("unused")
-      .map((row) => row.detail);
-    expect(vectorDeletes.size).toBeGreaterThan(0);
-    for (const sql of vectorDeletes) {
-      expect(
-        db
-          .prepare(`EXPLAIN QUERY PLAN ${sql}`)
-          .all(...Array.from(sql.matchAll(/\?/g), () => "unused"))
-          .map((row) => row.detail),
-      ).toEqual(pointLookup);
-    }
-
-    expect(readChunks(db)).toEqual([
-      first,
-      second,
-      expect.objectContaining({ start_line: 5, text: "turn 5", updated_at: 500 }),
-      expect.objectContaining({ start_line: 6, text: "turn 6", updated_at: 500 }),
-    ]);
-    expect(readHash(db)).toEqual({ hash: "v2" });
-    for (const table of [
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_vec",
-    ]) {
-      const idColumn = table === "memory_index_chunks_vec" ? "id" : "chunk_id";
-      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(), table).toEqual(
-        db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get(),
+  it.each([2, 33, 129])(
+    "keeps indexed point deletes for %i session removals with derived data",
+    async (removedCount) => {
+      const database = await createDatabase();
+      const db = database.db;
+      write(
+        database,
+        session("v1", [1, 2, ...Array.from({ length: removedCount }, (_, i) => i + 7)]),
       );
+      const [first, second] = readChunks(db);
+
+      const vectorDeletes = new Set<string>();
+      const statements = observeHostDataSql((sql, preparingDatabase) => {
+        if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
+          vectorDeletes.add(sql);
+        }
+      });
+      try {
+        // Known delta IDs must use point lookups even above the whole-source scan threshold.
+        writeDelta(database, { ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
+      } finally {
+        statements.restore();
+      }
+
+      const pointLookup = db
+        .prepare("EXPLAIN QUERY PLAN DELETE FROM memory_index_chunks_vec WHERE id = ?")
+        .all("unused")
+        .map((row) => row.detail);
+      expect(vectorDeletes.size).toBeGreaterThan(0);
+      for (const sql of vectorDeletes) {
+        expect(
+          db
+            .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+            .all(...Array.from(sql.matchAll(/\?/g), () => "unused"))
+            .map((row) => row.detail),
+        ).toEqual(pointLookup);
+      }
+
+      expect(readChunks(db)).toEqual([
+        first,
+        second,
+        expect.objectContaining({ start_line: 5, text: "turn 5", updated_at: 500 }),
+        expect.objectContaining({ start_line: 6, text: "turn 6", updated_at: 500 }),
+      ]);
+      expect(readHash(db)).toEqual({ hash: "v2" });
+      for (const table of [
+        "memory_index_chunk_recall_metadata",
+        "memory_index_chunk_provenance",
+        "memory_index_chunks_vec",
+      ]) {
+        const idColumn = table === "memory_index_chunks_vec" ? "id" : "chunk_id";
+        expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(), table).toEqual(
+          db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get(),
+        );
+        expect(
+          db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM ${table} WHERE ${idColumn} NOT IN (SELECT id FROM memory_index_chunks)`,
+            )
+            .get(),
+          table,
+        ).toEqual({ count: 0 });
+      }
       expect(
+        db.prepare("SELECT rowid, text FROM memory_index_chunks_fts ORDER BY rowid").all(),
+      ).toEqual(
         db
           .prepare(
-            `SELECT COUNT(*) AS count FROM ${table} WHERE ${idColumn} NOT IN (SELECT id FROM memory_index_chunks)`,
+            "SELECT chunk_rowid AS rowid, text FROM memory_index_chunks ORDER BY chunk_rowid",
           )
-          .get(),
-        table,
-      ).toEqual({ count: 0 });
-    }
-    expect(
-      db.prepare("SELECT rowid, text FROM memory_index_chunks_fts ORDER BY rowid").all(),
-    ).toEqual(
-      db
-        .prepare("SELECT chunk_rowid AS rowid, text FROM memory_index_chunks ORDER BY chunk_rowid")
-        .all(),
-    );
-  });
+          .all(),
+      );
+    },
+  );
 
   it("refreshes retained recall metadata and provenance without changing indexed content", async () => {
     const database = await createDatabase();

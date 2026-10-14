@@ -353,17 +353,16 @@ export class MemorySourceIndexKernel {
               .where("source", "=", source)
               .limit(MAX_VECTOR_POINT_DELETES + 1),
           ).rows.map((row) => row.id);
-        if (sparse.length > MAX_VECTOR_POINT_DELETES) {
-          // Bound native work for large removals without scanning unrelated
-          // vectors for sparse sources. JSON binds only IDs, not embeddings.
+        if (ids === undefined && sparse.length > MAX_VECTOR_POINT_DELETES) {
+          // Reserve full-index scans for large whole-source cleanup. Known
+          // delta IDs always use indexed scalar deletes below.
           this.database
             .prepare(
               `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
                 "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?" +
-                (ids ? " AND id IN (SELECT value FROM json_each(?))" : "") +
                 ")",
             )
-            .run(pathname, source, ...(ids ? [JSON.stringify(ids)] : []));
+            .run(pathname, source);
           return;
         }
         // sqlite-vec only uses its primary-key lookup for scalar equality.
