@@ -400,7 +400,8 @@ export default {
     vi.stubEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", runtimeIncludeFile);
     // Chromium selection (which spawns the browser) must stay lazy and run once per process.
     const resolveChromium = vi.fn((_defaultExecutablePath: string) => includeFile);
-    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", () => ({
+    vi.doMock("../ui/src/test-helpers/playwright-chromium.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../ui/src/test-helpers/playwright-chromium.ts")>()),
       resolvePlaywrightChromiumExecutablePath: resolveChromium,
     }));
     vi.resetModules();
