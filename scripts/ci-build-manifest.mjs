@@ -1780,7 +1780,6 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
-    count(manifest.run_ui_tests, 3) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,
