@@ -95,7 +95,7 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
 export class MusePool {
   private readonly entries = new Map<
     string,
-    { credentialIdentity: string; pending: Promise<MuseRuntime> }
+    { credentialIdentity: string; pending: Promise<MuseRuntime>; startup: AbortController }
   >();
   private disposed = false;
   constructor(
@@ -107,7 +107,9 @@ export class MusePool {
     workspace: string | undefined,
     apiKey: string | undefined,
     readOnly: boolean,
+    signal?: AbortSignal,
   ): Promise<MuseLease> {
+    signal?.throwIfAborted();
     if (this.disposed) {
       throw new Error("Muse runtime has been disposed");
     }
@@ -115,6 +117,7 @@ export class MusePool {
     if (this.disposed) {
       throw new Error("Muse runtime was disposed during environment preparation");
     }
+    signal?.throwIfAborted();
     const apiKeyIdentity = credentialFingerprint(apiKey);
     const key = JSON.stringify([workspace, apiKeyIdentity, readOnly]);
     const credentialIdentity = JSON.stringify([
@@ -124,14 +127,15 @@ export class MusePool {
     let entry = this.entries.get(key);
     if (!entry || entry.credentialIdentity !== credentialIdentity) {
       const previous = entry;
+      const startup = new AbortController();
       const pending = (async () => {
         if (previous) {
           const runtime = await previous.pending.catch(() => undefined);
           await runtime?.close();
         }
-        return this.spawn(workspace, env, readOnly, credentialIdentity);
+        return this.spawn(workspace, env, readOnly, credentialIdentity, startup.signal);
       })();
-      entry = { credentialIdentity, pending };
+      entry = { credentialIdentity, pending, startup };
       this.entries.set(key, entry);
       void pending.catch(() => {
         if (this.entries.get(key) === entry) {
@@ -139,7 +143,18 @@ export class MusePool {
         }
       });
     }
-    const runtime = await entry.pending;
+    const abort = () => entry.startup.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    let runtime: MuseRuntime;
+    try {
+      runtime = await entry.pending;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+    if (signal?.aborted) {
+      await runtime.close();
+      signal.throwIfAborted();
+    }
     if (this.disposed) {
       await runtime.close();
       throw new Error("Muse runtime was disposed during startup");
@@ -148,7 +163,7 @@ export class MusePool {
       if (this.entries.get(key) === entry) {
         this.entries.delete(key);
       }
-      return this.acquire(workspace, apiKey, readOnly);
+      return this.acquire(workspace, apiKey, readOnly, signal);
     }
     clearTimeout(runtime.timer);
     runtime.users++;
@@ -174,10 +189,12 @@ export class MusePool {
     env: NodeJS.ProcessEnv,
     readOnly: boolean,
     credentialIdentity: string,
+    signal: AbortSignal,
   ): Promise<MuseRuntime> {
     if (this.disposed) {
       throw new Error("Muse runtime was disposed during environment preparation");
     }
+    signal.throwIfAborted();
     const handshake = spawnMspConnection({
       command: this.binaryPath,
       args: [
@@ -193,10 +210,15 @@ export class MusePool {
       void handshake.close();
     }, 30_000);
     startup.unref();
+    const abort = () => {
+      void handshake.close();
+    };
+    signal.addEventListener("abort", abort, { once: true });
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
       });
+      signal.throwIfAborted();
       const runtime: MuseRuntime = {
         host,
         credentialIdentity,
@@ -240,6 +262,7 @@ export class MusePool {
       );
     } finally {
       clearTimeout(startup);
+      signal.removeEventListener("abort", abort);
     }
   }
 

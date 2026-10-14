@@ -26,7 +26,7 @@ export class MuseCatalogReader {
     }
     // Catalog checks do not need a workspace. The pool retires a host whenever
     // the managed credential or environment key changes, including before commit.
-    const lease = await this.current.pool.acquire(undefined, undefined, true);
+    const lease = await this.current.pool.acquire(undefined, undefined, true, ctx.signal);
     const abort = () => {
       void lease.runtime.close();
     };
