@@ -22,6 +22,8 @@ struct BundledRecoveryCompositionTests {
         let state = AppProfile.current.stateDirectoryURL()
         try #require(state.resolvingSymlinksInPath() == OpenClawPaths.stateDirURL.resolvingSymlinksInPath())
         let runtime = try await BundledRuntime.seed()
+        // ShellExecutor replaces the child environment; retain the app owner's profile and state.
+        let environment = try GatewayProcessManager.shared.appHostedEnvironment(runtime: runtime)
         let version = try #require(GatewayEnvironment.appVersionString())
         let config: [String: Any] = [
             "gateway": [
@@ -40,16 +42,16 @@ struct BundledRecoveryCompositionTests {
                 "--non-interactive", "--json",
             ],
             cwd: runtime.packageRoot.path,
-            env: runtime.environment,
+            env: environment,
             timeout: CLIInstaller.managedUpdateTimeout)
         try #require(created.success, Comment(rawValue: created.stderr))
         let selected = await ShellExecutor.runDetailed(
             command: runtime.cliCommand + ["config", "set", "agents.defaults.systemAgent.agentId", "recovery"],
             cwd: runtime.packageRoot.path,
-            env: runtime.environment,
+            env: environment,
             timeout: CLIInstaller.managedUpdateTimeout)
         try #require(selected.success, Comment(rawValue: selected.stderr))
-        try await self.installPlugin(runtime: runtime, state: state)
+        try await self.installPlugin(runtime: runtime, state: state, environment: environment)
         AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
         AppStateStore.shared.connectionMode = .local
         AppStateStore.shared.onboardingSeen = true
@@ -92,7 +94,7 @@ struct BundledRecoveryCompositionTests {
             try #require(try FileManager.default.destinationOfSymbolicLink(atPath: peer.path) == wrongRoot.path)
             let probe = state.appendingPathComponent("extensions/\(self.pluginID)/peer-health.mjs")
             let before = await ShellExecutor.runDetailed(
-                command: [runtime.bun.path, probe.path], cwd: nil, env: runtime.environment, timeout: 30)
+                command: [runtime.bun.path, probe.path], cwd: nil, env: environment, timeout: 30)
             try #require(!before.success)
 
             AppStateStore.shared.isPaused = true
@@ -204,7 +206,7 @@ struct BundledRecoveryCompositionTests {
             }
             #expect(try await GatewayConnection.shared.healthOK())
             let after = await ShellExecutor.runDetailed(
-                command: [runtime.bun.path, probe.path], cwd: nil, env: runtime.environment, timeout: 30)
+                command: [runtime.bun.path, probe.path], cwd: nil, env: environment, timeout: 30)
             #expect(after.success)
             #expect(after.stdout.contains(runtime.packageRoot.path))
             let health = try await GatewayConnection.shared.request(method: "health", params: nil)
@@ -278,7 +280,9 @@ struct BundledRecoveryCompositionTests {
         return try #require(window)
     }
 
-    private func installPlugin(runtime: BundledRuntime, state: URL) async throws {
+    private func installPlugin(
+        runtime: BundledRuntime, state: URL, environment: [String: String]) async throws
+    {
         let package = state.appendingPathComponent("fixture-source/package")
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: [
@@ -314,7 +318,7 @@ struct BundledRecoveryCompositionTests {
         let installed = await ShellExecutor.runDetailed(
             command: runtime.cliCommand + ["plugins", "install", archive.path, "--force", "--accept-capabilities"],
             cwd: runtime.packageRoot.path,
-            env: runtime.environment,
+            env: environment,
             timeout: CLIInstaller.managedUpdateTimeout)
         #expect(installed.success)
     }
