@@ -720,6 +720,12 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
 
+`openclaw update` automatically settles a `publication-complete` operation when
+the live candidate passes the same verification as repair, even when the update
+lease is unchanged. A dry run previews settlement without changing recovery
+artifacts. With an unchanged lease, other unfinished phases still require explicit
+repair.
+
 For an external-helper operation stuck at `prepared`, `publishing`, or
 `publication-complete` whose live package already serves the candidate, run
 `openclaw update repair` from an independent terminal. Repair verifies the

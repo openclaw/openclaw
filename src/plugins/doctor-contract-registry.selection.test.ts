@@ -519,7 +519,7 @@ describe("doctor-contract-registry module loader", () => {
       doctorContract: { configRepair: true },
     });
     const config = {
-      tools: { media: { image: { preferredModel: "opencode/gpt-5-nano" } } },
+      tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
     };
     const pluginIds = collectRelevantDoctorPluginIds(config);
 

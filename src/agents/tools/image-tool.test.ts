@@ -536,7 +536,7 @@ function installImageUnderstandingProviderDeps(
     ["minimax-portal-cn", "MiniMax-VL-01"],
     ["codex", "gpt-5.5"],
     ["openai", "gpt-5.4-mini"],
-    ["opencode", "gpt-5-nano"],
+    ["opencode", "minimax-m3"],
     ["opencode-go", "kimi-k2.6"],
     ["zai", "glm-4.6v"],
   ]);

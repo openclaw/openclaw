@@ -252,21 +252,19 @@ appear without a plugin update. For locally hosted models, use the
 ### Token Plan catalog
 
 Token Plan uses a separate exact-string allowlist. The built-in catalog shows
-Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
-compatibility tier selectable but hidden. Other allowlisted model IDs remain
+Alibaba's currently recommended plan models. Other allowlisted model IDs remain
 available as custom model refs. Image-generation-only plan models are not
 included here because they use different APIs.
 
-| Model ref                          | Input       | Context   | Picker status |
-| ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-flash`    | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
-| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
-| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
-| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
+| Model ref                       | Input       | Context   | Picker status |
+| ------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.7-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-max`   | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-flash` | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/kimi-k2.5`     | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5`         | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`  | text        | 196,608   | visible       |
 
 ## Thinking controls
 

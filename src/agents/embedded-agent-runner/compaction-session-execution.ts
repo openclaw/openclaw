@@ -394,6 +394,24 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           assertActive,
           onHookMessages: params.onCompactionHookMessages,
         });
+        const activeSessionFile = memoryTranscript
+          ? params.sessionFile
+          : formatSqliteSessionFileMarker({
+              ...sessionTarget,
+              sessionId: params.sessionId,
+            });
+        const completeSkippedCompaction = async (reason: string) => {
+          await runCompactionHooks({
+            ...hookContext(),
+            phase: "after",
+            messageCountAfter: beforeHookMetrics.messageCountBefore,
+            tokensAfter: beforeHookMetrics.tokenCountBefore,
+            compactedCount: 0,
+            compactionOutcome: "skipped",
+            sessionFile: activeSessionFile,
+          });
+          return { ok: true, compacted: false, reason };
+        };
         await runCompactionHooks({
           ...hookContext(),
           phase: "before",
@@ -420,11 +438,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
-          return {
-            ok: true,
-            compacted: false,
-            reason: "no real conversation messages",
-          };
+          return await completeSkippedCompaction("no real conversation messages");
         }
 
         const compactStartedAt = Date.now();
@@ -563,7 +577,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
             if (outcome.status === "skipped") {
               assertActive();
-              return { ok: true, compacted: false, reason: outcome.reason };
+              return await completeSkippedCompaction(outcome.reason);
             }
             clientResult = outcome.result;
           } finally {
@@ -584,12 +598,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
-        const activeSessionFile = memoryTranscript
-          ? params.sessionFile
-          : formatSqliteSessionFileMarker({
-              ...sessionTarget,
-              sessionId: params.sessionId,
-            });
         if (!memoryTranscript) {
           await runPostCompactionSideEffects({
             config: params.config,

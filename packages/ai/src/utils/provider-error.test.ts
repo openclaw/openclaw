@@ -60,8 +60,34 @@ describe("projectProviderError", () => {
         }),
       );
       const projection = projectProviderError(error);
+      expect(projection.retryAfterMs).toBe(seconds * 1000);
       expect(projection.errorMessage).toContain(`Retry-After: ${seconds} seconds`);
       expect(projection.errorBody).toBe('{"message":"rate limited"}');
+      expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
+    },
+  );
+
+  it.each([
+    { status: 429, remaining: "0", retryAfterMs: 62_500 },
+    { status: 429, remaining: "1", retryAfterMs: 7_000 },
+    { status: 503, remaining: "0", retryAfterMs: 7_000 },
+  ])(
+    "projects native quota headers before redaction: $status/$remaining",
+    ({ status, remaining, retryAfterMs }) => {
+      const projection = projectProviderError(
+        new APIError(
+          status,
+          { message: "rate limited" },
+          undefined,
+          new Headers({
+            "retry-after": "7",
+            "x-ratelimit-remaining-tokens": remaining,
+            "x-ratelimit-reset-tokens": "1m2.5s",
+            authorization: "Bearer synthetic-credential",
+          }),
+        ),
+      );
+      expect(projection.retryAfterMs).toBe(retryAfterMs);
       expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
     },
   );
@@ -272,7 +298,8 @@ describe("projectProviderError", () => {
     );
 
     expect(projectProviderError(error).stopReason).toBe("error");
-    expect(descriptorReads).toBe(64);
+    // Three fixed timing-metadata probes precede the bounded diagnostic walk.
+    expect(descriptorReads).toBe(64 + 3);
   });
 
   it("caps descriptor reads across a branching hostile graph", () => {
@@ -291,7 +318,8 @@ describe("projectProviderError", () => {
       );
 
     expect(projectProviderError(createNode()).stopReason).toBe("error");
-    expect(descriptorReads).toBe(64 * 64);
+    // Missing status and response fields cost five fixed probes, not another graph walk.
+    expect(descriptorReads).toBe(64 * 64 + 5);
   });
 
   it("redacts value fields when their discriminator falls beyond the field cap", () => {
