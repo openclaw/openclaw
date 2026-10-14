@@ -141,11 +141,16 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext, toolPolicy } =
     buildDiscordInboundAccessContext({
+      cfg,
+      accountId,
+      parentId: threadParentId,
       channelConfig,
       guildInfo,
       sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      senderName,
+      senderUsername,
       allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
       isGuild: isGuildMessage,
       channelTopic: channelInfo?.topic,
@@ -498,6 +503,7 @@ export async function buildDiscordMessageProcessContext(params: {
       historyKind: isGuildMessage ? "recent" : "pending",
     },
     access: {
+      toolPolicy,
       mentions: {
         canDetectMention: ctx.canDetectMention,
         wasMentioned: ctx.effectiveWasMentioned,
