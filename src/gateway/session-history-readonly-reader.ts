@@ -26,6 +26,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import { hasSessionTranscriptEntryReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import {
   readRecentTranscriptConversationText,
   type ReadRecentSessionConversationTextOptions,
@@ -102,10 +103,15 @@ export function createReadonlySessionHistoryReader(
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
         readWithCanonicalSessionAdmission(database, () => {
-          // Repeat the original conditional row validation at every reader invocation,
-          // after dispatch. A current entry may name a successor; it never selects this transcript.
           const entryValidationKey = target.entryValidationKey;
-          if (entryValidationKey !== undefined) {
+          if (
+            entryValidationKey !== undefined &&
+            !hasSessionTranscriptEntryReceipt(
+              database,
+              target.transcript.sessionId,
+              entryValidationKey,
+            )
+          ) {
             readSessionEntryRow(database, entryValidationKey);
           }
           return read(database);

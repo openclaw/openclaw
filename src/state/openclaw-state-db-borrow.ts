@@ -100,9 +100,11 @@ export function createStateDatabaseRetainer(
   };
   const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
     const resolvedPath = resolveDatabasePath({ path: pathname });
-    const scope = admit(resolvedPath, ownership);
     const database = state.cachedDatabases.get(resolvedPath);
-    return { database: database?.db.isOpen ? database : undefined, scope };
+    if (!database?.db.isOpen) {
+      return { database: undefined, scope: undefined };
+    }
+    return { database, scope: admit(resolvedPath, ownership) };
   };
   const retainReadReference = (
     database: OpenClawStateDatabase,

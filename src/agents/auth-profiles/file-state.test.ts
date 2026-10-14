@@ -24,6 +24,11 @@ import {
 } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
+
 afterEach(async () => {
   runtimeAuthProfileRowsCache.clear();
   await closeOpenClawStateDatabaseAsync();

@@ -84,9 +84,15 @@ export function prepareSessionParticipantContribution(
     );
   const completeCacheWrite = prepareSessionEntryCacheWrite(database);
   return {
-    result: { value: "updated" as const, projectionChanged: false, participants: {} },
+    result: {
+      value: "updated" as const,
+      projectionChanged: false,
+      participants: {},
+      records: updated,
+      actorVersion: publishActor.version,
+    },
     stage() {
-      publishActor(updated);
+      publishActor.publish(updated);
       stageSqliteTransactionState(database.db, {
         stage() {},
         rollback() {},

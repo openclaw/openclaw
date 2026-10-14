@@ -21,7 +21,6 @@ import {
   sessionAttentionIconName,
   resolveSessionIdleBadge,
 } from "../session-attention-presentation.ts";
-import type { SessionGlyphRing } from "../session-glyph.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../session-owner-chip.ts";
 import {
   resolveSessionRowBadges,
@@ -88,6 +87,8 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
 export function renderSessionAttentionIcon(attention: SidebarSessionAttention): JSX.Element {
   return attention.kind === "none" ? undefined : <SessionAttentionIcon attention={attention} />;
 }
+
+type SessionGlyphRing = "circle" | "pair";
 
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
 type SessionGlyphOptions = {

@@ -161,6 +161,33 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
+    await page.viewport(420, 720);
+    const { element, frame, trigger, panel } = await fixture(props(), 380);
+    element.mobile = true;
+    const source = document.createElement("button");
+    source.textContent = "Panels";
+    frame.prepend(source);
+    await element.updateComplete;
+    expect(trigger.hidden).toBe(true);
+    element.open(source);
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(true);
+    expect(panel.getBoundingClientRect().width).toBe(364);
+    panel.querySelector<HTMLButtonElement>("button")!.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+    expect(document.activeElement).toBe(source);
+    element.presented = false;
+    await element.updateComplete;
+    element.open(source);
+    await element.updateComplete;
+    expect(panel.matches(":popover-open")).toBe(false);
+  });
+
   it("closes Details after its child menu closes", async () => {
     const { element, trigger, panel, progress } = await fixture();
     trigger.click();

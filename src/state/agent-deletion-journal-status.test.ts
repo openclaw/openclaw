@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { isAgentDeletionBlocked, withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
+import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
+import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   beginSessionWorkAdmission,
   closeAgentWorkAdmissions,
@@ -131,3 +134,84 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     expect(await read()).toBe("absent");
   });
 });
+
+it.each(["before-read", "during-read", "revoked-read"] as const)(
+  "prepares an overlapping roster without retiring credentials (%s)",
+  async (timing) => {
+    await withOpenClawTestState({ label: "secrets-retiring-roster" }, async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      const agentId = "retiring";
+      const agentDir = state.agentDir(agentId);
+      const healthyDir = state.agentDir("main");
+      const config = { agents: { entries: { main: {}, [agentId]: {} } } };
+      const entered = createDeferred();
+      const release = createDeferred();
+      const loadAuthStore = vi.fn(async (dir?: string) => {
+        if (dir === agentDir && timing !== "before-read") {
+          entered.resolve();
+          await release.promise;
+          if (timing === "revoked-read") {
+            throw new Error("Auth profile reader owner was revoked");
+          }
+        }
+        return {
+          version: 1,
+          profiles: {
+            "custom:healthy": { type: "api_key" as const, provider: "custom", key: "fixture-key" },
+          },
+        };
+      });
+      const prepare = () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          env: state.env,
+          agentDirs: [healthyDir, agentDir],
+          includeConfigRefs: false,
+          loadAuthStore,
+        });
+      const inFlight = timing === "before-read" ? undefined : prepare();
+      void inFlight?.catch(() => {});
+      try {
+        if (inFlight) {
+          await entered.promise;
+        }
+        await withAgentDeletion(
+          agentId,
+          async (begin) => {
+            const deletion = await begin({
+              agentId,
+              agentDir,
+              workspaceDir: state.path(agentId),
+              sessionsDir: state.sessionsDir(agentId),
+              phase: "draining",
+            });
+            try {
+              release.resolve();
+              const snapshot = await (inFlight ?? prepare());
+              expect(snapshot.authStores.map((entry) => entry.agentDir)).toEqual([healthyDir]);
+              expect(snapshot.authStores[0]?.store.profiles["custom:healthy"]).toMatchObject({
+                key: "fixture-key",
+              });
+              expect(listConfiguredOwnerInputs(config).map((input) => input.agentId)).toEqual([
+                "main",
+              ]);
+              if (timing === "before-read") {
+                expect(loadAuthStore).not.toHaveBeenCalledWith(agentDir);
+              }
+            } finally {
+              await deletion.rollback();
+            }
+          },
+          { env: state.env },
+        );
+        expect(listConfiguredOwnerInputs(config).map((input) => input.agentId)).toEqual([
+          "main",
+          agentId,
+        ]);
+      } finally {
+        release.resolve();
+        await inFlight?.catch(() => {});
+      }
+    });
+  },
+);

@@ -6,6 +6,7 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -156,6 +157,11 @@ function projectSourceActor(
 export function createSessionCatalogSourceActorProjector(
   params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
 ): (actor: StoredSessionActor | undefined) => SessionCreatedActor | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-catalog-identity",
+    method: "createSessionCatalogSourceActorProjector",
+    replacement: "await prepareSessionCatalogSourceActorProjector before rendering the page",
+  });
   const ids = [
     ...new Set(
       params.actors.flatMap((actor) => {
@@ -281,6 +287,11 @@ export async function prepareSessionCatalogGitHubLinker(params: {
  * @deprecated Use prepareSessionCatalogGitHubLinker before rendering the page.
  */
 export function createSessionCatalogGitHubLinker() {
+  warnPluginSdkDeprecation({
+    family: "session-catalog-identity",
+    method: "createSessionCatalogGitHubLinker",
+    replacement: "await prepareSessionCatalogGitHubLinker before rendering the page",
+  });
   const profilesByAccountId = new Map<string, string>();
   const profilesByLogin = new Map<string, string>();
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();

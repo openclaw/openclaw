@@ -576,6 +576,13 @@ async function isSpeechProviderConfiguredAsync(
     if (!configured) {
       return false;
     }
+    if (!configured.provider.isConfiguredAsync) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "SpeechProviderPlugin.isConfigured",
+        replacement: "isConfiguredAsync",
+      });
+    }
     return (
       (await (configured.provider.isConfiguredAsync
         ? configured.provider.isConfiguredAsync(configured.context)

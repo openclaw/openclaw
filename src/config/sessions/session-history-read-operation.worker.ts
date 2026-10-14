@@ -94,16 +94,11 @@ async function prepareHistoryRead(
         { withOpenClawAgentDatabaseReadOnly },
         { assertOpenClawAgentDatabaseIdentity },
         { prepareTrajectoryRuntimeRetention },
-        { adoptPreparedCanonicalSessionValidationSchema },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly.js"),
         import("../../state/openclaw-agent-db-identity.js"),
         import("../../trajectory/runtime-retention.sqlite.js"),
-        import("../../state/openclaw-agent-canonical-validation-schema.js"),
       ]);
-      if (request.schemaContract) {
-        adoptPreparedCanonicalSessionValidationSchema(request.schemaContract);
-      }
       return () => {
         const read = withOpenClawAgentDatabaseReadOnly(
           (database) => {

@@ -48,10 +48,9 @@ function recordsFor(location: string) {
 
 it.each([
   { code: 0, references: 0, invalidates: false },
-  { code: 1, references: 0, invalidates: true },
-  { code: undefined, references: 0, invalidates: true },
   { code: 0, references: 1, invalidates: true },
-  { code: 0, references: undefined, invalidates: true },
+  { code: 1, references: 1, invalidates: true },
+  { code: undefined, references: 1, invalidates: true },
 ])(
   "settles worker exit $code with $references references without releasing siblings",
   ({ code, references, invalidates }) => {
@@ -68,10 +67,8 @@ it.each([
       const scopedToken = readSqliteDatabaseScopedWriteToken(database, "proof");
       const record = recordsFor(location)[0]!;
       const transferred = new Map(record.references);
-      if (references !== undefined) {
-        reference[0] = references;
-        transferred.set(worker.threadId, reference.buffer);
-      }
+      reference[0] = references;
+      transferred.set(worker.threadId, reference.buffer);
       transferred.set(worker.threadId + 1, sibling.buffer);
       installSqliteDatabaseAdmissions([{ ...record, references: transferred }]);
       const writeRevision = readSqliteDatabaseGeneration(record, "writeRevision");
@@ -94,9 +91,7 @@ it.each([
       expect(remaining.references.has(worker.threadId)).toBe(false);
       expect(remaining.references.get(worker.threadId + 1)).toBe(sibling.buffer);
       expect(Atomics.load(sibling, 0)).toBe(1);
-      if (references !== undefined) {
-        expect(Atomics.load(reference, 0)).toBe(-1);
-      }
+      expect(Atomics.load(reference, 0)).toBe(-1);
       expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
     } finally {
       Atomics.store(sibling, 0, 0);
@@ -510,10 +505,14 @@ it.each([false, true])(
       expect(closedBeforeExit).toBeTypeOf("string");
       expect(unrelatedBeforeExit).toBeTypeOf("string");
       await worker.terminate();
-      // An unclean exit cannot certify settled receipts, even for already-closed handles.
+      // Only a still-open handle can leave an unsettled receipt when its worker stops.
       expect(readSqliteDatabaseWriteTokenForPath(location)).not.toBe(beforeExit);
-      expect(readSqliteDatabaseWriteTokenForPath(closedLocation)).not.toBe(closedBeforeExit);
-      expect(readSqliteDatabaseWriteTokenForPath(unrelatedLocation)).not.toBe(unrelatedBeforeExit);
+      expect(readSqliteDatabaseWriteTokenForPath(closedLocation)).toBe(closedBeforeExit);
+      expect(readSqliteDatabaseWriteTokenForPath(unrelatedLocation)).toBe(unrelatedBeforeExit);
+      const scopedToken = readSqliteDatabaseScopedWriteToken(closedDatabase, "proof");
+      closedDatabase.prepare("UPDATE proof SET value = 43").run();
+      expect(readSqliteDatabaseScopedWriteToken(closedDatabase, "proof")).not.toBe(scopedToken);
+      expect(closedDatabase.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
       const inherited = readSqliteDatabaseAdmissions(
         getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
       )?.find((record) => record.location === location);

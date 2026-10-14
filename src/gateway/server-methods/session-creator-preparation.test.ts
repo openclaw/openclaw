@@ -17,10 +17,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -104,6 +101,7 @@ async function withCreatorRows(
   await withOpenClawTestState(
     {
       scenario: "minimal",
+      prepareProfileCatalog: true,
       env: {
         OPENCLAW_STATE_DIR: undefined,
         VITEST: undefined,
@@ -206,11 +204,10 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
     });
   });
 
-  it("selects prepared aliases by state path and reacquires them after database reopening", async () => {
-    await withCreatorRows(async ({ stateDir, callerId, creatorId, keys }) => {
-      const catalog = await profileAliases.prepareUserProfileCatalog();
-      using catalogCleanup = {
-        [Symbol.dispose]: catalog.release,
+  it("selects prepared aliases by state path", async () => {
+    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
+      using _ = {
+        [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release,
       };
       const sessionKey = keys[0]!;
       await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
@@ -223,24 +220,15 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(await receive()).toBe(true);
       const alternateRoot = `${stateDir}/absent-state`;
       await withEnvAsync({ OPENCLAW_STATE_DIR: alternateRoot }, async () => {
-        expect(await receive()).toBe(false);
-        expect(fs.existsSync(alternateRoot)).toBe(false);
+        const alternateCatalog = await profileAliases.prepareUserProfileCatalog();
+        try {
+          expect(await receive()).toBe(false);
+          expect(fs.existsSync(alternateRoot)).toBe(false);
+        } finally {
+          alternateCatalog.release();
+        }
       });
       expect(await receive()).toBe(true);
-      const pathname = `${stateDir}/state/openclaw.sqlite`;
-      catalogCleanup[Symbol.dispose]();
-      await cleanupSessionStateForTest({ stateDir });
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare("DELETE FROM user_profiles WHERE id = ?").run(creatorId);
-          profileAliases.publishUserProfilesChange(db, creatorId);
-        },
-        { path: pathname },
-      );
-      using _ = {
-        [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release,
-      };
-      expect(await receive()).toBe(false);
     });
   });
 

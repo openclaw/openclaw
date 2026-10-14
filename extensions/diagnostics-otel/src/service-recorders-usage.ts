@@ -3,8 +3,10 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOtelContentValue } from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
@@ -206,6 +208,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordMessageProcessed(
       evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
       metadata: DiagnosticEventMetadata,
+      privateData: DiagnosticEventPrivateData,
     ) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
@@ -222,6 +225,18 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.addRunAttrs(spanAttrs, evt);
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
+      }
+      const inputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
+        : undefined;
+      if (inputValue) {
+        spanAttrs["input.value"] = inputValue;
+      }
+      const outputValue = runtime.captureContent
+        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
+        : undefined;
+      if (outputValue) {
+        spanAttrs["output.value"] = outputValue;
       }
       const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
       const span =

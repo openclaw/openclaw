@@ -49,7 +49,7 @@ import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-reso
 import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
-import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { replaceRuntimeAuthProfileStoreSnapshotsAsync } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
@@ -318,7 +318,7 @@ async function runCatalogRequest(
       pluginGeneration: prepared.pluginGeneration,
     });
     if (request.kind === "catalog") {
-      replaceRuntimeAuthProfileStoreSnapshots([
+      await replaceRuntimeAuthProfileStoreSnapshotsAsync([
         { agentDir: value.input.agentDir, store: authStore },
       ]);
     }

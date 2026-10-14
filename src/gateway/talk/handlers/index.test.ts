@@ -4015,7 +4015,7 @@ describe("role-required Talk session creation", () => {
       },
     },
   ])("passes authenticated creator isolation through $method", async ({ method, params }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       vi.clearAllMocks();
       const profile = ensureProfileForEmail("talk-required@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
