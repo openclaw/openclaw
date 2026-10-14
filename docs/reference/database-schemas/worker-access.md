@@ -31,6 +31,12 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+SQLite admission delivery follows each worker's ordered cursor. The first snapshot
+includes its shared revision cells; later publications send only new or replaced
+facts, session scopes, and reference cells. Existing cells carry invalidation
+directly, so changing one fact does not resend every session's shared buffer.
+A new worker or database generation receives a complete snapshot.
+
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
@@ -131,6 +137,14 @@ with evidence for every caller. A filename or an async function alone does not
 prove worker execution. Update the generator's evidence, not its generated page.
 
 ## Check once on load; trust the owner
+
+Agent database open admits the catalog before integrity and schema preparation.
+Those stages consume its version and table-presence facts instead of probing
+the same empty store again. Fresh creation skips legacy migration detection;
+tracked DDL and rollback invalidate the catalog before subsequent reads. Schema
+preparation runs under Gateway or exclusive offline ownership, so it does not
+repeat its preflight reads inside the creation transaction. Integrity checks,
+agent ownership checks, and destructive cleanup authority remain in place.
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
@@ -4603,16 +4617,20 @@ that projection instead of opening a synchronous placement read during model
 fallback preparation; it retains current environment and execution-policy checks.
 Reads retain the original physical store; admission and initial routing also
 retain a revocable placement observation
-until their caller consumes the facts.
-Read preparation fails closed. If a same-session placement publication other than
-tool authority commits while the projection read runs, or is still pending when
+until their caller consumes the facts. Reply admission instead retains current
+placement facts and joins the existing writer when a preceding turn's claim
+publication is pending. Claim acquisition and release for the same destination
+do not reject a follow-up; a changed destination, session, source, lifecycle, or
+placement service still does. The later execution claim remains authoritative.
+Strict snapshot read preparation fails closed. If a same-session placement
+publication other than tool authority commits while the projection read runs, or is still pending when
 it returns, the owner releases the observation and rejects with
 `Session <id> placement authority changed`; it neither waits for settlement nor
 repeats the read. A preceding turn finishing or setup advancing at that moment
 can therefore reject the next turn, which fails visibly and is not retried
 automatically. This is an accepted best-effort tradeoff: the window is a single
-worker read, and admission, file reads, and sandbox preparation recheck the same
-observation while consuming it, so repeating only the read would not remove the
+worker read, and initial execution routing, file reads, and sandbox preparation
+recheck the same observation while consuming it, so repeating only the read would not remove the
 race. Unknown publication outcomes, cancellation, and store replacement also
 refuse the read, and an observation already handed to its consumer remains
 revocable.
@@ -6259,6 +6277,15 @@ current owner-held facts synchronously, with no SQLite statements or worker
 requests. Fingerprint, selected-profile, and validated pending-refresh checks
 remain at their existing boundaries; a persisted credential without retained
 authority is refused rather than recovered from a prepared snapshot.
+
+Personal OAuth acceptance also consumes the owner's published credential after
+provider preparation. It compares that credential once, without a database
+transaction or worker request. Refresh writes still compare the expected stored
+profile before replacing it, and the final fetch guard still checks live authority.
+OAuth resolution reuses a prepared personal owner's current credential rather
+than loading the same account again. Session model selection prepares auth-pin
+provider metadata asynchronously; its released synchronous SDK fallback remains
+available through December 31, 2026.
 
 Credential writers begin publication synchronously before the durable effect.
 Worker admission denies the host guard before commit, and committed postimages
