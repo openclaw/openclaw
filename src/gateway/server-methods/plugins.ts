@@ -36,6 +36,7 @@ import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/manageme
 import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { buildPluginSdkDeprecationNotices } from "../../plugins/sdk-deprecation-notices.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
 import { catalogHandlers } from "./catalog.js";
@@ -128,6 +129,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             const failure = failures.get(plugin.id);
             const error = failure ? `${failure.serviceId}: ${failure.error}` : record?.error;
             return Object.assign({}, plugin, {
+              compatibilityNotices: buildPluginSdkDeprecationNotices(plugin.id),
               catalogId: plugin.clawhubPackage
                 ? encodePluginDiscoveryId(plugin.clawhubPackage)
                 : encodeLocalPluginDiscoveryId(plugin.id),

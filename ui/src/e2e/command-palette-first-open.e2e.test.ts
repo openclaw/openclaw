@@ -30,7 +30,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -135,7 +135,7 @@ suite.define(() => {
         await installMockGateway(page, { sessionKey });
         const paletteModule = await holdModuleResponse(
           page,
-          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -225,7 +225,7 @@ suite.define(() => {
       });
       const paletteModule = await holdModuleResponse(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       // Keep an unrelated route loader present so palette assertions cannot depend on it.
       const chatModule = await holdModuleResponse(

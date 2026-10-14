@@ -68,6 +68,7 @@ import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./remov
 import {
   resolveRepository,
   resolveRepositoryIdentity,
+  resolveRepositoryPaths,
   type ResolvedRepository,
 } from "./repository-paths.js";
 import {
@@ -740,9 +741,9 @@ export class ManagedWorktreeService {
     canonicalRoot: string;
     sourceRoot: string;
   }> {
-    const resolved = await resolveRepository(repoRoot);
+    const resolved = await resolveRepositoryPaths(repoRoot);
     return {
-      canonicalRoot: resolved.repoRoot,
+      canonicalRoot: resolved.canonicalRoot,
       sourceRoot: resolved.sourceRoot,
     };
   }

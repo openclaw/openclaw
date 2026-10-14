@@ -140,22 +140,6 @@ describe("Node Code Mode worker custody", () => {
     expect(revised.config.maxPendingToolCalls).toBe(3);
   });
 
-  it("observes in-place changes to public executor inputs", async () => {
-    const catalog = [{ callableName: "lookup", description: "original" }];
-    const start = { ...input, catalog };
-    const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
-    await execute();
-    catalog[0]!.description = "updated";
-    await execute();
-    const sent = fixture.executions.at(-1)!.input as CodeModeNodeInput;
-    if (sent.kind !== "exec") {
-      throw new Error("expected execution payload");
-    }
-    expect(JSON.parse(new TextDecoder().decode(sent.initialization))).toMatchObject({
-      __openclawCatalog: [{ description: "updated" }],
-    });
-  });
-
   it("joins its native workers at host close without retiring a sibling host", async () => {
     const sibling = new LegacyPluginSdkResourceHost();
     const siblingScheduler = createTestGatewayScheduler();

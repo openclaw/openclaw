@@ -26,7 +26,6 @@ import type { SelectPicker } from "./select-picker.ts";
 import "./app-sidebar.tsx";
 
 type Sidebar = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   sidebarNarrationLines: ReadonlyMap<string, string>;
 };
 
@@ -139,13 +138,13 @@ describe("sidebar projection memo", () => {
     projectRows.mockClear();
     for (const change of [
       () => {
-        sidebar.teamOnlineExpanded = true;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.devGitBranch = "feature/sidebar";
       },
       () => {
-        sidebar.teamOnlineExpanded = false;
+        sidebar.requestUpdate();
       },
       () => {
         sidebar.sidebarMenus.closePositionedMenu("sessionSort");
@@ -265,7 +264,7 @@ describe("sidebar projection memo", () => {
       }
       await settleLitElement(sidebar);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-      sidebar.teamOnlineExpanded = true;
+      sidebar.requestUpdate();
       await settleLitElement(sidebar);
       await vi.advanceTimersByTimeAsync(999);
       await settleLitElement(sidebar);

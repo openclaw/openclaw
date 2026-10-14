@@ -1,7 +1,6 @@
-import {
-  runWithOpenClawStateBusyTimeout,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import type {
@@ -39,7 +38,7 @@ import {
   recordOutboundMessageProgressInDatabase,
 } from "./message-delivery-progress-store.js";
 
-// Keep the first open inside the fail-fast busy-timeout and contention boundary.
+// Opening can also encounter contention, so it shares the write retry boundary.
 function executeAuditAttempt(
   { stateOptions, open }: WorkerOperationContext,
   execute: (
@@ -49,11 +48,7 @@ function executeAuditAttempt(
 ): AuditWriterResult {
   const options = stateOptions();
   try {
-    return runWithOpenClawStateBusyTimeout(
-      () => execute({ ...options, database: open() }),
-      options,
-      0,
-    );
+    return execute({ ...options, database: open() });
   } catch (error) {
     if (isOpenClawStateWriteContentionError(error)) {
       return { status: "retry" };

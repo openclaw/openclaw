@@ -1,7 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import { threadId } from "node:worker_threads";
 import type { SqlConnection } from "../sql-connection.js";
-import type { DatabaseEngineId } from "./registry.js";
+import type { DatabaseEngineId } from "./types.js";
 
 type Kind = "statement" | "request";
 const channels = {

@@ -15,7 +15,7 @@ import { getLatestCompactionEntry } from "./session-manager.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  /** @deprecated Use setSessionNameAsync; removal follows a stable deprecation period. */
+  /** @deprecated Await setSessionNameAsync. Supported through 2026-12-31. */
   setSessionName(name: string): void {
     warnSessionPersistenceDeprecation("AgentSession.setSessionName", "setSessionNameAsync");
     this.sessionManager.appendSessionInfo(name);

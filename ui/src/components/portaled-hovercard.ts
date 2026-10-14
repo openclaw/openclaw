@@ -153,7 +153,15 @@ export class PortaledHovercardController {
 
   focusables(): HTMLElement[] {
     // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
-    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
+    return [
+      ...(this.card?.querySelectorAll<HTMLElement>(
+        'a[href]:not([tabindex="-1"]), button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+      ) ?? []),
+    ].filter((element) => {
+      // Slotted inspection controls join native Tab traversal only while their tooltip is open.
+      const content = element.closest('[slot="content"]');
+      return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
+    });
   }
 
   scheduleOpen(delay: number, open: () => void, trigger = this.trigger): void {

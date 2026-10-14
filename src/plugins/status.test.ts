@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 import * as status from "./status.js";
 import {
   createAutoEnabledStatusConfig,
@@ -276,6 +277,40 @@ describe("plugin status reports", () => {
     expect(inspected?.decisions).toMatchObject([
       { pluginId: "inspect-decisions", providerId: "inspect-decisions", configured: true },
     ]);
+  });
+
+  it("includes observed SDK calls in inspection and CLI compatibility output", () => {
+    const pluginId = "status-deprecated-sdk";
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      warnPluginSdkDeprecation({
+        pluginId,
+        family: "session-store",
+        method: "getSessionEntry",
+        replacement: "getSessionEntryAsync",
+      });
+      const report = setReport({ plugins: [createPluginRecord({ id: pluginId })] });
+      const notices = status.buildPluginCompatibilityNotices({ report });
+      expect(notices).toEqual([
+        expect.objectContaining({
+          pluginId,
+          code: "deprecated-sdk-api",
+          severity: "info",
+          apis: [
+            expect.objectContaining({
+              displayName: "getSessionEntry",
+              replacement: "getSessionEntryAsync",
+            }),
+          ],
+        }),
+      ]);
+      expect(inspect(pluginId, report).compatibility).toEqual(notices);
+      expect(status.buildPluginCompatibilityWarnings({ report })).toEqual([
+        `${pluginId} ${notices[0]?.message}`,
+      ]);
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("orders compatibility notices by plugin without attributing unrelated load failures", () => {

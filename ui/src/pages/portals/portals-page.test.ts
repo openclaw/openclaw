@@ -360,9 +360,9 @@ describe("PortalsPage", () => {
     "retains the embedded iframe document through %s presentation changes",
     async (entry) => {
       let title = portal.title;
-      const source = createContext(["portal.list"], async () => ({
-        portals: [{ ...portal, title }],
-      }));
+      const source = createContext(["portal.list", "ui.command.result"], async (method) =>
+        method === "portal.list" ? { portals: [{ ...portal, title }] } : { ok: true },
+      );
       let page: HTMLElementTagNameMap["openclaw-portals-page"];
       if (entry === "solid") {
         page = await mountPage(source.context, portal.id);
@@ -385,7 +385,9 @@ describe("PortalsPage", () => {
       expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
       title = "Refreshed app";
       page.handleToggleRequest(
-        new CustomEvent("openclaw:portal-toggle", { detail: { open: true, portalId: portal.id } }),
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { open: true, portalId: portal.id, requestId: "show-again" },
+        }),
       );
       page.presented = true;
       await page.updateComplete;
@@ -396,6 +398,15 @@ describe("PortalsPage", () => {
       expect(page.querySelector("iframe")).toBe(frame);
       expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
       expect(sourceWrites).not.toHaveBeenCalled();
+      expect(probePortalReachable).toHaveBeenCalledTimes(1);
+      expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+        requestId: "show-again",
+        presentation: {
+          portalId: portal.id,
+          status: "unverified",
+          reason: "network-reachable",
+        },
+      });
     },
   );
 
@@ -608,4 +619,61 @@ describe("PortalsPage", () => {
     expect(page.textContent).toContain("This gateway does not support portals.");
     expect(source.request).not.toHaveBeenCalled();
   });
+});
+
+describe("portal presentation receipts", () => {
+  it.each([
+    {
+      url: "http://127.0.0.1:43123/",
+      probe: "reachable",
+      status: "blocked",
+      reason: "remote-ingress-required",
+    },
+    {
+      url: "http://preview.example.test:43123/",
+      probe: "reachable",
+      status: "new-tab-required",
+      reason: "new-tab-required",
+    },
+    {
+      url: "https://preview.example.test/",
+      probe: "unreachable",
+      status: "blocked",
+      reason: "network-unreachable",
+    },
+    {
+      url: "https://preview.example.test/",
+      probe: "reachable",
+      status: "unverified",
+      reason: "network-reachable",
+    },
+    {
+      url: "https://preview.example.test/",
+      probe: "blocked",
+      status: "unverified",
+      reason: "probe-blocked",
+    },
+  ] as const)(
+    "reports $reason from the actual portal view without claiming rendered success",
+    async ({ url, probe, status, reason }) => {
+      probePortalReachable.mockResolvedValue(probe);
+      const source = createContext(["portal.list", "ui.command.result"], async (method) =>
+        method === "portal.list"
+          ? { portals: [{ ...portal, publicUrl: url, url: url + "?openclaw_portal=synthetic" }] }
+          : { ok: true },
+      );
+      const page = await mountPage(source.context, portal.id);
+      page.handleToggleRequest(
+        new CustomEvent("openclaw:portal-toggle", {
+          detail: { portalId: portal.id, requestId: "request-one", open: true },
+        }),
+      );
+      await waitForSolid(() =>
+        expect(source.request).toHaveBeenCalledWith("ui.command.result", {
+          requestId: "request-one",
+          presentation: { portalId: portal.id, status, reason },
+        }),
+      );
+    },
+  );
 });

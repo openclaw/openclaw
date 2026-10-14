@@ -434,13 +434,13 @@ export async function appendSessionTurnInWorker(
         };
         return operation.run(
           async () => {
-            const hot = inputActor.snapshot(authority);
-            const replicaPreparation = hot && prepareSessionInputFromReplica(plan, hot, scope);
-            if (replicaPreparation) {
-              return replicaPreparation;
-            }
             if (memory) {
-              return actor.storage!.read({ type: "session.turn.prepare", input: plan }, authority);
+              const hot = inputActor.snapshot(authority);
+              const replicaPreparation = hot && prepareSessionInputFromReplica(plan, hot, scope);
+              return (
+                replicaPreparation ??
+                actor.storage!.read({ type: "session.turn.prepare", input: plan }, authority)
+              );
             }
             return withSessionEntryWorker(
               database,

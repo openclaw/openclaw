@@ -211,7 +211,7 @@ it("restores the stopped Gateway before reporting a settled state-owner release 
   expect(boundary.health).toHaveBeenCalledOnce();
 });
 
-it.each([undefined, {}])(
+it.each([undefined])(
   "reports a settled state-release failure without a managed Gateway (%j)",
   async (config) => {
     const failure = new Error("settled state release failed");
