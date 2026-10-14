@@ -45,7 +45,7 @@ export type AuthStoreUpdateCommitted = {
   credentialFacts?: ReturnType<typeof authProfileCredentialPublication.bound>;
   compensation?: AuthStoreCompensation;
 };
-export type AuthStoreCompensation = {
+type AuthStoreCompensation = {
   before: { store: unknown; state: unknown };
   after: { store: unknown; state: unknown };
 };
