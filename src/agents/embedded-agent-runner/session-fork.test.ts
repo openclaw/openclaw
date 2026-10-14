@@ -8,6 +8,7 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
@@ -769,21 +770,34 @@ describe("prepared session fork provider boundary", () => {
         return { acknowledged: this.acknowledged, unicode, encoding: ++encodings };
       },
     };
+    const codeModeOptions = {
+      openclawCodeModeToolSurface: true,
+      openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
+    };
+    const tools = ["exec", "wait"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
     const parentText = "Unicode parent 🦞 café e\u0301";
     const onPayload = vi.fn((payload: unknown) => {
       if (onPayload.mock.calls.length > 1) {
         throw new Error("Provider review continuation cannot rebuild or retry its request");
       }
-      if (!isRecord(payload)) {
+      if (!isRecord(payload) || !Array.isArray(payload.tools)) {
         throw new Error("Expected request");
       }
-      return { ...payload, client_metadata: metadata };
+      return {
+        ...payload,
+        client_metadata: metadata,
+        tools: [...payload.tools, { type: "web_search" }],
+      };
     });
     await (
       await parent(
         model,
-        { ...context, messages: [{ role: "user", content: parentText, timestamp: 1 }] },
-        { apiKey: "synthetic-key", onPayload },
+        { ...context, tools, messages: [{ role: "user", content: parentText, timestamp: 1 }] },
+        { ...codeModeOptions, apiKey: "synthetic-key", onPayload },
       )
     ).result();
     expect(encodings).toBe(1);
@@ -807,5 +821,9 @@ describe("prepared session fork provider boundary", () => {
       });
     }
     expect(bodies[2]).toEqual(bodies[1]);
+    for (const body of bodies.slice(1)) {
+      expect(body.tools).toEqual(bodies[0].tools);
+      expect(body.tool_choice).toBe("none");
+    }
   });
 });

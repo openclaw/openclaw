@@ -23,6 +23,7 @@ export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string; 
 type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   metadata: Buffer;
+  options: StreamOptions;
   publications: Message[];
   streamFn: StreamFn;
   payload: Buffer;
@@ -156,7 +157,6 @@ export function wrapStreamFnWithSessionFork(
         metadata = Buffer.from(
           JSON.stringify({
             model: { ...model, headers: safeHeaders(model.headers) },
-            options: savedOptions,
             tools: context.tools?.map(({ name, description, parameters, async }) => ({
               name,
               description,
@@ -169,12 +169,14 @@ export function wrapStreamFnWithSessionFork(
         // Optional capture must not fail the parent or revoke already-running forks.
         return;
       }
-      const bytes = savedPayload.byteLength + metadata.length;
+      const bytes =
+        savedPayload.byteLength + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
       forgetSnapshot(identity.sessionId);
       if (bytes <= MAX_BYTES) {
         snapshots.set(identity.sessionId, {
           ...identity,
           metadata,
+          options: savedOptions,
           publications: [],
           payload: Buffer.from(
             savedPayload.buffer,
@@ -276,7 +278,6 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent();
   const metadata: {
     model: Model;
-    options: StreamOptions;
     tools: Parameters<StreamFn>[1]["tools"];
   } = JSON.parse(snapshot.metadata.toString("utf8"));
   if (
@@ -363,7 +364,7 @@ export async function runEmbeddedSessionFork(params: {
   for (let iteration = 0; iteration < 3; iteration++) {
     assertCurrent();
     const options: StreamOptions = {
-      ...metadata.options,
+      ...snapshot.options,
       apiKey: params.apiKey,
       signal: params.signal,
       // Background reviews cannot advertise an asynchronous tool execution capability.
