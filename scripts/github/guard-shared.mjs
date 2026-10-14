@@ -86,6 +86,8 @@ export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}
       const rateLimited = error instanceof GitHubRateLimitError;
       const inconsistentDiff = error instanceof GitHubDiffDataError;
       const readTimedOut = error instanceof GitHubReadTimeoutError;
+      const commitUnavailable =
+        error instanceof GitHubStatusPublicationError && error.cause?.status === 422;
       if (
         !rateLimited &&
         !inconsistentDiff &&
@@ -101,7 +103,7 @@ export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}
         ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
           1_000 +
           Math.floor(Math.random() * 15_000)
-        : inconsistentDiff
+        : inconsistentDiff || commitUnavailable
           ? 60_000 * 2 ** attempt
           : githubApiRetryDelaysMs[attempt];
       if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
@@ -222,7 +224,14 @@ export async function publishGuardStatus(guard, state, description) {
       },
     );
   } catch (error) {
-    if (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code)) {
+    if (
+      githubApiRetryStatuses.has(error?.status) ||
+      githubApiRetryCodes.has(error?.code) ||
+      // GitHub can briefly lack the live PR head in its status API. Restart
+      // with fresh PR state; other validation errors must still fail immediately.
+      (error?.status === 422 &&
+        error.responseMessage === `No commit found for SHA: ${guard.pullRequest.head.sha}`)
+    ) {
       throw new GitHubStatusPublicationError(error);
     }
     throw error;
@@ -484,6 +493,11 @@ export function createGitHubApi(token, options = {}) {
           }
           const error = new Error(message);
           error.status = response.status;
+          try {
+            error.responseMessage = JSON.parse(errorText)?.message;
+          } catch {
+            // Preserve HTTP details when GitHub sends a non-JSON error body.
+          }
           throw error;
         }
       }

@@ -720,6 +720,7 @@ describe("combined security review entry point", () => {
   it.each([
     { httpError: 429 },
     { httpError: 500, recordStatusBeforeError: true },
+    { httpError: 422, message: `No commit found for SHA: ${head}` },
     { transportError: "ECONNRESET" },
   ])("rereads authority after a failed success write instead of replaying it: %j", (failure) => {
     const result = evaluate({
@@ -732,7 +733,7 @@ describe("combined security review entry point", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toHaveLength(failure.httpError === 422 ? 2 : 1);
     const afterWait = result.requests.slice(
       result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
     );
@@ -971,6 +972,11 @@ describe("combined security review entry point", () => {
       deadline: "2026-01-02T00:01:00Z",
     },
     { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
+    {
+      route: statusPath,
+      failure: { httpError: 422, message: `No commit found for SHA: ${head}` },
+      deadline: "2026-01-02T00:01:00Z",
+    },
     {
       route: `GET ${pullPath}`,
       failure: { requestTimeout: "fetch" },

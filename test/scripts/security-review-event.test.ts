@@ -195,31 +195,86 @@ describe("automatic security review event resolution", () => {
     expect(result.requests.map(({ method }) => method)).toEqual(["GET", "WAIT", "GET", "POST"]);
   });
 
-  it("resolves the fresh head after a failed pending status before scheduling review", () => {
-    const nextHead = "b".repeat(40);
+  it.each([
+    { status: 500, message: "Server error", delay: 1_000 },
+    { status: 422, message: `No commit found for SHA: ${head}`, delay: 60_000 },
+  ])(
+    "resolves the fresh head after a failed pending status ($status)",
+    ({ status, message, delay }) => {
+      const nextHead = "b".repeat(40);
+      const result = evaluate({
+        eventName: "pull_request_target",
+        event: { action: "opened", pull_request: { number: 42 } },
+        responses: {
+          [`${prefix}/pulls/42`]: [
+            { body: pullRequest },
+            { body: { ...pullRequest, head: { ...pullRequest.head, sha: nextHead } } },
+          ],
+          [`${prefix}/statuses/${head}`]: { status, body: { message } },
+        },
+      });
+      expect(result.status, result.error).toBe(0);
+      expect(result.waits).toEqual([delay]);
+      expect(result.matrix).toEqual({ include: [{ pr: 42, head: nextHead }] });
+      expect(result.published.map(({ path }) => path)).toEqual([
+        `${prefix}/statuses/${head}`,
+        `${prefix}/statuses/${nextHead}`,
+      ]);
+      expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+      expect(result.published.at(-1)?.body?.state).toBe("pending");
+      expect(result.output).toBe(
+        `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\ntruncated=false\n`,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "bounds recovery while the status commit is unavailable, persistent: %s",
+    (persistent) => {
+      const missing = { status: 422, body: { message: `No commit found for SHA: ${head}` } };
+      const result = evaluate({
+        eventName: "pull_request_target",
+        event: { action: "opened", pull_request: { number: 42 } },
+        responses: {
+          [`${prefix}/statuses/${head}`]: persistent ? missing : [missing, { body: {} }],
+        },
+      });
+      expect(result.waits).toEqual(persistent ? [60_000, 120_000, 240_000] : [60_000]);
+      expect(result.requests.map(({ method }) => method)).toEqual(
+        persistent
+          ? ["GET", "POST", "WAIT", "GET", "POST", "WAIT", "GET", "POST", "WAIT", "GET", "POST"]
+          : ["GET", "POST", "WAIT", "GET", "POST"],
+      );
+      expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+      if (persistent) {
+        expect(result).toMatchObject({ status: 1, output: "" });
+        expect(result.error).toContain("recovery budget exhausted");
+      } else {
+        expect(result.status, result.error).toBe(0);
+        expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+      }
+    },
+  );
+
+  it("does not schedule a PR that closes during commit-visibility recovery", () => {
     const result = evaluate({
       eventName: "pull_request_target",
       event: { action: "opened", pull_request: { number: 42 } },
       responses: {
         [`${prefix}/pulls/42`]: [
           { body: pullRequest },
-          { body: { ...pullRequest, head: { ...pullRequest.head, sha: nextHead } } },
+          { body: { ...pullRequest, state: "closed" } },
         ],
-        [`${prefix}/statuses/${head}`]: { status: 500, body: { message: "Server error" } },
+        [`${prefix}/statuses/${head}`]: {
+          status: 422,
+          body: { message: `No commit found for SHA: ${head}` },
+        },
       },
     });
     expect(result.status, result.error).toBe(0);
-    expect(result.waits).toEqual([1_000]);
-    expect(result.matrix).toEqual({ include: [{ pr: 42, head: nextHead }] });
-    expect(result.published.map(({ path }) => path)).toEqual([
-      `${prefix}/statuses/${head}`,
-      `${prefix}/statuses/${nextHead}`,
-    ]);
-    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
-    expect(result.published.at(-1)?.body?.state).toBe("pending");
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\ntruncated=false\n`,
-    );
+    expect(result.matrix).toEqual({ include: [] });
+    expect(result.published).toHaveLength(1);
+    expect(result.waits).toEqual([60_000]);
   });
 
   it.each(["pull_request_target", "issue_comment"])(
@@ -261,12 +316,22 @@ describe("automatic security review event resolution", () => {
     },
   );
 
-  it("does not schedule a review job when its initial pending status cannot be recorded", () => {
+  it.each([
+    { status: 403, body: { message: "Forbidden" } },
+    { status: 422, body: { message: `No commit found for SHA: ${"b".repeat(40)}` } },
+    {
+      status: 422,
+      body: {
+        message: "Validation Failed",
+        errors: [{ message: `No commit found for SHA: ${head}` }],
+      },
+    },
+  ])("does not retry an unrelated status rejection: %j", (rejection) => {
     const result = evaluate({
       eventName: "pull_request_target",
       event: { action: "opened", pull_request: { number: 42 } },
       responses: {
-        [`${prefix}/statuses/${head}`]: { status: 403, body: { message: "Forbidden" } },
+        [`${prefix}/statuses/${head}`]: rejection,
       },
     });
     expect(result).toMatchObject({ status: 1, output: "" });

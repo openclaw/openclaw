@@ -711,6 +711,13 @@ evaluation errors are not retried.
 Checkout, runtime setup, and separately minted autoscrub token expiry are outside
 this recovery mechanism.
 
+When commit-status publication returns HTTP `422` with `No commit found for SHA:`
+matching the requested head, the resolver and review restart from live PR state
+after one, two, and four minutes. This allows GitHub's status API to catch up with
+a visible PR head without replaying stale decisions. These waits share the same
+three-restart limit and job deadline; exhausted recovery fails the job, and other
+`422` validation errors remain fatal.
+
 Transient commit-status publication failures also restart the complete evaluation.
 HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
 use one-, two-, and four-second delays, sharing the three-restart limit and job
