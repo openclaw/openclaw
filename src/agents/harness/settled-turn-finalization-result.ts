@@ -1,6 +1,8 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { isRecoveryInstructionEcho } from "../recovery-nudge-text.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
@@ -63,6 +65,15 @@ export function resolveSettledTurnFinalizationText(
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
   if (!text || isSilentReplyText(text)) {
+    throw new EmptySettledTurnFinalizationError(result);
+  }
+  if (isRecoveryInstructionEcho(text)) {
+    // The finalizer restated the recovery nudge the runner injected instead of
+    // answering the run, so the turn is unanswered and re-enters the existing
+    // bounded tool-free recovery rather than publishing the restatement.
+    log.warn(
+      "settled-turn finalization echoed the recovery instruction — refusing it as an answer",
+    );
     throw new EmptySettledTurnFinalizationError(result);
   }
   return text;

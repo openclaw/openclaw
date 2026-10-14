@@ -4,6 +4,7 @@ import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js"
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
+import { RECOVERY_REPLY_DELIVERY_CONTRACT } from "../../recovery-nudge-text.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -25,8 +26,7 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const REASONING_ONLY_RETRY_INSTRUCTION = `The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 
 describe("terminal resolution", () => {
   beforeEach(() => {

@@ -3,10 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../admitted-run-context.js";
+import { EmptySettledTurnFinalizationError } from "../../harness/settled-turn-finalization-outcome.js";
+import { assertSettledTurnFinalizationResult } from "../../harness/settled-turn-finalization-result.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -143,6 +146,20 @@ let admittedRunContext: AdmittedRunContext;
 
 function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
   return createSettledFinalizationTestInput(attempt, admittedRunContext);
+}
+
+// Mirrors runAgentHarnessLifecycleFinalization so the suite exercises the real
+// echo rejection rather than a stubbed outcome.
+function settleThroughHarness(assistant: AssistantMessage) {
+  try {
+    assertSettledTurnFinalizationResult({ assistant });
+    return { outcome: "answered" as const, result: { assistant } };
+  } catch (error) {
+    if (error instanceof EmptySettledTurnFinalizationError) {
+      return { outcome: "empty" as const, result: error.result };
+    }
+    throw error;
+  }
 }
 
 describe("prepareTerminalWithSettledTurnFinalization", () => {
@@ -356,6 +373,35 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     }
     await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
     expect(input.finalization.abortSignal.aborted).toBe(false);
+  });
+
+  it("retries after the finalizer restates the recovery instruction and delivers the retried answer", async () => {
+    const attempt = settledFailedAttempt();
+    const echoedAssistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "text",
+          text: "I'll gather the last facts. The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Let me write the summary.",
+        },
+      ],
+    });
+    const answerAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The disk has 12 GB free; nothing needs cleanup." }],
+    });
+    backendMocks.runSettledFinalization
+      .mockImplementationOnce(async () => settleThroughHarness(echoedAssistant))
+      .mockImplementationOnce(async () => settleThroughHarness(answerAssistant));
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "The disk has 12 GB free; nothing needs cleanup." }),
+    ]);
+    expect(result.prepared.payloadsWithToolMedia?.[0]?.text).not.toContain(
+      "Continue from the current transcript",
+    );
   });
 
   it("normalizes an unlimited budget when the finalizer publishes no deadline", async () => {

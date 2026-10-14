@@ -59,6 +59,7 @@ import { listRunningSessions, waitForExecScope } from "../agents/bash-process-re
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
+import { SETTLED_TOOL_TERMINAL_CONTINUATION_BODY } from "../agents/recovery-nudge-text.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -156,6 +157,7 @@ type InferencePlan =
   | "oversized-text"
   | "oversized-error"
   | "empty-terminal"
+  | "echoed-terminal"
   | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
@@ -675,6 +677,10 @@ class FakeWorkerGateway {
       this.sendEmptyTerminalTurn(socket, frame.params);
       return;
     }
+    if (plan === "echoed-terminal") {
+      this.sendTextTurn(socket, frame.params, "stop", SETTLED_TOOL_TERMINAL_CONTINUATION_BODY);
+      return;
+    }
     this.sendTextTurn(socket, frame.params, plan === "length" ? "length" : "stop");
   }
 
@@ -734,6 +740,7 @@ class FakeWorkerGateway {
     socket: WebSocket,
     identity: WorkerInferenceStartParams,
     stopReason: "stop" | "length" = "stop",
+    text = "worker reply",
   ): void {
     this.sendInferenceEvent(socket, identity, 1, {
       type: "start",
@@ -744,15 +751,10 @@ class FakeWorkerGateway {
     this.sendInferenceEvent(socket, identity, 3, {
       type: "text_delta",
       contentIndex: 0,
-      delta: "worker reply",
+      delta: text,
     });
     this.sendInferenceEvent(socket, identity, 4, { type: "text_end", contentIndex: 0 });
-    this.sendTerminal(
-      socket,
-      identity,
-      5,
-      assistantMessage([{ type: "text", text: "worker reply" }], stopReason),
-    );
+    this.sendTerminal(socket, identity, 5, assistantMessage([{ type: "text", text }], stopReason));
   }
 
   private sendToolTurn(
@@ -991,6 +993,31 @@ describe("worker runtime", () => {
     });
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
     expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+  });
+
+  it("re-asks once when the finalizer restates the recovery nudge", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "echoed-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    expect(gateway.inferenceRequests).toHaveLength(4);
+    expect(gateway.inferenceRequests[3]?.context.tools ?? []).toEqual([]);
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+  });
+
+  it("finalizes worker tool outcomes with a failure after two echoed continuations", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "echoed-terminal", "echoed-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(4);
     expect(gateway.liveEventRequests.at(-1)).toMatchObject({
       event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
     });

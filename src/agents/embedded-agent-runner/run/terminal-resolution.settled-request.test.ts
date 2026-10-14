@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { setReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { RECOVERY_REPLY_DELIVERY_CONTRACT } from "../../recovery-nudge-text.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -12,8 +13,7 @@ import {
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
 
-const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION = `The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 
 describe("resolveSettledTurnFinalizationRequest", () => {
   it("requests isolated finalization only for a required settled-tool turn", () => {

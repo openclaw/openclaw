@@ -86,6 +86,38 @@ describe("assertSettledTurnFinalizationResult", () => {
     }
   });
 
+  it("classifies a reply that restates the recovery nudge as an empty answer", () => {
+    const result = {
+      assistant: assistantMessage([
+        {
+          type: "text",
+          text: "I'll gather the last facts. The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Let me write the summary.",
+        },
+      ]),
+    };
+
+    try {
+      assertSettledTurnFinalizationResult(result);
+      throw new Error("expected recovery-echo classification");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
+      expect((error as EmptySettledTurnFinalizationError).result).toBe(result);
+    }
+  });
+
+  it("keeps a planning-style answer that never quotes the recovery nudge", () => {
+    const result = {
+      assistant: assistantMessage([
+        {
+          type: "text",
+          text: "The previous attempt did not complete because the process was killed, so I retried. I kept going and finished the inspection: nothing needs cleanup, the disk has 12 GB free.",
+        },
+      ]),
+    };
+
+    expect(assertSettledTurnFinalizationResult(result)).toBe(result);
+  });
+
   it("rejects an assistant stopped at the length limit", () => {
     expect(() =>
       assertSettledTurnFinalizationResult({

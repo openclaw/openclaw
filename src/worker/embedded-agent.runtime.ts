@@ -11,6 +11,7 @@ import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
+import { resolveFinalAssistantVisibleText } from "../agents/embedded-agent-runner/run/helpers.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
 import { resolveSettledToolTerminalContinuationInstruction } from "../agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { buildRuntimeContextCustomMessage } from "../agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -18,9 +19,11 @@ import { readSubscriptionCompletionEvidence } from "../agents/embedded-agent-run
 import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
+import { EmptySettledTurnFinalizationError } from "../agents/harness/settled-turn-finalization-outcome.js";
 import { assertSettledTurnFinalizationResult } from "../agents/harness/settled-turn-finalization-result.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
+import { isRecoveryInstructionEcho } from "../agents/recovery-nudge-text.js";
 import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
@@ -58,6 +61,9 @@ import { createWorkerPlacementTools, WORKER_TOOL_CONFIG } from "./worker-placeme
 function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
+
+// One re-ask is enough to recover a finalizer that restated its own nudge.
+const MAX_ECHOED_FINALIZATION_ATTEMPTS = 2;
 
 type RunWorkerEmbeddedTurnParams = Omit<
   WorkerLaunchPlan["assignment"],
@@ -448,16 +454,36 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       });
       if (instruction && terminalAssistant?.stopReason === "stop") {
         session.agent.state.tools = [];
-        await session.sendCustomMessage(
-          {
-            customType: "openclaw.settled-tool-finalization",
-            content: instruction,
-            display: false,
-          },
-          { triggerTurn: true },
-        );
-        terminalAssistant = completion.getCurrentAttemptAssistant();
-        assertSettledTurnFinalizationResult({ assistant: terminalAssistant! });
+        // The finalizer's reply is published verbatim, so a turn that restates
+        // the injected nudge is unanswered rather than delivered. Re-ask once
+        // with tools still disabled, then let the failure propagate.
+        for (
+          let finalizationAttempt = 1;
+          finalizationAttempt <= MAX_ECHOED_FINALIZATION_ATTEMPTS;
+          finalizationAttempt += 1
+        ) {
+          params.signal?.throwIfAborted();
+          await session.sendCustomMessage(
+            {
+              customType: "openclaw.settled-tool-finalization",
+              content: instruction,
+              display: false,
+            },
+            { triggerTurn: true },
+          );
+          terminalAssistant = completion.getCurrentAttemptAssistant();
+          try {
+            assertSettledTurnFinalizationResult({ assistant: terminalAssistant! });
+            break;
+          } catch (error) {
+            const echoedInstruction =
+              error instanceof EmptySettledTurnFinalizationError &&
+              isRecoveryInstructionEcho(resolveFinalAssistantVisibleText(terminalAssistant!));
+            if (!echoedInstruction || finalizationAttempt >= MAX_ECHOED_FINALIZATION_ATTEMPTS) {
+              throw error;
+            }
+          }
+        }
       }
       params.signal?.throwIfAborted();
       if (

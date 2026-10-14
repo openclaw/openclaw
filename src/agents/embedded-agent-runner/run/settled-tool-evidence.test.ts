@@ -1,6 +1,7 @@
 // Focused incomplete-turn behavior coverage.
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { RECOVERY_REPLY_DELIVERY_CONTRACT } from "../../recovery-nudge-text.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -13,8 +14,7 @@ import {
 import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION = `The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 
 type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 

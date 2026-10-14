@@ -1,5 +1,6 @@
 // Full-entry coverage for before_agent_finalize revision handling in embedded runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { RECOVERY_REPLY_DELIVERY_CONTRACT } from "../recovery-nudge-text.js";
 import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
@@ -12,8 +13,7 @@ import {
 } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const REASONING_ONLY_RETRY_INSTRUCTION = `The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch. ${RECOVERY_REPLY_DELIVERY_CONTRACT}`;
 
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
