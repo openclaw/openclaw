@@ -204,7 +204,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (assertSources) => {
               inputTurn.abortSignal?.throwIfAborted();
               assertSources();
-              requiredAdmission.assertCurrent(claim);
             },
           );
           // An admission wait ends without authority; retry from the durable placement.
@@ -412,6 +411,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
                 const preparedPlacement = placementRead.current();
+                requiredAdmission.assertCurrent(preparedPlacement);
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||

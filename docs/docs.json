@@ -3090,6 +3090,7 @@
                       "plugins/sdk-migration/import-paths",
                       "plugins/sdk-migration/removed-surfaces",
                       "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/async-transcript-and-tts",
                       "plugins/sdk-migration/compatibility-policy",
                       "plugins/sdk-migration/removal-timeline"
                     ]

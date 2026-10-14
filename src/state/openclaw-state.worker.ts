@@ -3,6 +3,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_SOURCE_FENCE } from "../infra/sqlite-source-fence-contract.js";
@@ -446,7 +447,9 @@ function createSharedStateWorkerBackend(
             runOpenClawStateWriteTransaction(
               ({ db }) => {
                 admit("transaction");
-                refreshSqlitePlannerStatistics(db);
+                if (!isPostgresSqlConnection(db)) {
+                  refreshSqlitePlannerStatistics(db);
+                }
                 admit("commit");
               },
               { database },
@@ -518,7 +521,7 @@ function createSharedStateWorkerBackend(
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }
-        if (nativeDatabase.db.isOpen) {
+        if (nativeDatabase.db.isOpen && !isPostgresSqlConnection(nativeDatabase.db)) {
           assertNoActiveSqliteReaders(nativeDatabase.db, "Shared-state worker");
         }
       }

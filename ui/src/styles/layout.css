@@ -2578,12 +2578,9 @@ openclaw-settings-save-indicator:empty {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-wa-dropdown.sidebar-customize-menu {
+.oc-menu.sidebar-customize-menu {
   position: fixed;
   z-index: 120;
-}
-
-wa-dropdown.sidebar-customize-menu::part(menu) {
   min-width: 224px;
   max-width: 264px;
   max-height: 420px;
@@ -2627,14 +2624,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   background: var(--bg-hover);
 }
 
-/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
-   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
-   that margin as the icon column instead of stacking into a ~17px gutter, and
-   keeps icon-less rows from inheriting a phantom leading indent. */
-wa-dropdown-item.sidebar-customize-menu__item {
-  gap: 0;
-}
-
 /* One leading column for the whole menu family: command glyphs centre inside
    the agent avatar's box (.agent-select__option .agent-select__avatar) so
    avatar rows and icon rows share a gutter and their labels start on one x. */
@@ -2652,7 +2641,7 @@ wa-dropdown-item.sidebar-customize-menu__item {
 }
 
 /* Agent rows use an avatar ring; command rows have no checked state. */
-.sidebar-agent-menu .sidebar-customize-menu__item::part(checkmark) {
+.sidebar-agent-menu .oc-menu-item__check {
   display: none;
 }
 
@@ -3821,12 +3810,12 @@ button.gateway-status:focus-visible {
   transition: color 120ms ease;
 }
 
-wa-dropdown-item.sidebar-agent-menu__agent-switch:hover,
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
+.oc-menu-item.sidebar-agent-menu__agent-switch:hover,
+.oc-menu-item.sidebar-agent-menu__agent-switch:focus-visible {
   background: transparent !important;
 }
 
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
+.oc-menu-item.sidebar-agent-menu__agent-switch:focus-visible {
   outline: none !important;
 }
 
@@ -4073,13 +4062,13 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   --agent-avatar-glyph-size: 24px;
 }
 
-wa-dropdown.sidebar-agent-menu::part(menu) {
+.oc-menu.sidebar-agent-menu {
   display: flex;
   flex-direction: column;
   width: min(300px, calc(100dvw - 16px));
   min-width: 0;
   max-width: calc(100dvw - 16px);
-  max-height: min(calc(100dvh - 16px), var(--auto-size-available-height, 100dvh));
+  max-height: min(calc(100dvh - 16px), var(--oc-overlay-available-height, 100dvh));
   overflow: hidden;
 }
 
@@ -4132,7 +4121,7 @@ wa-dropdown.sidebar-agent-menu::part(menu) {
   overflow: visible;
 }
 
-wa-dropdown.sidebar-identity-menu::part(menu) {
+.oc-menu.sidebar-identity-menu {
   min-width: max(224px, var(--sidebar-identity-menu-min-width, 224px));
   border-color: transparent;
   border-radius: var(--radius-md);
@@ -4198,7 +4187,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   height: 20px;
 }
 
-.sidebar-identity-menu__help::part(submenu-icon) {
+.sidebar-identity-menu__help .oc-menu-item__submenu-icon {
   inset-inline-end: 4px;
   width: 16px;
   height: 16px;

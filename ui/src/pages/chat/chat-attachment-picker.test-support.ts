@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render, type LitElement } from "lit";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import * as attachmentTextReader from "./components/chat-attachment-text-reader.ts";
@@ -36,10 +36,11 @@ export async function renderSettledPastedTextAttachment(
   const read = vi.spyOn(attachmentTextReader, "readAttachmentText");
   try {
     const container = renderChatView(overrides);
-    document.body.append(container);
-    const chip = expectDefined(
-      container.querySelector<LitElement>("openclaw-chat-pasted-text"),
-      "pasted text attachment",
+    const chip = await waitForSolid(() =>
+      expectDefined(
+        container.querySelector<LitElement>("openclaw-chat-pasted-text"),
+        "pasted text attachment",
+      ),
     );
     await chip.updateComplete;
     expect(read).toHaveBeenCalledOnce();

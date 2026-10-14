@@ -375,11 +375,12 @@ export function createWorkerProjectPreparation(params: {
     // the current provisioning owner, and never runs in a later session's HOME.
     const prepared: unknown = JSON.parse(
       await transport.runScriptWithBudget!(
-        (timeoutMs) =>
+        (timeoutMs, setupEnv) =>
           createProjectSetupScript({
             ...sourceInput,
             ...preparationInput,
             timeoutMs,
+            setupEnv,
             verifiedRetained,
           }),
         signal,
@@ -412,6 +413,7 @@ export function createWorkerProjectPreparation(params: {
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
+      ...(preparation?.recipe?.secretNames ? { secretNames: preparation.recipe.secretNames } : {}),
       ...("source" in params.project ? {} : { root: params.project.root }),
       ...(label !== undefined ? { label } : {}),
       ...(preparation && preparationInput

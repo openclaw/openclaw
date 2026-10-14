@@ -48,6 +48,8 @@ describe("provider overflow messages", () => {
 
   it.each([
     "Context window exceeded: estimated input 35137 leaves only 0 output tokens within the 32768-token context.",
+    "Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+    "Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
     "<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
     "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
@@ -59,6 +61,14 @@ describe("provider overflow messages", () => {
   it("does not treat other DashScope parameter ranges as context overflow", () => {
     expect(
       isContextOverflow(errorMessage("Range of max_tokens should be [1, 8192]"), 262_144),
+    ).toBe(false);
+  });
+
+  it("does not compact an output-only TGI validation error", () => {
+    expect(
+      isContextOverflow(
+        errorMessage("Input validation error: `max_new_tokens` must be <= 4096. Given: 8192"),
+      ),
     ).toBe(false);
   });
 });

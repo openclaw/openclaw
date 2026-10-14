@@ -53,8 +53,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       owner.close();
       throw new Error("Experimental workboard open did not select PostgreSQL");
     }
-    const schema = owner.db.schema;
-    schemas.add(schema);
     // The host anchor owns admission until the worker has released its connections.
     const fixture = openPostgresFixture({ dbPath, postgresInput });
     let closed = false;
@@ -70,7 +68,8 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       }
     }
     owners.push({ close });
-    await fixture.state();
+    const { schema } = await fixture.state();
+    schemas.add(schema);
     return { fixture, schema, close };
   }
 

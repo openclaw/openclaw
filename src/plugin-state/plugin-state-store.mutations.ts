@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { readPreparedPluginStateNativeBinding } from "./plugin-state-native-binding-codec.js";
 import type {
   PluginStateNativeBindingDeletion,
@@ -79,7 +79,7 @@ export function restorePluginStateNativeBinding(
 }
 
 export function clearPluginStateNamespace(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { pluginId: string; namespace: string },
 ): void {
   const result = executeSqliteQuerySync(

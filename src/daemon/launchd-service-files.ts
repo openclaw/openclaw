@@ -63,11 +63,10 @@ function collectLaunchAgentEnvironmentEntries(
   environment: GatewayServiceEnv | undefined,
 ): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
-  for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
+  for (const [rawKey, value] of Object.entries(environment ?? {})) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    const value = rawValue?.trim();
     // Empty NODE_OPTIONS intentionally clears launchd's inherited Node flags.
-    if (!key || value === undefined || (!value && key !== "NODE_OPTIONS")) {
+    if (!key || value === undefined || (!value.trim() && key !== "NODE_OPTIONS")) {
       continue;
     }
     entries.push([key, value]);

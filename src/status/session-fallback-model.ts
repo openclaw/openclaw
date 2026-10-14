@@ -1,19 +1,13 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
-import type {
-  SessionTranscriptReadScope,
-  TranscriptEvent,
-} from "../config/sessions/session-accessor.types.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
-import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { readSessionTranscriptTerminalModel } from "../sessions/transcript-terminal-model.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
 type SessionTerminalModel = { modelProvider: string; model: string };
@@ -120,55 +114,13 @@ async function readSessionTerminalFallbackModelAsync(params: {
   return undefined;
 }
 
-/** Storage readers prepare terminal facts; the host retains runtime alias policy. */
-export function readSessionTerminalFallbackModel(
-  params: SessionFallbackSource & { terminalEvent?: TranscriptEvent },
-): SessionTerminalModel | undefined {
-  const entry = params.sessionEntry;
-  if (
-    !params.sessionScope?.sessionKey ||
-    !entry?.sessionId ||
-    entry.status !== "done" ||
-    !entry.lastRunId ||
-    !entry.fallbackNotice
-  ) {
-    return undefined;
-  }
-  if (params.terminalEvent !== undefined) {
-    return selectSessionTerminalFallbackModel(entry, params.terminalEvent);
-  }
-  try {
-    const page = readSessionTranscriptBoundedMessageTailPage(
-      { ...params.sessionScope, sessionId: entry.sessionId },
-      { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
-    );
-    return selectSessionTerminalFallbackModel(entry, page.events[0]?.event);
-  } catch (error) {
-    if (
-      !isSessionTranscriptProjectionUnavailableError(error) &&
-      !(error instanceof SessionTranscriptStorageUnavailableError)
-    ) {
-      throw error;
-    }
-  }
-  return undefined;
-}
-
 /** Durable and memory readers apply the same terminal-run selection to a bounded tail. */
 export function selectSessionTerminalFallbackModel(
   entry: InternalSessionEntry,
   event: unknown,
 ): SessionTerminalModel | undefined {
-  const message = asOptionalRecord(asOptionalRecord(event)?.message);
-  if (
-    (message?.stopReason === "stop" || message?.stopReason === "length") &&
-    readSessionTranscriptRunId(message) === entry.lastRunId &&
-    message.display !== false &&
-    projectSessionDisplayMessage(message, { view: "model-context" })?.role === "assistant" &&
-    typeof message.provider === "string" &&
-    typeof message.model === "string"
-  ) {
-    return { modelProvider: message.provider, model: message.model };
-  }
-  return undefined;
+  const terminal = readSessionTranscriptTerminalModel(event);
+  return terminal && terminal.runId === entry.lastRunId
+    ? { modelProvider: terminal.modelProvider, model: terminal.model }
+    : undefined;
 }

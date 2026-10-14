@@ -9,7 +9,7 @@ import {
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
+import { readUserProfileSnapshotSync } from "../../state/user-profile-identity.read.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -115,11 +115,17 @@ export function identifiedClient(profileId: string): GatewayClient {
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
-    const resolved = readUserProfileIdentity(identity);
+    const { profiles } = readUserProfileSnapshotSync();
+    const source = profiles.find((profile) => profile.id === identity);
+    const canonical = source?.mergedInto ?? source?.id ?? identity;
+    const profile = profiles.find((candidate) => candidate.id === canonical);
     client.preparedSessionProfile = {
-      profileId: resolved?.profileId ?? identity,
-      aliases: resolved?.aliases ?? new Set([identity]),
-      role: resolved?.role ?? null,
+      profileId: canonical,
+      aliases: new Set([
+        canonical,
+        ...profiles.filter((candidate) => candidate.mergedInto === canonical).map(({ id }) => id),
+      ]),
+      role: profile?.role ?? null,
     };
   };
   refresh();

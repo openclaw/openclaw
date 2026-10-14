@@ -4,6 +4,7 @@ import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/sess
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   scheduleSkillExperienceReview,
@@ -96,8 +97,13 @@ function runCoreAgentEndSideEffects(
   }
 }
 
-/** @deprecated Use runAgentEndSideEffectsAsync; retained until the next Plugin SDK major. */
+/** @deprecated Await runAgentEndSideEffectsAsync. Retained during stable deprecation. */
 export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void {
+  warnPluginSdkDeprecation({
+    family: "agent-end-side-effects",
+    method: "runAgentEndSideEffects",
+    replacement: "await runAgentEndSideEffectsAsync",
+  });
   void runCoreAgentEndSideEffects(params, "native");
   runAgentHarnessAgentEndHook(params);
 }

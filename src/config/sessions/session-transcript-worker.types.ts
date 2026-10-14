@@ -6,10 +6,6 @@ import type {
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
-import type {
-  SessionRowTranscriptFields,
-  SessionRowBackfillWorkerInput,
-} from "../../gateway/session-row-transcript-backfill.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -306,7 +302,12 @@ export type SessionHistoryWorkerInput =
   | SessionBranchSummaryWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
-  | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
+  | {
+      kind: "prewarm";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      history: boolean;
+    }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
@@ -330,7 +331,6 @@ export type SessionHistoryWorkerInput =
   | SessionMemoryCaptureWorkerInput
   | SessionTranscriptAnchorsWorkerInput
   | SessionActivitySummarySourceWorkerInput
-  | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionProjectionStatusWorkerInput
   | SessionMembersWorkerInput
@@ -460,7 +460,6 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-activity-summary-source";
       source: SessionActivitySummaryBatchResult;
     };
-    "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
     "session-row-presence": boolean;
     "projection-status": boolean;
     "session-members": { kind: "session-members" } & SessionMembersSnapshot;
@@ -586,7 +585,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
-    prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
+    prewarm: (input: { env: NodeJS.ProcessEnv; history: boolean }) => Promise<void>;
     readPendingArchives: CancellableSessionHistoryReader<"session-pending-archives", "pending">;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
@@ -616,9 +615,6 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readWatermark: SessionHistoryReader<"transcript-watermark", "watermark">;
     readStats: SessionHistoryReader<"transcript-stats", "stats">;
     readActivitySummarySource: SessionHistoryReader<"session-activity-summary-source", "source">;
-    readRowBackfill: (
-      params: SessionRowBackfillWorkerInput["params"],
-    ) => Promise<SessionRowTranscriptFields>;
     readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
     readProjectionStatus: CancellableSessionHistoryReader<"projection-status">;
     readIdentityEvidence: SessionHistoryReader<"session-identity-evidence", "evidence">;

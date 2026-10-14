@@ -17,7 +17,10 @@ import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "./agent-database-admission-error.js";
-import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
+import {
+  loadOpenClawAgentCanonicalValidationReceipt,
+  recordOpenClawAgentCanonicalValidation,
+} from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
@@ -567,6 +570,8 @@ describe("canonical proof on physical database validation", () => {
             throw new Error("Expected a canonical reader and an independently admitted receipt");
           }
           try {
+            // Native fixture supplies the cold read-admission step performed by the worker.
+            loadOpenClawAgentCanonicalValidationReceipt(reader.database);
             expect(hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
             if (cache === "empty") {
               clearOpenClawAgentDatabaseValidationCache(database.path);

@@ -421,14 +421,6 @@ export class DraftPlaceBrowser {
 
   close() {
     this.resetBrowser(true);
-    for (const kind of ["where", "project", "checkout"] as const) {
-      const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`) as
-        | (HTMLElement & { open: boolean })
-        | null;
-      if (popover) {
-        popover.open = false;
-      }
-    }
   }
 
   showRoot() {

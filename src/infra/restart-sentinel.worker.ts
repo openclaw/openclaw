@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   WorkerWriteOperationContext,
@@ -15,6 +14,7 @@ import {
   type RestartSentinel,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -35,7 +35,7 @@ import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt
 
 function transaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
     writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
@@ -43,7 +43,7 @@ function transaction<Input, Output>(
 
 function receiptTransaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { write }: WorkerWriteOperationContext): Output =>
     write(

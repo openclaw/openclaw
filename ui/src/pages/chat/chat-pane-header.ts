@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { createRef } from "lit/directives/ref.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -9,7 +10,6 @@ import type { UiSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
-import { renderContextNewSessionAction } from "../../components/new-session-link.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -43,6 +43,8 @@ import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
+import type { ChatDetails } from "./components/chat-details.tsx";
+import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import "./components/chat-header-session-menu.ts";
 import type {
   HeaderMenuAction,
@@ -66,11 +68,8 @@ import { renderContinueInTerminalDialog } from "./components/continue-in-termina
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
-type HeaderPanelAction = HeaderMenuQuickAction & {
-  shortcut?: ReturnType<typeof sidebarPanelDefinitions>[number]["shortcut"];
-};
-
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
+  protected readonly headerDetailsRef = createRef<ChatDetails>();
   private headerMenuRow?: GatewaySessionRow;
   private headerWorkspace?: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   private headerAgentWorkspace?: string;
@@ -242,6 +241,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
+          placementRow: row,
+          requiredProfile:
+            this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
           session: { ...row, pinnable },
         })
       : {};
@@ -275,9 +277,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           : {}),
       }),
     );
-    const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
-      desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+      resolveChatPaneDesktopTarget(row) !== null &&
+      isDesktopPanelAvailable(this.context.gateway.snapshot);
     const discussion = this.resolveSessionDiscussionAction();
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
     const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
@@ -439,6 +441,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       : [];
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: this.context.gateway.snapshot,
+      requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
       movingKey: this.headerPlacementMovingKey,
       reclaimingKey: this.headerPlacementReclaimingKey,
       restartingKey: this.headerPlacementRestartingKey,
@@ -502,6 +505,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ownerViewing,
         personActivity,
         showOwnerChip,
+        this.mergedChrome,
         i18n.getLocale(),
       ],
       () =>
@@ -524,7 +528,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               onCopyPublicLink: () => void this.copySessionPublicLink(row),
               ownerViewing,
               personActivity,
-              showOwner: showOwnerChip,
+              showOwner: showOwnerChip && !this.mergedChrome,
               onOpen: () => void this.loadSessionSharing(row),
               onVisibilityChange: (visibility: SessionVisibility) =>
                 void this.setSessionVisibility(row, visibility),
@@ -545,10 +549,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      newSessionAction:
-        this.presented && this.mergedChrome && !this.navDrawerOpen
-          ? renderContextNewSessionAction(this.context, "header-new-session")
-          : nothing,
       title:
         (catalog ? this.catalogSession?.name?.trim() : undefined) ||
         this.resolveHeaderSessionTitle(row),
@@ -591,6 +591,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
+      onOpenDetails:
+        detailsControl === nothing
+          ? undefined
+          : (source) => this.headerDetailsRef.value?.open(source),
       runAction: subagentStop,
       presence: viewers?.length
         ? html`<openclaw-viewer-facepile

@@ -414,7 +414,7 @@ export type AgentHarnessSessionDeletionParams = {
 
 /**
  * Direct, unbound commit/rollback callbacks are deprecated and will be removed
- * in the next Plugin SDK major. Use createNativeSessionBindingLifecycleV2 for
+ * after an announced stable deprecation period. Use createNativeSessionBindingLifecycleV2 for
  * reversible stored bindings or createNativeSessionCommitFinalizer for
  * commit-only cleanup from openclaw/plugin-sdk/agent-harness-session-runtime.
  * Factory-produced participants remain supported by this contract.
@@ -477,6 +477,17 @@ export type AgentHarnessDescendantCancellationResult = {
   }>;
 };
 
+/** Activation-only native readiness check; it does not authorize a model turn. */
+export type AgentHarnessSetupVerificationContext = {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  workspaceDir: string;
+  signal: AbortSignal;
+  /** Revalidate the setup owner after awaits and before native I/O. */
+  assertCurrent: () => void;
+};
+
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
   TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
@@ -520,8 +531,15 @@ type AgentHarnessContract<
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /**
+   * Verify a profileless, harness-owned setup candidate without a model turn.
+   * Resolve only after native credentials and the selected model are usable;
+   * throw on rejection. Core owns the resulting setup binding and rechecks it
+   * before activation. Other inference checks still execute a bounded turn.
+   */
+  verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
+  /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removed in the next Plugin SDK major.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removal follows a stable deprecation period.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

@@ -48,6 +48,7 @@ export type DraftEnvironment = {
   status: EnvironmentStatus;
   platform?: string;
   sessionHost?: boolean;
+  workerHost?: { deviceFolders: boolean };
   workerSlots?: WorkerSlotSummary;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
@@ -309,6 +310,9 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             ? { sessionHost: environment.sessionHost }
             : {}),
           ...(workerSlots ? { workerSlots } : {}),
+          ...(isRecord(environment.workerHost)
+            ? { workerHost: { deviceFolders: environment.workerHost.deviceFolders === true } }
+            : {}),
           ...(lastConnectedAtMs !== undefined ? { lastConnectedAtMs } : {}),
           ...(lastDisconnectedAtMs !== undefined ? { lastDisconnectedAtMs } : {}),
           ...(lastSeenAtMs !== undefined ? { lastSeenAtMs } : {}),

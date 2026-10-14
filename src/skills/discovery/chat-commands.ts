@@ -77,7 +77,7 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForWorkspace; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; retained until an announced stable removal window. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
@@ -223,7 +223,7 @@ function appendSkillCommands(
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForAgents; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForAgents; retained until an announced stable removal window. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
   warnPluginSdkDeprecation({
     family: "skill-command-discovery",

@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
   createClient: vi.fn(),
   me: vi.fn(),
-  resolveWorkspaceId: vi.fn(),
   workspaces: vi.fn(),
 }));
 
@@ -21,10 +20,6 @@ vi.mock("./http-client.js", () => ({
       workspaces: mocks.workspaces,
     };
   },
-}));
-
-vi.mock("./resolve.js", () => ({
-  resolveWorkspaceId: mocks.resolveWorkspaceId,
 }));
 
 import { verifyClickClackAccountAfterSetup } from "./setup-verify.js";
@@ -59,7 +54,6 @@ describe("ClickClack post-write setup verification", () => {
     mocks.callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
     mocks.createClient.mockReset();
     mocks.me.mockReset().mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
-    mocks.resolveWorkspaceId.mockReset().mockResolvedValue("wsp_default");
     mocks.workspaces
       .mockReset()
       .mockResolvedValue([
@@ -67,24 +61,31 @@ describe("ClickClack post-write setup verification", () => {
       ]);
   });
 
-  it("prints the resolved bot and workspace without blocking setup", async () => {
-    const runtime = await verify();
+  it.each(["default", "wsp_default", "clickclack"])(
+    "prints the resolved bot and workspace for selector %s without blocking setup",
+    async (workspace) => {
+      const runtime = await verify({
+        channels: {
+          clickclack: { ...configuredAccount.channels.clickclack, workspace },
+        },
+      });
 
-    expect(mocks.createClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://127.0.0.1:8484",
-      }),
-    );
+      expect(mocks.createClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: "http://127.0.0.1:8484",
+        }),
+      );
 
-    expect(runtime.log).toHaveBeenNthCalledWith(
-      1,
-      "Connected as @openclaw — workspace clickclack resolved.",
-    );
-    expect(runtime.log).toHaveBeenNthCalledWith(
-      2,
-      "OpenClaw is running — ClickClack will connect automatically.",
-    );
-  });
+      expect(runtime.log).toHaveBeenNthCalledWith(
+        1,
+        "Connected as @openclaw — workspace clickclack resolved.",
+      );
+      expect(runtime.log).toHaveBeenNthCalledWith(
+        2,
+        "OpenClaw is running — ClickClack will connect automatically.",
+      );
+    },
+  );
 
   it.each([
     {
@@ -95,7 +96,6 @@ describe("ClickClack post-write setup verification", () => {
     {
       name: "a missing workspace",
       arrange: () => {
-        mocks.resolveWorkspaceId.mockResolvedValue("wsp_missing");
         mocks.workspaces.mockResolvedValue([]);
       },
       expected:

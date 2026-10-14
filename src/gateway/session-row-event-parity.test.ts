@@ -25,7 +25,7 @@ import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 afterEach(() => vi.restoreAllMocks());
 
 it("delivers nested event rows identical to the full list for each viewer and clock without SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const profiles = [

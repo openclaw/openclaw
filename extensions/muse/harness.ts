@@ -33,7 +33,8 @@ import {
 import { createApprovalHandler } from "./src/approvals.js";
 import { prepareMuseSessionContext } from "./src/context.js";
 import { consumeTurn } from "./src/events.js";
-import { credentialFingerprint, MusePool, openMuseSession } from "./src/runtime.js";
+import { MusePool, openMuseSession } from "./src/runtime.js";
+import { readMuseCatalog, verifyMuseSetup } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -53,7 +54,9 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
   const pool = new MusePool(options.binaryPath);
   const queue = new KeyedAsyncQueue();
   const active = new Map<string, () => Promise<void>>();
-  const inFlight = new Set<Promise<AgentHarnessAttemptResult>>();
+  const inFlight = new Set<Promise<unknown>>();
+  const catalogs = new Map<string, { workspaceDir: string; models: Set<string> }>();
+  const catalogAbort = new AbortController();
   let disposed = false;
 
   async function runAttempt(
@@ -163,16 +166,16 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         : security === "full" && ask === "off"
           ? "allowAll"
           : "promptUnmatched";
-      const compatibility = JSON.stringify([
-        workspace,
-        params.modelId,
-        credentialFingerprint(apiKey),
-        readOnly,
-        approvalMode,
-      ]);
       params.hostCapabilities.assertActive();
       const lease = await pool.acquire(workspace, apiKey, readOnly);
       const { runtime } = lease;
+      const compatibility = JSON.stringify([
+        workspace,
+        params.modelId,
+        runtime.credentialIdentity,
+        readOnly,
+        approvalMode,
+      ]);
       let session: Session | undefined;
       let turn: Turn | undefined;
       let forceCloseTimer: ReturnType<typeof setTimeout> | undefined;
@@ -476,6 +479,39 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
     executionEnvironment: "host-only",
+    verifySetup: verifyMuseSetup,
+    async loadModelCatalog(params) {
+      catalogs.delete(params.agentDir);
+      const request = readMuseCatalog({
+        config: params.config,
+        signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(30_000)]),
+        assertCurrent: () => {
+          if (disposed) {
+            throw new Error("Muse harness has been disposed.");
+          }
+        },
+      });
+      inFlight.add(request);
+      try {
+        const entries = await request;
+        catalogs.set(params.agentDir, {
+          workspaceDir: params.workspaceDir,
+          models: new Set(entries.map((entry) => entry.id)),
+        });
+        return entries;
+      } finally {
+        inFlight.delete(request);
+      }
+    },
+    readModelCatalogReadiness(params) {
+      const catalog = catalogs.get(params.agentDir);
+      return !disposed &&
+        params.provider === "meta" &&
+        catalog?.workspaceDir === params.workspaceDir &&
+        catalog.models.has(params.modelId)
+        ? { accountType: "native" }
+        : undefined;
+    },
     conversationToolPolicyNativeTools: ["exec", "read", "write", "edit"],
     supports: (ctx) =>
       ctx.requestedRuntime === "muse" &&
@@ -525,6 +561,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
     },
     async dispose() {
       disposed = true;
+      catalogAbort.abort();
+      catalogs.clear();
       await Promise.allSettled([...active.values()].map((abort) => abort()));
       await Promise.allSettled(inFlight);
       await pool.dispose();

@@ -26,6 +26,31 @@ function captureCardsList(store: WorkboardStore) {
 }
 
 describe("workboard card list revisions", () => {
+  it("keeps session-filtered payloads and revision receipts separate from full card lists", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const first = await store.create({ title: "First session", sessionKey: "session-one" });
+    const second = await store.create({ title: "Second session", sessionKey: "session-two" });
+    const listCards = captureCardsList(store);
+    const sessionsBefore = store.sessionsRevision;
+    const filtered = (await listCards({ sessionKey: "session-one" })).mock.calls[0]?.[1];
+    expect(filtered.cards.map((card: { id: string }) => card.id)).toEqual([first.id]);
+    expect(filtered.revision.sessionKey).toBe("session-one");
+    expect(store.sessionsRevision).toEqual(sessionsBefore);
+    const repeated = (
+      await listCards({ sessionKey: "session-one", sinceRevision: filtered.revision })
+    ).mock.calls[0]?.[1];
+    expect(repeated).toEqual({ unchanged: true, revision: filtered.revision });
+    expect(
+      (
+        await listCards({ sessionKey: "session-two", sinceRevision: filtered.revision })
+      ).mock.calls[0]?.[1].cards.map((card: { id: string }) => card.id),
+    ).toEqual([second.id]);
+    expect(
+      (await listCards({ sinceRevision: filtered.revision })).mock.calls[0]?.[1].cards,
+    ).toHaveLength(2);
+    expect((await listCards({ sessionKey: " " })).mock.calls[0]?.[0]).toBe(false);
+  });
+
   it("refreshes retained lists and session revisions after sibling worker commits", async () => {
     const { store: reader, dbPath } = createWorkboardSqliteTestHarness();
     const stores = createWorkboardSqliteStores({

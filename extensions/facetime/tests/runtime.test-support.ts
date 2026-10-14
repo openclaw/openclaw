@@ -241,8 +241,7 @@ export async function createRuntime(
   ),
   ownerHandles = ["owner@example.com"],
   storeOpeners?: {
-    openKeyedStore?: () => PluginStateKeyedStore<unknown>;
-    openKeyedStoreV2?: () => PluginStateKeyedStore<unknown, 2>;
+    openKeyedStoreV2: () => PluginStateKeyedStore<unknown, 2>;
   },
 ) {
   return await createFaceTimeRuntime({

@@ -39,7 +39,9 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
   const downloadClass = () => [
     "chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost",
     {
-      "chat-assistant-attachment-card__download--secondary": props.onExpand !== undefined,
+      "chat-assistant-attachment-card__action--labeled": Boolean(view().downloadLabel),
+      "chat-assistant-attachment-card__download--secondary":
+        props.onExpand !== undefined && !view().downloadLabel,
       skeleton: props.loading,
     },
   ];
@@ -99,6 +101,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             onClick={() => props.onDownload?.()}
           >
             <Icon name="download" />
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
           </button>
         ) : props.downloadHref || props.downloadPending ? (
           <a
@@ -114,6 +117,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
             title={view().downloadTitle}
           >
             <Icon name="download" />
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
           </a>
         ) : null}
         {props.onExpand !== undefined ? (

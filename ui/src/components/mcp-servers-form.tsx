@@ -5,6 +5,7 @@ export function McpServersForm(props: {
   busy: boolean;
   disabled: boolean;
   blockedReason: string | null;
+  autofocus?: boolean;
   onSubmit: (form: McpServerForm) => void;
   onCancel: () => void;
 }) {
@@ -29,6 +30,7 @@ export function McpServersForm(props: {
         <span>{t("mcpServers.nameLabel")}</span>
         <input
           name="mcp-name"
+          autofocus={props.autofocus}
           class="settings-input"
           type="text"
           required

@@ -1,7 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import { noteCronJobsStoreCommit } from "../store.js";
+import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { cronRunResultEvent } from "../store/run-result.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
@@ -13,7 +13,11 @@ import {
 } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import {
+  ensureLoaded,
+  noteLoadedCronStoreCommit,
+  runPostPersistCronNotifications,
+} from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
@@ -46,6 +50,7 @@ export async function finalizeCompletedCronRunOutcomes(
       if (!state.store) {
         await ensureLoaded(state);
       }
+      const observedRevision = getCronJobsStoreRevision(storeKey);
       const { outcome: result } = await executeOpenClawStateWorker(context, {
         type: "cron.finalizeRuns",
         input: {
@@ -75,15 +80,15 @@ export async function finalizeCompletedCronRunOutcomes(
         },
       });
       committedSuccessfully = true;
-      if (result.changed) {
-        noteCronJobsStoreCommit(storeKey);
-      }
       applyCronRuntimeRowsToState(
         state,
         result.upsertedJobs,
         result.removedJobs.map((job) => job.id),
         { publish: false },
       );
+      if (result.changed) {
+        noteLoadedCronStoreCommit(state, observedRevision);
+      }
       for (const entry of result.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }

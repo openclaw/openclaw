@@ -32,6 +32,46 @@ function createOptionalChoiceCompletionProgram(): Command {
 }
 
 describe("completion-cli", () => {
+  for (const [shell, nativeTest] of [
+    ["bash", it.skipIf(process.platform === "win32")],
+    ["fish", itWithFish],
+    ["powershell", itWithPowerShell],
+  ] as const) {
+    nativeTest(`offers root global flags after subcommands in ${shell}`, async () => {
+      const program = new Command()
+        .name("openclaw")
+        .enablePositionalOptions()
+        .option("--profile <name>", "Profile")
+        .option("--log-level <level>", "Log level")
+        .option("--container <name>", "Container")
+        .option("--no-color", "Disable colors")
+        .option("--root-only", "Positional root option")
+        .addOption(new Option("--dev", "Hidden global").hideHelp());
+      const group = program.command("group").alias("g").option("--parent-only");
+      group.command("status").option("--json");
+      program.command("local").addOption(new Option("--profile <name>").choices(["local"]));
+
+      for (const [line, expected] of [
+        ["openclaw g status --pr", ["--profile"]],
+        ["openclaw group status --no-c", ["--no-color"]],
+        ["openclaw group status --log", ["--log-level"]],
+        ["openclaw group status --cont", ["--container"]],
+        ["openclaw group status --root", []],
+        ["openclaw group status --parent", []],
+        ["openclaw group status --dev", []],
+        ["openclaw local --profile lo", ["local"]],
+      ] as const) {
+        const actual =
+          shell === "bash"
+            ? runGeneratedBashCompletion(program, line.split(" "))
+            : shell === "fish"
+              ? runGeneratedFishCompletion(program, line)
+              : await powerShellCompletion.complete(program, line);
+        expect(actual, line).toEqual(expected);
+      }
+    });
+  }
+
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
     const program = new Command()
       .name("openclaw")

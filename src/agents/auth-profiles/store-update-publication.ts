@@ -33,7 +33,7 @@ import {
 } from "./sqlite-read.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type { AuthStoreUpdateCommitted } from "./store-update-kernel.js";
+import type { AuthStoreUpdateCommitted } from "./store-update.worker.js";
 import type { PreparedAuthProfileStoreOwner } from "./types.js";
 
 /** Publish affected owners from committed facts, rereading only an overtaken result. */

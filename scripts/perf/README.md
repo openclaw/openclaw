@@ -166,3 +166,59 @@ Use loopback ports at least 40000. Never read/copy production databases or touch
 production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
+
+## Allocated bytes per RPC or turn
+
+Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --allocations --scenario sessions.list \
+  --clients 1 --runs 1 --operations 100 --limit 100 --rounds 5 \
+  --revision <measured-commit-sha>
+```
+
+Supported scenarios:
+
+| Scenario               | One measured operation                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
+| `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
+| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
+| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
+| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
+
+RPC scenarios use `--operations` per round. Turn scenarios use `--runs` (forced
+to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
+defaults to one operation per round; other RPC scenarios default to 100. Count
+the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
+Setup, startup
+recovery, subscription establishment, and one warmup round are outside capture.
+Each measured window includes completion and event drain, including the one-second
+quiet interval. The fixture inventory and request/client/run counts are recorded
+in `result.json`; the driver prints each sample as JSON and a short table.
+Raw `.heapprofile` files and numeric diagnostics remain alongside the report.
+Use a freshly generated fixture on each revision and compare multiple rounds.
+The driver adds a small parent/child session set; those sessions are included in
+list measurements. For production-shaped database size use `--transcript-mib 1500`
+when generating the fixture and record its actual database bytes.
+
+The existing private benchmark IPC preload samples the **Gateway main isolate**,
+with both `includeObjectsCollectedByMajorGC` and
+`includeObjectsCollectedByMinorGC` enabled and a 32 KiB average interval. V8's
+node `selfSize` totals estimate allocated bytes, including objects collected
+during capture. `estimatedAllocatedBytesPerOperation` divides that total by the
+validated completed operation count. Top sites include up to eight caller frames
+in entry-to-leaf order. These are statistical estimates: small batches can have
+substantial sampling noise. Run an idle comparison if background allocation is
+material; the driver does not subtract it or silently present heap deltas as churn.
+
+`gcMs`, `gcCount`, and `gcMsPerOperation` come from the main isolate's GC performance
+entries. Heap-used and RSS deltas are separate context fields. Worker allocations,
+worker GC, external buffers, and driver/model-fixture allocation are **not** in
+these per-operation estimates. Process CPU and RSS include workers; main-thread
+CPU is reported separately. Profiling adds CPU and memory overhead, so compare
+with the same sampling settings. No profiling runs when `--allocations` is absent.
+For live operator attribution, `diagnostics.heapProfile` accepts
+`{ "durationMs": 10000, "includeCollected": true }` with the existing admin
+scope and 30-second churn cap; it remains a timed sample, not an RPC denominator.

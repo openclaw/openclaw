@@ -1,15 +1,12 @@
-/* oxlint-disable max-lines -- Offline port phases share one manifest and custody context. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { z } from "zod";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
-import { collectIncludePathsRecursive } from "../config/includes-scan.js";
-import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/io.js";
+import { writeConfigFile } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
@@ -25,14 +22,12 @@ import {
   archiveDatabasePortManifest,
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
-  databasePortArtifactSchema,
   prepareDatabasePortDirectory,
   syncDatabasePortPath,
   writeDatabasePortArtifact,
   writeDatabasePortManifest,
   type DatabasePortManifest,
 } from "../infra/database-port-recovery.js";
-import { tryReadDiskSpace } from "../infra/disk-space.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import {
   createVerifiedSqliteSnapshot,
@@ -46,8 +41,24 @@ import {
   preparePostgresRestore,
   readBackupEngine,
 } from "../snapshot/database-backup.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
+import {
+  capacity,
+  configInputs,
+  type Context,
+  digest,
+  inputsSchema,
+  livePath,
+  manifest,
+  postgresConfig,
+  privatePaths,
+  record,
+  refuse,
+  revise,
+  readDatabasePortConfigSnapshot,
+  stagePath,
+  storeAt,
+  storeDirectory,
+} from "./doctor-database-port-context.js";
 
 export type DatabasePortOptions = {
   to?: DatabaseEngineId;
@@ -55,132 +66,10 @@ export type DatabasePortOptions = {
   resume?: string;
   rollback?: string;
 };
-const inputsSchema = z.object({
-  originalEngine: z.string().nullable(),
-  remainingSqlite: z.array(z.string()),
-  stores: z.array(
-    z.object({
-      dev: z.string(),
-      ino: z.string(),
-      image: z.string(),
-      original: databasePortArtifactSchema,
-    }),
-  ),
-});
-type Context = {
-  stateDir: string;
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  assertCurrent: () => void;
-  signal?: AbortSignal;
-  phase: string;
-  target: string;
-  directory: string;
-  manifest?: DatabasePortManifest;
-  inputs?: z.infer<typeof inputsSchema>;
-  prepared: [string, Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>][];
-};
-function refuse(ctx: Context, observed: string, required: string): never {
-  throw new WorkboardPortError(
-    `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
-  );
-}
-const digest = (value: unknown) =>
-  createHash("sha256").update(stableStringify(value)).digest("hex");
-function manifest(ctx: Context) {
-  return ctx.manifest!;
-}
-function storeAt(ctx: Context, index: number) {
-  return { target: manifest(ctx).targets[index]!, input: ctx.inputs!.stores[index]! };
-}
-const storeDirectory = (ctx: Context, index: number) => path.join(ctx.directory, String(index));
-const stagePath = (ctx: Context, index: number) =>
-  path.join(storeDirectory(ctx, index), "target.sqlite");
-const livePath = (target: DatabasePortManifest["targets"][number]) =>
-  target.original.engine === "sqlite" ? target.original.path : target.original.anchorPath;
-function revise(ctx: Context) {
-  const current = manifest(ctx);
-  current.revision++;
-  writeDatabasePortManifest(ctx.stateDir, current, ctx.assertCurrent);
-}
-async function record(ctx: Context, file: string, value: unknown) {
-  const contents = `${JSON.stringify(value)}\n`;
-  if (fs.existsSync(file)) {
-    if (fs.readFileSync(file, "utf8") !== contents) {
-      refuse(ctx, "changed private artifact", "recorded artifact contents");
-    }
-  } else {
-    writeDatabasePortArtifact(file, contents, ctx.assertCurrent);
-  }
-  manifest(ctx).artifacts.push(await captureDatabaseArtifact(file));
-  revise(ctx);
-}
-function privatePaths(ctx: Context, files: string[]) {
-  for (const file of files) {
-    ctx.target = file;
-    try {
-      assertDoctorSqliteMaintenancePathsNotAliased(
-        "database port",
-        [file],
-        [ctx.stateDir, path.dirname(ctx.configPath)],
-      );
-    } catch {
-      refuse(ctx, "aliased or inaccessible path", "an owned path without symbolic or hard links");
-    }
-  }
-}
-async function configInputs(ctx: Context) {
-  const raw = fs.readFileSync(ctx.configPath, "utf8");
-  const files = [
-    ctx.configPath,
-    ...(await collectIncludePathsRecursive({
-      configPath: ctx.configPath,
-      parsed: parseJsonWithJson5Fallback(raw),
-      env: ctx.env,
-    })),
-  ];
-  privatePaths(ctx, files);
-  return await Promise.all(files.map(captureDatabaseArtifact));
-}
-async function snapshot(ctx: Context) {
-  ctx.assertCurrent();
-  const value = await readConfigFileSnapshotForWrite({
-    observe: false,
-    skipPluginValidation: true,
-  });
-  if (!value.snapshot.valid || value.snapshot.path !== ctx.configPath) {
-    refuse(ctx, "invalid or changed configuration", "valid pinned config source");
-  }
-  privatePaths(ctx, Object.keys(value.writeOptions.includeFileTargetsForWrite ?? {}));
-  return value;
-}
-function postgresConfig(config: OpenClawConfig): OpenClawConfig {
-  return { ...config, database: { ...config.database, engine: "postgres" } };
-}
-function capacity(ctx: Context, files: { path: string; size: number }[]) {
-  const volumes = new Map<number, { path: string; required: number }>();
-  for (const file of files) {
-    const dev = fs.statSync(file.path).dev;
-    const volume = volumes.get(dev) ?? { path: file.path, required: 1024 ** 3 };
-    volume.required += file.size * 7;
-    volumes.set(dev, volume);
-  }
-  for (const volume of volumes.values()) {
-    const free = tryReadDiskSpace(volume.path);
-    if (free && free.availableBytes < volume.required) {
-      refuse(
-        ctx,
-        `${free.availableBytes} bytes free on ${volume.path}`,
-        `${volume.required} bytes for captures, migration, indexes and publication`,
-      );
-    }
-  }
-}
-
 async function preflight(ctx: Context, options: DatabasePortOptions) {
   ctx.phase = "preflight";
   const captured = await configInputs(ctx),
-    current = await snapshot(ctx);
+    current = await readDatabasePortConfigSnapshot(ctx);
   for (const input of captured) {
     await assertDatabaseArtifact(input);
   }
@@ -476,7 +365,7 @@ async function assertOriginal(ctx: Context, index: number, config: OpenClawConfi
   }
 }
 async function classifyConfig(ctx: Context) {
-  const current = await snapshot(ctx),
+  const current = await readDatabasePortConfigSnapshot(ctx),
     files = await configInputs(ctx),
     saved = manifest(ctx);
   if (isDeepStrictEqual(files, saved.originalConfig)) {
@@ -657,7 +546,7 @@ function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
 }
 async function resume(ctx: Context) {
   const current = manifest(ctx),
-    config = (await snapshot(ctx)).snapshot.config;
+    config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
   if (current.state === "preparing") {
     for (const input of current.originalConfig) {
       await assertDatabaseArtifact(input);
@@ -673,7 +562,7 @@ async function rollback(ctx: Context) {
   if (engine !== manifest(ctx).direction.from) {
     refuse(ctx, "changed engine environment", "original engine environment before rollback");
   }
-  return await finishPort(ctx, (await snapshot(ctx)).snapshot.config, true);
+  return await finishPort(ctx, (await readDatabasePortConfigSnapshot(ctx)).snapshot.config, true);
 }
 async function finishPort(ctx: Context, config: OpenClawConfig, restoring: boolean) {
   try {

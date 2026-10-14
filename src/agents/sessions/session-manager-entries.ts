@@ -2,7 +2,6 @@ import { buildSessionContext as buildCoreSessionContext } from "../../../package
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
@@ -197,12 +196,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
     return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptWriteActive();
       this.validateLeafControl(captured);
-      if (
-        !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) &&
-          !("actor" in admission) &&
-          "db" in admission.database)
-      ) {
+      if (!admission) {
         return this.appendLeafControlSync(captured);
       }
       const entry = this.createSelectedLeafControl(captured);

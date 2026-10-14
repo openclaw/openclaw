@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -39,6 +38,7 @@ import type {
 } from "./gateway-owner-lease.types.js";
 import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
@@ -209,7 +209,7 @@ export function readGatewayOwnerLease(
     openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   } = {},
 ): GatewayOwnerLeaseIdentity | undefined {
-  const operation = ({ db }: { db: DatabaseSync }) =>
+  const operation = ({ db }: { db: EngineConnection }) =>
     readGatewayOwnerLeaseFromDatabase(db, params.port);
   return params.current || params.openStateSchemaReadAdmission
     ? withExistingOpenClawStateDatabaseCurrentReadOnly(
@@ -247,7 +247,7 @@ export function acquireGatewayOwnerLease(params: {
     mode: params.mode,
     supervisor: params.supervisor,
   });
-  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: DatabaseSync) => T) =>
+  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: EngineConnection) => T) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
         runSqliteImmediateTransactionSync(
