@@ -21,6 +21,7 @@ import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
@@ -457,18 +458,31 @@ export async function prepareCodexInferenceThreadConfig(params: {
     binding?.clientId === params.clientId &&
     !getCodexInferenceThread(params.client, binding.threadId)
   ) {
-    const { thread } = await params.client.request(
-      "thread/read",
-      { threadId: binding.threadId, includeTurns: false },
-      {
-        signal: params.signal,
-        assertCurrent: params.assertCurrent,
-        withCurrent: params.authority?.withCurrent,
-      },
-    );
+    const response = await params.client
+      .request(
+        "thread/read",
+        { threadId: binding.threadId, includeTurns: false },
+        {
+          signal: params.signal,
+          assertCurrent: params.assertCurrent,
+          withCurrent: params.authority?.withCurrent,
+        },
+      )
+      .catch((error: unknown) => {
+        if (!isCodexThreadReadMissingError(error, binding.threadId)) {
+          throw error;
+        }
+        // An unused thread can disappear after failed startup and native cleanup.
+        // Let the lifecycle owner recover its binding; absence is not a loaded
+        // thread whose unowned inference configuration could be reused.
+        return undefined;
+      });
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    if (thread.id !== binding.threadId || thread.status?.type !== "notLoaded") {
+    if (
+      response &&
+      (response.thread.id !== binding.threadId || response.thread.status?.type !== "notLoaded")
+    ) {
       throw new Error(
         "Codex loaded thread has no owned inference route; reconnect before retrying",
       );
