@@ -152,7 +152,9 @@ describe("bounded scheduled proof reuse", () => {
       const scope = workflow.jobs.scope.steps.find((step: { id?: string }) => step.id === "scope");
       const patterns = scope.with.paths.trim().split("\n");
       expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
-      for (const path of workflow.on.push.paths) {
+      for (const path of workflow.on.push.paths.filter(
+        (pattern: string) => !pattern.startsWith("!"),
+      )) {
         expect(
           patterns.some((pattern: string) => matchesGlob(path, pattern)),
           path,
