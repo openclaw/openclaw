@@ -1,6 +1,16 @@
 # shellcheck source=scripts/pr-lib/github.sh
 source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
 
+# One elapsed clock for bounded admission; fixtures replace these two boundaries.
+pr_merge_now() { printf '%s\n' "$SECONDS"; }
+pr_merge_sleep() { sleep "$1"; }
+pr_merge_pause() {
+  local remaining=$(( $1 - $(pr_merge_now) )) delay="$2"
+  [ "$remaining" -gt 0 ] || return 1
+  [ "$delay" -le "$remaining" ] || delay="$remaining"
+  pr_merge_sleep "$delay"
+}
+
 # The local outcome outlives the process lock and all disposable prepare artifacts.
 # These private commits retain the actual head/main/landed objects as parents;
 # textual OIDs in a blob alone would not keep historical proof alive through GC.
@@ -670,10 +680,9 @@ merge_read() {
   return 1
 }
 
-merge_outcome_read_remote() {
-  local response observation before main previous local_only="${2:-false}"
-  response=$(merge_read observe "$1") || return 1
-  observation=$(printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
+merge_outcome_normalize() {
+  local response="$1"
+  printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$2" '
     .transport as $transport | .payload |
     def oid: type == "string" and test("^[0-9a-f]{40}$");
     select(.errors == null) | . as $response | .data.repository |
@@ -697,7 +706,13 @@ merge_outcome_read_remote() {
       (.pr | has("mergeCommit")) and
       (if .pr.state == "MERGED" then (.pr.mergeCommit.oid | oid) else
         (.pr.state == "OPEN" or .pr.state == "CLOSED") and .pr.mergeCommit == null end))
-  ') || return 1
+  '
+}
+
+merge_outcome_read_remote() {
+  local response observation before main previous local_only="${2:-false}"
+  response=$(merge_read observe "$1") || return 1
+  observation=$(merge_outcome_normalize "$response" "$1") || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
     [ "$(printf '%s\n' "$observation" | jq -r .transport)" = rest ] &&
     { [ "${MERGE_PRIOR_CI_REST_OBSERVATION:-false}" = true ] ||
@@ -834,12 +849,50 @@ verify_merge_main_advance() {
 }
 
 merge_outcome_stable() {
-  local reread main previous_main observation_attempt settling=false local_only="${2:-false}"
-  local main_floor="${4:-}"
-  for observation_attempt in 1 2 3; do
-    reread=$(merge_outcome_read_remote "$1" "$local_only") || {
-      merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
-    }
+  local reread="$MERGE_OBSERVATION" main previous_main observation_attempt=0 settling=false local_only="${2:-false}"
+  local main_floor="${4:-}" supplied="${5:-}" before="${6:-}"
+  local settle_start="" settle_deadline="" settle_delay=2 prior_ci_round=false projection_at
+  if [ "${3:-}" = requalify-prior-ci ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
+    prior_ci_round=true
+    settling="${MERGE_PRIOR_CI_SETTLING:-false}"
+    settle_delay="${MERGE_PRIOR_CI_UNKNOWN_DELAY:-2}"
+  fi
+  while true; do
+    if { [ "$prior_ci_round" = true ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
+      [ "$(pr_merge_now)" -ge "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" ]; } ||
+      { [ "$prior_ci_round" = false ] && [ "$settling" = true ] && [ "$(pr_merge_now)" -ge "$settle_deadline" ]; }; then
+      merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
+      merge_outcome_stop "mergeability recalculation remained UNKNOWN through the 60s settle limit after $observation_attempt observations; stopped before intent/dispatch"
+      return 1
+    fi
+    observation_attempt=$((observation_attempt + 1))
+    if [ -n "$supplied" ]; then
+      reread="$supplied"
+    else
+      reread=$(merge_outcome_read_remote "$1" "$local_only") || {
+        merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
+      }
+    fi
+    projection_at=$(pr_merge_now)
+    if { [ "$prior_ci_round" = true ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
+      [ "$projection_at" -ge "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" ]; } ||
+      { [ "$prior_ci_round" = false ] && [ "$settling" = true ] && [ "$projection_at" -ge "$settle_deadline" ]; }; then
+      merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
+      merge_outcome_stop "mergeability recalculation exceeded the 60s settle limit after $observation_attempt observations; stopped before intent/dispatch"
+      return 1
+    fi
+    if [ "$prior_ci_round" = true ]; then
+      # A timely known projection closes this episode even if its main needs fetching.
+      if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
+        [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ] || MERGE_PRIOR_CI_UNKNOWN_START="$projection_at"
+        MERGE_PRIOR_CI_SETTLING=true
+        settle_start="$MERGE_PRIOR_CI_UNKNOWN_START"
+        settle_deadline=$((settle_start + 60))
+      else
+        MERGE_PRIOR_CI_UNKNOWN_START=""
+        MERGE_PRIOR_CI_UNKNOWN_DELAY=2
+      fi
+    fi
     # Admission advances a separate verified cursor; the intent/audit main stays
     # pinned. Retained outcomes never acquire fresh dispatch authority here.
     if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
@@ -868,6 +921,11 @@ merge_outcome_stable() {
           # A returned authority window must also descend from its missing tip.
           proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
         fi
+        if [ -n "$before" ] && [ "$before" != "$main" ]; then
+          verify_merge_main_advance "$proof_main" "$before" "$local_only" "${3:-}" || advance_result=$?
+          if [ "$advance_result" -ne 0 ]; then return "$advance_result"; fi
+          proof_main="$before"
+        fi
         verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
         if [ "$advance_result" -ne 0 ]; then
           [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
@@ -877,15 +935,24 @@ merge_outcome_stable() {
         main_floor=""
         MERGE_OBSERVED_MAIN="$main"
         if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
-          if [ "$observation_attempt" -eq 3 ]; then
-            merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
-            merge_outcome_stop "mergeability recalculation remained UNKNOWN after 3 observations; stopped before intent/dispatch"
-            return 1
+          if [ "$prior_ci_round" = false ] && [ "$settling" = false ]; then
+            # The initial read is not part of the UNKNOWN settlement window.
+            settle_start="$projection_at"
+            settle_deadline=$((settle_start + 60))
           fi
-          [ "$settling" = true ] || echo "Waiting for mergeability recalculation after verified main advance (up to 3 observations)."
           settling=true
           MERGE_PRIOR_CI_RECALCULATED=true
-          sleep "$observation_attempt"
+          # The in-process snapshot already ended with live authority. Any wait
+          # discards it; the caller must collect a fresh snapshot on the next round.
+          [ -z "$supplied" ] || return 76
+          if ! pr_merge_pause "$settle_deadline" "$settle_delay"; then
+            merge_outcome_diagnose "$1" "$reread" "$MERGE_OBSERVATION"
+            merge_outcome_stop "mergeability recalculation remained UNKNOWN after $observation_attempt observations in $(( $(pr_merge_now) - settle_start ))s (60s limit); stopped before intent/dispatch"
+            return 1
+          fi
+          [ "$observation_attempt" -ne 1 ] || echo "Waiting for mergeability recalculation (60s limit; 2s, 4s, then 8s backoff)."
+          [ "$settle_delay" -ge 8 ] || settle_delay=$((settle_delay * 2))
+          [ "$prior_ci_round" = false ] || MERGE_PRIOR_CI_UNKNOWN_DELAY="$settle_delay"
           continue
         fi
         verify_merge_route_projection "$1" "$reread" "$route" "${qualified_refusal:-false}" || return 1
@@ -897,6 +964,7 @@ merge_outcome_stable() {
         MERGE_OBSERVATION=$(printf '%s\n' "$reread" | jq -c \
           --arg main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" '.main=$main') || return 1
         MERGE_TRANSPORT=$(printf '%s\n' "$reread" | jq -r .transport) || return 1
+        [ "$prior_ci_round" = false ] || MERGE_PRIOR_CI_SETTLING=false
         return 0
       fi
     fi

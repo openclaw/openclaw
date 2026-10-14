@@ -185,16 +185,25 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     If a response to an Ultrafast request echoes a different `service_tier`,
     OpenClaw records a temporary observation for that credential, model, and route.
     Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
-    and served tiers. Later calls keep requesting the selected tier. A response
+    and served tiers. Later calls keep requesting the selected tier unless repeated explicit rejections
+    trigger the run-local cooldown below. A response
     honoring it clears the hint immediately; otherwise the observation expires
     five minutes after its latest occurrence.
 
     If the native OpenAI API explicitly rejects `service_tier` before output,
     tool activity, or active-response steering, OpenClaw automatically retries
     that request at a slower tier: Ultrafast → Fast → Standard. The hint records
-    that recovery without changing saved preferences or later requests. It does
-    not retry tier errors after cancellation or an ambiguous connection failure.
-    Explicit low-level tier overrides are still sent as configured.
+    that recovery without changing saved preferences. After two consecutive
+    Ultrafast rejections in the same run and account/model route, later model
+    requests use Fast directly for ten minutes or twenty model requests,
+    whichever ends first. The next Ultrafast request probes the tier again: a
+    rejection renews the cooldown, while a successful Ultrafast request resets
+    the rejection count. A new run starts fresh. A successful response served at
+    a different tier does not itself trigger a cooldown.
+
+    The cooldown also applies to explicit Ultrafast request overrides; other
+    tiers remain as configured. OpenClaw does not retry tier errors after
+    cancellation or an ambiguous connection failure.
 
     Observations also clear on credential replacement, profile discovery refresh,
     or retirement of the prepared runtime, and are not persisted across restarts.
