@@ -139,7 +139,7 @@ export class GatewayBrowserClient {
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
-  private connectionAuth: GatewayHelloOk["auth"] | null = null;
+  private connectionHello: GatewayHelloOk | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
@@ -169,7 +169,7 @@ export class GatewayBrowserClient {
     }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
-        this.connectionAuth = null;
+        this.connectionHello = null;
         this.pendingPairing = null;
         this.pairingFailure = null;
         this.reachabilityProbe?.abort();
@@ -213,7 +213,7 @@ export class GatewayBrowserClient {
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
-        this.connectionAuth = null;
+        this.connectionHello = null;
         this.nativeAuthAbort?.abort();
         this.chatEvents.clear();
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
@@ -295,7 +295,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
-    this.connectionAuth = null;
+    this.connectionHello = null;
     this.nativeAuthAbort?.abort();
     this.reachabilityProbe?.abort();
     this.reachabilityProbe = null;
@@ -314,7 +314,11 @@ export class GatewayBrowserClient {
   }
 
   get auth() {
-    return this.connectionAuth;
+    return this.connectionHello?.auth ?? null;
+  }
+
+  get hello() {
+    return this.connectionHello;
   }
 
   get needsWakeReconnect() {
@@ -387,7 +391,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
-    this.connectionAuth = hello.auth;
+    this.connectionHello = hello;
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";

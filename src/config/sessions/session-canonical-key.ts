@@ -8,6 +8,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
@@ -154,7 +155,7 @@ export function readWithCanonicalSessionAdmission<T>(
   }
   // The actual guard requested admission before validation or publication. Retry
   // the materialized read under one snapshot, including policy/receipt changes.
-  return withSqlitePostCommitPublications(database.db, () =>
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteDeferredTransactionSync(database.db, read),
   );
 }
@@ -179,7 +180,7 @@ function rememberReaderAdmission(database: DatabaseSync, proof: ReaderAdmission)
   const previous = owned.proof;
   const previouslyCommitted = owned.committed;
   if (database.isTransaction) {
-    const staged = stageSqliteTransactionState(database, {
+    const staged = stageSqliteTransactionState(sqlPublicationAnchor(database), {
       stage: () => {
         revokeReaderContinuations(owned);
         owned.proof = proof;
@@ -330,7 +331,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
       throw new Error("Canonical session reader continuation is no longer current");
     }
   };
-  const value = withSqlitePostCommitPublications(database.db, () =>
+  const value = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteDeferredTransactionSync(database.db, () => {
       const previous = canonicalReadScope.current;
       canonicalReadScope.current = scope;
@@ -625,7 +626,7 @@ export function setCanonicalSqliteSessionMainKey(
   database: { agentId: string; db: DatabaseSync },
   mainKey: string | undefined,
 ): void {
-  if (database.db.isTransaction && !hasSqlitePostCommitScope(database.db)) {
+  if (database.db.isTransaction && !hasSqlitePostCommitScope(sqlPublicationAnchor(database.db))) {
     throw new Error("Canonical main-key changes require managed transaction publication");
   }
   const canonicalMainKey = normalizeMainKey(mainKey);
@@ -664,7 +665,7 @@ export function setCanonicalSqliteSessionMainKey(
   };
   if (
     !database.db.isTransaction ||
-    !stageSqliteTransactionState(database.db, {
+    !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
       stage: () => {
         admission.pendingMainKey = pending;
       },

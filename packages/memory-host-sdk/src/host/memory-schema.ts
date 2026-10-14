@@ -30,6 +30,8 @@ import {
   publishSqliteDatabaseAdmission,
   runSqliteImmediateTransactionSync,
   stageSqliteTransactionState,
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
   type SqliteDatabaseAdmissionKey,
 } from "./openclaw-runtime-sqlite.js";
 export {
@@ -98,16 +100,16 @@ const memoryIndexSchemaAdmissionKeys = new WeakMap<
 
 /** Derived-index replacements preserve the admitted memory table contracts. */
 export function stageMemoryIndexSchemaExtension(
-  db: DatabaseSync,
+  db: DatabaseSync | PostgresSqlConnection,
   replacement?: { ftsAvailable: boolean },
 ): void {
-  const key = memoryIndexSchemaAdmissionKeys.get(db);
+  const key = memoryIndexSchemaAdmissionKeys.get(sqlPublicationAnchor(db));
   const admitted = key && getSqliteDatabaseAdmission(db, key);
   if (!key || !admitted || (replacement && replacement.ftsAvailable !== admitted.ftsAvailable)) {
     return;
   }
   if (
-    !stageSqliteTransactionState(db, {
+    !stageSqliteTransactionState(sqlPublicationAnchor(db), {
       stage: () => {},
       rollback: () => {},
       commit: () => publishSqliteDatabaseAdmission(db, key, admitted),
@@ -381,7 +383,7 @@ export function ensureMemoryIndexSchema(params: {
     schemaDependent: true,
     read: readMemoryIndexSchemaAdmission,
   };
-  memoryIndexSchemaAdmissionKeys.set(params.db, admissionKey);
+  memoryIndexSchemaAdmissionKeys.set(sqlPublicationAnchor(params.db), admissionKey);
   const admitted = getSqliteDatabaseAdmission(params.db, admissionKey);
   if (admitted) {
     provenanceSchema.backfillMemoryChunkProvenance(params.db);

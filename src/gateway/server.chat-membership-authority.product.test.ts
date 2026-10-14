@@ -1,3 +1,6 @@
+// Load the deferred Gateway and model runtime during collection, outside the authority deadline.
+import "../agents/prepared-model-runtime.js";
+import "./server-start.js";
 import { randomUUID, X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";

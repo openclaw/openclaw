@@ -1223,6 +1223,15 @@ standing-intent, and Forget commands through that owner. Its published host
 reader is physically read-only and retires with the agent lifecycle.
 Logbook and Workboard already keep native SQL inside their worker backends.
 
+The V2 store exposes `terminalSignal`, backed by the execution owner's terminal
+notification. Worker crash, unexpected
+exit, fatal native failure, or admission revocation aborts it with the failure
+reason after accepted work settles, including unknown write outcomes. A confirmed
+commit remains acknowledged; consumers must not replay a write because the signal
+aborted. Normal idle retirement and explicit store close do not abort it. Memory
+uses this signal in its database-open fact, so its existing manager registry
+re-admits the next request instead of reusing a terminal worker.
+
 Released raw SQLite callbacks retain their named native compatibility adapters.
 Deprecated approval callbacks instead run at worker precommit, with a shared
 warning on actual legacy use and signature removal at the next Plugin SDK major.
@@ -6198,6 +6207,16 @@ unchanged. Their synchronous reader still reaches the native auth JSON primitive
 so those static T1 sites remain SDK compatibility debt. The Codex final guard no
 longer uses that native reader. Schemas, stored bytes, retention, and update behavior
 are unchanged.
+
+Bundled CLI-backed and system-agent inference await the existing auth-profile
+readers. Logout uses the existing auth writer for deletion and compensation; its
+transaction compares the selected credential once before removal. If catalog
+cleanup fails, compensation restores each exact prior cell, including an absent
+credential row, only while the cell still matches the removal's committed value.
+Deletion and restoration publish through the same credential authority owner, so
+subsequent use sees revocation and uncertain outcomes remain denied. Selection
+cleanup consumes the removal result without rereading credentials; reconnecting
+the same profile ID during cleanup may require selecting that account again.
 
 Runtime auth-source detection uses the existing agent and shared auth readers.
 It captures both possible shared-store targets before yielding and retains the

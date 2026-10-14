@@ -631,6 +631,22 @@ suite.define(() => {
         .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
       await usage.getByRole("button", { name: "Pin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
+      // A pinned page keeps a filled pin at rest, and hovering the pin keeps the
+      // whole entry, pin included, inside the row highlight.
+      const usagePin = usage.getByRole("button", { name: "Unpin", exact: true });
+      await page.mouse.move(900, 600);
+      await expect
+        .poll(() =>
+          usagePin.evaluate((pin) => ({
+            opacity: getComputedStyle(pin).opacity,
+            filled: getComputedStyle(pin.querySelector("svg")!).fill !== "none",
+          })),
+        )
+        .toEqual({ opacity: "1", filled: true });
+      await usagePin.hover();
+      await expect
+        .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
+        .not.toBe("rgba(0, 0, 0, 0)");
       await captureUiProof(page, "02-personal-pin.png");
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);

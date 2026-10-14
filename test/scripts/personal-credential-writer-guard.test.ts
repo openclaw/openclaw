@@ -649,12 +649,12 @@ it("bounds reviewed lazy imports by loader, declaration scope and selected expor
 it("closes raw-store and worker-kernel entries while preserving the named update dispatchers", () => {
   const sources = {
     [authCells]: `export function writeAuthProfileJsonCell() {}`,
-    "src/agents/auth-profiles/store-update-kernel.ts": `
+    "src/agents/auth-profiles/store-update.worker.ts": `
       import { writeAuthProfileJsonCell } from './sqlite-json-write.js';
       export function updateAuthProfileStoreInDatabase() { writeAuthProfileJsonCell(); }
     `,
     "src/agents/auth-profiles/store.worker.ts": `
-      import { updateAuthProfileStoreInDatabase } from './store-update-kernel.js';
+      import { updateAuthProfileStoreInDatabase } from './store-update.worker.js';
       export const operations = { 'authProfiles.update': () => updateAuthProfileStoreInDatabase() };
     `,
   };
@@ -663,7 +663,7 @@ it("closes raw-store and worker-kernel entries while preserving the named update
     inspect({
       ...sources,
       "src/new-writer.worker.ts": `
-        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update-kernel.js';
+        import { updateAuthProfileStoreInDatabase } from './agents/auth-profiles/store-update.worker.js';
         updateAuthProfileStoreInDatabase();
       `,
     }),
