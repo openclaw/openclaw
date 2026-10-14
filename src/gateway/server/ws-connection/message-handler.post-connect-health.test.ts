@@ -23,7 +23,10 @@ import {
   ensureProfileForTailscaleIdentity,
 } from "../../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
@@ -203,6 +206,17 @@ beforeEach(() => {
 });
 
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
+  beforeEach(async () => {
+    const state = await createOpenClawTestState({
+      label: "post-connect-health",
+      prepareProfileCatalog: true,
+    });
+    onTestFinished(async () => {
+      await cleanupGatewayHarnesses();
+      await state.cleanup();
+    });
+  });
+
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     vi.clearAllMocks();
@@ -381,28 +395,31 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   );
 
   it.each(["probe"])("keeps ephemeral %s connections unidentified", async (mode) => {
-    await withOpenClawTestState({ label: "gateway-owner-ephemeral" }, async () => {
-      resolveConnectAuthStateMock.mockResolvedValueOnce({
-        authResult: { ok: true, method: "token" },
-        authOk: true,
-        authMethod: "token",
-        sharedAuthOk: true,
-      });
-      const harness = attachGatewayHarness({
-        connId: `ephemeral-${mode}`,
-        connectNonce: `nonce-${mode}`,
-      });
-      harness.sendConnect("connect", {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "gateway-client", version: "dev", platform: "test", mode },
-        role: "operator",
-        auth: { token: "owner-fixture" },
-        caps: [],
-      });
-      await waitForFast(() => expect(harness.client).not.toBeNull());
-      expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
-    });
+    await withOpenClawTestState(
+      { label: "gateway-owner-ephemeral", prepareProfileCatalog: true },
+      async () => {
+        resolveConnectAuthStateMock.mockResolvedValueOnce({
+          authResult: { ok: true, method: "token" },
+          authOk: true,
+          authMethod: "token",
+          sharedAuthOk: true,
+        });
+        const harness = attachGatewayHarness({
+          connId: `ephemeral-${mode}`,
+          connectNonce: `nonce-${mode}`,
+        });
+        harness.sendConnect("connect", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "dev", platform: "test", mode },
+          role: "operator",
+          auth: { token: "owner-fixture" },
+          caps: [],
+        });
+        await waitForFast(() => expect(harness.client).not.toBeNull());
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+      },
+    );
   });
 
   it("retains the watchdog through registration and holds pipelined frames until hello completion", async () => {
@@ -1864,36 +1881,39 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   ] as const)(
     "records authenticated remote management authority for %s with %s: %s",
     async (id, scope, allowed) => {
-      await withOpenClawTestState({ label: "gateway-control-ui-admin" }, async () => {
-        const harness = connectTrustedProxyUser(loadConfigMock, "control-ui-authority", { id }, [
-          scope,
-        ]);
-        await harness.whenAttached;
-        expect(harness.client).toMatchObject({ connect: { scopes: [scope] } });
-        const admission = resolveGatewayCronCreatorAuthorityAdmission({
-          runId: "control-ui-admin-run",
-          resolvedSessionKey: "agent:main:main",
-          client: harness.client as never,
-          request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
-          hasRestoredCronContinuation: false,
-          isOneShotModelRun: false,
-          isRestartRecoveryResumeRun: false,
-        });
-        const expected = allowed
-          ? {
-              runId: "control-ui-admin-run",
-              callerOrigin: { kind: "unknown" },
-              callerScopedCreation: true,
-              managementEntitlement: { source: "control-ui-admin" },
-            }
-          : undefined;
-        expect(admission).toEqual(expected);
-      });
+      await withOpenClawTestState(
+        { label: "gateway-control-ui-admin", prepareProfileCatalog: true },
+        async () => {
+          const harness = connectTrustedProxyUser(loadConfigMock, "control-ui-authority", { id }, [
+            scope,
+          ]);
+          await harness.whenAttached;
+          expect(harness.client).toMatchObject({ connect: { scopes: [scope] } });
+          const admission = resolveGatewayCronCreatorAuthorityAdmission({
+            runId: "control-ui-admin-run",
+            resolvedSessionKey: "agent:main:main",
+            client: harness.client as never,
+            request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
+            hasRestoredCronContinuation: false,
+            isOneShotModelRun: false,
+            isRestartRecoveryResumeRun: false,
+          });
+          const expected = allowed
+            ? {
+                runId: "control-ui-admin-run",
+                callerOrigin: { kind: "unknown" },
+                callerScopedCreation: true,
+                managementEntitlement: { source: "control-ui-admin" },
+              }
+            : undefined;
+          expect(admission).toEqual(expected);
+        },
+      );
     },
   );
 
   it("binds handshake policy to the verified login rather than unrelated identity grants", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const preparationStarted = createDeferred();
       const releasePreparation = createGatewayHarnessGate();
       prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {

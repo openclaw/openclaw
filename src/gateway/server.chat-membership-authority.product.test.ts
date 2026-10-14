@@ -20,7 +20,7 @@ import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import { readUserProfileIdentity } from "../state/user-profile-list.js";
+import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -639,7 +639,7 @@ it(
         steeringMessage,
       );
       linkEmail(aliasEmail, replacement.id);
-      const mergedProfile = readUserProfileIdentity(aliasSource.id);
+      const mergedProfile = readResidentUserProfileIdentity(aliasSource.id);
       expect(mergedProfile).toMatchObject({
         profileId: replacement.id,
       });

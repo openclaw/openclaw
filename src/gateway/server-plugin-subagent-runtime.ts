@@ -528,11 +528,12 @@ export function createGatewaySubagentRuntime(
         const manifestPlugins =
           cfg.plugins?.enabled === false
             ? []
-            : metadata.resolvePluginMetadataSnapshot({
+            : await metadata.resolvePluginMetadataSnapshotAsync({
                 config: cfg,
                 env: process.env,
                 workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
               });
+        sessionMutationCommitGuard();
         const selection = params.provider
           ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
               manifestPlugins,

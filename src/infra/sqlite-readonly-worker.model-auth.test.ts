@@ -214,7 +214,7 @@ describe("model resolution auth row snapshots", () => {
             rows = receiveAuthProfileUpdateValue(facts.port);
           });
         try {
-          await runWithSqliteWorkerStateContext(context, () =>
+          runWithSqliteWorkerStateContext(context, () =>
             backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
           );
         } finally {

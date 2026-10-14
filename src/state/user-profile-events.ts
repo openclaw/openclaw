@@ -253,6 +253,8 @@ export function captureUserProfileModelAccountLinksAuthority(
       [
         authorityCell(store, "modelAccountLinks", profileId),
         authorityCell(store, "profileIdentities", profileId),
+        // A merge may add default links without changing the target's identity.
+        authorityCell(store, "profiles", profileId),
       ],
       true,
     ),

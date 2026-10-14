@@ -7,6 +7,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  machineState: () =>
+    import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   projects: () =>
     import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
   agentDeletion: () =>
@@ -14,7 +16,7 @@ const loaders = {
       (m) => m.agentDeletionSessionStoreReadOperations,
     ),
   agentLifecycle: () =>
-    import("./agent-lifecycle-read.kernel.js").then((m) => m.agentLifecycleReadOperations),
+    import("./agent-lifecycle-read.worker.js").then((m) => m.agentLifecycleReadOperations),
   agentRecovery: () =>
     import("./agent-deletion-recovery.worker.js").then((m) => m.agentRecoveryReadOperations),
   legacySessionMigration: () =>
@@ -29,10 +31,20 @@ const loaders = {
     ),
   config: () =>
     import("../config/io.health-state.kernel.js").then((m) => m.configHealthReadOperations),
-  plugins: () =>
-    import("../infra/deferred-plugin-migrations.js").then(
-      (m) => m.deferredPluginMigrationReadOperations,
-    ),
+  plugins: async () => {
+    const [migrations, metadata] = await Promise.all([
+      import("../infra/deferred-plugin-migrations.js").then(
+        (m) => m.deferredPluginMigrationReadOperations,
+      ),
+      import("../plugins/plugin-metadata-state.read.worker.js").then(
+        (m) => m.pluginMetadataReadOperations,
+      ),
+    ]);
+    return {
+      ...migrations,
+      ...metadata,
+    };
+  },
   generatedHtmlProvenance: () =>
     import("../media/generated-html-provenance.worker.js").then(
       (m) => m.generatedHtmlProvenanceReadOperations,

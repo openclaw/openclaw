@@ -26,7 +26,7 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
   async (restriction) => {
     const now = 1_000_000;
     using _ = vi.spyOn(Date, "now").mockReturnValue(now);
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       cfg.gateway!.roles!.definitions.admin = {
         sessions: { others: "write" },

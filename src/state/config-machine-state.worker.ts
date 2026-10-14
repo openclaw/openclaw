@@ -1,7 +1,7 @@
 import { loadOrCreateConfigRevisionKeyInDatabase } from "../gateway/config-revision-key.worker.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
+import { normalizeConfigMachineStateKey } from "./config-machine-state-row.js";
 import { writeConfigMachineStateInDatabase } from "./config-machine-state-write.js";
-import { normalizeConfigMachineStateKey } from "./config-machine-state.js";
 import { authProfileCredentialPublication } from "./user-model-account-authority.js";
 import type { WorkerOperations, WorkerWriteOperationContext } from "./worker-operation-registry.js";
 

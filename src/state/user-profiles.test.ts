@@ -19,7 +19,7 @@ import { getUserPreferences, setUserPreferences } from "./user-preferences.test-
 import { readUserProfileVersion } from "./user-profile-events.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
-import { prepareUserProfileCatalog } from "./user-profile-list.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -39,7 +39,6 @@ import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
 } from "./user-profiles.js";
 
 const catalogReleases: Array<() => void> = [];

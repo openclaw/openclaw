@@ -80,7 +80,7 @@ export async function loadSessionsUsageResultCached(
     cache: sessionsUsageCache,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
-    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef, false)?.revision ?? ""}`,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
     revisionOnly: params.overviewKey !== undefined,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
