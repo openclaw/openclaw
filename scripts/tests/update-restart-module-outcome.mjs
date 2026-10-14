@@ -246,6 +246,9 @@ async function fixture({
     readBuiltGatewayBuildId: async () => undefined,
     readActiveGatewayLockPort: async () => 19305,
     createUpdateFailureFact: (fact) => fact,
+    // Real result publication waits out state-read contention and records doctor facts.
+    acquireWithWait: async (params) => await params.acquire(),
+    collectUpdateDoctorFailureFacts: () => [],
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,

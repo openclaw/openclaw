@@ -261,6 +261,7 @@ export async function resolveMSTeamsSendContext(params: {
     sdkCloudOptions,
     tokenProvider,
     sharePointSiteId: msteamsCfg.sharePointSiteId,
+    sharePointFolder: msteamsCfg.sharePointFolder,
     mediaMaxBytes,
   };
 }
