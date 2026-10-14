@@ -17,6 +17,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
+import { MEDIA_FFPROBE_TIMEOUT_MS } from "./ffmpeg-limits.js";
 import {
   probePlaybackMediaFileDescriptor,
   toMediaProbeResult,
@@ -97,10 +98,48 @@ const PLAYBACK_TRANSCODE_MAX_DURATION_SECS = 20 * 60;
 const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
-const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
+/**
+ * The player polls for readiness on a fixed backoff schedule — 2+4+8+16+30+30+20 s
+ * between HEAD requests (ui/src/pages/chat/components/chat-media-playback.ts) — and
+ * settles permanently as unavailable when the final poll at ~110 s still answers
+ * "preparing", so a rendition that settles later is unobservable. That window starts
+ * with the player's first request, not with the encode.
+ */
+const PLAYBACK_READINESS_WINDOW_MS = 110_000;
+/**
+ * Give this one command its own budget inside the observed window — the window minus
+ * both probe deadlines, so even a maximally permitted encode still becomes observable
+ * before the final poll. Settlement is more than the encode alone: the source probe
+ * runs before the job starts and the output is probed again before publication, each
+ * bounded by the shared 10-second ffprobe deadline, with only sub-second stat/read/cache
+ * writes of a size-bounded file around them. The shared 45-second ffmpeg deadline is
+ * shorter still and kills encodes the player would have kept waiting for: measured on
+ * an 8-core host, a 1080p30 software encode (libx264 at its default medium preset,
+ * `-threads 2`) costs ~0.44 s of wall time per second of source, so sources of
+ * ~100-200 s need 45-90 s.
+ *
+ * The window also covers pool admission: with both transcode slots busy a rendition
+ * waits as "preparing" while its player keeps polling, so the per-command budget is
+ * only the ceiling. The effective deadline is computed end-to-end — the window minus
+ * the time already spent waiting for admission and the output-probe bound — and a
+ * rendition whose window has already closed settles as fallback (serving the original,
+ * exactly as a failed transcode does) instead of starting an encode no player can
+ * observe or burning a slot it could leave to a rendition that still has time.
+ */
+const PLAYBACK_TRANSCODE_TIMEOUT_MS =
+  PLAYBACK_READINESS_WINDOW_MS - 2 * MEDIA_FFPROBE_TIMEOUT_MS;
+const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32, windows: 32 } as const;
 const MAX_PENDING_PLAYBACK_INSPECTIONS = 32;
 const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
+/** First request time per rendition in the current polling session; bounds admission wait. */
+const playbackWindowStarts = new Map<string, number>();
+
+function recordPlaybackFailure(operationKey: string, failedAtMs: number): void {
+  playbackFailures.delete(operationKey);
+  playbackFailures.set(operationKey, failedAtMs);
+  pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);
+}
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
 const playbackInspectionPermits = createPermitPool(2);
@@ -446,6 +485,7 @@ async function transcodePlaybackSource(params: {
   kind: PlaybackMediaKind;
   cacheKey: string;
   maxBytes: number;
+  timeoutMs: number;
 }): Promise<void> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   await using opened = await openLocalFileSafely({ filePath: params.source.path });
@@ -517,6 +557,7 @@ async function transcodePlaybackSource(params: {
           maxOutputBytes: params.maxBytes,
           outputPath,
         }),
+        { timeoutMs: params.timeoutMs },
       );
       const outputStat = await fs.stat(outputPath);
       if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > params.maxBytes) {
@@ -612,8 +653,52 @@ export async function resolvePlaybackTranscode(
       return { kind: "fallback" };
     }
   }
+
+  // The player's readiness window opened with its first request for this rendition and
+  // keeps running while the rendition waits for a transcode slot, so admission delay
+  // comes out of the same budget as the encode.
+  const nowMs = Date.now();
+  const windowStartMs = playbackWindowStarts.get(operationKey);
+  const windowExpired =
+    windowStartMs !== undefined && nowMs - windowStartMs >= PLAYBACK_READINESS_WINDOW_MS;
   if (playbackJobs.size >= MAX_PLAYBACK_TRANSCODE_JOBS) {
+    if (windowExpired) {
+      // This polling session has already settled; answer fallback (serving the original,
+      // as a failed transcode does) instead of promising a rendition no player can
+      // observe. The cooldown paces retries, so a later session gets a fresh window.
+      playbackWindowStarts.delete(operationKey);
+      recordPlaybackFailure(operationKey, nowMs);
+      log.warn(
+        `Playback transcode skipped for ${params.sourcePath}: readiness window elapsed while waiting for capacity`,
+      );
+      return { kind: "fallback" };
+    }
+    if (windowStartMs === undefined) {
+      playbackWindowStarts.set(operationKey, nowMs);
+      pruneMapToMaxSize(playbackWindowStarts, MAX_PLAYBACK_ENTRIES.windows);
+    }
     return { kind: "preparing" };
+  }
+
+  const startedAtMs = windowStartMs === undefined || windowExpired ? nowMs : windowStartMs;
+  if (windowStartMs === undefined || windowExpired) {
+    playbackWindowStarts.delete(operationKey);
+    playbackWindowStarts.set(operationKey, startedAtMs);
+    pruneMapToMaxSize(playbackWindowStarts, MAX_PLAYBACK_ENTRIES.windows);
+  }
+  const timeoutMs = Math.min(
+    PLAYBACK_TRANSCODE_TIMEOUT_MS,
+    PLAYBACK_READINESS_WINDOW_MS - Math.max(0, nowMs - startedAtMs) - MEDIA_FFPROBE_TIMEOUT_MS,
+  );
+  if (timeoutMs <= 0) {
+    // The window closed while this rendition waited for admission; an encode started
+    // now could not become observable before the player's final poll.
+    playbackWindowStarts.delete(operationKey);
+    recordPlaybackFailure(operationKey, nowMs);
+    log.warn(
+      `Playback transcode skipped for ${params.sourcePath}: readiness window elapsed while waiting for capacity`,
+    );
+    return { kind: "fallback" };
   }
 
   const job = transcodePlaybackSource({
@@ -623,6 +708,7 @@ export async function resolvePlaybackTranscode(
     kind: params.kind,
     cacheKey,
     maxBytes,
+    timeoutMs,
   });
   // Pool admission and test synchronization must observe the same completion boundary.
   playbackJobs.set(operationKey, job);
@@ -630,17 +716,17 @@ export async function resolvePlaybackTranscode(
     () => {
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);
+      playbackWindowStarts.delete(operationKey);
     },
     (reason: unknown) => {
       playbackJobs.delete(operationKey);
+      playbackWindowStarts.delete(operationKey);
       if (!playbackFailures.has(operationKey)) {
         log.warn(
           `Playback transcode failed for ${params.sourcePath}: ${formatErrorMessage(reason)}`,
         );
       }
-      playbackFailures.delete(operationKey);
-      playbackFailures.set(operationKey, Date.now());
-      pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);
+      recordPlaybackFailure(operationKey, Date.now());
     },
   );
   return { kind: "preparing" };

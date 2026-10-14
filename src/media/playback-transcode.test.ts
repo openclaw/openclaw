@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { MEDIA_FFMPEG_TIMEOUT_MS } from "./ffmpeg-limits.js";
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
   settlePlaybackTranscodeJobsForTest,
@@ -519,6 +520,45 @@ describe("resolvePlaybackTranscode", () => {
     }
   });
 
+  it("lets a transcode that outlasts the shared ffmpeg deadline finish", async () => {
+    const source = await createSource("budget-video.mkv");
+    probePlaybackMediaFileDescriptor.mockResolvedValueOnce({
+      durationMs: 1000,
+      videoCodec: "h264",
+      videoStreamIndex: 0,
+      audioCodec: "aac",
+      audioStreamIndex: 1,
+    });
+    // Behave like the real runFfmpeg: enforce whichever deadline the caller passes,
+    // defaulting to the shared one. This encode outlasts the shared 45 s deadline but
+    // fits inside the player's ~110 s readiness window.
+    const encodeMs = MEDIA_FFMPEG_TIMEOUT_MS + 30_000;
+    runFfmpeg.mockImplementationOnce(
+      async (args: string[], options?: { timeoutMs?: number }) => {
+        const deadlineMs = options?.timeoutMs ?? MEDIA_FFMPEG_TIMEOUT_MS;
+        if (encodeMs > deadlineMs) {
+          throw new Error("Command timed out");
+        }
+        await fs.writeFile(args.at(-1) ?? "", "normalized-video");
+        return "";
+      },
+    );
+    const params = {
+      ...source,
+      mimeType: "video/x-matroska",
+      kind: "video" as const,
+    };
+
+    await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+      kind: "preparing",
+    });
+    await waitForPlaybackTranscodeJobsForTest("all");
+
+    await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
+      kind: "transcoded",
+    });
+  });
+
   it("single-flights MIME aliases that target the same cached rendition", async () => {
     const source = await createSource("alias-audio.mp4");
     const transcodeStarted = createDeferred();
@@ -843,6 +883,142 @@ describe("resolvePlaybackTranscode", () => {
         release.resolve();
       }
       await settlePlaybackTranscodeJobsForTest();
+    }
+  });
+
+  it("bounds a delayed transcode by the player's remaining readiness window", async () => {
+    const sources = await Promise.all([
+      createSource("window-first.mkv"),
+      createSource("window-second.mkv"),
+      createSource("window-third.mkv"),
+    ]);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const starts = sources.map(() => createDeferred());
+    const releases = sources.map(() => createDeferred());
+    let nextJobIndex = 0;
+    runFfmpeg.mockImplementation(async (args: string[]) => {
+      const index = nextJobIndex++;
+      starts[index]!.resolve();
+      await releases[index]!.promise;
+      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
+      return "";
+    });
+    const params = sources.map(({ sourcePath, sourceStat }) => ({
+      sourcePath,
+      sourceStat,
+      mimeType: "video/x-matroska",
+      kind: "video" as const,
+    }));
+
+    try {
+      // Two long encodes hold both transcode slots.
+      await expect(playback.resolvePlaybackTranscode(params[0]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await expect(playback.resolvePlaybackTranscode(params[1]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await Promise.all(starts.slice(0, 2).map(async ({ promise }) => await promise));
+
+      // The third player's readiness window opens while the pool is saturated.
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      expect(runFfmpeg).toHaveBeenCalledTimes(2);
+
+      // 85 s of admission delay later a slot frees; the encode gets only the time the
+      // player has left — 110 s window − 85 s wait − 10 s output-probe bound.
+      nowSpy.mockReturnValue(1_085_000);
+      const capacityAvailable = waitForPlaybackTranscodeJobsForTest("next");
+      releases[0]!.resolve();
+      await expect(capacityAvailable).resolves.toBe(2);
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await starts[2]!.promise;
+      expect(runFfmpeg).toHaveBeenCalledTimes(3);
+      expect(runFfmpeg.mock.calls[2]?.[1]).toEqual({ timeoutMs: 15_000 });
+
+      const remainingJobs = waitForPlaybackTranscodeJobsForTest("all");
+      for (const release of releases.slice(1)) {
+        release.resolve();
+      }
+      await expect(remainingJobs).resolves.toBe(2);
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toMatchObject({
+        kind: "transcoded",
+      });
+    } finally {
+      for (const release of releases) {
+        release.resolve();
+      }
+      await settlePlaybackTranscodeJobsForTest();
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("settles a rendition as fallback once its readiness window closes while waiting for capacity", async () => {
+    const sources = await Promise.all([
+      createSource("expired-first.mkv"),
+      createSource("expired-second.mkv"),
+      createSource("expired-third.mkv"),
+    ]);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    const starts = sources.map(() => createDeferred());
+    const releases = sources.map(() => createDeferred());
+    let nextJobIndex = 0;
+    runFfmpeg.mockImplementation(async (args: string[]) => {
+      const index = nextJobIndex++;
+      starts[index]!.resolve();
+      await releases[index]!.promise;
+      await fs.writeFile(args.at(-1) ?? "", "normalized-video");
+      return "";
+    });
+    const params = sources.map(({ sourcePath, sourceStat }) => ({
+      sourcePath,
+      sourceStat,
+      mimeType: "video/x-matroska",
+      kind: "video" as const,
+    }));
+
+    try {
+      await expect(playback.resolvePlaybackTranscode(params[0]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await expect(playback.resolvePlaybackTranscode(params[1]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await Promise.all(starts.slice(0, 2).map(async ({ promise }) => await promise));
+      // The third rendition's readiness window opens while the pool is saturated.
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      expect(runFfmpeg).toHaveBeenCalledTimes(2);
+
+      // The final poll at ~110 s still finds no capacity: settle as fallback (serving
+      // the original, as a failed transcode does) instead of promising a rendition the
+      // player can no longer observe, and pace retries through the failure cooldown.
+      nowSpy.mockReturnValue(2_110_000);
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "fallback",
+      });
+      nowSpy.mockReturnValue(2_120_000);
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "fallback",
+      });
+      expect(runFfmpeg).toHaveBeenCalledTimes(2);
+
+      // A later polling session gets a fresh window once the cooldown passes.
+      nowSpy.mockReturnValue(2_171_000);
+      await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
+        kind: "preparing",
+      });
+      expect(runFfmpeg).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const release of releases) {
+        release.resolve();
+      }
+      await settlePlaybackTranscodeJobsForTest();
+      nowSpy.mockRestore();
     }
   });
 
