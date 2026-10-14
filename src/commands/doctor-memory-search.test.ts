@@ -709,6 +709,21 @@ describe("noteMemorySearchHealth", () => {
       "openclaw config set agents.entries.agent-default.memory.search.provider none",
     );
     expect(firstNoteMessage()).not.toContain("openclaw config set memory.search.provider none");
+    expect(firstNoteMessage()).toContain("because its provider is set explicitly");
+  });
+
+  it.each([
+    ["openai", true],
+    ["auto", false],
+  ])("says search and sync fail closed for provider %s: %s", async (configured, explicit) => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+    const config = { memory: { search: { provider: configured } } } as OpenClawConfig;
+    await runMemorySearchHealth("openai", undefined, undefined, config);
+    const failClosed =
+      "Memory search and sync both stop for this agent because its provider is set explicitly";
+    const indexGuard = "this agent already has a vector index, memory sync also stops";
+    expect(firstNoteMessage().includes(failClosed)).toBe(explicit);
+    expect(firstNoteMessage().includes(indexGuard)).toBe(!explicit);
   });
 
   it.each([

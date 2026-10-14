@@ -581,7 +581,9 @@ async function inspectMemorySearchHealthForAgent(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
       `Semantic recall will not work without a valid API key.`,
-      `If ${fallback ? `the "${fallback}" fallback is unavailable too and ` : ""}this agent already has a vector index, memory sync also stops to protect it: new and changed memory files are not indexed, not even for keyword search, until embeddings work again.`,
+      providerSetting.explicit
+        ? `${fallback ? `If the "${fallback}" fallback is unavailable too, memory` : "Memory"} search and sync both stop for this agent because its provider is set explicitly: memory_search returns an unavailable result and new and changed memory files are not indexed until embeddings work again.`
+        : `If ${fallback ? `the "${fallback}" fallback is unavailable too and ` : ""}this agent already has a vector index, memory sync also stops to protect it: new and changed memory files are not indexed, not even for keyword search, until embeddings work again.`,
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
@@ -601,18 +603,31 @@ async function inspectMemorySearchHealthForAgent(
 function resolveMemorySearchProviderSetting(
   cfg: OpenClawConfig,
   agentId: string,
-): { path: string; settable: boolean } {
-  if (resolveAgentConfig(cfg, agentId)?.memory?.search?.provider === undefined) {
-    return { path: "memory.search.provider", settable: true };
+): { path: string; settable: boolean; explicit: boolean } {
+  const agentProvider = resolveAgentConfig(cfg, agentId)?.memory?.search?.provider;
+  // Documented Memory Core contract: an explicitly named remote provider fails closed;
+  // unset or legacy "auto" keeps keyword recall (docs/reference/memory-config.md).
+  const configured = (agentProvider ?? cfg.memory?.search?.provider)?.trim();
+  const explicit = Boolean(configured) && configured !== "auto";
+  if (agentProvider === undefined) {
+    return { path: "memory.search.provider", settable: true, explicit };
   }
   const id = normalizeAgentId(agentId);
   const listed = listAgentEntriesWithSource(cfg).find(
     ({ entry }) => normalizeAgentId(entry.id) === id,
   );
   if (listed?.source.kind === "entries") {
-    return { path: `agents.entries.${listed.source.key}.memory.search.provider`, settable: true };
+    return {
+      path: `agents.entries.${listed.source.key}.memory.search.provider`,
+      settable: true,
+      explicit,
+    };
   }
-  return { path: `memory.search.provider of the agents.list entry "${agentId}"`, settable: false };
+  return {
+    path: `memory.search.provider of the agents.list entry "${agentId}"`,
+    settable: false,
+    explicit,
+  };
 }
 
 function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
