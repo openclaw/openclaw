@@ -12,10 +12,11 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export async function loadMemoryCommandConfig(
   commandName: string,
   mode?: "enforce_resolved" | "read_only_status",
-  config?: OpenClawConfig,
+  providedConfig?: OpenClawConfig,
 ) {
-  const targetIds = getMemoryEmbeddingCommandSecretTargetIds(config);
-  config ??= await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+  const targetIds = getMemoryEmbeddingCommandSecretTargetIds(providedConfig);
+  const config =
+    providedConfig ?? (await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })());
   try {
     const { resolvedConfig, diagnostics, hadUnresolvedTargets } =
       await resolveCommandSecretRefsViaGateway({
