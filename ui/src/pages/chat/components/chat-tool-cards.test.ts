@@ -16,20 +16,22 @@ import {
   extractToolCardsCached,
 } from "../../../lib/chat/tool-cards.ts";
 import * as controlUiView from "../../../plugins/control-ui-view.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-import { renderToolFixture as render, settleToolBridges } from "./chat-tool-render.test-support.ts";
+import {
+  renderToolFixture as render,
+  settleToolBridges,
+  renderToolCard,
+} from "./chat-tool-render.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
-function textOf(container: ParentNode, selector: string) {
-  return container.querySelector(selector)?.textContent;
-}
+const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 
 async function mountCard(
   card: ToolCard,
@@ -110,37 +112,31 @@ describe("tool-cards", () => {
       ),
     ).toEqual(["new a", "new b"]);
 
-    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-      "wa-tab-group",
-    );
-    const tabs = Array.from(
-      container.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>("wa-tab"),
-    );
-    await tabGroup?.updateComplete;
-    await Promise.all(tabs.map((tab) => tab.updateComplete));
-    expect(
-      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
-    ).toBe("Tool detail view");
+    const tabGroup = container.querySelector<HTMLElement>(".chat-tool-card__modes");
+    const tabList = tabGroup?.querySelector('[role="tablist"]');
+    await waitForSolid(() => {
+      expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
+    });
+    const tabs = Array.from(tabGroup?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
     expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual(
       [
         ["Diff", "true"],
         ["Raw", "false"],
       ],
     );
-    const diffBody = container.querySelector<HTMLElement>('wa-tab-panel[name="diff"]');
-    const rawBody = container.querySelector<HTMLElement>('wa-tab-panel[name="raw"]');
-    expect(diffBody?.hasAttribute("active")).toBe(true);
-    expect(rawBody?.hasAttribute("active")).toBe(false);
+    const diffBody = container.querySelector<HTMLElement>('[id$="-diff-panel"]');
+    const rawBody = container.querySelector<HTMLElement>('[id$="-raw-panel"]');
+    expect(diffBody?.hidden).toBe(false);
+    expect(rawBody?.hidden).toBe(true);
 
     tabs[1]?.click();
-    await tabGroup?.updateComplete;
-    await Promise.all(tabs.map((tab) => tab.updateComplete));
-    expect(diffBody?.hasAttribute("active")).toBe(false);
-    expect(rawBody?.hasAttribute("active")).toBe(true);
+    await waitForSolid(() => {
+      expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+    });
+    expect(diffBody?.hidden).toBe(true);
+    expect(rawBody?.hidden).toBe(false);
     expect(rawBody?.querySelector("code")?.textContent).toBe("Applied patch");
-    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
 
-    tabGroup?.setAttribute("aria-label", "Translated tool detail view");
     await mountCard(
       {
         id: "msg:patch:multi",
@@ -156,40 +152,47 @@ describe("tool-cards", () => {
       {},
       container,
     );
-    await tabGroup?.updateComplete;
-    expect(container.querySelector("wa-tab-group")).toBe(tabGroup);
-    expect(rawBody?.hasAttribute("active")).toBe(true);
-    expect(
-      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
-    ).toBe("Tool detail view");
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-tool-card__modes")).toBe(tabGroup);
+      expect(rawBody?.hidden).toBe(false);
+      expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
+    });
     container.remove();
   });
 
-  it("shows failed edit output before the attempted diff", async () => {
-    const container = document.body.appendChild(document.createElement("div"));
-    await mountCard(
-      {
-        id: "msg:edit:failed",
-        name: "edit",
-        args: { path: "src/a.ts", oldText: "before", newText: "after" },
-        outputText: "Patch context did not match",
-        completed: true,
-        isError: true,
-      },
-      {},
-      container,
-    );
+  it.each([
+    { outcome: "failed", outputText: "Patch context did not match", details: undefined },
+    {
+      outcome: "skipped",
+      outputText: "Skipped to process an incoming message.",
+      details: { status: "skipped", deniedReason: "steering" },
+    },
+  ])(
+    "shows $outcome edit output before the attempted diff",
+    async ({ outcome, outputText, details }) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      await mountCard(
+        {
+          id: "msg:edit:failed",
+          name: "edit",
+          args: { path: "src/a.ts", oldText: "before", newText: "after" },
+          outputText,
+          details,
+          completed: true,
+          isError: outcome === "failed",
+        },
+        {},
+        container,
+      );
 
-    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-      "wa-tab-group",
-    );
-    await tabGroup?.updateComplete;
-
-    expect(container.querySelector('wa-tab[panel="raw"]')?.hasAttribute("active")).toBe(true);
-    expect(container.querySelector('wa-tab-panel[name="raw"]')?.hasAttribute("active")).toBe(true);
-    expect(textOf(container, 'wa-tab-panel[name="raw"] code')).toBe("Patch context did not match");
-    container.remove();
-  });
+      const rawTab = container.querySelector('[role="tab"][data-tab-value="raw"]');
+      await waitForSolid(() => expect(rawTab?.getAttribute("aria-selected")).toBe("true"));
+      const rawBody = container.querySelector<HTMLElement>('[id$="-raw-panel"]');
+      expect(rawBody?.hidden).toBe(false);
+      expect(rawBody?.querySelector("code")?.textContent).toBe(outputText);
+      container.remove();
+    },
+  );
 
   it("labels a completed Codex file creation from its recorded operation", async () => {
     const onOpenWorkspaceFile = vi.fn();

@@ -16,6 +16,12 @@ split; widening the window restores the saved desktop layout. **Details** opens
 a full-width overlay above the composer. Desktop keeps the **Layout** menu and
 separate **Details** control.
 
+Details keeps session metadata visible. Pull requests and automations appear
+expanded when they contain items; empty sections are omitted entirely. You can
+collapse populated sections without ordinary updates reopening them. Loading or
+failed automation reads show their status and retry action without an empty
+disclosure. Task progress remains independently collapsible.
+
 ## OpenClaw system care
 
 Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.

@@ -13,6 +13,14 @@ sidebarTitle: "Sessions and sidebar"
 The sidebar separates navigation into **Pages**, **Sessions**, and **Online**.
 The New session page starts new conversations.
 
+To work directly in a folder on a paired device, select that specific device,
+then choose **Existing folder on device** in the workspace picker. Enter an
+absolute path on that device. The option appears only when the connected session
+host advertises support; **Auto** cannot select an existing device folder.
+The session stays bound to that device and displays its folder path. Files stay
+on the device rather than being copied to or reconciled with the Gateway. See
+[session hosting](/nodes/session-hosting#work-in-an-existing-device-folder).
+
 ## Navigation rail
 
 The icon rail stays separate from the selected navigation list. **Pages** opens
@@ -77,6 +85,8 @@ or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the **My sessions** default.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
+The filtered session list loads before custom group metadata, so a slow group
+catalog does not hold up session rows. Group names and ordering update when that catalog arrives.
 On a single-user installation without ownership filters, the header is a plain
 **Sessions** title and the list includes sessions without owner metadata.
 
@@ -648,7 +658,7 @@ On an OpenClaw Chat send, the submitted text and attachments appear immediately 
 
 If the model catalog is still loading, session creation stops waiting after a shared 20-second catalog deadline and reports that the session was not created. Retry shortly; your draft remains available. Closing the requesting connection or losing its authority also ends a pending catalog wait.
 
-Starting a suggested task immediately removes its card without switching sessions or changing your draft. The card stays hidden after confirmation. If session creation fails or acceptance is interrupted or unconfirmed, the card reappears with its original instructions and recovery controls. **Retry** checks the same task and preserves the selected launch mode. Skill Workshop revisions carry their submitted instructions into chat while history loads.
+Starting a suggested task immediately removes its card without switching sessions or changing your draft. The card stays hidden after confirmation. If session creation fails or acceptance is interrupted or unconfirmed, the card reappears with its original instructions and recovery controls. **Retry** checks the same task and preserves the selected launch mode. A confirmed retry clears that task’s earlier error banner without clearing newer or unrelated chat errors. Skill Workshop revisions carry their submitted instructions into chat while history loads.
 
 Attributed submissions show your avatar immediately, in the same position as the chat transcript. Opening the created session focuses the composer quietly; the attention cue is reserved for navigation that prefills a draft.
 

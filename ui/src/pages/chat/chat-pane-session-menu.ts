@@ -599,6 +599,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
+      row.deviceFolder?.path ||
       (row.execNode ? row.execCwd?.trim() : undefined) ||
       row.spawnedWorkspaceDir?.trim() ||
       row.spawnedCwd?.trim() ||

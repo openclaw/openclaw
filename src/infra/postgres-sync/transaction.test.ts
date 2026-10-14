@@ -177,12 +177,13 @@ describe("experimental PostgreSQL transaction protocol", () => {
     },
   );
 
-  it("uses a read-only repeatable snapshot and reuses it for nested reads", () => {
+  it("ends a read-only repeatable snapshot without a write receipt and reuses it for nested reads", () => {
     const { db, statements } = postgresFixture();
     expect(
       runSqliteReadSnapshotSync(db, () => runSqliteReadSnapshotSync(db, () => "snapshot")),
     ).toBe("snapshot");
-    expect(statements).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", "COMMIT"]);
+    expect(statements).toEqual(["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", "ROLLBACK"]);
+    expect(db.isTransaction).toBe(false);
   });
 
   it("rolls a failed inner write back to its savepoint before the outer commit", () => {

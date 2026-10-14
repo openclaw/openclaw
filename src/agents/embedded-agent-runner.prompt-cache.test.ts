@@ -338,6 +338,7 @@ describe("provider prefix across admitted Gateway agent turns", () => {
           let userEnvelopes = new Map<string, string>();
           let turn = 0;
           let requestsThisTurn = 0;
+          let assistantHistory: string[] = [];
           let providerFailure: Error | undefined;
           const createObserver = promptCacheRequestObserver.createPromptCacheRequestObserver;
           const observerSpy = vi
@@ -347,6 +348,20 @@ describe("provider prefix across admitted Gateway agent turns", () => {
               return {
                 ...observer,
                 onModelRequest: (runtimeModel, context) => {
+                  if (api === "openai-responses" && turn <= 4) {
+                    const assistants = context.messages
+                      .filter((message) => message.role === "assistant")
+                      .map((message) => stableStringify(message));
+                    for (let index = 0; index < assistantHistory.length; index++) {
+                      if (assistants[index] !== assistantHistory[index]) {
+                        providerFailure = new Error(
+                          `assistant replay changed at assistant ${index}`,
+                        );
+                        throw providerFailure;
+                      }
+                    }
+                    assistantHistory = assistants;
+                  }
                   const occurrences = new Map<string, number>();
                   let userAnchor = "";
                   userEnvelopes = new Map(

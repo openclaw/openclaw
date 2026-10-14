@@ -1,15 +1,18 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { SnapshotImage } from "../pages/cloud-workers/cloud-worker-environment-model.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
 } from "../pages/cloud-workers/cloud-worker-snapshots.test-support.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud environments mocked Gateway E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (path) => `Playwright Chromium is unavailable at ${path}`,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 function snapshot() {
   const result = snapshotListFixture();
@@ -29,6 +32,99 @@ const methods = [
   "environments.destroy",
 ];
 suite.define(() => {
+  it("refreshes snapshots and saved machines after lazy plugin activation without reconnecting", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 1100 },
+    });
+    const page = await context.newPage();
+    const coreMethods = [
+      "config.get",
+      "config.patch",
+      "plugins.uiDescriptors",
+      "environments.list",
+    ];
+    const gateway = await installMockGateway(page, {
+      featureMethods: coreMethods,
+      methodResponses: {
+        "config.get": {
+          valid: false,
+          hash: "saved",
+          appliedConfigHash: "saved",
+          sourceConfig: {},
+          resolved: {},
+          config: {},
+        },
+        "environments.list": { environments: [], profiles: [] },
+        "crabbox.images.list": snapshot(),
+        "plugins.uiDescriptors": {
+          ok: true,
+          generation: 1,
+          descriptors: [],
+          methods: [...coreMethods, ...methods],
+          controlUiTabs: [],
+          controlUiWidgetKinds: [],
+          controlUiLinkReaders: [],
+          pluginSurfaceUrls: {},
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await gateway.waitForRequest("config.get");
+      await page
+        .getByText("The first cloud session for a repository prepares it and saves a snapshot.", {
+          exact: false,
+        })
+        .waitFor();
+      await page.locator(".cloud-environments__advanced > summary").click();
+      const emptyMachines = page.getByText("No cloud worker profiles are configured.", {
+        exact: true,
+      });
+      await emptyMachines.waitFor();
+      const surface = page.locator("openclaw-cloud-workers-page");
+      const before = await takeControlUiScreenshotFrame(page, surface, [emptyMachines], {
+        animations: "disabled",
+      });
+      await fs.writeFile(path.join(suite.artifactDir, "lazy-before.png"), before.png);
+      expect(await gateway.getRequests("crabbox.images.list")).toHaveLength(0);
+      const config = {
+        cloudWorkers: {
+          profiles: {
+            cloud: {
+              provider: "crabbox",
+              install: "bundle",
+              settings: { provider: "aws", class: "standard" },
+            },
+          },
+        },
+      };
+      await gateway.setMethodResponse("config.get", {
+        valid: true,
+        hash: "saved",
+        appliedConfigHash: "saved",
+        sourceConfig: config,
+        resolved: config,
+        config,
+      });
+      await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
+      const repository = page
+        .locator(".cloud-environments__row")
+        .getByText("github.com/acme/app", { exact: true });
+      await repository.waitFor();
+      const machine = page.getByRole("button", { name: "Edit: cloud", exact: true });
+      await machine.waitFor();
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+      expect((await gateway.getRequests("crabbox.images.list")).length).toBeGreaterThan(0);
+      const after = await takeControlUiScreenshotFrame(page, surface, [repository, machine], {
+        animations: "disabled",
+      });
+      await fs.writeFile(path.join(suite.artifactDir, "lazy-after.png"), after.png);
+    } finally {
+      await context.close();
+    }
+  });
   it("rebuilds the selected repository and cancels its build after confirmation", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

@@ -255,7 +255,9 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
+        await expect(
+          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
+        ).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

@@ -19,6 +19,63 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it("retries a restored existing-folder create after its device stops offering free slots", async () => {
+    let freeSlots = 1;
+    const { place, flow, gateway } = createDraftFixture({
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [
+                {
+                  id: "node:runner",
+                  type: "node",
+                  status: "available",
+                  sessionHost: true,
+                  workerHost: { deviceFolders: true },
+                  workerSlots: { total: 1, available: freeSlots },
+                },
+              ],
+              profiles: [],
+            }
+          : {},
+      agents: [
+        {
+          id: "main",
+          workspace: "/workspace",
+          agentRuntime: {
+            id: "openclaw",
+            source: "agent",
+            cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+          },
+        },
+      ],
+    });
+    await gateway.refreshCloudProfiles();
+    flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep my folder",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: {
+        agentId: "main",
+        message: "",
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    });
+    flow.releasePendingPlacementOwner();
+    flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+    expect(place.deviceFolder).toEqual({ deviceId: "runner", path: "/srv/project" });
+    // The pending session itself can hold the device's only slot.
+    freeSlots = 0;
+    await gateway.refreshCloudProfiles();
+    expect(place.deviceFolderAvailable).toBe(false);
+    expect(flow.submitBlock()).toBeUndefined();
+  });
+
   it.each(["retry", "choose-workspace"] as const)(
     "retains a saved project after failed discovery until %s resolves the choice",
     async (recovery) => {
