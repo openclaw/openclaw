@@ -53,7 +53,7 @@ export async function openChatLayoutMenu(
     }
     return menu;
   }
-  const trigger = scope.locator("button.chat-pane__layout-trigger").first();
+  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if ((await menu.getAttribute("open")) === null) {
     const element = await menu.elementHandle();
@@ -84,7 +84,7 @@ export async function closeChatLayoutMenu(
     await waitForMenuClose(menu);
     return;
   }
-  const trigger = scope.locator("button.chat-pane__layout-trigger").first();
+  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if ((await menu.getAttribute("open")) !== null) {
     await trigger.click();

@@ -284,7 +284,12 @@ export function presentNarrowSidebarLayout(
 ): SidebarLayout {
   const slot =
     layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
-  if (!slot || (!options?.allPanels && slot !== "subagents" && slot !== "processes")) {
+  // A retained Conversation beside a promoted main view is not a selected tool.
+  if (
+    !slot ||
+    slot === "conversation" ||
+    (!options?.allPanels && slot !== "subagents" && slot !== "processes")
+  ) {
     return layout;
   }
   let presented = narrowPresentations.get(layout);
