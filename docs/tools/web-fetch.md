@@ -292,13 +292,16 @@ arguments to retrieve the omitted content. Saved output retains the untrusted-co
 warning and is capped at 2,000,000 characters; `spill.truncated` indicates an
 incomplete saved response.
 
-Sandboxed sessions save this output in their existing private input-staging area,
-accessible through the sandbox reader. Cached saved paths remain scoped to the
-requesting session and sandbox workspace. Local Docker and Podman sandboxes also
-receive saved output when guest workspace access is read-only: the trusted input
-staging owner prepares the file without granting guest write access. If a backend
-cannot stage output, the inline result reports that full output is unavailable
-instead of advertising a host-only path.
+Local Docker and Podman sandboxes save this output in their existing private
+input-staging area, accessible through the sandbox reader. Cached saved paths remain
+scoped to the requesting session and sandbox workspace. Recovery also works when
+guest workspace access is read-only: the trusted input-staging owner prepares the
+file without granting guest write access.
+
+Other backends, including remote-shell sandboxes, need a prepared input-staging
+capability before saved output is available. Without it, the inline result reports
+that full output is unavailable, makes no staging write, and advertises no host-only
+path. An unsuccessful save is not cached.
 
 ## Limits and safety
 

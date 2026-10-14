@@ -9,12 +9,16 @@ import { createSandboxedReadTool } from "../agent-tools.read.js";
 import type { SandboxBackendCommandParams } from "../sandbox/backend-handle.types.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { bindSandboxInputStager, createSandboxInputStager } from "../sandbox/input-staging.js";
+import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createWebFetchTool } from "./web-fetch.js";
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
-vi.mock("./web-guarded-fetch.js", () => ({ fetchWithWebToolsNetworkGuard: fetchMock }));
+vi.mock("./web-guarded-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./web-guarded-fetch.js")>()),
+  fetchWithWebToolsNetworkGuard: fetchMock,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const marker = "OMITTED_RESPONSE_MARKER";
@@ -22,6 +26,10 @@ const fullText = `${"line of fetched content\n".repeat(1_000)}${marker}\n`;
 
 function context(root: string, session: string, assertInvocationCurrent?: () => void) {
   const bridge = createHostSandboxFsBridge(root);
+  bindSandboxInputStager(
+    bridge,
+    createSandboxInputStager({ root, bridge, assertCurrent: () => {} }),
+  );
   const options = {
     sandboxed: true,
     sandboxRoot: root,
@@ -182,15 +190,33 @@ describe("web_fetch sandbox output recovery", () => {
   it("returns bounded content without a false host-file promise when a backend cannot stage output", async () => {
     fetchMock.mockImplementation(async () => mockResponse());
     const sandbox = context(tempDirs.make("web-fetch-unavailable-"), "unavailable");
-    sandbox.bridge.createFileExclusive = async () => {
-      throw new Error("Sandbox backend cannot save output");
-    };
+    const runRemoteShellScript = vi.fn(async () => {
+      throw new Error("Unsupported staging must not run a remote command");
+    });
+    const unsupported = createWebFetchTool({
+      ...sandbox.options,
+      sandboxFsBridge: createRemoteShellSandboxFsBridge({
+        sandbox: createSandboxTestContext({
+          overrides: {
+            workspaceDir: sandbox.options.sandboxRoot,
+            agentWorkspaceDir: sandbox.options.sandboxRoot,
+          },
+        }),
+        runtime: {
+          remoteWorkspaceDir: "/workspace",
+          remoteAgentWorkspaceDir: "/workspace",
+          runRemoteShellScript,
+        },
+      }),
+    })!;
     const args = { url: "https://example.com/sandbox-unavailable" };
-    const failed = details(await sandbox.fetch.execute("unavailable", args));
+    const failed = details(await unsupported.execute("unavailable", args));
     expect(failed.spill).toBeUndefined();
     expect(failed.text).toContain("line of fetched content");
     expect(failed.text).toContain("Full output unavailable in sandbox");
     expect(failed.text.length).toBeLessThanOrEqual(1_000);
+    expect(runRemoteShellScript).not.toHaveBeenCalled();
+    expect(await fs.readdir(sandbox.options.sandboxRoot)).toEqual([]);
     const retry = details(
       await context(sandbox.options.sandboxRoot, "unavailable").fetch.execute("retry", args),
     );

@@ -3,7 +3,7 @@
  *
  * Creates owner-only log files without reusing predictable names.
  */
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,38 +28,15 @@ export async function writePrivateTempFile(
       throw new Error("Sandbox output context is unavailable");
     }
     const stageInput = getSandboxInputStager(bridge);
-    if (stageInput) {
-      return stageInput({
-        prefix,
-        content,
-        signal: options.signal,
-        assertCurrent: () => options.assertCurrent?.(),
-      });
-    }
-    if (!bridge.createFileExclusive) {
+    if (!stageInput) {
       throw new Error("Sandbox does not support private output staging");
     }
-    const { stagedInputDirectory, STAGED_INPUT_GITIGNORE } =
-      await import("../../../media/staged-inputs.js");
-    const directory = stagedInputDirectory(randomUUID());
-    const filePath = `${directory}/${prefix}.log`;
-    for (const [target, data] of [
-      [`${directory}/.gitignore`, STAGED_INPUT_GITIGNORE],
-      [filePath, content],
-    ] as const) {
-      options.assertCurrent?.();
-      const created = await bridge.createFileExclusive({
-        filePath: target,
-        cwd: root,
-        data,
-        signal: options.signal,
-      });
-      if (created !== "created") {
-        throw new Error("Private output staging path already exists");
-      }
-    }
-    options.assertCurrent?.();
-    return bridge.resolvePath({ filePath, cwd: root }).containerPath;
+    return stageInput({
+      prefix,
+      content,
+      signal: options.signal,
+      assertCurrent: () => options.assertCurrent?.(),
+    });
   }
   const filePath = createPrivateTempFilePath(prefix);
   await writeFile(filePath, content, { flag: "wx", mode: 0o600 });

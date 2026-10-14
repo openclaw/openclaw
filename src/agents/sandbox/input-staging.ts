@@ -18,6 +18,7 @@ export function bindSandboxInputStager(bridge: SandboxFsBridge, stage: SandboxIn
 }
 
 export function getSandboxInputStager(bridge: SandboxFsBridge): SandboxInputStager | undefined {
+  // SAFETY: Only bindSandboxInputStager writes this private symbol with a SandboxInputStager.
   return (bridge as InputStagingBridge)[INPUT_STAGER];
 }
 
