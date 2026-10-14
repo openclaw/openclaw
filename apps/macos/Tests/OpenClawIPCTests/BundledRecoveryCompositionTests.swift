@@ -29,14 +29,26 @@ struct BundledRecoveryCompositionTests {
                 "auth": ["mode": "token", "token": "synthetic-composition-token"],
                 "controlUi": ["enabled": false],
             ],
-            "agents": [
-                "ownership": "explicit",
-                "defaults": ["systemAgent": ["agentId": "main"]],
-                "entries": ["main": ["workspace": state.appendingPathComponent("workspace").path]],
-            ],
             "plugins": ["allow": [self.pluginID], "slots": ["memory": "none"]],
         ]
         try JSONSerialization.data(withJSONObject: config).write(to: OpenClawPaths.configURL)
+        // The schema probe needs the creation owner's registration and deletion history.
+        let created = await ShellExecutor.runDetailed(
+            command: runtime.cliCommand + [
+                "agents", "add", "recovery", "--workspace", state.appendingPathComponent("workspace").path,
+                "--agent-dir", state.appendingPathComponent("agents/recovery/agent").path,
+                "--non-interactive", "--json",
+            ],
+            cwd: runtime.packageRoot.path,
+            env: runtime.environment,
+            timeout: CLIInstaller.managedUpdateTimeout)
+        try #require(created.success, Comment(rawValue: created.stderr))
+        let selected = await ShellExecutor.runDetailed(
+            command: runtime.cliCommand + ["config", "set", "agents.defaults.systemAgent.agentId", "recovery"],
+            cwd: runtime.packageRoot.path,
+            env: runtime.environment,
+            timeout: CLIInstaller.managedUpdateTimeout)
+        try #require(selected.success, Comment(rawValue: selected.stderr))
         try await self.installPlugin(runtime: runtime, state: state)
         AppDefaults.standard.set(GatewayHosting.service.rawValue, forKey: GatewayHosting.defaultsKey)
         AppStateStore.shared.connectionMode = .local
@@ -91,7 +103,8 @@ struct BundledRecoveryCompositionTests {
             let stoppedService = try #require(
                 try await GatewayLaunchAgentManager.loadedGatewayState(port: GatewayEnvironment.gatewayPort()))
             try #require(stoppedService.runningPID == nil)
-            let agent = state.appendingPathComponent("agents/main/agent/openclaw-agent.sqlite")
+            let agent = state.appendingPathComponent("agents/recovery/agent/openclaw-agent.sqlite")
+            try #require(FileManager.default.fileExists(atPath: agent.path))
             let artifacts = [
                 agent,
                 URL(fileURLWithPath: agent.path + "-wal"),
@@ -103,8 +116,11 @@ struct BundledRecoveryCompositionTests {
                     at: artifact,
                     to: artifact.appendingPathExtension("composition-original"))
             }
-            try FileManager.default.createDirectory(
-                at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
+            for artifact in retained {
+                try FileManager.default.copyItem(
+                    at: artifact.appendingPathExtension("composition-original"),
+                    to: artifact)
+            }
             // Newer schemas are a required refusal, unlike isolatable secondary-agent diagnostics.
             let future = await ShellExecutor.runDetailed(
                 command: ["/usr/bin/sqlite3", agent.path, "PRAGMA user_version=2147483646;"],
@@ -140,10 +156,13 @@ struct BundledRecoveryCompositionTests {
                 in: window, description: "newer-schema Doctor outcome", matching: { elements in
                     elements.first {
                         let value: Any? = $0.accessibilityValue?()
+                        return $0.accessibilityRole?() == .staticText &&
+                            (value as? String)?.contains("2147483646") == true
+                    } ?? elements.first {
+                        let value: Any? = $0.accessibilityValue?()
                         let text = value as? String
                         return $0.accessibilityRole?() == .staticText &&
-                            (text?.contains("2147483646") == true ||
-                                text?.contains("The bundled Gateway update could not finish.") == true)
+                            text?.contains("The bundled Gateway update could not finish.") == true
                     }
                 })
             let diagnosticValue: Any? = diagnostic.accessibilityValue?()
@@ -163,7 +182,9 @@ struct BundledRecoveryCompositionTests {
             let stoppedAfterRefusal = try #require(
                 try await GatewayLaunchAgentManager.loadedGatewayState(port: GatewayEnvironment.gatewayPort()))
             try #require(stoppedAfterRefusal.runningPID == nil)
-            try FileManager.default.removeItem(at: agent)
+            for artifact in artifacts where FileManager.default.fileExists(atPath: artifact.path) {
+                try FileManager.default.removeItem(at: artifact)
+            }
             for artifact in retained {
                 try FileManager.default.moveItem(
                     at: artifact.appendingPathExtension("composition-original"),
