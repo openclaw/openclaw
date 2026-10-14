@@ -148,6 +148,17 @@ describe("yielded private settle outcomes", () => {
       response: { status: "ok" },
       expected: { delivered: false, reason: "completion_handoff_unavailable", terminal: true },
     },
+    {
+      // A visible child's settlement now carries the requester incarnation
+      // binding, so a replaced requester must be refused before dispatch just
+      // like the private route.
+      name: "replaced requester on a visible settlement",
+      replaced: true,
+      public: true,
+      bound: true,
+      response: { status: "ok" },
+      expected: { delivered: false, reason: "completion_handoff_unavailable", terminal: true },
+    },
   ])("requires real completion evidence: $name", async (testCase) => {
     const sessionKey = "agent:main:discord:dm:U123";
     const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
@@ -178,8 +189,9 @@ describe("yielded private settle outcomes", () => {
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       requireDirectDelivery: true,
-      ...("public" in testCase
-        ? { requireVisibleReply: true }
+      ...("public" in testCase ? { requireVisibleReply: true } : {}),
+      ...("public" in testCase && !("bound" in testCase)
+        ? {}
         : { completionRequesterSessionId: "requester-session-dm" }),
       directIdempotencyKey: "announce:requester-settle:private",
     });
