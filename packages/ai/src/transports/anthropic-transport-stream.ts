@@ -2,6 +2,7 @@ import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -61,19 +62,6 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
 }
 
-function buildAnthropicBetaHeader(
-  model: AnthropicTransportModel,
-  betaFeatures: readonly string[],
-  params: { oauth: boolean },
-): string | undefined {
-  if (!isDirectAnthropicModel(model)) {
-    return undefined;
-  }
-  return params.oauth
-    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
-    : betaFeatures.join(",");
-}
-
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
@@ -111,42 +99,14 @@ function readAnthropicSseChunk(
     return reader.read();
   }
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      reject(createAbortError(signal));
-    };
-
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-
-    signal.addEventListener("abort", onAbort, { once: true });
-    reader.read().then(
-      (result) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve(result);
-      },
-      (error: unknown) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      reader.read().catch((error: unknown) => {
+        throw toErrorObject(error, "Non-Error rejection");
+      }),
+    signal,
+    createAbortError,
+  );
 }
 
 function parseAnthropicSseEventData(data: string): Record<string, unknown> {
@@ -289,7 +249,11 @@ function createAnthropicTransportClient(params: {
     if (needsInterleavedBeta) {
       betaFeatures.push("interleaved-thinking-2025-05-14");
     }
-    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: isOAuthToken });
+    const betaHeader = isDirectAnthropicModel(model)
+      ? isOAuthToken
+        ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+        : betaFeatures.join(",")
+      : undefined;
     if (isOAuthToken) {
       const identity = buildAnthropicClaudeCodeIdentity(betaHeader, model.headers, optionHeaders);
       defaultHeaders = identity.headers;

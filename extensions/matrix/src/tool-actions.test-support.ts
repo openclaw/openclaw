@@ -34,7 +34,6 @@ vi.mock("./matrix/actions/messages.js", () => ({
   editMatrixMessage: mocks.editMatrixMessage,
   readMatrixMessage: mocks.readMatrixMessage,
   readMatrixMessages: mocks.readMatrixMessages,
-  sendMatrixMessage: mocks.sendMatrixMessage,
 }));
 vi.mock("./matrix/actions/room.js", () => ({
   getMatrixMemberInfo: mocks.getMatrixMemberInfo,
@@ -58,6 +57,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 vi.mock("./matrix/send.js", () => {
   return {
     reactMatrixMessage: mocks.reactMatrixMessage,
+    sendMessageMatrix: mocks.sendMatrixMessage,
   };
 });
 

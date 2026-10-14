@@ -1017,7 +1017,7 @@ packages/ai/src/providers/anthropic.ts	2
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
-packages/ai/src/providers/mistral.ts	2
+packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	17
 packages/ai/src/providers/openai-completions-tool-calls.ts	1
