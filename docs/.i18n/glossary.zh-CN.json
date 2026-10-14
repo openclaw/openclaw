@@ -732,6 +732,10 @@
     "target": "Neon AI Gateway"
   },
   {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
+  },
+  {
     "source": "Mistral",
     "target": "Mistral"
   },
