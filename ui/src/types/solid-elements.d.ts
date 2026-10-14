@@ -48,6 +48,20 @@ declare module "@solidjs/web" {
       "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
+      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+        "prop:onSelect"?: (
+          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+        ) => void;
+      };
+      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
+        "prop:initialPackageName"?: string;
+        "prop:pageMode"?: boolean;
+        "prop:onClose"?: () => void;
+        "prop:onAdded"?: () => void;
+        "prop:onSelectEntry"?: (
+          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+        ) => void;
+      };
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
         "prop:request"?: NodePermissionRequest | null;
