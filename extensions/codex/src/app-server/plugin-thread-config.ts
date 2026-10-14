@@ -34,6 +34,7 @@ import {
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 export type PluginAppPolicyContextEntry = {
   source?: "plugin";
@@ -166,12 +167,28 @@ export async function buildCodexPluginThreadConfig(
     if (cached) {
       return cached;
     }
-    const pending = threadRequest(method, requestParams).catch((error: unknown) => {
-      if (pluginDetailReads.get(key) === pending) {
-        pluginDetailReads.delete(key);
-      }
-      throw error;
-    });
+    let retried = false;
+    const pending = threadRequest(method, requestParams)
+      .catch((error: unknown) => {
+        if (!isTransientCodexPluginReadError(error)) {
+          throw error;
+        }
+        retried = true;
+        // The existing request owner keeps this read inside the same deadline.
+        return threadRequest(method, requestParams);
+      })
+      .catch((error: unknown) => {
+        // Keep definite RPC failures and an exhausted retry for this build so
+        // app refreshes cannot amplify them. Activation and later builds reset it.
+        if (
+          !retried &&
+          !(error instanceof CodexAppServerRpcError) &&
+          pluginDetailReads.get(key) === pending
+        ) {
+          pluginDetailReads.delete(key);
+        }
+        throw error;
+      });
     pluginDetailReads.set(key, pending);
     return pending;
   };
@@ -436,6 +453,19 @@ export async function buildCodexPluginThreadConfig(
     inventory,
     diagnostics,
   };
+}
+
+function isTransientCodexPluginReadError(error: unknown): boolean {
+  // Native remote_plugin_catalog_error_to_jsonrpc uses INTERNAL_ERROR for auth
+  // failures too. Only its explicit transient HTTP status form permits a reread.
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.method === "plugin/read" &&
+    error.code === -32603 &&
+    /^read remote plugin details: remote plugin catalog request to \S+ failed with status (?:408|500|502|503|504)(?:\s|:)/u.test(
+      error.message,
+    )
+  );
 }
 
 /** Deep-merges optional Codex thread config patches, returning undefined when empty. */

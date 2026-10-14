@@ -115,6 +115,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   const deadlineMs = performance.now() + timeoutMs;
   let requestTimedOut = false;
   const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
+    signal.throwIfAborted();
     const remainingTimeoutMs = deadlineMs - performance.now();
     if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
