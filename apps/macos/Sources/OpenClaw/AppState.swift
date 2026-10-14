@@ -500,7 +500,8 @@ final class AppState {
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
             ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
-        let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
+        let resolvedConnection = ConnectionModeResolver.resolve(root: configRoot)
+        let resolvedConnectionMode = resolvedConnection.mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
         self.hostsLocalGatewayWithRemotePrimary = AppDefaults.standard
@@ -544,6 +545,9 @@ final class AppState {
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
+        if resolvedConnection == EffectiveConnectionMode(mode: .remote, source: .configRemoteURL) {
+            self.dirtyGatewayConfigFields.insert(.mode)
+        }
         if !self.isPreview, !AppProfile.current.isActive {
             LaunchAgentManager.shared.loadStatus { [weak self] current in
                 self?.hydrateLaunchAtLogin(current)
@@ -564,6 +568,9 @@ final class AppState {
             self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
+        if self.dirtyGatewayConfigFields.contains(.mode) {
+            self.syncGatewayConfigIfNeeded()
+        }
         if !self.isPreview {
             self.startConfigWatcher()
         }
@@ -876,6 +883,9 @@ extension AppState {
         if let nextMode, nextMode != self.connectionMode {
             self.connectionMode = nextMode
         }
+        if desiredMode == nil, hasRemoteUrl, self.connectionMode == .remote {
+            self.dirtyGatewayConfigFields.insert(.mode)
+        }
     }
 
     func applyConfigOverrides(_ root: [String: Any]) {
@@ -1097,9 +1107,12 @@ extension AppState {
         var removesGatewayMode = false
 
         let desiredMode = draft.connectionMode == .unconfigured ? nil : draft.connectionMode.rawValue
+        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let repairsRemoteMode = draft.connectionMode == .remote &&
+            ConnectionModeResolver.resolve(root: currentRoot).mode == .remote &&
+            currentMode != ConnectionMode.remote.rawValue
 
-        if draft.dirtyFields.contains(.mode) {
-            let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.dirtyFields.contains(.mode) || repairsRemoteMode {
             if let desiredMode {
                 if currentMode != desiredMode {
                     gateway["mode"] = desiredMode
@@ -1113,7 +1126,17 @@ extension AppState {
 
         var remote = gateway["remote"] as? [String: Any] ?? [:]
         var remoteChanged = false
-        if draft.dirtyFields.contains(where: { $0.remoteKey != nil }) {
+        var remoteDirtyFields = draft.dirtyFields
+        if repairsRemoteMode, GatewayRemoteConfig.resolveUrlString(root: currentRoot) == nil {
+            remoteDirtyFields.formUnion([
+                .remoteTransport,
+                .remoteUrl,
+                .remoteTarget,
+                .remoteIdentity,
+                .remoteToken,
+            ])
+        }
+        if remoteDirtyFields.contains(where: { $0.remoteKey != nil }) {
             let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
             let updated = Self.updatedRemoteGatewayConfig(
                 current: remote,
@@ -1124,7 +1147,7 @@ extension AppState {
                     remoteTarget: draft.remoteTarget,
                     remoteIdentity: draft.remoteIdentity,
                     remoteToken: draft.remoteToken,
-                    dirtyFields: draft.dirtyFields))
+                    dirtyFields: remoteDirtyFields))
             remote = updated.remote
             remoteChanged = updated.changed
         }
@@ -1350,8 +1373,25 @@ extension AppState {
     }
 
     @discardableResult
+    func prepareGatewayConfigForChromeExtensionSetup() throws -> Bool {
+        self.gatewayConfigSyncTask?.cancel()
+        guard self.performGatewayConfigSyncNow() else {
+            let message = self.gatewayConfigConflict?.message ??
+                self.gatewayConfigSyncFailure ??
+                String(localized: "Could not save Gateway settings. Check your connection settings and try again.")
+            throw ChromeExtensionSetup.SetupError.gatewayConfigSyncFailed(message)
+        }
+        return true
+    }
+
+    @discardableResult
     func syncGatewayConfigNow() -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        return self.performGatewayConfigSyncNow()
+    }
+
+    private func performGatewayConfigSyncNow() -> Bool {
+        guard !self.isInitializing else { return true }
         self.setGatewayConfigSyncState(.pending)
 
         let currentRoot = OpenClawConfigFile.loadDict()
@@ -1525,6 +1565,9 @@ extension AppState {
 extension AppState {
     func _testEnableGatewayConfigSync() {
         self.gatewayConfigSyncEnabledForTesting = true
+        if !self.dirtyGatewayConfigFields.isEmpty {
+            self.syncGatewayConfigIfNeeded()
+        }
     }
 
     func _testAwaitGatewayConfigSync() async {

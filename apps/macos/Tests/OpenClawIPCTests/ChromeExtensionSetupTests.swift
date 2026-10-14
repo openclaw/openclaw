@@ -319,4 +319,77 @@ struct ChromeExtensionSetupTests {
             try ChromeExtensionSetup.readResult(Self.pending, action: .verify)
         }
     }
+
+    @Test func `Chrome setup publishes remote mode from startup remote URL before running action`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://remote.example:18789",
+                        "token": "remote-token",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            var observedModes: [String?] = []
+            let setup = ChromeExtensionSetup(state: state) { _ in
+                let gateway = OpenClawConfigFile.loadDict()["gateway"] as? [String: Any]
+                observedModes.append(gateway?["mode"] as? String)
+                return self.prepared
+            }
+            defer { setup.stop() }
+
+            let result = try await setup.run(action: .install) { true }
+            #expect(result == self.prepared)
+            #expect(observedModes == ["remote"])
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test func `Chrome setup surfaces visible recovery when remote mode publication cannot complete`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://remote.example:18789",
+                    ],
+                ],
+            ]))
+            var allowSave = false
+            let state = AppState(preview: true, gatewayConfigSaver: { root, allowGatewayModeRemoval in
+                guard allowSave else { return false }
+                return OpenClawConfigFile.saveDict(root, allowGatewayModeRemoval: allowGatewayModeRemoval)
+            })
+            var actionCalls = 0
+            let setup = ChromeExtensionSetup(state: state) { _ in
+                actionCalls += 1
+                return self.prepared
+            }
+            defer { setup.stop() }
+
+            await #expect(
+                throws: ChromeExtensionSetup.SetupError.gatewayConfigSyncFailed(
+                    "Could not save Gateway settings. Check your connection settings and try again."))
+            {
+                try await setup.run(action: .install) { true }
+            }
+            #expect(actionCalls == 0)
+            #expect(state.gatewayConfigSyncFailure != nil)
+
+            allowSave = true
+            let recovered = try await setup.run(action: .install) { true }
+            #expect(recovered == self.prepared)
+            #expect(actionCalls == 1)
+            #expect(state.gatewayConfigSyncFailure == nil)
+            let gateway = OpenClawConfigFile.loadDict()["gateway"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "remote")
+        }
+    }
 }
