@@ -44,9 +44,9 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
 | `mux`        | [Mux](https://mux.coder.com)                                                                           |
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
-| `pool`       | [Poolside Agent](https://acpx.sh/agents.html#pool)                                                     |
 | `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `pool`       | Pool (`pool acp`)                                                                                      |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
 | `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
