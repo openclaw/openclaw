@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as KillTreeModule from "../process/kill-tree.js";
 
 type ShellEnvModule = typeof import("./shell-env.js");
 
@@ -39,6 +40,7 @@ beforeEach(async () => {
 describe("async login-shell PATH preparation", () => {
   afterEach(() => {
     vi.doUnmock("node:child_process");
+    vi.doUnmock("../process/kill-tree.js");
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -179,6 +181,31 @@ describe("async login-shell PATH preparation", () => {
       expect(getShellPathFromLoginShell(options)).toBeNull();
       expect(exec).toHaveBeenCalledTimes(calls);
     }
+  });
+
+  it("settles a live shell at its deadline and releases the probe for retry", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const killProcessTree = vi.fn();
+    vi.doMock("../process/kill-tree.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof KillTreeModule>()),
+      killProcessTree,
+    }));
+    const probe = await holdProbe();
+    const options = { env: {}, timeoutMs: 10, platform: "linux" as const };
+    const settled = vi.fn();
+    const pending = prepareShellPathFromLoginShell(options).then(settled);
+    Object.defineProperty(probe.child, "pid", { value: 12345 });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(settled).toHaveBeenCalledWith(null);
+    expect(killProcessTree).toHaveBeenCalledWith(12345, { detached: true, force: true });
+    expect(probe.child.stdout?.destroyed).toBe(true);
+    expect(probe.child.stderr?.destroyed).toBe(true);
+    await pending;
+    const retry = prepareShellPathFromLoginShell(options);
+    expect(probe.exec).toHaveBeenCalledTimes(2);
+    probe.finish(null);
+    await expect(retry).resolves.toBe("/shell/bin");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps the deadline through descendant-held output pipes after shell exit", async () => {

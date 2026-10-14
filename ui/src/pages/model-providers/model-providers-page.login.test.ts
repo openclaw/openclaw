@@ -165,6 +165,51 @@ function providerChoices(page: Pick<ParentNode, "querySelectorAll">) {
 }
 
 describe("Models provider login", () => {
+  it("offers setup-only sign-in through AI Setup, not Provider Access", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, answer } = loginHarness({
+      capabilities: [
+        {
+          provider: "meta",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            {
+              id: "meta/muse-code",
+              brandId: "meta",
+              label: "Muse Code",
+              kind: "device-code",
+              featured: true,
+              requiresSetup: true,
+            },
+          ],
+        },
+      ],
+    });
+    const page = appendPage(context);
+    await openPicker(page);
+    await selectProvider(page, "meta");
+    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
+    page.login.reset();
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+    await page.updateComplete;
+    await selectProvider(page, "meta");
+    await startSelectedLogin(page, "meta/muse-code");
+    expect(request).toHaveBeenCalledWith(
+      "models.authLogin",
+      expect.objectContaining({ authChoice: "meta/muse-code", agentId: "writer" }),
+      { timeoutMs: null },
+    );
+    expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
+    answer.resolve({
+      done: true,
+      status: "done",
+      modelActivation: { modelRef: "meta/muse-spark-1.3" },
+    });
+    await submitCredential(page);
+  });
+
   it.each([
     { kind: "oauth", cancel: false, submit: false },
     { kind: "oauth", cancel: false, submit: true },

@@ -28,6 +28,8 @@ export function setupSidebarTest() {
       // Fake clocks must leave this fixture's frame scheduler in place.
       vi.setConfig({
         fakeTimers: {
+          // jsdom can retire its native frame timer after the fake clock is installed.
+          shouldClearNativeTimers: true,
           toFake: [
             "setTimeout",
             "clearTimeout",

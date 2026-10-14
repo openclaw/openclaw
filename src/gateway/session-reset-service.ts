@@ -860,7 +860,7 @@ async function performPreparedGatewaySessionReset({
               : params.clearExecBinding
                 ? undefined
                 : currentEntry?.execCwd,
-            ...(params.armSessionDiffBaselineCapture && !nextExecNode
+            ...(params.armSessionDiffBaselineCapture && !nextExecNode && !currentEntry?.deviceFolder
               ? {
                   sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
                 }
@@ -898,6 +898,8 @@ async function performPreparedGatewaySessionReset({
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             repositoryWorkspaceId:
               preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
+            // Placement can be retired by reset; the logical chat must still stay on its device.
+            deviceFolder: currentEntry?.deviceFolder ? { ...currentEntry.deviceFolder } : undefined,
             ...creationStamp,
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,

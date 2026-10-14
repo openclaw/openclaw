@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { SqlConnection } from "../infra/sql-connection.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import {
   createUpdateRun,
@@ -103,7 +103,7 @@ function createDeferredState() {
   return { db: openOpenClawStateDatabase().db, runId: run.runId };
 }
 
-function expectVersion(db: DatabaseSync, version: number) {
+function expectVersion(db: SqlConnection, version: number) {
   // Read the held SQLite connection directly: opening a new runner would hide a broken timer.
   expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
   expect(

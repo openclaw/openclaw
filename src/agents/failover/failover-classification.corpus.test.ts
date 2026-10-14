@@ -32,6 +32,9 @@ function classifyReplyRequest(signal: FailoverSignal) {
 
 // The shared corpus also feeds retry tests; select only distinct classification paths here.
 const representativeCorpusIds = new Set([
+  "patterns-context-tgi-input",
+  "patterns-context-tgi-total",
+  "structured-tgi-output-only",
   "patterns-context-lmstudio-loaded-length-400",
   "billing-together-payment-required",
   "billing-proxy-subscription",

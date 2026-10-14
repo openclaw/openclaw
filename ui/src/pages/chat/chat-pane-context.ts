@@ -124,8 +124,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     outboxState?: string;
   };
 
-  constructor() {
-    super();
+  constructor(element: HTMLElement, context: ApplicationContext) {
+    super(element, context);
     void new SubscriptionsController(this)
       .watchStore(() => this.context?.navigation)
       .effect(
@@ -150,6 +150,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   ) {
     return resolvePlacementComposer({
       gatewaySnapshot: this.context.gateway.snapshot,
+      requiredProfile: this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
       movingKey: this.headerPlacementMovingKey,
       reclaimingKey: this.headerPlacementReclaimingKey,
       restartingKey: this.headerPlacementRestartingKey,
@@ -205,24 +206,30 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       client: scope.client,
       gatewaySnapshot: scope.context.gateway.snapshot,
       row,
+      fallbackAgentId: resolveChatAgentId(scope.state),
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
       reconcileMutation: (agentId?: string | null) => scope.sessions.reconcileMutation(agentId),
       requestUpdate: () => this.requestUpdate(),
     };
-    const runtime = await import("./chat-pane-placement.runtime.ts");
     if (mode === "reclaim") {
-      await runtime.reclaimChatPanePlacement({
+      const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+      await reclaimChatPanePlacement({
         ...params,
         reclaimingKey: pendingKey,
         placementStartup,
         onReclaimingChange: onPendingChange,
       });
     } else {
-      await runtime.changeChatPanePlacement({
+      const { changeSessionPlacement } =
+        await import("../../components/session-placement.runtime.ts");
+      await changeSessionPlacement({
         ...params,
         mode,
         pendingKey,
+        currentGatewaySnapshot: () => scope.context.gateway.snapshot,
+        requiredProfile: () =>
+          scope.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
         currentRow: () => (this.state ? selectedChatSessionRow(this.state) : undefined),
         onPendingChange,
       });

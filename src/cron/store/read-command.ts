@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type {
   OpenClawStateReadCommand,
@@ -32,7 +32,7 @@ export function isCronStateReadCommand(
 
 /** Runs Cron queries inside the shared reader's admitted native frame. */
 export function readCronStateCommandInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: CronStateReadCommand,
 ): Extract<OpenClawStateReadResult, { type: `cron.${string}` }> {
   switch (command.type) {

@@ -502,12 +502,8 @@ async function runQueuedUsageCostRefresh(
               }
             }
           }
-          const rebuildRows = fullRefreshRequested
-            ? [...state.pendingRebuildRows.values()]
-            : sessionFiles.flatMap((file) => {
-                const row = state.pendingRebuildRows.get(file);
-                return row ? [row] : [];
-              });
+          // Caller selectors can differ from canonical keys; the worker matches repair facts.
+          const rebuildRows = [...state.pendingRebuildRows.values()];
           if (fullRefreshRequested) {
             state.fullRefreshRequested = false;
           }
@@ -523,10 +519,10 @@ async function runQueuedUsageCostRefresh(
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
                 remainingRollupIds.add(rollupId);
-                state.pendingSessionFiles.set(
-                  state.pendingRebuildRows.has(rollupId) ? rollupId : sessionFile,
-                  null,
-                );
+                state.pendingSessionFiles.set(sessionFile, null);
+                if (state.pendingRebuildRows.has(rollupId)) {
+                  state.pendingSessionFiles.set(rollupId, null);
+                }
               }
             },
             rebuildRows,
@@ -551,7 +547,11 @@ async function runQueuedUsageCostRefresh(
             continue;
           }
           for (const row of rebuildRows) {
-            if (!remainingRollupIds.has(row.key) && state.pendingRebuildRows.get(row.key) === row) {
+            if (
+              (fullRefreshRequested || sessionFiles.includes(row.key)) &&
+              !remainingRollupIds.has(row.key) &&
+              state.pendingRebuildRows.get(row.key) === row
+            ) {
               state.pendingRebuildRows.delete(row.key);
             }
           }

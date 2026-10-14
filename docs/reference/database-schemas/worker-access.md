@@ -259,6 +259,15 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Durable actor residency retains narrow navigation and exact byte accounting,
+not settled append bodies. Full bodies stay in SQLite and committed append
+receipts; retries read canonical storage when their payload is no longer in the
+current transaction. Actor append slow-hold warnings include `context.payloadBytes`,
+the UTF-8 size of the primary prepared event or message payload (summed message
+bodies for turn appends). This count excludes optional initialization headers.
+The reported `phases.sqlMs` includes synchronous JavaScript work inside the
+transaction; it is not a sum of SQLite statement timings.
+
 Cold input preparation uses the turn planner instead of fetching a full actor
 replica first. The planner carries its recovery expectation into the input
 command; prepared, explicit, and warm replica expectations remain fixed across
@@ -444,6 +453,10 @@ worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
+Each operation captures its logical session-store selectors and physical database
+owners before borrowing custody. Discovery, archive reads, and replay reuse those
+bindings, so a warm worker cannot substitute an older registry lookup. Existing
+custody and read-only ownership validation still guard every database read.
 Usage reports capture cache metadata, bodies, and selected monthly partitions in
 one synchronous engine read snapshot, then close it before asynchronous transcript
 discovery, replay, or pricing. Concurrent refreshes cannot change those captured
@@ -548,7 +561,7 @@ replacement, and content edits continue to invalidate retained context.
 
 Exact metadata rewrites that preserve transcript admission and navigation carry
 their canonical replacement rows in the existing committed authority receipt.
-The resident actor updates its payloads and mutation timestamp in that same
+The resident actor updates its byte accounting and mutation timestamp in that same
 transaction; the main-thread replica installs those rows without another worker
 read. This includes an identical model-prompt capture after hydration. Rollback
 leaves stored messages unchanged and retains the database owner's failed-write
@@ -1222,6 +1235,15 @@ absence. Memory Core sends vector/schema, metadata, lineage-origin,
 standing-intent, and Forget commands through that owner. Its published host
 reader is physically read-only and retires with the agent lifecycle.
 Logbook and Workboard already keep native SQL inside their worker backends.
+
+The V2 store exposes `terminalSignal`, backed by the execution owner's terminal
+notification. Worker crash, unexpected
+exit, fatal native failure, or admission revocation aborts it with the failure
+reason after accepted work settles, including unknown write outcomes. A confirmed
+commit remains acknowledged; consumers must not replay a write because the signal
+aborted. Normal idle retirement and explicit store close do not abort it. Memory
+uses this signal in its database-open fact, so its existing manager registry
+re-admits the next request instead of reusing a terminal worker.
 
 Released raw SQLite callbacks retain their named native compatibility adapters.
 Deprecated approval callbacks instead run at worker precommit, with a shared
@@ -2701,19 +2723,12 @@ live receipt boundary. These assertions execute no main-thread SQLite. Recovery
 carries its original source receipt into combined operations; a mismatch refuses
 composition before dispatch.
 
-Reef retains synchronous `listCurrent` reads only for the released
-`ChannelPlugin` config, account-description, and security-policy adapters;
-asynchronous directory listings use the worker. Replacing those released
-synchronous policy surfaces belongs to the next approved SDK migration. Hosts
-without `createOperation` retain their existing native adapters, selected before
-awaiting. Worker failures never select a fallback.
-
-Older hosts without the additive direct-DM authority callback retain their
-historical host behavior and do not gain the current host's checks after their
-own awaits. See the
-[channel authority contract](/plugins/sdk-channel-plugins) for current-host
-checks. These changes preserve schemas, stored formats, retention, permissions,
-and update behavior.
+Reef's config, account-description, security-policy, and directory adapters use
+the asynchronous worker APIs. Bundled plugins release with the host and require
+its current capabilities; Reef has no older-host native-store or transport
+fallback. See the [channel authority contract](/plugins/sdk-channel-plugins)
+for the host's checks before dispatch. Schemas, stored formats, retention,
+permissions, and update behavior are unchanged.
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
 writer. The worker plans retained transcript rows before its synchronous write
@@ -4534,12 +4549,18 @@ fallback preparation; it retains current environment and execution-policy checks
 Reads retain the original physical store; admission and initial routing also
 retain a revocable placement observation
 until their caller consumes the facts.
-If a placement publication overlaps read preparation, the owner joins its
-settlement and reads fresh facts from the same physical store. A preceding turn
-finishing or setup advancing cannot reject the next turn merely by superseding
-that read. Only read preparation repeats; consumer effects and writes never do.
-Unknown publication outcomes, cancellation, and store replacement still refuse
-the read, and an observation already handed to its consumer remains revocable.
+Read preparation fails closed. If a same-session placement publication other than
+tool authority commits while the projection read runs, or is still pending when
+it returns, the owner releases the observation and rejects with
+`Session <id> placement authority changed`; it neither waits for settlement nor
+repeats the read. A preceding turn finishing or setup advancing at that moment
+can therefore reject the next turn, which fails visibly and is not retried
+automatically. This is an accepted best-effort tradeoff: the window is a single
+worker read, and admission, file reads, and sandbox preparation recheck the same
+observation while consuming it, so repeating only the read would not remove the
+race. Unknown publication outcomes, cancellation, and store replacement also
+refuse the read, and an observation already handed to its consumer remains
+revocable.
 Chat admission reruns its session, reservation, and caller checks after preparation;
 reply admission rechecks its session and lifecycle after the worker read. Runtime
 selection is a prepared default that tolerates setup and preceding-turn publications;
@@ -6198,6 +6219,16 @@ unchanged. Their synchronous reader still reaches the native auth JSON primitive
 so those static T1 sites remain SDK compatibility debt. The Codex final guard no
 longer uses that native reader. Schemas, stored bytes, retention, and update behavior
 are unchanged.
+
+Bundled CLI-backed and system-agent inference await the existing auth-profile
+readers. Logout uses the existing auth writer for deletion and compensation; its
+transaction compares the selected credential once before removal. If catalog
+cleanup fails, compensation restores each exact prior cell, including an absent
+credential row, only while the cell still matches the removal's committed value.
+Deletion and restoration publish through the same credential authority owner, so
+subsequent use sees revocation and uncertain outcomes remain denied. Selection
+cleanup consumes the removal result without rereading credentials; reconnecting
+the same profile ID during cleanup may require selecting that account again.
 
 Runtime auth-source detection uses the existing agent and shared auth readers.
 It captures both possible shared-store targets before yielding and retains the

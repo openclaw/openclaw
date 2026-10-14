@@ -332,6 +332,7 @@ export const TalkSessionSteerParamsSchema = closedObject({
 
 export const TalkSessionCloseParamsSchema = closedObject({
   sessionId: NonEmptyString,
+  disposition: Type.Optional(Type.Union([Type.Literal("abort"), Type.Literal("detach")])),
   discard: Type.Optional(Type.Boolean()),
 });
 

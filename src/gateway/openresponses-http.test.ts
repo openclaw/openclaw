@@ -11,6 +11,7 @@ import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
@@ -24,6 +25,7 @@ import {
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import * as httpCommon from "./http-common.js";
 import {
   registerOpenResponsesHttpUploadTests,
   registerOpenResponsesHttpMediaInputTests,
@@ -38,6 +40,7 @@ import {
   findSseEvent,
   parseSseData,
 } from "./http-stream.test-support.js";
+import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -1615,5 +1618,70 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
     },
   );
+
+  it("releases stream observation when its client disconnects during session authorization", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const authorized = createDeferred();
+    const finishAuthorization = createDeferred();
+    const disconnected = createDeferred();
+    const subscriptions = new Set<() => void>();
+    const authorizeSession = httpUtils.authorizeOpenAiCompatibleHttpSession;
+    const watchDisconnect = httpCommon.watchClientDisconnect;
+    const observeRun = agentEvents.onAgentEventForRun;
+    const authorizationSpy = vi
+      .spyOn(httpUtils, "authorizeOpenAiCompatibleHttpSession")
+      .mockImplementationOnce(async (params) => {
+        const result = await authorizeSession(params);
+        authorized.resolve();
+        await finishAuthorization.promise;
+        return result;
+      });
+    const disconnectSpy = vi
+      .spyOn(httpCommon, "watchClientDisconnect")
+      .mockImplementationOnce((req, res, controller, onDisconnect) => {
+        res.once("close", () => disconnected.resolve());
+        return watchDisconnect(req, res, controller, onDisconnect);
+      });
+    const observationSpy = vi
+      .spyOn(agentEvents, "onAgentEventForRun")
+      .mockImplementation((runId, listener) => {
+        const stop = observeRun(runId, listener);
+        const release = () => {
+          subscriptions.delete(release);
+          stop();
+        };
+        subscriptions.add(release);
+        return release;
+      });
+    agentCommandMock.mockClear();
+    const clientReq = http.request({
+      hostname: "127.0.0.1",
+      port: enabledPort,
+      path: "/v1/responses",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    clientReq.on("error", () => {});
+    clientReq.end(JSON.stringify({ stream: true, model: "openclaw", input: "hi" }));
+    try {
+      await authorized.promise;
+      clientReq.destroy();
+      await disconnected.promise;
+      finishAuthorization.resolve();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(subscriptions.size).toBe(0);
+    } finally {
+      clientReq.destroy();
+      finishAuthorization.resolve();
+      for (const release of subscriptions) {
+        release();
+      }
+      observationSpy.mockRestore();
+      disconnectSpy.mockRestore();
+      authorizationSpy.mockRestore();
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

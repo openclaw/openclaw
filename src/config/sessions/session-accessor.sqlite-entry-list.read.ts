@@ -3,6 +3,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -204,7 +205,7 @@ export function listSqliteSessionEntriesFromDatabase(
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
-    const captured = withSqlitePostCommitPublications(database.db, () =>
+    const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
       runSqliteDeferredTransactionSync(database.db, () => {
         const snapshot = readSessionEntryCache(database, {
           cache: false,

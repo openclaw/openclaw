@@ -140,16 +140,16 @@ function createGitHubReadHandler<T>(
     if (!resolved) {
       return;
     }
+    const startedAt = performance.now();
+    let preparedAt: number | undefined;
     try {
       const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
         options,
         resolved.agentId,
       );
       assertSelected();
-      const result =
-        params.refresh === true
-          ? await load(target, identity, undefined, true)
-          : await load(target, identity);
+      preparedAt = performance.now();
+      const result = await load(target, identity, undefined, params.refresh === true);
       assertSelected();
       respond(true, result, undefined);
     } catch (error) {
@@ -160,6 +160,14 @@ function createGitHubReadHandler<T>(
             ? { message: error.message, retryable: error.reason !== "unavailable" }
             : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    } finally {
+      const finishedAt = performance.now();
+      if (method === "controlUi.githubPreview" && finishedAt - startedAt >= 500) {
+        context.logGateway?.info("Slow GitHub preview handler", {
+          identityMs: Math.round((preparedAt ?? finishedAt) - startedAt),
+          loadMs: preparedAt === undefined ? 0 : Math.round(finishedAt - preparedAt),
+        });
+      }
     }
   };
 }

@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -16,6 +17,7 @@ import {
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import {
+  readSqliteWorkerMonotonicNs,
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
@@ -379,7 +381,10 @@ function createOperationAdmission(
     }
     const decision = new Int32Array(message.decision);
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (
+        typeof message.deadlineNs === "bigint" &&
+        readSqliteWorkerMonotonicNs() >= message.deadlineNs
+      ) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -657,7 +662,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
 
 /** Record facts only after the real transaction commits, before native settlement is announced. */
 export function deferSqliteWorkerCommitReceipt(
-  database: DatabaseSync,
+  database: DatabaseSync | PostgresSqlConnection,
   facts: unknown,
   delivery: "commit" | "settlement" = "commit",
 ): void {
@@ -669,9 +674,11 @@ export function deferSqliteWorkerCommitReceipt(
 }
 
 /** A typed fenced write cannot commit without its destination owner's settlement evidence. */
-export function assertSqliteWorkerCommitReceiptPending(database: DatabaseSync): void {
+export function assertSqliteWorkerCommitReceiptPending(
+  database: DatabaseSync | PostgresSqlConnection,
+): void {
   const scope = currentAdmission.getStore();
-  if (!scope?.active || !scope.owner.pendingReceipts?.get(database)) {
+  if (!scope?.active || !scope.owner.pendingReceipts?.get(sqlPublicationAnchor(database))) {
     throw new SqliteWorkerError(
       "SQLite source fence requires a destination commit receipt",
       "closed",

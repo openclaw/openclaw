@@ -76,6 +76,13 @@ internal maintenance against subsequent revocation; it is never retained across
 asynchronous work or a lock wait. Schemas, stored formats, retention, permissions,
 and update behavior are unchanged.
 
+Update-history workers bound commit-admission waits to one second. On timeout,
+the transaction rolls back before the same worker command retries, preserving
+FIFO ordering and rereading the current rows. Fresh admission waits outside
+`BEGIN IMMEDIATE`, leaving the serving Gateway's writer free while the updater
+host is busy. Authority refusals and uncertain rollback outcomes are not retried;
+required update and recovery records retain their existing durability.
+
 Database-fact readers do not contact the host inside a transaction. Missing writer
 registrations or unpublished facts remain unknown until the transaction closes;
 schema readers retain their conservative snapshot validation. The next read

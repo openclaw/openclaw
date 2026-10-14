@@ -80,6 +80,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
     permissionMode: entry.permissionMode,
     execNode: entry.execNode,
     sessionRoot: entry.sessionRoot,

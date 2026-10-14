@@ -770,7 +770,7 @@ describe("runIsolatedCompletion", () => {
     async ({ requestedProfile, selectedProfile }) => {
       mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
       mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
-      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(selectedProfile);
       mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
 
       await expect(

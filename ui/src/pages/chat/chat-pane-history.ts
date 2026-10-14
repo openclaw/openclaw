@@ -79,6 +79,7 @@ import { maybeResetToolStream } from "./stream-reconciliation.ts";
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
+  private historyObserverBootstrap = false;
   // Staged prefetch: after a consumed older page, the next page is fetched in
   // the background and parked here, so the following boundary crossing
   // prepends without a visible round trip. One slot per pane; the claim is
@@ -204,6 +205,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.historyObserver?.disconnect();
     this.historyObserver = null;
     this.historyObserverSentinel = null;
+    this.historyObserverBootstrap = false;
   }
 
   protected syncHistoryObserver(): void {
@@ -221,10 +223,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       !this.presented ||
       !this.visuallyPresented ||
       !this.state?.connected ||
-      !this.historyObserverArmed ||
       !this.transcript.isPositionSettled ||
       this.transcript.isProgrammaticScroll ||
       this.loadingOlder ||
+      this.historyAutoLoadBlocked ||
       !this.hasOlderMessages()
     ) {
       this.clearHistoryObserver();
@@ -237,14 +239,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     this.transcriptScrollTop ??= root.scrollTop;
-    if (this.historyAutoLoadBlocked) {
-      this.clearHistoryObserver();
-      return;
-    }
+    const bootstrap = !this.historyObserverArmed;
     if (
       this.historyObserver &&
       this.historyObserver.root === root &&
-      this.historyObserverSentinel === sentinel
+      this.historyObserverSentinel === sentinel &&
+      this.historyObserverBootstrap === bootstrap
     ) {
       return;
     }
@@ -264,6 +264,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           return;
         }
         this.clearHistoryObserver();
+        // Fill a visible short tail without a gesture, but never page a full
+        // transcript merely because its boundary is within the prefetch margin.
+        // Measure only at the observed boundary, after placement has settled.
+        if (bootstrap && (root.clientHeight === 0 || root.scrollHeight > root.clientHeight)) {
+          return;
+        }
         this.historyObserverArmed = false;
         void this.loadOlderMessages();
       },
@@ -273,6 +279,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       { root, rootMargin: `${CHAT_HISTORY_PREFETCH_EDGE_PX}px 0px 0px`, threshold: 0 },
     );
     this.historyObserverSentinel = sentinel;
+    this.historyObserverBootstrap = bootstrap;
     this.historyObserver.observe(sentinel);
   }
 
@@ -747,7 +754,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         bubbles: true,
         composed: true,
         detail: {
-          owner: this,
+          owner: this.element,
           onSlashCommand,
         },
       }),

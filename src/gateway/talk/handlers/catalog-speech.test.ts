@@ -14,7 +14,8 @@ vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
   listSpeechProviders: () => registry.providers,
   canonicalizeSpeechProviderId: (id: string | undefined) => id,
-  getSpeechProvider: () => undefined,
+  getSpeechProvider: (id: string | undefined) =>
+    registry.providers.find((provider) => provider.id === id),
 }));
 
 vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
@@ -30,49 +31,57 @@ beforeEach(() => {
   registry.realtime = [];
 });
 
-it("checks the listed speech provider with its resolved config and async availability", async () => {
-  const cfg: OpenClawConfig = {
-    plugins: { enabled: false },
-    tts: { providers: { sample: { apiKey: "synthetic-speech-key" } } },
-  };
-  let available = true;
-  registry.providers = [
-    {
-      id: "sample",
-      label: "Sample speech",
-      resolveConfig: ({ rawConfig }) => ({
-        resolvedKey: asOptionalRecord(asOptionalRecord(rawConfig.providers)?.sample)?.apiKey,
-      }),
-      isConfigured: () => false,
-      isConfiguredAsync: async ({ providerConfig }) =>
-        available && providerConfig.resolvedKey === "synthetic-speech-key",
-      synthesize: async () => {
-        throw new Error("catalog must not synthesize");
-      },
-    },
-  ];
-
-  const read = () =>
-    callGatewayHandler(
-      talkHandlers,
-      "talk.catalog",
-      {},
+it.each([false, true])(
+  "checks speech readiness with the prepared Talk override=%s",
+  async (talkOverride) => {
+    const expectedKey = talkOverride ? "synthetic-talk-key" : "synthetic-speech-key";
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      tts: { providers: { sample: { apiKey: "synthetic-speech-key" } } },
+      ...(talkOverride
+        ? { talk: { provider: "sample", providers: { sample: { apiKey: "synthetic-talk-key" } } } }
+        : {}),
+    };
+    let available = true;
+    registry.providers = [
       {
-        context: { getRuntimeConfig: () => cfg },
+        id: "sample",
+        label: "Sample speech",
+        resolveConfig: ({ rawConfig }) => ({
+          resolvedKey: asOptionalRecord(asOptionalRecord(rawConfig.providers)?.sample)?.apiKey,
+        }),
+        isConfigured: () => false,
+        isConfiguredAsync: async ({ providerConfig }) =>
+          available && providerConfig.resolvedKey === expectedKey,
+        synthesize: async () => {
+          throw new Error("catalog must not synthesize");
+        },
       },
-    );
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ id: "sample", configured: true }] } },
-  });
-  available = false;
-  const later = await read();
-  expect(later).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ id: "sample", configured: false }] } },
-  });
-  expect(JSON.stringify(later.response)).not.toContain("synthetic-speech-key");
-});
+    ];
+
+    const read = () =>
+      callGatewayHandler(
+        talkHandlers,
+        "talk.catalog",
+        {},
+        {
+          context: { getRuntimeConfig: () => cfg },
+        },
+      );
+    expect(await read()).toMatchObject({
+      ok: true,
+      response: { speech: { providers: [{ id: "sample", configured: true }] } },
+    });
+    available = false;
+    const later = await read();
+    expect(later).toMatchObject({
+      ok: true,
+      response: { speech: { providers: [{ id: "sample", configured: false }] } },
+    });
+    expect(JSON.stringify(later.response)).not.toContain("synthetic-speech-key");
+    expect(JSON.stringify(later.response)).not.toContain("synthetic-talk-key");
+  },
+);
 
 it("prepares the selected realtime catalog once per request and refreshes availability", async () => {
   const cfg: OpenClawConfig = {

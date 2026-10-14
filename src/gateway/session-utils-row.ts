@@ -438,6 +438,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       ? { sessionRoot: entry.sessionRoot }
       : {}),
     worktree: entry?.worktree,
+    deviceFolder: entry?.deviceFolder,
     repositoryWorkspaceId: entry?.repositoryWorkspaceId,
     ...(input.repository ? { repository: input.repository } : {}),
     execNode: entry?.execNode,

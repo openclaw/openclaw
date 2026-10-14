@@ -5,7 +5,7 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
@@ -214,6 +214,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
@@ -232,11 +234,12 @@ export class SetupInferenceCancelledError extends Error {
 }
 
 export function throwIfSetupInferenceCancelled(
-  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
 ): void {
   if (params.signal?.aborted || params.isCancelled?.()) {
     throw new SetupInferenceCancelledError();
   }
+  params.assertCurrent?.();
 }
 
 export async function waitForProviderAuth<T>(
@@ -260,7 +263,7 @@ export type ActivateSetupInferenceDeps = {
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   enablePluginInConfig?: typeof enablePluginInConfig;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;

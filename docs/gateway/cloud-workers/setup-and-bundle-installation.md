@@ -28,6 +28,38 @@ The example profile supports both OpenClaw and Codex. Keep setup focused on mach
 
 When an agent tool waits for a bounded in-process Gateway request, stalled-run recovery honors the active response deadline, including nested Crabbox creation calls. Completing, failing, canceling, or timing out the wait removes its allowance; a prior run's pending request cannot extend the current run's budget. A response timeout does not by itself cancel provisioning. Inspect the environment's state before retrying an uncertain creation request.
 
+### Protected setup secrets
+
+Use `settings.setupSecrets` to map environment names to protected shared-store
+SecretRefs. Profile setup, repository preparation, and post-create/start commands
+receive opaque sentinels. A job-scoped HTTPS proxy substitutes the value only for
+the store entry's exact allowed hosts, including Bearer headers and Basic
+credentials. The upstream proxy credential and CA private key stay on the Gateway.
+Public HTTPS package downloads remain available through the bridge.
+Plain HTTP downloads, including Ubuntu's default apt mirrors, go directly from
+the lease and never receive substituted secrets. The runner unsets inherited
+`HTTP_PROXY` and `http_proxy` values so they cannot redirect that traffic.
+
+This requires an exclusively owned coordinator Linux lease and Crabbox 0.77.0 or
+newer with its matching egress runtime helper. Missing support, unavailable proxy,
+unbound store entries, and unmapped repository requests fail visibly before
+repository code runs. There is no plaintext fallback. No-secret jobs keep their
+existing runner. HTTPS clients must honor the supplied proxy and CA variables;
+detached processes lose protected access when the lifecycle command finishes.
+
+The runner removes its temporary public CA bundle and revokes its grant on exit,
+failure, or cancellation. Snapshot capture also removes runner-owned temp files
+and Crabbox command staging. Setup secrets do not disable snapshots; values and
+sentinel bytes never enter snapshot compatibility keys. Keep credentials out of
+generated files and logs. See [setup jobs](/gateway/secrets/secret-store-and-egress#job-scoped-setup-grants)
+and [cloud environment secrets](/gateway/cloud-workers/environment-file).
+
+Updating retires `settings.setupEnv`. Run `openclaw doctor --fix` to migrate only
+existing protected store entries with destination bindings. Doctor reports missing,
+unbound, or conflicting entries for repair, without changing their values or
+inventing destinations. Unrepaired profiles cannot provision. Existing leases
+remain inspectable and releasable, but cannot capture a legacy plaintext image.
+
 ### Native Windows prerequisites
 
 For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
