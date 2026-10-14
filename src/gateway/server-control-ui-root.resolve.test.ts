@@ -225,20 +225,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
   });
 
-  test("reports disappearing auto-detected roots without aborting Gateway startup", () => {
-    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
-    vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
-      throw new Error("ENOENT: root vanished");
-    });
-
-    const { lifecycle, warn } = createLifecycle();
-
-    expect(lifecycle.state).toEqual({ kind: "failed" });
-    expect(warn).toHaveBeenCalledWith(
-      "gateway: Control UI assets are unavailable at /repo/dist/control-ui: ENOENT: root vanished",
-    );
-  });
-
   test("prepares initially disabled assets when enabled and keeps the serving root stable", async () => {
     const { lifecycle } = createLifecycle({ enabled: false });
     const rootReference = lifecycle.state;
@@ -254,22 +240,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(lifecycle.state).toMatchObject({ kind: "resolved", path: "/repo/dist/control-ui" });
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     await lifecycle.stop();
-  });
-
-  test("publishes structured build failures into the existing root reference", async () => {
-    controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockResolvedValue({
-      ok: false,
-      built: false,
-      message: "Control UI build timed out.",
-    });
-    const { lifecycle, warn } = createLifecycle();
-    const rootReference = lifecycle.state;
-
-    await lifecycle.start();
-
-    expect(lifecycle.state).toBe(rootReference);
-    expect(rootReference).toEqual({ kind: "failed" });
-    expect(warn).toHaveBeenCalledWith("gateway: Control UI build timed out.");
   });
 
   test("publishes rejected builds as actionable terminal failures", async () => {

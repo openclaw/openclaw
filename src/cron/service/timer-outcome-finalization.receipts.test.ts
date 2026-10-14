@@ -44,7 +44,6 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
     claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? "main",
     }),
   );
 }

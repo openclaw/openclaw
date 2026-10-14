@@ -1,6 +1,7 @@
 import {
   sqliteSessionIdWriteScope,
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseScopedWriteTokensForPath,
 } from "../../infra/sqlite-database-admission.js";
 import type { SessionRowChange } from "../../sessions/session-row-changes.js";
 import { readPreparedSessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache-publication-state.js";
@@ -9,11 +10,28 @@ import type { FileTarget, ReplicaCell } from "./session-actor-replica.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
-export function scopedWriteToken(target: FileTarget, sessionIds: readonly string[]) {
-  return readSqliteDatabaseScopedWriteTokenForPath(target.database.nativeLocation, [
+function writeScopes(target: FileTarget, sessionIds: readonly string[]) {
+  return [
     ...collectSessionEntryLookupKeys(target.sessionKey),
     ...sessionIds.map(sqliteSessionIdWriteScope),
-  ]);
+  ];
+}
+
+export function scopedWriteToken(target: FileTarget, sessionIds: readonly string[]) {
+  return readSqliteDatabaseScopedWriteTokenForPath(
+    target.database.nativeLocation,
+    writeScopes(target, sessionIds),
+  );
+}
+
+export function scopedWriteTokens(
+  database: FileTarget["database"],
+  entries: readonly { target: FileTarget; dependencySessionIds: readonly string[] }[],
+) {
+  return readSqliteDatabaseScopedWriteTokensForPath(
+    database.nativeLocation,
+    entries.map(({ target, dependencySessionIds }) => writeScopes(target, dependencySessionIds)),
+  );
 }
 
 export function readSessionActorParticipantPostimage(

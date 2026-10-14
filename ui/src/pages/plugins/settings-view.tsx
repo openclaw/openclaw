@@ -26,6 +26,7 @@ import { PluginInstallAction } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -194,22 +195,25 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     onIconError={() => props.onIconError(plugin().id)}
                     loading={props.iconLoading?.(plugin().id)}
                   />
-                  <a
-                    class="settings-row__text plugins-settings-row__link oc-settings-row-content"
-                    href={props.pluginHref(plugin().id)}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenPlugin(plugin().id);
-                    }}
-                  >
-                    <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                    <span class="settings-row__desc oc-settings-row-description">
-                      {plugin().description || t("pluginsPage.optionalCapability")}
-                    </span>
-                  </a>
+                  <div class="settings-row__text oc-settings-row-content">
+                    <a
+                      class="settings-row__text plugins-settings-row__link"
+                      href={props.pluginHref(plugin().id)}
+                      onClick={(event: MouseEvent) => {
+                        if (!shouldHandleNavigationClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onOpenPlugin(plugin().id);
+                      }}
+                    >
+                      <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
+                      <span class="settings-row__desc oc-settings-row-description">
+                        {plugin().description || t("pluginsPage.optionalCapability")}
+                      </span>
+                    </a>
+                    {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
+                  </div>
                   <div class="settings-row__control oc-settings-row-control">
                     {(() => {
                       const state = plugin().state;
@@ -415,6 +419,7 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
+      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }

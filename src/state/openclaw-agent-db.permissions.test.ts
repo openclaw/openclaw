@@ -124,7 +124,7 @@ describe("agent database permission repair", () => {
         startupJournal: false,
       });
       try {
-        return withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+        return withSqliteWorkerOperationAdmission(admission, () =>
           // This fixture runs both owners in one isolate; a port round trip would deadlock.
           withSqliteDatabaseAdmissionExchange(
             () => captureSqliteDatabaseAdmissions(),

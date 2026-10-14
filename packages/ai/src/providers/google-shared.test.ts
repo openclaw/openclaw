@@ -53,12 +53,18 @@ describe("buildGoogleSimpleThinking", () => {
     ["gemini-flash-latest", "MINIMAL"],
     ["gemini-pro-latest", "LOW"],
     ["gemini-3.7-flash", "LOW"],
+    ["gemini-3.8-flash", "LOW"],
   ])("uses the supported thinking floor for %s", (id, level) => {
     const target = { ...model, id };
-    expect(buildGoogleSimpleThinking(target, { reasoning: "minimal" })).toEqual({
+    const thinking = buildGoogleSimpleThinking(target, { reasoning: "minimal" });
+    expect(thinking).toEqual({
       enabled: true,
       level,
     });
+    expect(
+      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
+        ?.thinkingConfig,
+    ).toEqual({ includeThoughts: true, thinkingLevel: level });
     expect(
       buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
         ?.thinkingConfig,
@@ -546,32 +552,33 @@ describe("runGoogleGenerateContentLifecycle", () => {
 
 describe("buildGoogleGenerateContentParams", () => {
   it.each([
-    { provider: "google", api: "google-generative-ai", signature: undefined },
-    { provider: "google-vertex", api: "google-vertex", signature: undefined },
-    { provider: "google", api: "google-generative-ai", signature: "c2lnbmVk" },
-    { provider: "google-gemini-cli", api: "google-generative-ai", signature: undefined },
-  ] as const)(
-    "replays Gemini 4 tool signatures on $provider ($signature)",
-    ({ provider, api, signature }) => {
-      const target = { ...model, id: "gemini-4-argon", provider, api };
-      const assistant = {
-        ...createAssistantOutput(target),
-        content: [toolCall({}, signature)],
-      };
-      const params = buildGoogleGenerateContentParams(target, {
-        messages: [assistant, makeTextToolResult("call_1", "lookup", "ok", false, 0)],
-      });
-      const functionCallPart = params.contents
-        .flatMap((content) => content.parts ?? [])
-        .find((part) => part.functionCall);
-      expect(functionCallPart?.functionCall?.name).toBe("lookup");
-      expect(functionCallPart?.thoughtSignature).toBe(
-        provider === "google-gemini-cli"
-          ? undefined
-          : (signature ?? "skip_thought_signature_validator"),
-      );
-    },
-  );
+    ["gemini-4-argon", "google", "google-generative-ai", undefined],
+    ["gemini-4-argon", "google-vertex", "google-vertex", undefined],
+    ["gemini-4-argon", "google", "google-generative-ai", "c2lnbmVk"],
+    ["gemini-4-argon", "google-gemini-cli", "google-generative-ai", undefined],
+    ["gemini-3.8-flash", "google", "google-generative-ai", undefined],
+    ["gemini-3.8-flash", "google-vertex", "google-vertex", undefined],
+    ["gemini-3.8-flash", "google", "google-generative-ai", "c2lnbmVk"],
+    ["gemini-3.8-flash", "google-gemini-cli", "google-generative-ai", undefined],
+  ] as const)("replays %s tool signatures on %s (%s, %s)", (id, provider, api, signature) => {
+    const target = { ...model, id, provider, api };
+    const assistant = {
+      ...createAssistantOutput(target),
+      content: [toolCall({}, signature)],
+    };
+    const params = buildGoogleGenerateContentParams(target, {
+      messages: [assistant, makeTextToolResult("call_1", "lookup", "ok", false, 0)],
+    });
+    const functionCallPart = params.contents
+      .flatMap((content) => content.parts ?? [])
+      .find((part) => part.functionCall);
+    expect(functionCallPart?.functionCall?.name).toBe("lookup");
+    expect(functionCallPart?.thoughtSignature).toBe(
+      provider === "google-gemini-cli"
+        ? undefined
+        : (signature ?? "skip_thought_signature_validator"),
+    );
+  });
 
   it("forwards stop sequences to Google generation config", () => {
     const params = buildGoogleGenerateContentParams(
