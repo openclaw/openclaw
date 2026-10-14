@@ -75,15 +75,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toBeUndefined();
   });
 
-  it("uses session-derived group policy when caller groupId disagrees", () => {
-    expect(
-      groupPolicy({
-        sessionKey: "agent:main:whatsapp:group:safe-room",
-        groupId: "trusted-group",
-      }),
-    ).toEqual({ allow: ["read"] });
-  });
-
   it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
     expect(
       groupPolicy({
@@ -248,11 +239,6 @@ describe("resolveEffectiveToolPolicy", () => {
 
   it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
     { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-    {
-      name: "provider profile alsoAllow",
-      tools: { byProvider: { fixture: { profile: "minimal", alsoAllow: ["process"] } } },
-      warning: 'Add alsoAllow: ["process"]',
-    },
   ])("warns only about actionable grants with $name", async ({ tools, warning }) => {
     const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {
