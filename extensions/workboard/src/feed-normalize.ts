@@ -139,6 +139,45 @@ function normalizeTimestamp(value: unknown): number | undefined {
     : undefined;
 }
 
+/** Snoozes reach at most a year out; past times are refused so a card never hides by mistake. */
+export const FEED_MAX_SNOOZE_MS = 366 * 24 * 60 * 60 * 1000;
+
+/** Check a snooze wake time: a future epoch ms within a year. */
+export function checkFeedSnoozeTime(until: number, now: number, field = "until"): number {
+  if (!Number.isFinite(until)) {
+    throw new Error(`${field} must be a time in epoch milliseconds or ISO-8601.`);
+  }
+  if (until <= now) {
+    throw new Error(`${field}: pick a snooze time in the future.`);
+  }
+  if (until - now > FEED_MAX_SNOOZE_MS) {
+    throw new Error(`${field}: snooze for at most a year.`);
+  }
+  return Math.trunc(until);
+}
+
+/**
+ * Read an agent's `snoozeUntil`: an ISO-8601 string or epoch ms. `null` or an empty
+ * string clears the snooze; `undefined` means the agent did not set it.
+ */
+export function parseFeedSnoozeUntil(value: unknown, now: number): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || (typeof value === "string" && !value.trim())) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    const time = /^\d+$/.test(text) ? Number(text) : Date.parse(text);
+    return checkFeedSnoozeTime(time, now, "snoozeUntil");
+  }
+  if (typeof value === "number") {
+    return checkFeedSnoozeTime(value, now, "snoozeUntil");
+  }
+  throw new Error("snoozeUntil must be an ISO-8601 time or epoch milliseconds.");
+}
+
 /** Validate a whole Feed record. Over-limit text throws so the authoring agent sees why. */
 export function normalizeFeed(value: unknown): WorkboardFeed | undefined {
   if (!isRecord(value)) {
@@ -187,22 +226,25 @@ export function feedHasPresentation(feed: WorkboardFeed | undefined): boolean {
   );
 }
 
-// Owner state that an agent patch never sets directly.
+// Owner state that an agent patch never sets directly, plus the controls handled below.
 const OWNER_FEED_FIELDS = new Set([
   "reopen",
   "ackedAt",
   "ackedAction",
   "draftEdited",
   "snoozedUntil",
+  "snoozeUntil",
 ]);
 
 /**
  * Merge an agent patch into the stored Feed record. A `null` field clears it;
- * omitted fields keep their value. `reopen: true` clears the owner's ack and snooze.
+ * omitted fields keep their value. `reopen: true` clears the owner's ack and snooze;
+ * `snoozeUntil` in the same patch then snoozes the card again until that time.
  */
 export function mergeFeedPatch(
   existing: WorkboardFeed | undefined,
   patch: unknown,
+  now = Date.now(),
 ): WorkboardFeed | undefined {
   if (!isRecord(patch)) {
     throw new Error("feed must be an object.");
@@ -226,6 +268,12 @@ export function mergeFeedPatch(
     delete next.ackedAt;
     delete next.ackedAction;
     delete next.snoozedUntil;
+  }
+  const snoozeUntil = parseFeedSnoozeUntil(patch.snoozeUntil, now);
+  if (snoozeUntil === null) {
+    delete next.snoozedUntil;
+  } else if (snoozeUntil !== undefined) {
+    next.snoozedUntil = snoozeUntil;
   }
   const normalized = normalizeFeed(next);
   return feedIsEmpty(normalized) ? undefined : normalized;

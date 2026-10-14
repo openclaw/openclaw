@@ -696,6 +696,12 @@ their wake time and an **Unsnooze** button. When the time passes, the card
 comes back at the top as a reminder. An agent reply with `workboard_comment`, or
 `workboard_feed` with `reopen: true`, wakes it early.
 
+Agents can snooze a card too, for dated follow-ups such as "remind me on
+Friday": pass `snoozeUntil` (ISO-8601 or epoch milliseconds, at most a year
+out) in the `feed` of `workboard_create`, in `workboard_feed`, or in
+`workboard_comment`. A comment or `reopen` that also passes `snoozeUntil` keeps
+the card snoozed until that time. An empty string or `null` clears it.
+
 Scripts can use the Gateway methods `workboard.feed.list`, `workboard.feed.act`,
 `workboard.feed.comment`, `workboard.feed.ack`, `workboard.feed.snooze` (`until`
 in epoch milliseconds, at most a year out, or `null` to unsnooze), and

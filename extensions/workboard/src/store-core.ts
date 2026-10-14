@@ -8,7 +8,7 @@ import type {
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { mergeFeedPatch } from "./feed-normalize.js";
+import { mergeFeedPatch, parseFeedSnoozeUntil } from "./feed-normalize.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import { WorkboardBoardStore } from "./store-boards.js";
@@ -777,11 +777,15 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       createdAt: now,
       ...(input.author ? { author: input.author } : {}),
     };
+    const snoozeUntil = parseFeedSnoozeUntil(input.snoozeUntil, Date.now());
     return await this.updateMetadata(id, (existing) => {
       assertCanMutateClaimedCard(existing, scope);
       const { ackedAction, snoozedUntil, ...feed } = existing.metadata?.feed ?? {};
-      // An owner reply settles the card; an agent reply wakes a snoozed one early.
-      const wakes = input.author?.kind === "agent" && snoozedUntil !== undefined;
+      // An owner reply settles the card; an agent reply wakes a snoozed one early,
+      // unless the same reply snoozes it again.
+      const wakes =
+        (input.author?.kind === "agent" && snoozedUntil !== undefined) || snoozeUntil !== undefined;
+      const snooze = snoozeUntil ? { snoozedUntil: snoozeUntil } : {};
       return {
         ...existing.metadata,
         // A backdated comment still sorts before any reply written after its timestamp.
@@ -789,9 +793,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           .toSorted((a, b) => a.createdAt - b.createdAt)
           .slice(-MAX_CARD_COMMENTS),
         ...(input.ackFeed
-          ? { feed: { ...feed, ackedAt: now } }
+          ? { feed: { ...feed, ackedAt: now, ...snooze } }
           : wakes
-            ? { feed: { ...feed, ...(ackedAction ? { ackedAction } : {}) } }
+            ? { feed: { ...feed, ...(ackedAction ? { ackedAction } : {}), ...snooze } }
             : {}),
       };
     });

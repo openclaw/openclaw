@@ -338,4 +338,70 @@ describe("workboard feed", () => {
       vi.useRealTimers();
     }
   });
+
+  it("lets an agent snooze a card on create, update and comment", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2026-10-14T10:00:00Z"));
+      const { store } = setup();
+      const tool = toolsFor(store, "revenue");
+      const snoozedUntil = async (id: string) =>
+        (await store.get(id))?.metadata?.feed?.snoozedUntil;
+      const friday = Date.parse("2026-10-16T09:00:00+02:00");
+
+      const created = await tool("workboard_create").execute("call-1", {
+        title: "Give Ferenc until Friday",
+        boardId: "owner",
+        feed: { summary: "Ping him then.", snoozeUntil: "2026-10-16T09:00:00+02:00" },
+      });
+      const id = (created.details as { card: { id: string } }).card.id;
+      expect(await snoozedUntil(id)).toBe(friday);
+
+      // A plain agent comment still wakes the card early.
+      await tool("workboard_comment").execute("call-2", { id, body: "He answered." });
+      expect(await snoozedUntil(id)).toBeUndefined();
+
+      // A comment that passes snoozeUntil snoozes it instead, epoch ms works too.
+      await tool("workboard_comment").execute("call-3", {
+        id,
+        body: "Pinging him Friday.",
+        snoozeUntil: friday,
+      });
+      expect(await snoozedUntil(id)).toBe(friday);
+
+      // reopen clears the ack, and snoozeUntil in the same call keeps it hidden until then.
+      await store.ackFeed(id, { acked: true });
+      const later = friday + 60 * 60 * 1000;
+      await tool("workboard_feed").execute("call-4", {
+        id,
+        summary: "Still waiting.",
+        reopen: true,
+        snoozeUntil: String(later),
+      });
+      const feed = (await store.get(id))?.metadata?.feed;
+      expect(feed?.ackedAt).toBeUndefined();
+      expect(feed?.snoozedUntil).toBe(later);
+
+      // Leaving snoozeUntil out keeps it; "" or null clears it.
+      await tool("workboard_feed").execute("call-5", { id, summary: "Edited." });
+      expect(await snoozedUntil(id)).toBe(later);
+      await tool("workboard_feed").execute("call-6", { id, snoozeUntil: "" });
+      expect(await snoozedUntil(id)).toBeUndefined();
+      await tool("workboard_feed").execute("call-7", { id, snoozeUntil: friday });
+      await tool("workboard_feed").execute("call-8", { id, snoozeUntil: null });
+      expect(await snoozedUntil(id)).toBeUndefined();
+
+      for (const bad of ["next friday", Date.now() - 1, Date.now() + 400 * 24 * 60 * 60 * 1000]) {
+        await expect(
+          tool("workboard_feed").execute("call-9", { id, snoozeUntil: bad }),
+        ).rejects.toThrow("snoozeUntil");
+      }
+      await expect(
+        tool("workboard_comment").execute("call-10", { id, body: "x", snoozeUntil: "soon" }),
+      ).rejects.toThrow("snoozeUntil");
+      expect(await snoozedUntil(id)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

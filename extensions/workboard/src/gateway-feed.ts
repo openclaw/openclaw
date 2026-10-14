@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
+import { checkFeedSnoozeTime } from "./feed-normalize.js";
 import {
   buildFeedActionMessage,
   buildFeedCommentMessage,
@@ -41,24 +42,15 @@ function readOptionalText(params: Record<string, unknown>, key: string): string 
   return value;
 }
 
-/** Snoozes reach at most a year out; past times are refused so a card never hides by mistake. */
-export const FEED_MAX_SNOOZE_MS = 366 * 24 * 60 * 60 * 1000;
-
 function readSnoozeUntil(params: Record<string, unknown>, now: number): number | null {
   const until = params.until;
   if (until === null) {
     return null;
   }
-  if (typeof until !== "number" || !Number.isFinite(until)) {
+  if (typeof until !== "number") {
     throw new Error("until must be a time in epoch milliseconds, or null to unsnooze.");
   }
-  if (until <= now) {
-    throw new Error("Pick a snooze time in the future.");
-  }
-  if (until - now > FEED_MAX_SNOOZE_MS) {
-    throw new Error("Snooze for at most a year.");
-  }
-  return Math.trunc(until);
+  return checkFeedSnoozeTime(until, now);
 }
 
 export function registerWorkboardFeedGatewayMethods(params: {
