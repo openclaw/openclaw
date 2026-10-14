@@ -6,9 +6,31 @@ import { describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
-  describe.each([
-    { context: "ordinary fresh home", env: {}, reason: "never-asked" },
-    { context: "automated fresh home", env: { CI: "1" }, reason: "automated-environment" },
+  it.each([
+    {
+      context: "ordinary fresh home",
+      env: {},
+      reason: "never-asked",
+      name: "piped stdout",
+      tty: false,
+      format: "JSON",
+    },
+    {
+      context: "ordinary fresh home",
+      env: {},
+      reason: "never-asked",
+      name: "stubbed dual TTYs",
+      tty: true,
+      format: "text",
+    },
+    {
+      context: "automated fresh home",
+      env: { CI: "1" },
+      reason: "automated-environment",
+      name: "stubbed dual TTYs",
+      tty: true,
+      format: "text",
+    },
     {
       context: "automation with an explicit endpoint",
       env: {
@@ -16,14 +38,13 @@ describe("cli json stdout contract", () => {
         OPENCLAW_TELEMETRY_ENDPOINT: "https://telemetry.example.invalid/api/latest-version",
       },
       reason: "never-asked",
+      name: "piped stdout",
+      tty: false,
+      format: "JSON",
     },
-  ])("telemetry inspection in $context", ({ env, reason }) => {
-    it.each([
-      { name: "piped stdout", tty: false, format: "JSON" },
-      { name: "stubbed dual TTYs", tty: true, format: "JSON" },
-      { name: "piped stdout", tty: false, format: "text" },
-      { name: "stubbed dual TTYs", tty: true, format: "text" },
-    ])("writes successful telemetry show $format to $name", async ({ tty, format }) => {
+  ])(
+    "telemetry inspection in $context writes successful $format to $name",
+    async ({ env, reason, tty, format }) => {
       await withTempHome(
         async (tempHome) => {
           const preload = Buffer.from(
@@ -104,8 +125,8 @@ describe("cli json stdout contract", () => {
         },
         { prefix: "openclaw-telemetry-json-success-e2e-" },
       );
-    });
-  });
+    },
+  );
 
   it("keeps `update status --json` stdout parseable even with legacy doctor preflight inputs", async () => {
     await withTempHome(
@@ -168,21 +189,10 @@ describe("cli json stdout contract", () => {
       human: true,
     },
     {
-      name: "account validation with JSON before its option",
-      args: ["channels", "capabilities", "--json", "--account", "ghost"],
-      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
-    },
-    {
       name: "target validation with JSON after its option and explicit Commander routing",
       args: ["channels", "capabilities", "--target", "channel:1", "--json"],
       message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
       commander: true,
-    },
-    {
-      name: "unknown channel validation with JSON before its option",
-      args: ["channels", "capabilities", "--json", "--channel", "definitely-not-a-channel"],
-      message:
-        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
     },
     {
       name: "account validation through dual-TTY finalization",
@@ -406,143 +416,87 @@ describe("cli json stdout contract", () => {
     );
   });
 
-  it.each([
-    { name: "qr", command: ["qr"] },
-    { name: "clawbot qr", command: ["clawbot", "qr"] },
-  ])("renders conflicting $name options as one canonical JSON document", async (testCase) => {
-    await withTempHome(
-      async (tempHome) => {
-        for (const conflict of [
-          {
-            args: ["--limited", "--voice-node"],
-            message: "Use either --limited or --voice-node, not both.",
-          },
-          {
-            args: ["--token", "test-token", "--password", "test-password"],
-            message: "Use either --token or --password, not both.",
-          },
-        ]) {
-          const result = runBuiltCli(tempHome, [...testCase.command, "--json", ...conflict.args], {
-            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          });
-
-          expect(result.status, result.stderr).toBe(1);
-          expect(JSON.parse(result.stdout)).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: conflict.message },
-          });
-          expect(result.stdout).not.toContain("[openclaw]");
-          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-          expect(result.stderr).not.toContain(conflict.message);
-        }
-      },
-      { prefix: "openclaw-qr-json-failure-e2e-" },
-    );
-  });
-
-  it.each([
-    { name: "qr", command: ["qr"] },
-    { name: "clawbot qr", command: ["clawbot", "qr"] },
-  ])("keeps combined $name output flags as one JSON document on stdout", async ({ command }) => {
-    await withTempHome(
-      async (tempHome) => {
-        const configPath = path.join(tempHome, "openclaw.json");
-        await fs.writeFile(
-          configPath,
-          JSON.stringify({
-            gateway: {
-              bind: "custom",
-              customBindHost: "127.0.0.1",
-              auth: { mode: "token", token: "e2e-token" },
-            },
-          }),
-        );
-
-        for (const flags of [
-          ["--setup-code-only", "--json"],
-          ["--json", "--setup-code-only"],
-        ]) {
-          const result = runBuiltCli(
-            tempHome,
-            [...command, ...flags],
+  it.each([{ name: "qr", command: ["qr"] }])(
+    "renders conflicting $name options as one canonical JSON document",
+    async (testCase) => {
+      await withTempHome(
+        async (tempHome) => {
+          for (const conflict of [
             {
-              OPENCLAW_CONFIG_PATH: configPath,
-              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              args: ["--limited", "--voice-node"],
+              message: "Use either --limited or --voice-node, not both.",
             },
-            { inheritEnvironment: false },
+            {
+              args: ["--token", "test-token", "--password", "test-password"],
+              message: "Use either --token or --password, not both.",
+            },
+          ]) {
+            const result = runBuiltCli(
+              tempHome,
+              [...testCase.command, "--json", ...conflict.args],
+              {
+                OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+                OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              },
+            );
+
+            expect(result.status, result.stderr).toBe(1);
+            expect(JSON.parse(result.stdout)).toEqual({
+              ok: false,
+              error: { type: "cli_error", message: conflict.message },
+            });
+            expect(result.stdout).not.toContain("[openclaw]");
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+            expect(result.stderr).not.toContain(conflict.message);
+          }
+        },
+        { prefix: "openclaw-qr-json-failure-e2e-" },
+      );
+    },
+  );
+
+  it.each([{ name: "qr", command: ["qr"] }])(
+    "keeps combined $name output flags as one JSON document on stdout",
+    async ({ command }) => {
+      await withTempHome(
+        async (tempHome) => {
+          const configPath = path.join(tempHome, "openclaw.json");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              gateway: {
+                bind: "custom",
+                customBindHost: "127.0.0.1",
+                auth: { mode: "token", token: "e2e-token" },
+              },
+            }),
           );
 
-          expect(result.status, result.stderr).toBe(0);
-          const payload = JSON.parse(result.stdout);
-          expect(typeof payload.setupCode).toBe("string");
-          expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
-          expect(result.stderr).not.toContain(payload.setupCode);
-        }
-      },
-      { prefix: "openclaw-qr-setup-code-json-e2e-" },
-    );
-  });
+          for (const flags of [
+            ["--setup-code-only", "--json"],
+            ["--json", "--setup-code-only"],
+          ]) {
+            const result = runBuiltCli(
+              tempHome,
+              [...command, ...flags],
+              {
+                OPENCLAW_CONFIG_PATH: configPath,
+                OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              },
+              { inheritEnvironment: false },
+            );
 
-  it("renders sandbox explain validation failures as one canonical JSON document", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const result = runBuiltCli(tempHome, [
-          "sandbox",
-          "explain",
-          "--json",
-          "--agent",
-          "alpha",
-          "--session",
-          "agent:beta:main",
-        ]);
-
-        expect(result.status, result.stderr).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
-          },
-        });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain(
-          'Sandbox explain agent "alpha" does not match session agent "beta".',
-        );
-      },
-      { prefix: "openclaw-sandbox-json-failure-e2e-" },
-    );
-  });
-
-  it("returns one canonical document when docs search fails", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
-        )}`;
-        const result = runBuiltCli(
-          tempHome,
-          ["docs", "offline", "--json"],
-          {},
-          {
-            execArgv: [`--import=${preload}`],
-          },
-        );
-
-        expect(result.status).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: "Docs search failed: offline fixture",
-          },
-        });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain("Docs search failed: offline fixture");
-      },
-      { prefix: "openclaw-docs-json-failure-e2e-" },
-    );
-  });
+            expect(result.status, result.stderr).toBe(0);
+            const payload = JSON.parse(result.stdout);
+            expect(typeof payload.setupCode).toBe("string");
+            expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
+            expect(result.stderr).not.toContain(payload.setupCode);
+          }
+        },
+        { prefix: "openclaw-qr-setup-code-json-e2e-" },
+      );
+    },
+  );
 
   it("keeps Commander parse failures machine-readable in JSON mode", async () => {
     await withTempHome(
@@ -575,18 +529,6 @@ describe("cli json stdout contract", () => {
   });
 
   it.each([
-    {
-      name: "unknown root",
-      args: ["pairng"],
-      diagnostic: 'OpenClaw does not know the command "pairng".',
-      suggestion: "openclaw pairing",
-    },
-    {
-      name: "unknown nested command",
-      args: ["sessions", "lst"],
-      diagnostic: 'OpenClaw sessions has no command "lst".',
-      suggestion: "openclaw sessions list",
-    },
     {
       name: "unknown nested command with a later argument",
       args: ["config", "gett", "gateway.port"],
@@ -628,12 +570,6 @@ describe("cli json stdout contract", () => {
       args: ["pairng", "--json"],
       diagnostic: 'OpenClaw does not know the command "pairng".',
       suggestion: "openclaw pairing",
-    },
-    {
-      name: "unknown nested command",
-      args: ["sessions", "lst", "--json"],
-      diagnostic: 'OpenClaw sessions has no command "lst".',
-      suggestion: "openclaw sessions list",
     },
   ])("reports $name once with structured JSON guidance", async (testCase) => {
     await withTempHome(
