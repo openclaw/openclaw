@@ -23,7 +23,7 @@ import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-ty
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
@@ -386,17 +386,33 @@ function renderCatalogGroup(
             >
               <Icon name="listFilter" />
             </button>
-            {canCreateSession() ? (
-              <NewSessionLink
-                basePath={params.basePath}
-                agentId={params.newSessionAgentId}
-                target={{ catalogId: readCatalog().id }}
-                className="sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new"
-                label={`${t("chat.runControls.newSession")} — ${readCatalog().label}`}
-                disabledReason={params.newSessionDisabledReason}
-                onOpen={params.onOpenNewSession}
-              />
-            ) : undefined}
+            {canCreateSession()
+              ? renderNewSessionLink({
+                  get basePath() {
+                    return params.basePath;
+                  },
+                  get agentId() {
+                    return params.newSessionAgentId;
+                  },
+                  get target() {
+                    return {
+                      catalogId: readCatalog().id,
+                    };
+                  },
+                  get className() {
+                    return "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new";
+                  },
+                  get label() {
+                    return `${t("chat.runControls.newSession")} — ${readCatalog().label}`;
+                  },
+                  get disabledReason() {
+                    return params.newSessionDisabledReason;
+                  },
+                  get onOpen() {
+                    return params.onOpenNewSession;
+                  },
+                })
+              : undefined}
           </>
         }
       />

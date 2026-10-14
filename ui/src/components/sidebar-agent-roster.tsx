@@ -39,7 +39,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink } from "./solid/new-session-link.tsx";
 import {
   TeamSessionSlots,
   type TeamSessionSlotsProps,
@@ -245,10 +245,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                 ),
                 runVisibility,
               });
-              const disabledReason = () => {
-                const access = roster.host().readNewSessionAccess();
-                return access.allowed ? undefined : access.reason;
-              };
+              const access = () => roster.host().readNewSessionAccess();
               return (
                 <section
                   class="sidebar-agent-roster__group"
@@ -315,14 +312,23 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       }}
                     >
-                      <NewSessionLink
-                        basePath={roster.host().basePath}
-                        agentId={card().id}
-                        className="sidebar-agent-roster__action sidebar-agent-roster__new"
-                        label={`${t("agentChip.newConversation")}: ${card().name}`}
-                        disabledReason={disabledReason()}
-                        onOpen={(id, target) => roster.host().requestOpenNewSession(id, target)}
-                      />
+                      {renderNewSessionLink({
+                        get basePath() {
+                          return roster.host().basePath;
+                        },
+                        get agentId() {
+                          return card().id;
+                        },
+                        className: "sidebar-agent-roster__action sidebar-agent-roster__new",
+                        get label() {
+                          return `${t("agentChip.newConversation")}: ${card().name}`;
+                        },
+                        get disabledReason() {
+                          const currentAccess = access();
+                          return currentAccess.allowed ? undefined : currentAccess.reason;
+                        },
+                        onOpen: (id, target) => roster.host().requestOpenNewSession(id, target),
+                      })}
                       <Menu
                         id={`sidebar-agent-roster-${card().id}`}
                         class="sidebar-customize-menu sidebar-agent-roster__menu"
