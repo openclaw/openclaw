@@ -85,6 +85,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       });
       const { sidebar, page } = await mountFilters(width);
       sidebar.dir = direction;
+      // Keep a previous case's pointer from opening hover surfaces during keyboard navigation.
+      await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
       const occlusion: boolean[] = [];
       const started = performance.now();
       const surfaceSelector = ".picker-select__menu,.oc-overlay,.tooltip-popup";
