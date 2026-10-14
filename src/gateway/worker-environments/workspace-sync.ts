@@ -651,6 +651,11 @@ export function createWorkerWorkspaceActions(
     runWorkspaceCommand,
     // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
     syncWorkspace: (request: WorkerWorkspaceSyncRequest) => {
+      if (request.source.kind === "device-folder") {
+        return Promise.reject(
+          new Error("Device folders require their paired node, not an SSH workspace tunnel."),
+        );
+      }
       if (request.source.kind === "repository") {
         return Promise.reject(
           new Error(

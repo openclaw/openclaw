@@ -425,7 +425,15 @@ export async function executeLocalTurn<T>(params: {
         );
     identity = resolvePlacementIdentity(params.claim, current);
     claimSessionKey = current?.sessionKey ?? identity.sessionKey;
-    const assertLocalWorkspace = (repositoryWorkspaceId: string | undefined) => {
+    const assertLocalWorkspace = (
+      entry: { repositoryWorkspaceId?: string; deviceFolder?: { deviceId: string } } | undefined,
+    ) => {
+      if (entry?.deviceFolder) {
+        throw new Error(
+          `This session uses a folder on device ${entry.deviceFolder.deviceId}. Dispatch it to that device before sending a turn; it cannot run on the Gateway.`,
+        );
+      }
+      const repositoryWorkspaceId = entry?.repositoryWorkspaceId;
       if (repositoryWorkspaceId) {
         throw new Error(
           "This repository session needs a cloud worker. Choose a cloud environment and retry.",
@@ -443,22 +451,17 @@ export async function executeLocalTurn<T>(params: {
     });
     if (memory) {
       assertPreflightCurrent();
-      assertLocalWorkspace(
-        readCapturedSessionActorEntry(memory, scope.sessionKey)?.repositoryWorkspaceId,
-      );
+      assertLocalWorkspace(readCapturedSessionActorEntry(memory, scope.sessionKey));
     } else if (reader) {
       const key = assertSessionEntryCohortScope(reader, scope);
       await reader.withRead(
         { sessionKeys: [key], snapshotFields: [] },
         assertPreflightCurrent,
-        (read) =>
-          assertLocalWorkspace(
-            read.entries.find((row) => row.sessionKey === key)?.entry.repositoryWorkspaceId,
-          ),
+        (read) => assertLocalWorkspace(read.entries.find((row) => row.sessionKey === key)?.entry),
       );
     } else {
       const entry = await readSessionEntryReadOnlyInWorker(scope, assertPreflightCurrent);
-      assertLocalWorkspace(entry?.repositoryWorkspaceId);
+      assertLocalWorkspace(entry);
     }
   } finally {
     // The claim transaction rechecks placement predicates and publishes its own observation.

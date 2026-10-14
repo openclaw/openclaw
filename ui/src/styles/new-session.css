@@ -726,6 +726,18 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+.new-session-page__device-folder {
+  flex-basis: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.new-session-page__device-folder > span:last-child {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .new-session-page__branch-field {
   flex: 1 1 auto;
   min-width: 0;

@@ -183,6 +183,20 @@ describe("gateway/node-catalog", () => {
     });
   });
 
+  it("publishes existing-folder consent only for a connected device", () => {
+    const input = {
+      pairedDevices: [pairedDevice()],
+      sessionHostNodeIds: new Set(["mac-1"]),
+      deviceFolderNodeIds: new Set(["mac-1"]),
+    };
+    expect(
+      createKnownNodeCatalog({ ...input, connectedNodes: [connectedNode()] }).get("mac-1"),
+    ).toMatchObject({ workerHost: { deviceFolders: true } });
+    expect(
+      createKnownNodeCatalog({ ...input, connectedNodes: [] }).get("mac-1")?.workerHost,
+    ).toBeUndefined();
+  });
+
   it("uses the newest durable last-seen source for offline nodes", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [

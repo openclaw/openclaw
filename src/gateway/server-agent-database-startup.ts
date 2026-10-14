@@ -1,4 +1,4 @@
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -138,9 +138,13 @@ export function activateGatewayAgentDatabaseStartup(params: {
         ]);
         assertCurrent();
         const beforeConfig = params.getConfig();
+        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
+        // ACP-only stores need database/session preparation, not native auth/model publication.
+        if (!listAgentIds(beforeConfig).includes(agentId)) {
+          return;
+        }
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
-        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         if (
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({

@@ -109,7 +109,7 @@ function validateContextVersion(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select(["seq", transcriptEventModelNavigationSql().as("navigation_json")])
+        .select(["seq", transcriptEventModelNavigationSql(database.db).as("navigation_json")])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ),
@@ -214,7 +214,7 @@ function modelContextBatchSql(requests: readonly ModelContextRequest[]) {
     omitCheckpoint ? [entry.seq] : [],
   );
   const omitCheckpoint = omitted.length
-    ? /* kysely-allow-raw: checkpoint omission is scoped to bound row identities in this payload batch. */ sql<number>`seq IN (${sql.join(omitted)})`
+    ? /* kysely-allow-raw: checkpoint omission is scoped to bound row identities in this payload batch. */ sql<number>`CASE WHEN seq IN (${sql.join(omitted)}) THEN 1 ELSE 0 END`
     : sql.lit(0);
   const omissions = requests.flatMap(({ entry, toolResultOmission }) =>
     toolResultOmission ? [sql`WHEN ${entry.seq} THEN ${toolResultOmission}`] : [],
@@ -315,7 +315,10 @@ function withTranscriptContextSnapshot<T>(
               for (const row of iterateSqliteQuerySync(
                 database.db,
                 base
-                  .select(["seq", transcriptEventModelNavigationSql().as("navigation_json")])
+                  .select([
+                    "seq",
+                    transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+                  ])
                   .orderBy("seq", "asc"),
               )) {
                 // Only navigation crosses into JavaScript before the canonical context is selected.
@@ -362,7 +365,7 @@ function withTranscriptContextSnapshot<T>(
                 const { bySeq, omitCheckpoint, omission } = modelContextBatchSql(batch);
                 const query = base
                   .select((eb) => {
-                    const storedBytes = transcriptEventModelBytesSql(omitCheckpoint);
+                    const storedBytes = transcriptEventModelBytesSql(database.db, omitCheckpoint);
                     // Stored costs describe the original model view, not a transient omission notice.
                     const bytes: AliasableExpression<number> = omission
                       ? eb
@@ -371,6 +374,7 @@ function withTranscriptContextSnapshot<T>(
                           .then(
                             eb.fn<number>("octet_length", [
                               projectModelContextEventSql(
+                                database.db,
                                 transcriptEventJsonSql(database.db),
                                 omitCheckpoint,
                                 omission,
@@ -400,6 +404,7 @@ function withTranscriptContextSnapshot<T>(
                   .select((eb) => [
                     "seq",
                     projectModelContextEventSql(
+                      database.db,
                       transcriptEventJsonSql(database.db),
                       omitCheckpoint,
                       omission,

@@ -413,7 +413,7 @@ describe("chat pane native history pagination", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("does not bootstrap older history when the viewport starts short or grows", async () => {
+  it("fills a visible history tail once the viewport can fit it", async () => {
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -453,10 +453,11 @@ describe("chat pane native history pagination", () => {
       pane.syncHistoryObserver();
       clientHeight = 600;
       pane.syncHistoryObserver();
-      await Promise.resolve();
-      expect(request).not.toHaveBeenCalled();
-      expect(observe).not.toHaveBeenCalled();
-      expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4]);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(observe).toHaveBeenCalledWith(sentinel);
+      await vi.waitFor(() =>
+        expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
