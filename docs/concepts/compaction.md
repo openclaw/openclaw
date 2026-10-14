@@ -112,6 +112,7 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
     - `input exceeds the maximum number of tokens`
     - `input token count exceeds the maximum number of input tokens` (Bedrock)
     - `input is too long for the model`
+    - `` `inputs` must have less than N tokens `` and `` `inputs` tokens + `max_new_tokens` must be <= N `` (Hugging Face TGI; output-only `max_new_tokens` limits do not trigger compaction)
     - `ollama error: context length exceeded`
 
   </Accordion>

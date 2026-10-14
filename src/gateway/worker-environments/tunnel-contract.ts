@@ -8,6 +8,7 @@ import type {
   NodeWorkerWorkspaceProcessInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
@@ -197,6 +198,7 @@ export type WorkerWorkspaceReconcileRequest = {
     | {
         kind: "repository";
         authorize?: () => void;
+        markPhase?: (phase: string) => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,
@@ -261,6 +263,8 @@ export type WorkerWorkspaceTunnelHandle = {
   stop(): Promise<void>;
 };
 
+export type WorkerTurnProcessResult = SpawnResult & { nodeLoss?: WorkerNodeLostError };
+
 export type WorkerTurnTunnelHandle = Omit<
   WorkerWorkspaceTunnelHandle,
   "launchTurn" | "measureLaunchTurn" | "readLaunchToolNames"
@@ -268,7 +272,7 @@ export type WorkerTurnTunnelHandle = Omit<
   measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
   /** Placement tool implementations available in the destination's installed supervisor. */
   readLaunchToolNames(): Promise<readonly string[]>;
-  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<WorkerTurnProcessResult>;
 };
 
 export type WorkerTunnelHandle = WorkerWorkspaceTunnelHandle | WorkerTurnTunnelHandle;

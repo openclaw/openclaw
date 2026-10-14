@@ -1,9 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
+import { requireNativeDatabaseFile } from "./database-engine/physical-facts.js";
 import { formatErrorMessage } from "./errors.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { assertSqliteIntegrity, SqliteRepairableForeignKeyError } from "./sqlite-integrity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
@@ -13,7 +15,7 @@ export class UpdateRunAdmissionBusyError extends Error {
 }
 
 export function runUpdateRunAdmission<T>(
-  operation: (db: DatabaseSync, recoveryChanges: string[]) => T,
+  operation: (db: EngineConnection, recoveryChanges: string[]) => T,
   options: UpdateRunLedgerOptions,
   recoverTaskDeliveryOrphans: boolean,
   assertCurrent?: (stage: "transaction" | "commit") => void,
@@ -21,7 +23,7 @@ export function runUpdateRunAdmission<T>(
   if (options.database) {
     throw new Error("Update run admission requires its own writable connection");
   }
-  const admitted = (db: DatabaseSync, recoveryChanges: string[]) => {
+  const admitted = (db: EngineConnection, recoveryChanges: string[]) => {
     const result = operation(db, recoveryChanges);
     assertCurrent?.("commit");
     return result;
@@ -32,6 +34,9 @@ export function runUpdateRunAdmission<T>(
   // Pre-v19 orphan recovery must remain here: schema-19 table retirement waits
   // for managed shutdown and cannot run just to open the old driver's ledger.
   const inspection = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db, path }) => {
+    if (isPostgresSqlConnection(db)) {
+      requireNativeDatabaseFile("postgres", "integrity");
+    }
     try {
       assertSqliteIntegrity(db, path);
       return { repairable: undefined };

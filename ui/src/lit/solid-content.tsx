@@ -46,7 +46,7 @@ let currentLitRoots: Set<NestedSolidRoot> | undefined;
 const litContentMounts = new WeakMap<HTMLElement | DocumentFragment, LitContentMount>();
 
 /** Retire the existing range without restoring a possibly disposed creator. */
-export function unmountLitContent(container: HTMLElement | DocumentFragment): void {
+function unmountLitContent(container: HTMLElement | DocumentFragment): void {
   litContentMounts.get(container)?.dispose();
 }
 

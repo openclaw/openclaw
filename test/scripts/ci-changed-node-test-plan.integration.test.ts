@@ -8,6 +8,7 @@ import {
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveUiE2ePrTestSelection,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -184,6 +185,40 @@ it.each(["packages/markdown-core/src/render-aware-chunking.ts"])(
     );
   },
 );
+
+// #170662 moved transcript layout completion to a microtask. PR selection omitted
+// these mocked-Gateway cases, so the resulting renderer freeze first failed on main.
+it.each([
+  {
+    name: "the #170662 diff",
+    paths: [
+      "docs/web/control-ui.md",
+      "ui/src/lib/reactive/README.md",
+      "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+      "ui/src/pages/chat/components/chat-transcript-layout.ts",
+      "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-replies.test.ts",
+      "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+      "ui/src/pages/chat/solid-render-lifecycle.test.tsx",
+      "ui/src/pages/chat/solid-render-lifecycle.ts",
+    ],
+  },
+  { name: "message reveal", paths: ["ui/src/pages/chat/components/chat-message-reveal.ts"] },
+  { name: "Solid render lifecycle", paths: ["ui/src/pages/chat/solid-render-lifecycle.ts"] },
+])("selects transcript browser owners for $name", ({ paths }) => {
+  const selection = resolveUiE2ePrTestSelection(paths);
+  expect(selection.mode).toBe("owners");
+  for (const file of [
+    "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
+    "ui/src/e2e/chat-position-rail.e2e.test.ts",
+    "ui/src/e2e/chat-reply-preview-recovery.e2e.test.ts",
+  ]) {
+    expect(selection.reasons[file], file).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^direct route\/component dependency: /u)]),
+    );
+  }
+});
 
 it("keeps UI and core changes with exact owners and direct consumers", () => {
   const paths = [

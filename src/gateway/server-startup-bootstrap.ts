@@ -25,11 +25,11 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
-import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
-import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
+import { readGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
@@ -100,8 +100,11 @@ export async function prepareGatewayServerBootstrap(input: {
     startupTrace.mark("process.bootstrap");
   }
   const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
-    if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
-      const restartHandoff = readGatewayRestartHandoffSync();
+    if (
+      !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
+      isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
+    ) {
+      const restartHandoff = await readGatewayRestartHandoff();
       resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
         ["source", restartHandoff?.source],
         ["restartKind", restartHandoff?.restartKind],

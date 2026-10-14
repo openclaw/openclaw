@@ -302,7 +302,12 @@ export type SessionHistoryWorkerInput =
   | SessionBranchSummaryWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
-  | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
+  | {
+      kind: "prewarm";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      history: boolean;
+    }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
@@ -580,7 +585,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
-    prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
+    prewarm: (input: { env: NodeJS.ProcessEnv; history: boolean }) => Promise<void>;
     readPendingArchives: CancellableSessionHistoryReader<"session-pending-archives", "pending">;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
