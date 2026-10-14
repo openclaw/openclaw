@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
@@ -68,9 +68,9 @@ export class UserProfileOwnerError extends Error {
   }
 }
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
+const ensuredDatabases = new WeakSet<EngineConnection>();
 
-function rememberEnsuredSchema(database: DatabaseSync, cache: WeakSet<DatabaseSync>): void {
+function rememberEnsuredSchema(database: EngineConnection, cache: WeakSet<EngineConnection>): void {
   if (cache.has(database)) {
     return;
   }

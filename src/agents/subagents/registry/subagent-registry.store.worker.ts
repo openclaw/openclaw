@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../../../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../../../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -48,7 +48,7 @@ import type {
 const log = createSubsystemLogger("state/worker");
 
 export function readSubagentRunsInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {

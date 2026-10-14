@@ -8,6 +8,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -62,7 +63,7 @@ describe("Gateway config revision tokens", () => {
     expect(projector.projectRawHash(`${rawHash}0`)).not.toBe(rawToken);
     expect(() =>
       assertSqliteSchemaContains(
-        storedDatabase,
+        requireNativeSqliteDatabase(storedDatabase),
         "previous state-schema reader",
         getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
       ),

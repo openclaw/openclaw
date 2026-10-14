@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { getBoundDeviceBootstrapContextFromRecords } from "./device-bootstrap.worker-kernel.js";
 import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
 import type {
@@ -12,12 +11,13 @@ import {
   readDeviceBootstrapTokenRecordsFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 // The borrowed store snapshot owns invalidation; obsolete projections are collectable with it.
 const bindingsBySnapshot = new WeakMap<DevicePairingStoreState, DevicePairingBindingFact[]>();
 
 export function executeDevicePairingRead(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   command: DevicePairingReadCommand,
 ): DevicePairingReadReply {

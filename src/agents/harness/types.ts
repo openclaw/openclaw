@@ -477,6 +477,17 @@ export type AgentHarnessDescendantCancellationResult = {
   }>;
 };
 
+/** Activation-only native readiness check; it does not authorize a model turn. */
+export type AgentHarnessSetupVerificationContext = {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  workspaceDir: string;
+  signal: AbortSignal;
+  /** Revalidate the setup owner after awaits and before native I/O. */
+  assertCurrent: () => void;
+};
+
 type AgentHarnessContract<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
   TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
@@ -519,6 +530,13 @@ type AgentHarnessContract<
   /** OpenClaw tool capabilities an indivisible native surface requires from effective profiles. */
   conversationToolPolicyNativeTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  /**
+   * Verify a profileless, harness-owned setup candidate without a model turn.
+   * Resolve only after native credentials and the selected model are usable;
+   * throw on rejection. Core owns the resulting setup binding and rechecks it
+   * before activation. Other inference checks still execute a bounded turn.
+   */
+  verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
    * @deprecated Implement resolveSessionRuntimeOwnershipAsync; removal follows a stable deprecation period.

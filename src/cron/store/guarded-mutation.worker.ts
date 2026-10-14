@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -29,14 +29,18 @@ import type { CronAdmittedStoreTransactionHooks } from "./transaction-hooks.type
 
 type MutationInput = CronRuntimeWorkerOperations["cron.mutateJobs"]["input"];
 
-function loadCronMutationStore(db: DatabaseSync, storeKey: string) {
+function loadCronMutationStore(db: EngineConnection, storeKey: string) {
   const rows = loadCronRows(db, storeKey);
   const store = loadedCronStoreFromRows(rows).store;
   loadCronRuntimeAuthorities({ db, storeKey, jobs: store.jobs });
   return store;
 }
 
-function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobId: string): void {
+function retireCronMutationTriggerState(
+  db: EngineConnection,
+  storeKey: string,
+  jobId: string,
+): void {
   const active = findActiveCronRunReceiptInDatabase({ database: db, storePath: storeKey, jobId });
   if (active) {
     retireCronRunTriggerStateInDatabase({ database: db, handle: active });
@@ -61,7 +65,7 @@ function retireCronMutationTriggerState(db: DatabaseSync, storeKey: string, jobI
 }
 
 function applyCronReceiptMutation(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
 ): void {
@@ -90,7 +94,7 @@ function applyCronReceiptMutation(
 }
 
 function cancelChangedQueuedRuns(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: MutationInput,
   changes: PreparedCronStoreChanges,
   previousJobs: ReturnType<typeof loadCronMutationStore>["jobs"],

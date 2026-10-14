@@ -351,6 +351,47 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("validates projected retries with the same source and target constraints as Move requests", () => {
+    const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
+    const retries = [
+      { expected, target: { kind: "gateway" } },
+      { expected, target: { kind: "gateway" }, abandonSource: true },
+      { expected, target: { kind: "device", deviceId: "device-1" } },
+      {
+        expected,
+        target: { kind: "profile", profileId: "team", os: "linux", machineClass: "tiny" },
+      },
+    ];
+    for (const retry of retries) {
+      expect(
+        Value.Check(SessionPlacementMoveSchema, {
+          target: retry.target,
+          updatedAtMs: 1,
+          error: "move interrupted",
+          retry,
+        }),
+      ).toBe(true);
+      expect(validateSessionsMoveParams({ key: "agent:main:dispatch", ...retry })).toBe(true);
+    }
+    for (const retry of [
+      { expected: { ...expected, generation: -1 }, target: { kind: "gateway" } },
+      { expected: { ...expected, environmentId: "x".repeat(257) }, target: { kind: "gateway" } },
+      { expected, target: { kind: "gateway" }, abandonSource: false },
+      { expected, target: { kind: "device", deviceId: "device-1" }, abandonSource: true },
+      { expected, target: { kind: "profile", profileId: "team" }, abandonSource: true },
+      { expected, target: { kind: "gateway" }, operationId: "move:v1:opaque" },
+    ]) {
+      expect(
+        Value.Check(SessionPlacementMoveSchema, {
+          target: retry.target,
+          updatedAtMs: 1,
+          error: "move interrupted",
+          retry,
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("keeps the move result bounded to terminal placement state", () => {
     const result = {
       ok: true,

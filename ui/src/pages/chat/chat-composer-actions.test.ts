@@ -11,8 +11,8 @@ import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 
 afterEach(async () => {
   await resetComposerFixture();

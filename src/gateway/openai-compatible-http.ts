@@ -57,8 +57,8 @@ export async function prepareOpenAiCompatibleHttpRequest<T extends z.ZodType>(
   if (!handled) {
     return handled;
   }
-  const client = { abortController: new AbortController(), onDisconnect: () => {} };
-  watchClientDisconnect(req, res, client.abortController, () => client.onDisconnect());
+  const client = { abortController: new AbortController() };
+  watchClientDisconnect(req, res, client.abortController);
   const modelAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelAuth.allowed) {
     sendMissingScopeForbidden(res, modelAuth.missingScope);
@@ -122,7 +122,10 @@ export function startOpenAiCompatibleStream(params: {
   writeDelta: (delta: string) => void;
   complete: (result: StreamResult) => void;
   fail: (error: StreamError, result?: unknown) => void;
-}): () => void {
+}): void {
+  if (params.signal.aborted) {
+    return;
+  }
   const { res, runId } = params;
   const chat = params.protocol === "chat";
   const textStream = createAssistantTextStream(Boolean(params.constraint));
@@ -138,6 +141,7 @@ export function startOpenAiCompatibleStream(params: {
   const close = () => {
     closed = true;
     unsubscribe();
+    params.signal.removeEventListener("abort", onAbort);
   };
   const finish = () => {
     writeDone(res);
@@ -228,6 +232,11 @@ export function startOpenAiCompatibleStream(params: {
   // Agent cleanup and deferred wire delivery settle independently during shutdown.
   const releaseAgent = retainGatewayRootWorkAdmissionContinuation();
   const releaseStream = retainGatewayHttpResponseWork(res);
+  const onAbort = () => {
+    close();
+    releaseStream();
+  };
+  params.signal.addEventListener("abort", onAbort, { once: true });
   void (async () => {
     try {
       const result = await params.run();
@@ -257,7 +266,7 @@ export function startOpenAiCompatibleStream(params: {
       };
       requestFinalize();
     } catch (error) {
-      if (closed || params.signal.aborted) {
+      if (closed) {
         return;
       }
       terminalPhase = "error";
@@ -273,8 +282,4 @@ export function startOpenAiCompatibleStream(params: {
       }
     }
   })();
-  return () => {
-    close();
-    releaseStream();
-  };
 }

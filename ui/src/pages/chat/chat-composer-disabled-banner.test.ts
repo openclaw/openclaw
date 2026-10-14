@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
 afterEach(async () => {
   await resetComposerFixture();

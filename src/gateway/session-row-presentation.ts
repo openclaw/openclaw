@@ -314,28 +314,33 @@ export function prepareProjectedSessionPresentation(
         temporal.fields.endedAt,
         temporal.fields.runtimeMs,
         // Transient owners can cycle without publishing a row; retire the earlier sample.
-        JSON.stringify([run, preparedFacts]),
+        run?.active,
+        run?.status,
+        JSON.stringify(run?.runIds),
+        preparedFacts?.placement || preparedFacts?.placementMove
+          ? JSON.stringify(preparedFacts)
+          : preparedFacts,
         resolveActiveSessionAgentStatus(record.entry.agentStatus, now),
         // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
         record.entry.goal?.status === "active" && record.entry.goal.tokenBudget !== undefined
           ? now
           : undefined,
         record.materialized.source.childLinks?.length,
-        ...(record.materialized.source.childLinks ?? []).flatMap(({ key, entry }) => {
-          const childActive = runState(key, entry).fields.hasActiveSubagentRun;
-          return [
-            key,
-            childActive,
-            resolveSessionChildOwners({
-              key,
-              entry,
-              now,
-              subagentRuns,
-              hasActiveRun: childActive,
-            }).includes(record.key),
-          ];
-        }),
       ];
+      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
+        const childActive = runState(key, entry).fields.hasActiveSubagentRun;
+        facts.push(
+          key,
+          childActive,
+          resolveSessionChildOwners({
+            key,
+            entry,
+            now,
+            subagentRuns,
+            hasActiveRun: childActive,
+          }).includes(record.key),
+        );
+      }
       const previous = published?.facts;
       if (!previous || !facts.every((fact, index) => fact === previous[index])) {
         published = { facts, views: new Map(), target: toProjectedSessionSharingTarget(record) };
@@ -467,7 +472,7 @@ export function prepareProjectedSessionPresentation(
     if (signature !== undefined) {
       // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
       const encoded = JSON.stringify(row);
-      const snapshot: GatewaySessionRow = freezeJsonSnapshot(JSON.parse(encoded));
+      const snapshot = freezeJsonSnapshot(row);
       encodings.set(snapshot, encoded);
       views?.set(signature, snapshot);
       return projectModels(snapshot);
@@ -503,7 +508,7 @@ export function prepareProjectedSessionPresentation(
         const { entries, ownerSessionProfiles, ...facets } = select();
         Object.freeze(entries);
         view.selection = Object.freeze({
-          ...freezeJsonSnapshot(structuredClone(facets)),
+          ...freezeJsonSnapshot(facets),
           ownerSessionProfiles,
           entries,
         });
