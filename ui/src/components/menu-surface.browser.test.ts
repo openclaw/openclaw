@@ -7,6 +7,8 @@ import { renderComposerLibraryMenuSolid } from "../pages/chat/components/chat-co
 import { renderComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
 import { renderChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
@@ -18,8 +20,8 @@ import "./web-awesome.ts";
 // a stacking context (.shell-nav z-index 10) painted below the sidebar
 // resizer (.sidebar-resizer z-index 20), so a fixed-position menu rendered
 // inside the nav is overdrawn by the divider unless it is promoted to the
-// popover top layer. Plain overlays use openclaw-menu-surface; Web Awesome
-// dropdowns already own their popup and must not nest inside that surface.
+// popover top layer. Plain overlays use openclaw-menu-surface; owned Menus
+// have their own popover and must not nest inside that surface.
 //
 // The repo-level test shard also collects *.browser.test.ts under jsdom,
 // which has neither the Popover API nor real layout; the paint-order
@@ -30,6 +32,7 @@ const originalThemeMode = document.documentElement.getAttribute("data-theme-mode
 const originalClasses = document.documentElement.className;
 
 afterEach(async () => {
+  cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
   vi.unstubAllGlobals();
@@ -95,30 +98,6 @@ function hitTestOnDivider(menu: HTMLElement, divider: HTMLElement): Element | nu
   return document.elementFromPoint(x, y);
 }
 
-type Dropdown = HTMLElementTagNameMap["wa-dropdown"];
-
-function menuSurface(dropdown: Dropdown): HTMLElement {
-  const surface = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-  if (!surface) {
-    throw new Error("expected rendered menu surface");
-  }
-  return surface;
-}
-
-async function openMenu(dropdown: Dropdown) {
-  const shown = new Promise<Event>((resolve) => {
-    dropdown.addEventListener("wa-after-show", resolve, { once: true });
-  });
-  dropdown.open = true;
-  await shown;
-}
-
-async function expectMenuInTopLayer(dropdown: Dropdown) {
-  const popup = dropdown.shadowRoot?.querySelector("wa-popup");
-  const surface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
-  await expect.poll(() => surface?.matches(":popover-open")).toBe(true);
-}
-
 async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
   await card.updateComplete;
   const menu = card.querySelector<HTMLElement>(".oc-menu");
@@ -178,24 +157,32 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    const dropdown = document.createElement("wa-dropdown");
-    dropdown.className = "sidebar-session-sort-menu";
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.style.position = "fixed";
-    trigger.style.left = `${Math.round(dividerBounds.left) - 120}px`;
-    trigger.style.top = "100px";
-    const item = document.createElement("wa-dropdown-item");
-    item.className = "sidebar-session-sort-menu__item";
-    item.textContent = "Created";
-    dropdown.append(trigger, item);
-    nav.append(dropdown);
+    mountSolid(
+      () =>
+        Menu({
+          id: "sidebar-sort",
+          label: "Sort sessions",
+          panelClass: "sidebar-session-sort-menu",
+          triggerAttributes: {
+            style: {
+              position: "fixed",
+              left: `${Math.round(dividerBounds.left) - 120}px`,
+              top: "100px",
+            },
+          },
+          items: [{ id: "created", label: "Created", class: "sidebar-session-sort-menu__item" }],
+        }),
+      { container: nav },
+    );
+    flush();
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(nav.querySelector<HTMLElement>(".oc-menu-trigger")!).click();
+    const menu = nav.querySelector<HTMLElement>(".oc-menu")!;
     // Popover membership precedes positioning; hit-test only after the completed show.
-    await openMenu(dropdown);
-    await expectMenuInTopLayer(dropdown);
-    expect(dropdown.closest("openclaw-menu-surface")).toBeNull();
+    await expect.poll(() => menu.dataset.phase).toBe("open");
+    expect(menu.matches(":popover-open")).toBe(true);
+    expect(menu.closest("openclaw-menu-surface")).toBeNull();
 
-    const menu = menuSurface(dropdown);
     const menuBounds = menu.getBoundingClientRect();
     expect(menuBounds.right).toBeGreaterThan(dividerBounds.left);
     const hit = document.elementFromPoint(
@@ -203,7 +190,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
       menuBounds.top + menuBounds.height / 2,
     );
     expect(hit).not.toBeNull();
-    expect(dropdown.contains(hit)).toBe(true);
+    expect(menu.contains(hit)).toBe(true);
   });
 });
 
@@ -238,23 +225,26 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   ])("keeps %s highlighted during %s submenu navigation", async (className, input) => {
     await useDesktopViewport();
     const { page, userEvent } = await import("vitest/browser");
-    const dropdown = document.createElement("wa-dropdown");
-    const trigger = document.createElement("button");
-    trigger.slot = "trigger";
-    trigger.textContent = "Actions";
-    const parent = document.createElement("wa-dropdown-item");
-    parent.className = className;
-    parent.append("Parent");
-    const child = document.createElement("wa-dropdown-item");
-    child.className = className;
-    child.slot = "submenu";
-    child.textContent = "Child";
-    parent.append(child);
-    const sibling = document.createElement("wa-dropdown-item");
-    sibling.className = className;
-    sibling.textContent = "Other action";
-    dropdown.append(trigger, parent, sibling);
-    document.body.append(dropdown);
+    const { container } = mountSolid(() =>
+      Menu({
+        id: "submenu-highlight",
+        label: "Actions",
+        items: [
+          {
+            id: "parent",
+            label: "Parent",
+            class: className,
+            children: [{ id: "child", label: "Child", class: className }],
+          },
+          { id: "sibling", label: "Other action", class: className },
+        ],
+      }),
+    );
+    flush();
+    const trigger = container.querySelector<HTMLElement>(".oc-menu-trigger")!;
+    const parent = container.querySelector<HTMLElement>('[data-value="parent"]')!;
+    const child = container.querySelector<HTMLElement>('[data-value="child"]')!;
+    const sibling = container.querySelector<HTMLElement>('[data-value="sibling"]')!;
     const swatch = document.createElement("div");
     swatch.style.backgroundColor = "var(--bg-hover)";
     document.body.append(swatch);
@@ -466,22 +456,23 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
     async (theme) => {
       await useDesktopViewport();
       const highlight = useTheme(theme);
-      const host = document.createElement("div");
-      document.body.append(host);
-      render(
-        html`<wa-dropdown>
-          <button slot="trigger">Actions</button>
-          <wa-dropdown-item value="neutral">Open</wa-dropdown-item>
-          <wa-dropdown-item value="disabled" disabled>Unavailable</wa-dropdown-item>
-          <wa-dropdown-item value="danger" variant="danger">Delete</wa-dropdown-item>
-        </wa-dropdown>`,
-        host,
+      const { container: host } = mountSolid(() =>
+        Menu({
+          id: "menu-states",
+          label: "Actions",
+          items: [
+            { id: "neutral", label: "Open" },
+            { id: "disabled", label: "Unavailable", disabled: true },
+            { id: "danger", label: "Delete", variant: "danger" },
+          ],
+        }),
       );
+      flush();
       const { page, userEvent } = await import("vitest/browser");
-      const trigger = host.querySelector<HTMLElement>('[slot="trigger"]')!;
-      const neutral = host.querySelector<HTMLElement>('[value="neutral"]')!;
-      const disabled = host.querySelector<HTMLElement>('[value="disabled"]')!;
-      const danger = host.querySelector<HTMLElement>('[value="danger"]')!;
+      const trigger = host.querySelector<HTMLElement>(".oc-menu-trigger")!;
+      const neutral = host.querySelector<HTMLElement>('[data-value="neutral"]')!;
+      const disabled = host.querySelector<HTMLElement>('[data-value="disabled"]')!;
+      const danger = host.querySelector<HTMLElement>('[data-value="danger"]')!;
       await page.elementLocator(trigger).click();
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{Home}");
@@ -489,7 +480,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await expect.poll(() => getComputedStyle(neutral).backgroundColor).toBe(highlight);
       await hoverBackground(disabled, "rgba(0, 0, 0, 0)");
       const dangerSwatch = document.createElement("div");
-      dangerSwatch.style.backgroundColor = "var(--wa-color-danger-fill-normal)";
+      dangerSwatch.style.backgroundColor = "var(--danger-subtle)";
       danger.append(dangerSwatch);
       const dangerHighlight = getComputedStyle(dangerSwatch).backgroundColor;
       expect(dangerHighlight).not.toBe(highlight);
