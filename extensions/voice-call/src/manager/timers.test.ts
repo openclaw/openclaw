@@ -58,22 +58,46 @@ describe("voice-call manager timers", () => {
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
   });
 
-  it("bounds per-call duration at the configured cap", async () => {
+  it.each([
+    { override: 2, expected: 2 },
+    { override: 9, expected: 5 },
+  ])("bounds per-call duration $override at the configured cap", async ({ override, expected }) => {
     const ctx = {
       isStopping: () => false,
       trackCallWork: vi.fn(),
       activeCalls: new Map([
-        ["brief-call", { state: "active", metadata: { maxDurationSeconds: 9 } }],
+        ["brief-call", { state: "active", metadata: { maxDurationSeconds: override } }],
       ]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
     };
     const onTimeout = vi.fn(async () => ({ success: true }));
     startMaxDurationTimer({ ctx: ctx as never, callId: "brief-call", onTimeout });
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(expected * 1000 - 1);
     expect(onTimeout).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(onTimeout).toHaveBeenCalledWith("brief-call");
+  });
+
+  it("does not time out terminal calls", async () => {
+    const ctx = {
+      isStopping: () => false,
+      trackCallWork: vi.fn(),
+      activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
+      maxDurationTimers: new Map(),
+      config: { maxDurationSeconds: 5 },
+    };
+    const onTimeout = vi.fn(async () => ({ success: true }));
+
+    startMaxDurationTimer({
+      ctx: ctx as never,
+      callId: "call-1",
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 
   it("caps oversized max duration and transcript timers", () => {

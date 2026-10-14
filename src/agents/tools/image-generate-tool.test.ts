@@ -1463,6 +1463,118 @@ describe("createImageGenerateTool", () => {
     expect(generateArgs.aspectRatio).toBe("2.35:1");
   });
 
+  it("does not infer edit resolution when krea/v2/medium/text-to-image declares no resolution options", async () => {
+    const model = "krea/v2/medium/text-to-image";
+
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 10,
+        supportsAspectRatio: true,
+        resolutionsByModel: { [model]: [] },
+      }),
+    ]);
+    const generateImage = mockGeneratedImage({
+      provider: "fal",
+      model,
+      images: [imageAsset("krea-style-out", "krea-style.png")],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("style-ref"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 2048,
+      height: 2048,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("krea-style.png", 14));
+
+    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-fal-krea-style", {
+      prompt: "Style-directed portrait",
+      image: "./fixtures/style.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inferredResolution).toBe("2K");
+    expect(generateArgs.inputImages).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      model: "fal-ai/nano-banana-2",
+      primaryRef: "fal/fal-ai/nano-banana-2",
+      maxInputImages: 14,
+    },
+    {
+      model: "openai/gpt-image-2/edit",
+      primaryRef: "FAL/openai/gpt-image-2/edit",
+      maxInputImages: 10,
+      limitPrefix: "openai/gpt-image-",
+    },
+  ])("accepts $model edits up to its reference limit", async (testCase) => {
+    const { model, primaryRef, maxInputImages } = testCase;
+    const provider = {
+      ...createFalEditProvider({
+        defaultModel: model,
+        models: [model],
+        maxInputImages: 1,
+        ...(testCase.limitPrefix
+          ? { maxInputImagesByModelPrefix: { [testCase.limitPrefix]: maxInputImages } }
+          : { maxInputImagesByModel: { [model]: maxInputImages } }),
+      }),
+      generateImage: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+      })),
+    };
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      provider,
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("reference"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 1024,
+      height: 1024,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 6));
+
+    const tool = createToolWithPrimaryImageModel(primaryRef, {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-model-reference-limit", {
+      prompt: "combine references",
+      images: Array.from(
+        { length: maxInputImages },
+        (_, index) => `./fixtures/ref-${index + 1}.png`,
+      ),
+    });
+
+    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(maxInputImages);
+    await expect(
+      tool.execute("call-too-many-references", {
+        prompt: "combine references",
+        images: Array.from(
+          { length: maxInputImages + 1 },
+          (_, index) => `./fixtures/ref-${index + 1}.png`,
+        ),
+      }),
+    ).rejects.toThrow(/reference image/);
+    expect(provider.generateImage).toHaveBeenCalledTimes(1);
+    if (maxInputImages === 16) {
+      expect(loadWebMedia).toHaveBeenCalledTimes(16);
+      expect(generateImage).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
     const provider = createFalEditProvider({ omitMaxInputImages: true });
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([

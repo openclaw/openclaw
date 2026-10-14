@@ -59,6 +59,10 @@ describe("resolveGenerateAction", () => {
   it.each([
     [{}, "generate"],
     [{ action: "   " }, "generate"],
+    [{ action: 1 }, "generate"],
+    [{ action: "generate" }, "generate"],
+    [{ action: " STATUS " }, "status"],
+    [{ action: "list" }, "list"],
     [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
   ] as const)("resolves or rejects %j", (args, expected) => {
     if (typeof expected === "string") {
@@ -70,23 +74,26 @@ describe("resolveGenerateAction", () => {
 });
 
 describe("resolveMediaToolLocalRoots", () => {
-  it.each([true])("adds host-owned attachment roots (workspaceOnly=%s)", async (workspaceOnly) => {
-    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
-    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
-    const { localRoots } = await resolveMediaToolReferenceAccess({
-      input: path.join(attachmentRoot, "receipt.png"),
-      isDataUrl: false,
-      workspaceDir,
-      fsPolicy: { workspaceOnly, readOnlyRoots: [attachmentRoot] },
-    });
-    if (workspaceOnly) {
-      expect(localRoots.map(normalizeHostPath)).toEqual(
-        [getMediaDir(), workspaceDir, attachmentRoot].map(normalizeHostPath),
-      );
-    } else {
-      expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(attachmentRoot));
-    }
-  });
+  it.each([true, false])(
+    "adds host-owned attachment roots (workspaceOnly=%s)",
+    async (workspaceOnly) => {
+      const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+      const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+      const { localRoots } = await resolveMediaToolReferenceAccess({
+        input: path.join(attachmentRoot, "receipt.png"),
+        isDataUrl: false,
+        workspaceDir,
+        fsPolicy: { workspaceOnly, readOnlyRoots: [attachmentRoot] },
+      });
+      if (workspaceOnly) {
+        expect(localRoots.map(normalizeHostPath)).toEqual(
+          [getMediaDir(), workspaceDir, attachmentRoot].map(normalizeHostPath),
+        );
+      } else {
+        expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(attachmentRoot));
+      }
+    },
+  );
 
   it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
     const root = path.join("/tmp", "openclaw-media-workspace");
@@ -191,10 +198,12 @@ describe("resolveMediaToolReferenceAccess", () => {
     error?: RegExp | typeof URIError;
   }>([
     { input: pathToFileURL(filePath).href, expected: filePath },
+    { input: "https://example.com/reference.png", expected: "https://example.com/reference.png" },
     { input: "media://inbound/a.png", expected: "media://inbound/a.png" },
     { input: "data:image/png;base64,cG5n", isDataUrl: true, expected: null },
     { input: "file://attacker/share.png", error: /remote hosts/i },
     { input: "file:///tmp/encoded%2Fseparator.png", error: /encode path separators/i },
+    { input: "file:///tmp/malformed%ZZ.png", error: URIError },
   ])("resolves or rejects $input", async ({ input, isDataUrl = false, expected, error }) => {
     const result = resolveMediaToolReferenceAccess({
       input,
@@ -322,6 +331,8 @@ describe("hasGenerationToolAvailability", () => {
       isConfigured: () => false,
       expected: false,
     },
+    { name: "auth-free configured provider", isConfigured: () => true, expected: true },
+    { name: "unconfigured provider", isConfigured: () => false, expected: false },
     {
       name: "supplied auth store",
       expected: true,
