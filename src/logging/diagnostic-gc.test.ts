@@ -140,14 +140,15 @@ it("owns demand, queued GC batches, and disable/re-enable through the existing h
 });
 
 it.each([
-  ["sqlite-store.worker", undefined],
-  ["code-mode-node.worker", 1],
-] as const)("batches %s GC with heap samples and flushes at shutdown", async (script, slot) => {
+  ["sqlite-store.worker.ts", "sqlite-store.worker", undefined],
+  ["code-mode-node.worker.ts", "code-mode-node.worker", 1],
+  ["code-mode-node.worker.mjs", "code-mode-node.worker", 1],
+] as const)("batches %s GC and flushes at shutdown", async (file, script, slot) => {
   const worker = createCpuTrackedWorker(
     'require("node:worker_threads").parentPort.on("message", () => {});',
     { eval: true },
   );
-  trackNativeWorkerForCpu(worker, new URL(`../infra/${script}.ts`, import.meta.url));
+  trackNativeWorkerForCpu(worker, new URL(`../infra/${file}`, import.meta.url));
   const parent = new MessageChannel();
   const events: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(

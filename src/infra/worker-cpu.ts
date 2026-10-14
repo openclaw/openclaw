@@ -60,7 +60,7 @@ function workerScriptName(filename: string | URL, evalSource = false): string {
     return "other";
   }
   const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?ts$/u,
+    /\.[cm]?[jt]s$/u,
     ".js",
   );
   return normalizeDiagnosticWorkerScript(name);
