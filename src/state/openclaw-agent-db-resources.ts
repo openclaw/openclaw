@@ -264,6 +264,7 @@ function isSqliteBusyRetirementError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) {
     return false;
   }
+  // SAFETY: narrowed above to a non-null object; sqlite errors expose code/errcode/message optionally.
   const candidate = error as { code?: unknown; errcode?: unknown; message?: unknown };
   if (candidate.errcode === SQLITE_BUSY_ERRCODE) {
     return true;
@@ -314,6 +315,7 @@ export async function drainAgentDatabaseResources<T>(
         .filter(
           ({ index }) =>
             nativeResults[index]?.status === "rejected" &&
+            // SAFETY: the status === "rejected" guard proves the settled result is a PromiseRejectedResult.
             isSqliteBusyRetirementError((nativeResults[index] as PromiseRejectedResult).reason),
         );
       if (busyEntries.length === 0) {
