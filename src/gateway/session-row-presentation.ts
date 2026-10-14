@@ -37,7 +37,7 @@ import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 type PresentationOptions = Omit<
   records.SnapshotOptions,
@@ -155,7 +155,10 @@ const sharedLists = new WeakMap<
   ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
 >();
 
-export function shareSidebarSessionRows(rows: GatewaySessionRow[], ifRowsRevision?: string) {
+export function shareSidebarSessionRows(
+  rows: GatewaySessionRow[],
+  ifRowsRevision?: string,
+): Pick<SessionsListResult, "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged"> {
   let shared = sharedLists.get(rows);
   if (!shared) {
     shared = { ...shareSessionRowFacts(rows), rowsRevision: randomUUID() };
