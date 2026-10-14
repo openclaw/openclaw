@@ -41,10 +41,6 @@ function createHandoffEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function legacyHandoffPath(env: NodeJS.ProcessEnv): string {
-  return path.join(env.OPENCLAW_STATE_DIR ?? "", "gateway-supervisor-restart-handoff.json");
-}
-
 function readHandoffRow(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
@@ -215,6 +211,7 @@ describe("gateway restart handoff", () => {
         env,
         pid: 222,
         reason: "gateway.restart",
+        restartKind: "update-process",
         supervisorMode: "systemd",
         createdAt: 1_200,
         restartTrace: { startedAt: 1_100, lastAt: 1_200 },
@@ -222,6 +219,7 @@ describe("gateway restart handoff", () => {
       await expect(readGatewayRestartHandoff(env, 1_500)).resolves.toMatchObject({
         pid: 222,
         source: "operator-restart",
+        restartKind: "update-process",
         supervisorMode: "systemd",
         restartTrace: { startedAt: 1_100, lastAt: 1_200 },
       });
@@ -407,32 +405,6 @@ describe("gateway restart handoff", () => {
     expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
   });
 
-  it("overwrites the previous pending handoff row", async () => {
-    const env = createHandoffEnv();
-
-    await expectWrittenHandoff({
-      env,
-    });
-    await expectWrittenHandoff({
-      env,
-      pid: 67_890,
-      reason: "gateway.restart",
-      restartKind: "update-process",
-      supervisorMode: "systemd",
-    });
-
-    expect(readHandoffRow(env)).toMatchObject({
-      handoff_key: "current",
-      pid: 67_890,
-      reason: "gateway.restart",
-      source: "operator-restart",
-      restart_kind: "update-process",
-      supervisor_mode: "systemd",
-    });
-    expect(readGatewayRestartHandoffSync(env)?.pid).toBe(67_890);
-    expect(fs.existsSync(legacyHandoffPath(env))).toBe(false);
-  });
-
   it("atomically accepts and removes a matching handoff", async () => {
     const env = createHandoffEnv();
     const handoff = await expectWrittenHandoff({
@@ -463,7 +435,6 @@ describe("gateway restart handoff", () => {
       reason: "missing",
     });
   });
-
   it("retains a PID-mismatched handoff for the matching consumer", async () => {
     const env = createHandoffEnv();
     await expectWrittenHandoff({

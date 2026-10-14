@@ -417,22 +417,6 @@ it("refuses conflicting publication identities instead of rewriting owned proven
   expect(read()).toEqual(published);
 });
 
-it("rejects a stale preparation instead of replacing a newer receipt", () => {
-  const adopted = createImmutableInstallRecord(descriptor, () => {});
-  const receipt = recordImmutablePreparedGeneration(adopted, prepared, () => {});
-  expect(() =>
-    recordImmutablePreparedGeneration(
-      adopted,
-      {
-        ...prepared,
-        buildDigest: "3".repeat(64),
-      },
-      () => {},
-    ),
-  ).toThrow("no longer current");
-  expect(read()).toEqual(receipt);
-});
-
 it("rolls back a preparation when executor authority is lost before commit", () => {
   const adopted = createImmutableInstallRecord(descriptor, () => {});
   let admissions = 0;

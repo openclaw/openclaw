@@ -63,13 +63,6 @@ function createExitingRuntime() {
 }
 
 describe("runtime-guard", () => {
-  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
-    state.initializeSqlite.mockClear();
-    state.version = "24.16.0";
-    state.lossless = true;
-    await assertSupportedRuntime(createExitingRuntime());
-    expect(state.initializeSqlite).not.toHaveBeenCalled();
-  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const details = {
@@ -202,7 +195,9 @@ describe("runtime-guard", () => {
   );
 
   it("keeps healthy runtime checks independent of diagnostic formatting", async () => {
+    state.initializeSqlite.mockClear();
     await assertSupportedRuntime();
+    expect(state.initializeSqlite).not.toHaveBeenCalled();
     expect(state.diagnosticLoads).toBe(0);
     expect(state.error).not.toHaveBeenCalled();
   });

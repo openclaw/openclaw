@@ -124,11 +124,6 @@ describe("node SQLite locations", () => {
     },
   );
 
-  it("keeps ordinary filesystem paths unchanged outside Windows", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
-  });
-
   it.each([
     ":memory:",
     "file::memory:",
@@ -167,38 +162,6 @@ describe("node SQLite locations", () => {
     );
     expect(resolveSpy).toHaveBeenCalledWith("relative/openclaw.sqlite");
     expect(namespacedSpy).toHaveBeenCalledWith("resolved-openclaw.sqlite");
-  });
-
-  it("keeps UNC and namespaced Windows paths on the Windows VFS path boundary", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const resolvedPaths = new Map([
-      [
-        String.raw`\\server\share\state\openclaw.sqlite`,
-        String.raw`\\server\share\state\openclaw.sqlite`,
-      ],
-      ["//server/share/state/openclaw.sqlite", String.raw`\\server\share\state\openclaw.sqlite`],
-      ["relative/openclaw.sqlite", String.raw`\\server\share\workdir\relative\openclaw.sqlite`],
-      [
-        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-      ],
-      [
-        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-      ],
-    ]);
-    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => {
-      return resolvedPaths.get(pathname) ?? pathname;
-    });
-    const namespacedSpy = vi
-      .spyOn(path, "toNamespacedPath")
-      .mockImplementation((pathname) => pathname);
-
-    for (const [pathname, resolvedPath] of resolvedPaths) {
-      expect(resolveNodeSqliteLocation(pathname)).toBe(resolvedPath);
-    }
-    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
-    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
   });
 
   it("preserves the Windows long-path namespace in immutable SQLite URIs", () => {

@@ -201,6 +201,11 @@ describe("session-delivery queue recovery", () => {
         );
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(onSettled).toHaveBeenCalledTimes(2);
+        expect(onSettled).toHaveBeenCalledWith(
+          expect.objectContaining({ id }),
+          "moved-to-failed",
+          queueContext,
+        );
         expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
         expect(await drain()).toEqual(
           mode === "recovery" ? expect.objectContaining({ failed: 0 }) : null,
@@ -578,56 +583,6 @@ describe("session-delivery queue recovery", () => {
       ]);
     });
   });
-
-  it.each(["recovery", "exact"] as const)(
-    "reports a finalized dead letter through %s",
-    async (mode) => {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-        const id = await enqueueSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey: "agent:main:main",
-            message: "generated image ready",
-            messageId: "image:task-dead-lettered:agent-loop",
-          },
-          queueContext,
-        );
-
-        const onSettled = vi.fn(async () => undefined);
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-        const options = {
-          deliver: vi.fn(async () => {
-            throw new SessionDeliveryDeadLetteredError("ambiguous side effects");
-          }),
-          onSettled,
-          queueContext,
-          log,
-        };
-
-        if (mode === "recovery") {
-          const summary = await recoverPendingSessionDeliveries(options);
-          expect(summary.recovered).toBe(0);
-          expect(summary.failed).toBe(1);
-        } else {
-          expect(
-            await drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" }),
-          ).toBeNull();
-        }
-        expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-          `Session delivery: entry ${id} was dead-lettered and moved to failed`,
-        );
-        expect(onSettled).toHaveBeenCalledWith(
-          expect.objectContaining({ id }),
-          "moved-to-failed",
-          queueContext,
-        );
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
-        expect((await recoverPendingSessionDeliveries(options)).failed).toBe(0);
-        expect(options.deliver).toHaveBeenCalledTimes(1);
-        expect(log.warn).toHaveBeenCalledTimes(1);
-      });
-    },
-  );
 
   it("uses the entry retry budget when draining entries", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {

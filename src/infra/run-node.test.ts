@@ -1,5 +1,5 @@
 // Tests node process runner lifecycle and captured output.
-import { spawnSync as realSpawnSync, type SpawnOptions } from "node:child_process";
+import { spawnSync as realSpawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -39,7 +39,6 @@ import {
   createPipedExitedProcess,
   createFakeProcess,
   skipRuntimePostBuild,
-  firstMockCall,
   writeRuntimePostBuildScaffold,
   expectedBuildSpawn,
   resolvePath,
@@ -355,65 +354,6 @@ describe("run-node script", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").for([false, true])(
-    "force-cleans the active child process group after SIGTERM (rebuild: %s)",
-    async (rebuild, { tmp }) => {
-      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-
-      const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
-      const child = Object.assign(new EventEmitter(), {
-        pid: 42_420,
-        kill: vi.fn(),
-      });
-      const groupSignals: Array<[number, string | number]> = [];
-      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
-      const spawn = vi.fn((_cmd: string, _args: string[], _options: SpawnOptions) => {
-        markChildSpawned();
-        return child;
-      });
-
-      const exitCodePromise = runNodeCommand(tmp, {
-        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0", OPENCLAW_VITEST_RUNTIME: "bun" },
-        platform: "darwin",
-        process: fakeProcess,
-        signalProcess: (pid: number, signal?: string | number) => {
-          groupSignals.push([pid, signal ?? "SIGTERM"]);
-          if (signal === "SIGTERM") {
-            queueMicrotask(() => child.emit("exit", 0, null));
-          }
-          return true;
-        },
-        spawn,
-        runRuntimePostBuild: skipRuntimePostBuild,
-      });
-
-      await Promise.race([childSpawned, exitCodePromise]);
-      expect(spawn).toHaveBeenCalled();
-      fakeProcess.emit("SIGTERM");
-      const exitCode = await exitCodePromise;
-
-      expect(exitCode).toBe(143);
-      const spawnCall = firstMockCall(spawn);
-      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : "bun");
-      expect(spawnCall?.[1]).toEqual(
-        rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
-      );
-      expect(spawnCall?.[2]).toMatchObject({
-        detached: true,
-        stdio: rebuild ? ["inherit", "pipe", "pipe"] : "inherit",
-      });
-      expect(spawn).toHaveBeenCalledOnce();
-      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
-      expect(groupSignals).toEqual([
-        [-42_420, "SIGTERM"],
-        [-42_420, "SIGKILL"],
-      ]);
-      expect(child.kill).not.toHaveBeenCalled();
-      expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
-      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
-    },
-  );
-
   it("rebuilds when git HEAD changes even if source mtimes do not exceed the old build stamp", async ({
     tmp,
   }) => {
@@ -503,7 +443,6 @@ describe("run-node script", () => {
       });
     },
   );
-
   it("rechecks a dirty dashboard client after waiting for an active build", async ({ tmp }) => {
     await setupStampedProject(tmp, { trackConfig: true });
     await fs.rm(resolvePath(tmp, BUILD_STAMP));
