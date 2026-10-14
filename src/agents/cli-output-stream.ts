@@ -28,6 +28,7 @@ import {
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
+  isClaudeStopHookFeedbackRecord,
   isClaudeStreamJsonDialect,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
@@ -43,7 +44,6 @@ import {
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
-  isClaudeStopHookFeedbackRecord,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
 import { appendCliResultText } from "./cli-output-results.js";
@@ -273,6 +273,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     return true;
   };
 
+  // Committed or rejected text cannot join the next reply through a tool split.
+  const resetReplySegment = () => {
+    segmentStart = assistantText.length;
+    currentMessageStart = segmentStart;
+    preserveFrom = segmentStart;
+    pendingMessageSeparator = false;
+    sawToolUseSinceText = false;
+    currentMessageHadToolUse = false;
+    previousMessageHadToolUse = false;
+  };
+
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     if (parseErrorText) {
       return;
@@ -280,28 +291,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     const attributedParentToolUseId = readClaudeAttributedSubagentProgressId(parsed);
     if (attributedParentToolUseId) {
       params.onAttributedSubagentProgress?.(attributedParentToolUseId);
-    }
-    // A Stop-hook bounce is a hard segment boundary: the refused draft before
-    // the record must stop being a candidate to outrank the result envelope.
-    // Without this, a rewrite routed through a tool makes the next message a
-    // tool-split boundary, which reconnects the rejected draft to the
-    // correction and delivers both. The reset happens after the rejected
-    // message's stop and before the rewrite's first delta, so it never cuts
-    // into the correction itself.
-    if (
-      claudeStreamJson &&
-      !isClaudeSubagentRecord(parsed) &&
-      isClaudeStopHookFeedbackRecord(parsed)
-    ) {
-      finishTaggedReasoningMessage();
-      if (classifyClaudeCommentary) {
-        flushPendingClaudeText("assistant");
-      }
-      segmentStart = currentMessageStart = preserveFrom = assistantText.length;
-      sawToolUseSinceText = false;
-      pendingMessageSeparator = false;
-      previousMessageHadToolUse = false;
-      currentMessageHadToolUse = false;
     }
     if (
       claudeStreamJson &&
@@ -378,11 +367,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (parsed.type === "result") {
+    const stopHookFeedback =
+      claudeStreamJson && !isClaudeSubagentRecord(parsed) && isClaudeStopHookFeedbackRecord(parsed);
+    if (parsed.type === "result" || stopHookFeedback) {
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeText("assistant");
       }
+    }
+
+    if (stopHookFeedback) {
+      resetReplySegment();
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -480,13 +475,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       // An interim result commits its segment. Rebase boundary state so later
       // text is judged on its own, while delta snapshots stay cumulative.
-      segmentStart = assistantText.length;
-      currentMessageStart = segmentStart;
-      preserveFrom = segmentStart;
-      pendingMessageSeparator = false;
-      sawToolUseSinceText = false;
-      currentMessageHadToolUse = false;
-      previousMessageHadToolUse = false;
+      resetReplySegment();
       return;
     }
 

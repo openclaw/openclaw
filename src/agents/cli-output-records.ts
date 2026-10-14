@@ -385,12 +385,8 @@ export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean
   return parsed.parent_tool_use_id != null;
 }
 
-// A Claude Code Stop-hook rejection replays the refused draft back to the model
-// as a top-level user text record ("Stop hook feedback: …") and/or a system
-// notification keyed `stop-hook`, always between the rejected message and the
-// rewrite. Tool results never carry a text block alongside them, so requiring
-// text and no tool_result keeps real tool-result records out of this
-// classification.
+// Stop-hook feedback arrives between the rejected message and its rewrite.
+// Tool-result records and subagent traffic must retain their ordinary boundaries.
 export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>): boolean {
   if (parsed.type === "system") {
     return (
@@ -408,7 +404,7 @@ export function isClaudeStopHookFeedbackRecord(parsed: Record<string, unknown>):
   }
   return (
     content.some((block) => isRecord(block) && block.type === "text") &&
-    !content.some((block) => isRecord(block) && block.type === "tool_result")
+    !content.some((block) => isRecord(block) && isClaudeToolResultBlockType(block.type))
   );
 }
 
