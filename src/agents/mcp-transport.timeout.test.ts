@@ -42,9 +42,9 @@ describe("MCP HTTP stream timeouts", () => {
   it.for(["headers", "body"] as const)(
     "completes a tool call silent beyond the default %s timeout",
     async (stage, { signal }) => {
-      const toolReceived = createDeferred<void>();
-      const bodyReceived = createDeferred<void>();
-      const finishTool = createDeferred<void>();
+      const toolReceived = createDeferred();
+      const bodyReceived = createDeferred();
+      const finishTool = createDeferred();
       const fixture = await reserveTestPortListener({
         offsets: [0],
         createListener: () =>
