@@ -59,25 +59,38 @@ const isWarning = (comment) =>
   [WARN, ASSIGNED_WARN].includes(comment.body.split("\n\n<!-- barnacle-stale-pr:v1")[0].trimEnd());
 
 function cheapProtection(pr) {
-  if (pr.state !== "open" || pr.merged) return "closed-or-merged";
-  if (labelsOf(pr).some((label) => PROTECTED.has(label))) return "protected-label";
-  if (ASSOCIATIONS.has(pr.author_association)) return "maintainer-author";
+  if (pr.state !== "open" || pr.merged) {
+    return "closed-or-merged";
+  }
+  if (labelsOf(pr).some((label) => PROTECTED.has(label))) {
+    return "protected-label";
+  }
+  if (ASSOCIATIONS.has(pr.author_association)) {
+    return "maintainer-author";
+  }
   return null;
 }
 
 function securityProtection(comments, pr) {
   for (const comment of comments) {
-    if (comment.user?.id !== CLAWSWEEPER || comment.performed_via_github_app?.id !== 3306130)
+    if (comment.user?.id !== CLAWSWEEPER || comment.performed_via_github_app?.id !== 3306130) {
       continue;
+    }
     // Human text is explanatory; only the review owner's exact-head markers are authority.
     for (const marker of comment.body.matchAll(
       /<!--\s*clawsweeper-(security|verdict|review-state):([a-z-]+)([\s\S]*?)-->/g,
     )) {
-      if (marker[1] !== "security" || marker[2] !== "security-sensitive") continue;
+      if (marker[1] !== "security" || marker[2] !== "security-sensitive") {
+        continue;
+      }
       const item = /\bitem=(\d+)\b/.exec(marker[3]);
       const sha = /\bsha=([0-9a-f]{40})\b/.exec(marker[3]);
-      if (!item || !sha) return "unknown-security-marker";
-      if (Number(item[1]) !== pr.number) continue;
+      if (!item || !sha) {
+        return "unknown-security-marker";
+      }
+      if (Number(item[1]) !== pr.number) {
+        continue;
+      }
       return sha[1] === pr.head.sha ? "security-review-required" : "unknown-security-head";
     }
   }
@@ -87,7 +100,7 @@ function securityProtection(comments, pr) {
 function latestWarning(snapshot) {
   return snapshot.comments
     .filter((comment) => trustedBarnacle(comment) && isWarning(comment))
-    .sort((a, b) => time(b.created_at) - time(a.created_at) || b.id - a.id)[0];
+    .toSorted((a, b) => time(b.created_at) - time(a.created_at) || b.id - a.id)[0];
 }
 
 function headWitnesses(snapshot) {
@@ -121,11 +134,16 @@ function headWitnesses(snapshot) {
 function activityAt(snapshot, ignoredComment) {
   let latest = time(snapshot.pr.created_at);
   const witnesses = headWitnesses(snapshot);
-  if (witnesses.length)
+  if (witnesses.length) {
     latest = Math.max(latest, Math.min(...witnesses.map((witness) => witness.at)));
-  if (!automated(snapshot.editor)) latest = Math.max(latest, time(snapshot.lastEditedAt));
+  }
+  if (!automated(snapshot.editor)) {
+    latest = Math.max(latest, time(snapshot.lastEditedAt));
+  }
   for (const comment of [...snapshot.comments, ...snapshot.reviewComments, ...snapshot.reviews]) {
-    if (comment.id === ignoredComment || automated(comment.user ?? comment.author)) continue;
+    if (comment.id === ignoredComment || automated(comment.user ?? comment.author)) {
+      continue;
+    }
     latest = Math.max(
       latest,
       time(comment.updated_at ?? comment.updatedAt),
@@ -145,7 +163,7 @@ function activityAt(snapshot, ignoredComment) {
 }
 
 /** Evaluate only authoritative GitHub facts; never use the PR's raw updated_at. */
-export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment) {
+export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment = null) {
   const { pr, comments, runs } = snapshot;
   const head = pr.head.sha;
   const result = (action, reason, extra = {}) => ({
@@ -155,22 +173,30 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment) 
     reason,
     ...extra,
   });
-  if (snapshot.unstable) return result("preserve", "changed-during-observation");
+  if (snapshot.unstable) {
+    return result("preserve", "changed-during-observation");
+  }
   const protectedReason =
     cheapProtection(pr) ||
     snapshot.ownershipProtection ||
     securityProtection(comments, pr) ||
     snapshot.historyProtection;
-  if (protectedReason) return result("preserve", protectedReason);
+  if (protectedReason) {
+    return result("preserve", protectedReason);
+  }
   const latestStatuses = new Map();
-  for (const status of snapshot.statuses ?? [])
-    if (!latestStatuses.has(status.context)) latestStatuses.set(status.context, status);
+  for (const status of snapshot.statuses ?? []) {
+    if (!latestStatuses.has(status.context)) {
+      latestStatuses.set(status.context, status);
+    }
+  }
   if (
     [...latestStatuses.values()].some(
       (status) => CI_GATES.has(status.context) && status.state === "success",
     )
-  )
+  ) {
     return result("preserve", "executed-ci-proof");
+  }
   // A named exact-head gate can be green while old, unrelated checks leave the rollup red.
   if (
     runs.some(
@@ -198,11 +224,14 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment) 
   const assigned = pr.assignees.length > 0;
   const eligibleAt = assigned ? time(pr.created_at) + 27 * DAY : activity + 14 * DAY;
   if (!warning) {
-    if (!assigned && !witnesses.length) return result("preserve", "unknown-head-timing");
-    if (now < eligibleAt)
+    if (!assigned && !witnesses.length) {
+      return result("preserve", "unknown-head-timing");
+    }
+    if (now < eligibleAt) {
       return result("preserve", "initial-inactivity", {
         eligibleAt: new Date(eligibleAt).toISOString(),
       });
+    }
     return result("warn", "initial-warning");
   }
   const warningAt = time(warning.created_at);
@@ -213,34 +242,39 @@ export function evaluatePullRequest(snapshot, now = Date.now(), ignoredComment) 
       { eligibleAt: new Date(eligibleAt).toISOString() },
     );
   }
-  if (warning.updated_at !== warning.created_at)
+  if (warning.updated_at !== warning.created_at) {
     return result(
       witnesses.length || assigned ? "warn" : "preserve",
       witnesses.length || assigned ? "edited-warning" : "unknown-head-timing",
     );
+  }
   const marker = /<!-- barnacle-stale-pr:v1 head=([0-9a-f]{40}) -->/.exec(warning.body);
   let witness = marker?.[1] === head ? "warning-head" : null;
-  if (marker && marker[1] !== head)
+  if (marker && marker[1] !== head) {
     return result(
       witnesses.length ? "warn" : "preserve",
       witnesses.length ? "head-changed" : "unknown-head-timing",
     );
+  }
   if (!marker) {
     // Fork PR association arrays can be empty. The immutable workflow run must
     // bind the PR's source repository, branch and head after this PR was opened.
     witness = witnesses.find((item) => item.at <= warningAt)?.source;
   }
-  if (!witness) return result("preserve", "unknown-legacy-head");
+  if (!witness) {
+    return result("preserve", "unknown-legacy-head");
+  }
   if (activity > warningAt) {
     return result("warn", "activity-after-warning");
   }
   const closeAt = Math.max(warningAt + 7 * DAY, assigned ? time(pr.created_at) + 34 * DAY : 0);
-  if (now < closeAt)
+  if (now < closeAt) {
     return result("preserve", "warning-grace", {
       warning: warning.id,
       witness,
       eligibleAt: new Date(closeAt).toISOString(),
     });
+  }
   return result("close", "expired-warning", {
     warning: warning.id,
     witness,
@@ -272,20 +306,27 @@ function reader(github, checksGithub, context, budget) {
     );
   const reserve = (needed) => {
     const total = Object.values(needed).reduce((sum, count) => sum + count, 0);
-    if (requests + total > budget) throw exhausted(`${requests}/${budget}, need ${total}`);
+    if (requests + total > budget) {
+      throw exhausted(`${requests}/${budget}, need ${total}`);
+    }
     for (const [lane, count] of Object.entries(needed)) {
-      if (quotas[lane] && quotas[lane].remaining < count + 10)
+      if (quotas[lane] && quotas[lane].remaining < count + 10) {
         throw exhausted(`${lane} remaining=${quotas[lane].remaining}, reset=${quotas[lane].reset}`);
+      }
     }
   };
   const take = (lane) => {
     reserve({ [lane]: 1 });
     requests++;
     usage[lane]++;
-    if (quotas[lane]) quotas[lane].remaining--;
+    if (quotas[lane]) {
+      quotas[lane].remaining--;
+    }
   };
   const update = (lane, remaining, reset) => {
-    if (!Number.isFinite(Number(remaining))) return;
+    if (!Number.isFinite(Number(remaining))) {
+      return;
+    }
     const previous = quotas[lane];
     quotas[lane] = {
       remaining: previous ? Math.min(previous.remaining, Number(remaining)) : Number(remaining),
@@ -308,15 +349,18 @@ function reader(github, checksGithub, context, budget) {
       call(checksGithub.rest.rateLimit.get, {}, "checks"),
     ]);
     const failure = results.find((result) => result.status === "rejected");
-    if (failure) throw failure.reason;
+    if (failure) {
+      throw failure.reason;
+    }
     const [app, checks] = results.map((result) => result.value.data.resources);
     for (const [lane, resource] of [
       ["app", app.core],
       ["checks", checks.core],
       ["graphql", checks.graphql],
     ]) {
-      if (!resource || !Number.isFinite(resource.remaining))
+      if (!resource || !Number.isFinite(resource.remaining)) {
         throw new Error(`Missing ${lane} quota evidence`);
+      }
       quotas[lane] = { remaining: resource.remaining, reset: resource.reset };
     }
   };
@@ -331,7 +375,9 @@ function reader(github, checksGithub, context, budget) {
       }
       const batch = key ? data[key] : data;
       rows.push(...batch);
-      if (batch.length < 100) return rows;
+      if (batch.length < 100) {
+        return rows;
+      }
     }
     throw new Error("Stale PR pagination incomplete after 100 pages; checkpoint unchanged");
   };
@@ -380,7 +426,9 @@ async function snapshotOf(github, checksGithub, io, number) {
   const failure = observations.find(
     (item) => item.status === "rejected" && item.reason.code !== "STALE_PR_HISTORY",
   );
-  if (failure) throw failure.reason;
+  if (failure) {
+    throw failure.reason;
+  }
   const historyProtection = observations.some((item) => item.status === "rejected")
     ? "incomplete-workflow-history"
     : null;
@@ -416,12 +464,16 @@ async function snapshotOf(github, checksGithub, io, number) {
       const { data } = await io.call(github.rest.repos.getCollaboratorPermissionLevel, {
         username: user.login,
       });
-      if (ROLES.has(data.permission) || ROLES.has(data.role_name))
+      if (ROLES.has(data.permission) || ROLES.has(data.role_name)) {
         ownershipProtection = "maintainer-ownership";
+      }
     } catch (error) {
       // Missing/unknown permission evidence must not authorize a closure.
-      if (error.status === 403 || error.status === 404) ownershipProtection = "unknown-ownership";
-      else throw error;
+      if (error.status === 403 || error.status === 404) {
+        ownershipProtection = "unknown-ownership";
+      } else {
+        throw error;
+      }
     }
   }
   const { data: observed } = await io.call(github.rest.pulls.get, { pull_number: number });
@@ -455,8 +507,9 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
   const before = io.usage();
   const fresh = await snapshotOf(github, checksGithub, io, decision.number);
   const checked = evaluatePullRequest(fresh, now());
-  if (!sameDecision(decision, checked))
+  if (!sameDecision(decision, checked)) {
     return { ...checked, action: "preserve", reason: "changed-before-mutation" };
+  }
   const after = io.usage();
   // Reserve a complete second observation plus effects/readbacks before writing.
   // Larger concurrent pagination still fails visibly as an unfinished mutation.
@@ -496,15 +549,18 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
       const { data: stored } = await io.call(github.rest.issues.getComment, {
         comment_id: comment.id,
       });
-      if (!validComment(stored, body)) throw new Error("Warning readback mismatch");
-      const after = await snapshotOf(github, checksGithub, io, decision.number);
-      const afterDecision = evaluatePullRequest(after, now());
+      if (!validComment(stored, body)) {
+        throw new Error("Warning readback mismatch");
+      }
+      const afterWarning = await snapshotOf(github, checksGithub, io, decision.number);
+      const afterDecision = evaluatePullRequest(afterWarning, now());
       if (
         afterDecision.head !== decision.head ||
         afterDecision.reason !== "warning-grace" ||
         afterDecision.warning !== stored.id
-      )
+      ) {
         return { ...afterDecision, action: "preserve", reason: "changed-after-warning" };
+      }
       await write(mutationGithub.rest.issues.addLabels, { ...base, labels: ["stale"] });
     } else if (decision.action === "close") {
       let commentId = checked.closeComment;
@@ -527,15 +583,18 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
         now(),
         commentId,
       );
-      if (!sameDecision(checked, final))
+      if (!sameDecision(checked, final)) {
         return { ...final, action: "preserve", reason: "changed-before-close" };
+      }
       io.reserve({ app: 3 });
       const { data: closed } = await write(mutationGithub.rest.pulls.update, {
         pull_number: decision.number,
         state: "closed",
       });
       progress.closed = closed.state === "closed";
-      if (!progress.closed) throw new Error("Closure response did not confirm closed state");
+      if (!progress.closed) {
+        throw new Error("Closure response did not confirm closed state");
+      }
       const { data: terminal } = await io.call(github.rest.pulls.get, {
         pull_number: decision.number,
       });
@@ -546,12 +605,15 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
         terminal.merged ||
         terminal.head.sha !== decision.head ||
         issue.closed_by?.id !== actor
-      )
+      ) {
         throw new Error("Closure readback or actor mismatch");
+      }
     }
     return { ...decision, commentId: progress.commentId };
   } catch (cause) {
-    if (!progress.attempted) throw cause;
+    if (!progress.attempted) {
+      throw cause;
+    }
     throw Object.assign(
       new Error(`Unfinished PR mutation ${JSON.stringify(progress)}: ${cause.message}`),
       { code: "STALE_PR_MUTATION", progress },
@@ -578,10 +640,11 @@ export async function runStalePullRequests({
     !github ||
     !checksGithub ||
     (!dryRun && (!mutationGithub || ![...BARNACLE.values()].includes(expectedAppId)))
-  )
+  ) {
     throw new Error(
       "Explicit app reader, checks reader and live Barnacle writer identity are required",
     );
+  }
   const io = reader(github, checksGithub, context, 4500);
   if (
     !Number.isSafeInteger(maxClosures) ||
@@ -590,10 +653,12 @@ export async function runStalePullRequests({
     !Number.isSafeInteger(detailLimit) ||
     detailLimit < 1 ||
     detailLimit > 350
-  )
+  ) {
     throw new Error("Invalid stale PR run bounds");
-  if (targets.length > 1000 || targets.some((id) => !Number.isSafeInteger(id) || id <= 0))
+  }
+  if (targets.length > 1000 || targets.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
     throw new Error("Invalid PR targets (maximum 1000 positive PR numbers)");
+  }
   await io.init();
   core.info(`Initial API quotas ${JSON.stringify(io.quotas())}`);
   const exact = targets.length > 0;
@@ -602,9 +667,13 @@ export async function runStalePullRequests({
     try {
       checkpoint = JSON.parse(await readFile(cursorPath, "utf8")).lastNumber;
     } catch (error) {
-      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
+        throw error;
+      }
     }
-    if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) checkpoint = null;
+    if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) {
+      checkpoint = null;
+    }
   }
   const metadataStart = io.count();
   const items = exact
@@ -627,6 +696,7 @@ export async function runStalePullRequests({
   let closed = 0;
   let lastNumber = checkpoint;
   let exhausted = false;
+  /** @type {Error | undefined} */
   let unfinished;
   for (const item of slice.selected) {
     try {
@@ -648,7 +718,9 @@ export async function runStalePullRequests({
           decision,
           now,
         );
-        if (decision.action === "close") closed++;
+        if (decision.action === "close") {
+          closed++;
+        }
       } else if (!dryRun && decision.action === "close") {
         // Do not advance over eligible closures that the per-run cap left untouched.
         break;
@@ -668,7 +740,9 @@ export async function runStalePullRequests({
         core.error?.(error.message);
         break;
       }
-      if (error.code !== "STALE_PR_BUDGET") throw error;
+      if (error.code !== "STALE_PR_BUDGET") {
+        throw error;
+      }
       core.warning?.(error.message);
       exhausted = true;
       break;
@@ -699,11 +773,14 @@ export async function runStalePullRequests({
     unfinished: Boolean(unfinished),
   };
   core.info(`Stale PR scan ${JSON.stringify(summary)}`);
-  if (core.summary)
+  if (core.summary) {
     await core.summary
       .addHeading("Barnacle stale PR lifecycle")
       .addCodeBlock(JSON.stringify({ ...summary, decisions }, null, 2), "json")
       .write();
-  if (unfinished) throw unfinished;
+  }
+  if (unfinished) {
+    throw unfinished;
+  }
   return { ...summary, decisions };
 }

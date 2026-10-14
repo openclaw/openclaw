@@ -777,15 +777,18 @@ AFTER_CD
       );
 
     for (const name of [
-      "Mark stale unassigned issues and pull requests (primary)",
+      "Mark stale unassigned issues (primary)",
       "Mark stale assigned issues (primary)",
-      "Mark stale unassigned issues and pull requests (fallback)",
+      "Mark stale unassigned issues (fallback)",
       "Mark stale assigned issues (fallback)",
     ]) {
       const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
         .split(",")
         .map((label) => label.trim());
       expect(exemptLabels, name).toContain("bug");
+      expect(String(stepNamed(name).with?.["days-before-pr-stale"]), name).toBe("-1");
+      expect(String(stepNamed(name).with?.["days-before-pr-close"]), name).toBe("-1");
+      expect(String(stepNamed(name).with?.["remove-pr-stale-when-updated"]), name).toBe("false");
     }
 
     const bugJob = staleWorkflow.jobs["stale-bug-verification"];
@@ -2893,6 +2896,23 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step, jobId, jobCondition } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
+        if (step.with?.path === ".cache/barnacle-pr-scan.json") {
+          expect(file).toBe(".github/workflows/stale.yml");
+          expect(jobId).toBe("stale-pull-requests");
+          expect(step.with).toEqual({
+            path: ".cache/barnacle-pr-scan.json",
+            key: "barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}",
+          });
+          expect(step.if).toBe(
+            "${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}",
+          );
+          const workflow = readWorkflow(file);
+          expect(workflow.jobs["stale-pull-requests"].concurrency).toEqual({
+            group: "barnacle-stale-pr-lifecycle",
+            "cancel-in-progress": false,
+          });
+          continue;
+        }
         if (step.with?.path === "full-release-execution-plan") {
           expect(file).toBe(".github/workflows/full-release-validation.yml");
           expect(jobId).toBe("release_execution_plan");
