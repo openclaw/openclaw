@@ -345,6 +345,9 @@ export function isPreparedNativeModelCatalogReady(params: {
   if (!selection && params.catalogAcquired !== true) {
     return false;
   }
+  if (!selection && !snapshot.routeVariants.some((entry) => entry.nativeRuntime)) {
+    return true;
+  }
   let scope: AgentHarnessModelCatalogParams | undefined;
   const readReady = (entry: ModelCatalogEntry) => {
     const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
