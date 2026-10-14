@@ -47,6 +47,7 @@ function isOwnerSelectedUiE2eTest(file: string): boolean {
 export const CI_PROOF_TEST_FILES = [
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "src/gateway/gateway.sessions-send-provenance.e2e.test.ts",
+  "src/gateway/gateway.sessions-send-recovery.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
   "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",

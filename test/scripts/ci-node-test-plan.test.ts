@@ -3084,7 +3084,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("retains the caught Codex recovery contract in main, PR, and manual Node plans", () => {
+  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
     const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
     const files = (mode: "push" | "pull-request") =>
       getCommittedCompactPlan(mode).flatMap((shard) =>
@@ -3116,6 +3116,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
+
+    const coldRecovery = "src/gateway/gateway.sessions-send-recovery.test.ts";
+    expect(mainFiles.filter((file) => file === coldRecovery)).toHaveLength(1);
+    expect(prFiles).not.toContain(coldRecovery);
+    const coldOwners = defaultShards.flatMap((shard) =>
+      (shard.includePatterns ?? []).filter((file) => file === coldRecovery).map(() => shard),
+    );
+    expect(coldOwners).toHaveLength(1);
+    expect(coldOwners[0]).toMatchObject({
+      configs: expect.arrayContaining(["test/vitest/vitest.gateway-core.config.ts"]),
+      pretestBuildMode: "runtime",
+    });
   });
 
   it.each(["github"])(

@@ -7,6 +7,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import {
   closeProvider,
   listenProvider,
@@ -135,16 +136,24 @@ it(
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+      const deviceIdentity = generateStoredDeviceIdentity();
       const connect = () =>
         acquireGatewayTestClient(
           {
-            deviceIdentity: null,
+            deviceIdentity,
+            env: gateway.state.env,
             url: gateway.url,
             token: gateway.gatewayToken,
-            clientName: "cli",
-            mode: "cli",
+            clientName: "test",
+            mode: "test",
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write"],
+            // Reconnect with explicit credentials; this fixture has no local token cache.
+            hostDeps: {
+              loadDeviceAuthToken: () => null,
+              storeDeviceAuthToken: () => {},
+              clearDeviceAuthToken: () => {},
+            },
           },
           {
             timeoutMs: 30_000,

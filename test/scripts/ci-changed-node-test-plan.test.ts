@@ -366,6 +366,7 @@ describe("CI changed Node test plan", () => {
     expect(files).toContain(ordinary);
     expect(files.some(isCiProofTestFile)).toBe(false);
     const dedicatedProofs = [
+      "src/gateway/gateway.sessions-send-recovery.test.ts",
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
       "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
       "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
