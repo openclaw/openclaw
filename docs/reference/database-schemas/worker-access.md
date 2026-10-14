@@ -453,6 +453,10 @@ worker snapshot; discovery still reads only metadata. Its transcript statistics
 batch carries the rewrite generation and hot/cold state alongside the bounds,
 so the subsequent scan reuses those facts without another watermark read. A
 rewrite during a background scan converges on the next receipt-driven refresh.
+Each operation captures its logical session-store selectors and physical database
+owners before borrowing custody. Discovery, archive reads, and replay reuse those
+bindings, so a warm worker cannot substitute an older registry lookup. Existing
+custody and read-only ownership validation still guard every database read.
 Usage reports capture cache metadata, bodies, and selected monthly partitions in
 one synchronous engine read snapshot, then close it before asynchronous transcript
 discovery, replay, or pricing. Concurrent refreshes cannot change those captured

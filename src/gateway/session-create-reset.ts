@@ -35,6 +35,7 @@ export function tryResetGatewaySessionForCreation(
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    !params.deviceFolder &&
     !requestedToolOverrides &&
     !parentIncognito &&
     // Catalog targets need a fresh locked row; resetting main would return before

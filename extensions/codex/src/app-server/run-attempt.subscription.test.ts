@@ -11,6 +11,7 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
@@ -96,6 +97,9 @@ describe("Codex attempt subscription recovery", () => {
     let turns = 0;
     const harness = createStartedThreadHarness(
       async (method) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
         if (method === "thread/start") {
           return threadStartResult(++starts === 1 ? "thread-1" : "thread-sibling");
         }
@@ -109,6 +113,7 @@ describe("Codex attempt subscription recovery", () => {
       },
       { persistedThreads: [] },
     );
+    ownCodexInferenceClient(harness.client);
     const first = runCodexAppServerAttempt(params);
     await first.waitForTurnAccepted();
     const sibling = runCodexAppServerAttempt(siblingParams);

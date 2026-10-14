@@ -48,7 +48,8 @@ export function runPostgresTransactionSync<T>(
         }
         const commit = () => {
           assertPostgresOperationCurrent();
-          db.exec("COMMIT");
+          // End read snapshots without publishing the connection's COMMIT write receipt.
+          db.exec(readOnly ? "ROLLBACK" : "COMMIT");
         };
         if (options?.withCommit) {
           assertSyncTransactionResult(options.withCommit(commit));

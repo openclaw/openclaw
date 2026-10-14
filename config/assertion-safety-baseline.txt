@@ -793,7 +793,6 @@ extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1
 extensions/slack/src/http/plugin-routes.ts	1
-extensions/slack/src/http/registry.ts	2
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
@@ -918,7 +917,7 @@ extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
-extensions/twitch/src/twitch-ingress.ts	4
+extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	2
@@ -1219,7 +1218,7 @@ src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
-src/agents/embedded-agent-helpers/openai.ts	17
+src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1

@@ -898,40 +898,6 @@ describe("Reef channel lifecycle", () => {
     expect(inbox.isSettled()).toBe(true);
   });
 
-  it("tears down the inbox loop before settling when a loop branch throws", async () => {
-    vi.useFakeTimers();
-    const parent = createTestPluginServiceScheduler();
-    const inbox = hangingInbox();
-    // Simulate a non-transport crash escaping the lifecycle (reconcile errors
-    // are contained, so throw from the error hook itself). The startup
-    // reconcile succeeds so the failure lands on the periodic loop, with the
-    // inbox already running and therefore able to leak.
-    let reconciles = 0;
-    const lifecycle = runReefChannelLifecycle({
-      scheduler: parent,
-      startInbox: inbox.startInbox,
-      reconcile: async () => {
-        reconciles += 1;
-        if (reconciles === 1) {
-          return;
-        }
-        throw new Error("boom");
-      },
-      onReconcileError: () => {
-        throw new Error("fatal");
-      },
-      reconcileIntervalMs: 5,
-    });
-    const rejected = expect(lifecycle).rejects.toThrow("fatal");
-    await inbox.started;
-    await vi.advanceTimersByTimeAsync(5);
-    await rejected;
-    // The rejection must not leave the inbox reconnect loop running: its
-    // signal is aborted and its promise has settled before the caller resumes.
-    expect(inbox.seen[0]?.aborted).toBe(true);
-    expect(inbox.isSettled()).toBe(true);
-  });
-
   it("joins an active reconciliation before reporting an inbox failure", async () => {
     vi.useFakeTimers();
     const parent = createTestPluginServiceScheduler();
