@@ -506,6 +506,26 @@ test("users.prefs dispatch saves guest choices only to the authenticated durable
       { status: "ok", entries: {} },
       undefined,
     ]);
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let reachedCommit = false;
+    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+    admission.mockImplementation((admit, attachment) =>
+      createAdmission((workerRequest, grant) => {
+        if (workerRequest.stage === "commit") {
+          reachedCommit = true;
+          adaClient.connect.scopes = [];
+        }
+        admit(workerRequest, grant);
+      }, attachment),
+    );
+    expect(
+      await request("users.prefs.set", { entries: { [key]: { folder: "/revoked" } } }),
+    ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+    expect(reachedCommit).toBe(true);
+    expect(await preferences.getCanonicalUserPreferences(ada.id)).toMatchObject({
+      entries: { [key]: { ...choice, worktreeName: "focused-fix" } },
+    });
+    admission.mockRestore();
     linkEmail("ada@example.test", grace.id);
     expect(await request("users.prefs.get", {}, graceClient)).toEqual([
       true,
