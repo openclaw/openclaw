@@ -161,13 +161,11 @@ export async function prepareModelChoice(params: {
             owner = materializePreparedModelCatalogOwner(owner);
             ({ decisions, entry, auth } = await decide(owner.modelCatalog));
           }
-          const nativeLogin = auth.runtimeAuth && owner.authModes[auth.runtimeAuth.id];
           // Native readiness can be unknown before discovery or after its client retires.
           // Acquire it once through the owner's native load before admitting the choice.
           if (
             auth.availability !== true &&
             auth.runtimeAuth?.source === "native" &&
-            !(typeof nativeLogin === "object" && nativeLogin.readiness === "missing") &&
             owner.loadNativeModelCatalog
           ) {
             const renewed = await owner
@@ -202,8 +200,7 @@ export async function prepareModelChoice(params: {
               kind: "unavailable",
               error:
                 renewalError === undefined
-                  ? (auth.unavailableMessage ??
-                    `The selected account or native runtime is unavailable for ${key}. Restore that account before spawning this model.`)
+                  ? `The selected account or native runtime is unavailable for ${key}. Restore that account before spawning this model.`
                   : `The native runtime is unavailable for ${key}: native catalog renewal failed: ${formatErrorMessage(renewalError)}`,
             };
           }

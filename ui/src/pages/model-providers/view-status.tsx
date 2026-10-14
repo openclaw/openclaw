@@ -15,8 +15,6 @@ const AUTH_STATUS: Record<
   expired: { kind: "danger", labelKey: "modelProviders.status.expired" },
   missing: { kind: "danger", labelKey: "modelProviders.status.missing" },
   "api-key": { kind: "muted", labelKey: "modelProviders.status.apiKey" },
-  configured: { kind: "muted", labelKey: "modelProviders.status.configured" },
-  unknown: { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" },
 };
 
 function renderAuthStatus(card: ModelProviderCard) {
@@ -32,18 +30,13 @@ function renderAuthStatus(card: ModelProviderCard) {
   return (
     <span title={detail ?? label}>
       {" "}
-      <SettingsStatus kind={status.kind} label={label} /> {card.nativeAuth?.message}
+      <SettingsStatus kind={status.kind} label={label} />{" "}
     </span>
   );
 }
 
 export function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return (
-    card.nativeAuth?.readiness === "configured" ||
-    card.hasConfigApiKey ||
-    Boolean(card.apiKey) ||
-    card.profiles.length > 0
-  );
+  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
 }
 
 function needsAuthAttention(card: ModelProviderCard): boolean {
@@ -73,9 +66,6 @@ export function renderProviderStatus(card: ModelProviderCard) {
   }
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
-  }
-  if (card.nativeAuth) {
-    return renderAuthStatus(card);
   }
   if (!hasProviderCredentials(card)) {
     return renderAuthStatus(card);

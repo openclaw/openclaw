@@ -340,7 +340,7 @@ export async function prepareWorkspaceBuildGroup(
               registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
               ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
             }),
-        configuredProviderIds,
+        catalogMode === "static" ? options.providerDiscoveryProviderIds : configuredProviderIds,
       ),
       ...(catalogMode === "static"
         ? {

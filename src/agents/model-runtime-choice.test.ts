@@ -843,6 +843,30 @@ describe("prepared model support admission", () => {
     agents: { defaults: { model: "fixture/native", models: { "fixture/native": {} } } },
   };
 
+  it("awaits recovered native auth before falling back to catalog renewal", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "fixture/native",
+          models: { "fixture/native": { agentRuntime: { id: "native-test" } } },
+        },
+      },
+    };
+    const { state, reload } = publishNativeRenewal(config);
+    state.registered = false;
+    state.renewalRegisters = false;
+    const recheckNativeLogin = vi.fn(async () => {
+      await Promise.resolve();
+      state.registered = true;
+    });
+    Object.assign(published.owner!, { recheckNativeLogin });
+    expect(
+      await prepareModelChoice({ ...selection, cfg: config, raw: "fixture/native" }),
+    ).toMatchObject(nativeResolved);
+    expect(recheckNativeLogin).toHaveBeenCalledExactlyOnceWith({ force: true });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it.each([
     { ownership: "catalog", source: "override" },
     { ownership: "catalog", source: "automatic" },

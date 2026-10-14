@@ -25,12 +25,7 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
   expiresAt?: number;
   /** Native presence authorizes only this runtime, never a provider bearer request. */
-  nativeAuth?: {
-    runtime: string;
-    mode: "api-key" | "oauth" | "token";
-    readiness?: "configured" | "unknown" | "missing";
-    message?: string;
-  };
+  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
 };
 
 /** Context for resolving external provider auth profiles. */

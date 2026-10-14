@@ -119,50 +119,6 @@ describe("renderModelProviders", () => {
     await i18n.setLocale("en");
   });
 
-  it("shows native readiness without offering provider-owned credential actions", () => {
-    const container = document.createElement("div");
-    for (const [readiness, label] of [
-      ["configured", "Credentials configured"],
-      ["unknown", "Not verified"],
-      ["missing", "Sign in required"],
-    ] as const) {
-      mount(
-        props({
-          cards: [
-            card({
-              id: "claude-cli",
-              displayName: "Claude",
-              apiKey: undefined,
-              nativeAuth: { runtimeId: "claude-cli", mode: "oauth", readiness },
-            }),
-            card(),
-          ],
-        }),
-        container,
-      );
-      expect(
-        text(
-          container.querySelector(
-            '[data-provider-id="claude-cli"] .model-providers__credentials strong',
-          ),
-        ),
-      ).toBe(label);
-      expect(
-        text(
-          container.querySelector(
-            '[data-provider-id="openai"] .model-providers__credentials strong',
-          ),
-        ),
-      ).toBe("API key from environment (OPENAI_API_KEY)");
-      const native = container.querySelector('[data-provider-id="claude-cli"]')!;
-      expect(button(native, "Set API key")).toBeUndefined();
-      expect(button(native, "Test connection")).toBeUndefined();
-      const api = container.querySelector('[data-provider-id="openai"]')!;
-      expect(button(api, "Set API key")).toBeDefined();
-      expect(button(api, "Test connection")).toBeDefined();
-    }
-  });
-
   it("keeps discovery failure recovery visible while another provider is pending", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
@@ -570,26 +526,6 @@ describe("renderModelProviders", () => {
       expect(text(provider)).not.toContain("Signed in");
       expect(text(container.querySelector(".model-providers__profile-status"))).toContain(
         "Credentials configured",
-      );
-    },
-  );
-
-  it.each(["auth-rejected", "unavailable"] as const)(
-    "shows a native catalog %s outcome instead of only configured metadata",
-    (catalogStatus) => {
-      const container = mount(
-        props({
-          cards: [
-            card({
-              nativeAuth: { runtimeId: "claude-cli", mode: "oauth", readiness: "configured" },
-              auth: { kind: "configured" },
-              catalogStatus,
-            }),
-          ],
-        }),
-      );
-      expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
-        catalogStatus === "auth-rejected" ? "Credentials rejected" : "Models unavailable",
       );
     },
   );

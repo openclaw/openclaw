@@ -530,32 +530,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               : undefined,
         });
       }
-      for (const [runtimeId, mode] of Object.entries(preparedSnapshot.authModes)) {
-        if (typeof mode !== "object") {
-          continue;
-        }
-        const readiness = mode.readiness ?? "configured";
-        const native: ModelAuthStatusProvider = {
-          provider: runtimeId,
-          displayName: providerDisplayName(runtimeId),
-          status:
-            readiness === "missing" ? "missing" : readiness === "configured" ? "ok" : "static",
-          profiles: [],
-          nativeAuth: {
-            runtimeId,
-            mode: mode.mode,
-            readiness,
-            ...(mode.message ? { message: mode.message } : {}),
-          },
-        };
-        const provider = providers.find((entry) => entry.provider === native.provider);
-        if (provider) {
-          provider.nativeAuth = native.nativeAuth;
-          provider.status = native.status;
-        } else {
-          providers.push(native);
-        }
-      }
       const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
     });

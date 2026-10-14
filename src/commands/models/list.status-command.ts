@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   resolveAgentNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -55,7 +54,6 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
-import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
@@ -135,12 +133,6 @@ type StatusRuntimeAuthRouteBase = {
   runtime: string;
   authProvider: string;
   effective: ProviderAuthOverview["effective"];
-  nativeAuth?: {
-    runtimeId: string;
-    mode: "api_key" | "oauth" | "token";
-    readiness: "configured" | "unknown" | "missing";
-    message?: string;
-  };
 };
 
 type StatusRuntimeAuthRoute =
@@ -491,7 +483,7 @@ export async function modelsStatusCommand(
       );
       const createStatusAuthResolver = (
         authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
-        preparedRuntimeAuthModes: PreparedAgentCredentialModes = {},
+        nativeMode?: "api_key" | "oauth" | "token",
       ) =>
         createModelAuthAvailabilityResolver({
           cfg,
@@ -500,9 +492,11 @@ export async function modelsStatusCommand(
           agentDir,
           workspaceDir,
           env: process.env,
-          // Native facts choose a harness route without becoming host credentials.
+          // Native mode chooses a harness route without becoming a host credential.
           syntheticAuthProviderRefs: [...syntheticAuthProviderRefs],
-          preparedRuntimeAuthModes,
+          preparedRuntimeAuthModes: nativeMode
+            ? { codex: { source: "native", mode: nativeMode } }
+            : {},
           metadataSnapshot,
         });
       let authResolver = createStatusAuthResolver(store);
@@ -523,12 +517,6 @@ export async function modelsStatusCommand(
         providerDiscoveryProviderIds,
         readOnly: true,
       });
-      const catalogAuth = getPreparedModelFullCatalogAuth(catalog);
-      if (!catalogAuth) {
-        throw new Error("Prepared model catalog omitted its authentication facts.");
-      }
-      const { authModes } = catalogAuth;
-      authResolver = createStatusAuthResolver(store, authModes);
       const visibilityPolicy = createModelVisibilityPolicy({
         cfg,
         catalog: catalog.entries,
@@ -648,12 +636,7 @@ export async function modelsStatusCommand(
       const cliRuntimeAuthUsages = providerUses
         // Codex harness auth is already modeled by the selected OpenAI route.
         // CLI-runtime aliases are only for distinct backends such as Gemini CLI.
-        .filter(
-          (usage) =>
-            usage.allowCodexRuntimeFallback &&
-            !usage.usesCodexRuntimeAuth &&
-            usage.evaluation.runtimeAuth?.source !== "native",
-        )
+        .filter((usage) => usage.allowCodexRuntimeFallback && !usage.usesCodexRuntimeAuth)
         .map((usage) => {
           const runtimeProvider = resolveCliRuntimeExecutionProvider({
             provider: usage.provider,
@@ -700,11 +683,7 @@ export async function modelsStatusCommand(
       }
       for (const provider of syntheticProvidersToProbe) {
         const normalized = normalizeProviderId(provider);
-        const preparedMode = authModes[normalized];
-        if (
-          !syntheticAuthProviderRefs.has(normalized) ||
-          (normalized !== "codex" && typeof preparedMode === "object")
-        ) {
+        if (!syntheticAuthProviderRefs.has(normalized)) {
           continue;
         }
         const resolvedLocal = await prepareProviderSyntheticAuthWithPlugin({
@@ -756,15 +735,7 @@ export async function modelsStatusCommand(
             ...store,
             profiles: { ...store.profiles, ...syntheticProfiles },
           },
-          nativeCodexMode
-            ? {
-                ...authModes,
-                codex: authModes.codex ?? {
-                  source: "native",
-                  mode: nativeCodexMode === "api-key" ? "api_key" : nativeCodexMode,
-                },
-              }
-            : authModes,
+          nativeCodexMode === "api-key" ? "api_key" : nativeCodexMode,
         );
         providerUses = await resolveProviderUses(authResolver);
         codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
@@ -956,34 +927,6 @@ export async function modelsStatusCommand(
             },
           ] as const;
         }),
-        ...providerUses.flatMap((usage): Array<readonly [string, StatusRuntimeAuthRoute]> => {
-          const runtimeAuth = usage.evaluation.runtimeAuth;
-          if (usage.usesCodexRuntimeAuth || runtimeAuth?.source !== "native") {
-            return [];
-          }
-          const native = authModes[runtimeAuth.id];
-          if (!native || typeof native === "string") {
-            return [];
-          }
-          return [
-            [
-              `${usage.provider}:${runtimeAuth.id}:${runtimeAuth.id}`,
-              {
-                provider: usage.provider,
-                runtime: runtimeAuth.id,
-                authProvider: runtimeAuth.id,
-                status: usage.evaluation.availability === false ? "missing" : "usable",
-                effective: resolveRuntimeAuthRouteEffective(runtimeAuth.id, usage.evaluation),
-                nativeAuth: {
-                  runtimeId: runtimeAuth.id,
-                  mode: native.mode,
-                  readiness: native.readiness ?? "configured",
-                  ...(native.message ? { message: native.message } : {}),
-                },
-              },
-            ],
-          ];
-        }),
       ];
       const runtimeAuthRoutes = Array.from(
         new Map<string, StatusRuntimeAuthRoute>(runtimeAuthRouteEntries).values(),
@@ -1031,19 +974,13 @@ export async function modelsStatusCommand(
         new Set(
           providerUses
             .filter((usage) => !hasUsableAuthForProviderInUse(usage))
-            .map(
-              (usage) =>
-                usage.evaluation.runtimeAuth?.id ??
-                resolveCliRuntimeAuthProvider(usage) ??
-                usage.provider,
-            ),
+            .map((usage) => resolveCliRuntimeAuthProvider(usage) ?? usage.provider),
         ),
       )
         .filter(
           (provider) =>
             !isCliProvider(provider, cfg) ||
-            cliRuntimeAuthUsages.some((usage) => usage.runtime === provider) ||
-            runtimeAuthRoutes.some((route) => route.runtime === provider && route.nativeAuth),
+            cliRuntimeAuthUsages.some((usage) => usage.runtime === provider),
         )
         .toSorted((a, b) => a.localeCompare(b));
 
@@ -1367,19 +1304,12 @@ export async function modelsStatusCommand(
                     : ""
                 }`
               : "";
-          const nativeAuth = route.nativeAuth
-            ? `${formatSeparator()}${formatKeyValue("native", route.nativeAuth.readiness)}${
-                route.nativeAuth.message
-                  ? `${formatSeparator()}${colorize(rich, theme.muted, route.nativeAuth.message)}`
-                  : ""
-              }`
-            : "";
           runtime.log(
             `- ${theme.heading(route.provider)} via ${colorize(
               rich,
               theme.accentBright,
               route.runtime,
-            )} uses ${theme.heading(route.authProvider)} ${formatEffective(route.effective)}${formatSeparator()}${formatKeyValue("status", route.status)}${nativeAuth}${runtimeAvailability}`,
+            )} uses ${theme.heading(route.authProvider)} ${formatEffective(route.effective)}${formatSeparator()}${formatKeyValue("status", route.status)}${runtimeAvailability}`,
           );
         }
       }

@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 
-const { nativeLogin, discoverClaudeCliModels } = vi.hoisted(() => ({
-  nativeLogin: vi.fn(),
+const { probeClaudeCliAuthStatus, discoverClaudeCliModels } = vi.hoisted(() => ({
+  probeClaudeCliAuthStatus: vi.fn(),
   discoverClaudeCliModels: vi.fn(),
 }));
-vi.mock("./cli-auth-seam.js", () => ({ observeClaudeCliNativeLogin: nativeLogin }));
+vi.mock("./cli-auth-seam.js", () => ({ probeClaudeCliAuthStatus }));
 // mock-isolation: Generation tests must not spawn the installed Claude CLI or read native login.
 vi.mock("./cli-model-discovery.js", () => ({ discoverClaudeCliModels }));
 
@@ -12,7 +12,7 @@ import provider from "./provider-discovery.js";
 
 afterEach(() => {
   vi.useRealTimers();
-  nativeLogin.mockReset();
+  probeClaudeCliAuthStatus.mockReset();
   discoverClaudeCliModels.mockReset();
 });
 
@@ -29,10 +29,10 @@ it("prepares native availability once for a 632-workspace roster", async () => {
     },
   };
   const env = { CLAUDE_CONFIG_DIR: "/synthetic/native-account" };
-  nativeLogin.mockImplementation(
+  probeClaudeCliAuthStatus.mockImplementation(
     () =>
       new Promise((resolve) => {
-        setTimeout(() => resolve({ readiness: "missing" }), 250);
+        setTimeout(() => resolve({ status: "missing" }), 250);
       }),
   );
   const prepared = new Set<string>();
@@ -45,33 +45,24 @@ it("prepares native availability once for a 632-workspace roster", async () => {
   try {
     await vi.advanceTimersByTimeAsync(250);
     expect(prepared.size).toBe(632);
-    expect(nativeLogin).toHaveBeenCalledOnce();
+    expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
   } finally {
     await vi.runAllTimersAsync();
     await publication;
   }
 });
 
-it.each(["config", "environment", "login selector", "capture signal", "expired capture"])(
+it.each(["config", "environment", "capture signal"])(
   "reobserves native availability after a changed %s",
   async (changed) => {
     const config = {};
-    const env: NodeJS.ProcessEnv = {};
-    const signal = changed === "expired capture" ? undefined : new AbortController().signal;
+    const env = {};
+    const signal = new AbortController().signal;
     const input = { config, env, signal, provider: "claude-cli" };
-    nativeLogin
-      .mockResolvedValueOnce({ readiness: "missing" })
-      .mockResolvedValueOnce({ readiness: "configured" });
-    vi.useFakeTimers();
-    expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({
-      nativeAuth: { readiness: "missing" },
-    });
-    if (changed === "expired capture") {
-      vi.advanceTimersByTime(60_000);
-    }
-    if (changed === "login selector") {
-      env.CLAUDE_CONFIG_DIR = "/synthetic/changed-account";
-    }
+    probeClaudeCliAuthStatus
+      .mockResolvedValueOnce({ status: "available" })
+      .mockResolvedValueOnce({ status: "missing" });
+    expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({ mode: "oauth" });
     expect(
       await provider.prepareSyntheticAuth!({
         ...input,
@@ -79,8 +70,35 @@ it.each(["config", "environment", "login selector", "capture signal", "expired c
         ...(changed === "environment" ? { env: {} } : {}),
         ...(changed === "capture signal" ? { signal: new AbortController().signal } : {}),
       }),
-    ).toMatchObject({ nativeAuth: { readiness: "configured" } });
-    expect(nativeLogin).toHaveBeenCalledTimes(2);
+    ).toBeUndefined();
+    expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("expires a negative capture so a recovered login is observed", async () => {
+  vi.useFakeTimers();
+  const input = { config: {}, env: {}, provider: "claude-cli" };
+  probeClaudeCliAuthStatus
+    .mockResolvedValueOnce({ status: "missing" })
+    .mockResolvedValueOnce({ status: "available" });
+  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
+  expect(await provider.prepareSyntheticAuth!(input)).toBeUndefined();
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(await provider.prepareSyntheticAuth!(input)).toMatchObject({ mode: "oauth" });
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
+});
+
+it.each(["timeout", "unreadable", "missing"])(
+  "admits an inconclusive %s probe but blocks an explicit missing login",
+  async (status) => {
+    probeClaudeCliAuthStatus.mockResolvedValue({ status });
+    const auth = await provider.prepareSyntheticAuth!({
+      config: {},
+      env: {},
+      provider: "claude-cli",
+    });
+    expect(Boolean(auth?.apiKey)).toBe(status !== "missing");
   },
 );
 
@@ -91,8 +109,8 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
   const surviving = new AbortController();
   const reason = new Error("native preparation retired");
   let releaseSurvivor: (() => void) | undefined;
-  nativeLogin
-    .mockResolvedValue({ readiness: "configured" })
+  probeClaudeCliAuthStatus
+    .mockResolvedValue({ status: "available" })
     .mockImplementationOnce(
       ({ signal }: { signal: AbortSignal }) =>
         new Promise((_, reject) => {
@@ -102,7 +120,7 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
     .mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          releaseSurvivor = () => resolve({ readiness: "configured" });
+          releaseSurvivor = () => resolve({ status: "available" });
         }),
     );
   const prepare = (signal: AbortSignal) =>
@@ -116,9 +134,9 @@ it("joins one probe per cancellation scope and preserves a surviving capture", a
   await rejection;
   await expect(survivor).resolves.toMatchObject({ mode: "oauth" });
   await expect(follower).resolves.toMatchObject({ mode: "oauth" });
-  expect(nativeLogin).toHaveBeenCalledTimes(2);
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
   await expect(prepare(cancelled.signal)).rejects.toBe(reason);
-  expect(nativeLogin).toHaveBeenCalledTimes(2);
+  expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
 });
 
 it("publishes the native menu once per discovery generation, never static membership", async () => {
@@ -145,7 +163,7 @@ it("publishes the native menu once per discovery generation, never static member
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     thinkingLevelMap: { low: "low", max: "max" },
   };
-  nativeLogin.mockResolvedValue({ readiness: "configured" });
+  probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
   discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
   const first = await provider.catalog!.run(ctx);
   expect(first).toMatchObject({

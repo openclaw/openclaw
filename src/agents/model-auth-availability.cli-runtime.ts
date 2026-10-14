@@ -113,22 +113,6 @@ export function createCliRuntimeModelAuthEvaluator(
           })
         : evaluation;
     }
-    const native = params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(runtimeProvider)];
-    if (native && typeof native !== "string") {
-      // Availability admits an attempt; only the native runtime can verify its login.
-      // An unreadable local source is unknown, not evidence that the user logged out.
-      return {
-        availability: native.readiness !== "missing",
-        availabilityAuthoritative: true,
-        routeResolution: null,
-        selectedAuthMode: native.mode,
-        evidence: "runtime",
-        runtimeAuth: { id: runtimeProvider, source: "native" },
-        ...(native.readiness === "missing"
-          ? { unavailableReason: "missing-auth", unavailableMessage: native.message }
-          : {}),
-      };
-    }
     if (normalizeProviderId(runtimeProvider) === normalizeProviderId(provider)) {
       return runtimeOwners?.length ? evaluation : undefined;
     }

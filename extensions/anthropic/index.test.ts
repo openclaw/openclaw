@@ -9,13 +9,13 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
-const { nativeLogin } = vi.hoisted(() => ({
-  nativeLogin: vi.fn(),
+const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
+  probeClaudeCliAuthStatusMock: vi.fn(),
 }));
 
 vi.mock("./cli-auth-seam.js", () => {
   return {
-    observeClaudeCliNativeLogin: nativeLogin,
+    probeClaudeCliAuthStatus: probeClaudeCliAuthStatusMock,
   };
 });
 
@@ -30,7 +30,7 @@ import {
 import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
-  nativeLogin.mockReset();
+  probeClaudeCliAuthStatusMock.mockReset();
 });
 
 afterAll(() => {
@@ -954,36 +954,45 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
-  it.each(["configured", "unknown", "missing"] as const)(
-    "publishes the same native Claude %s fact to runtime and discovery",
-    async (readiness) => {
-      nativeLogin.mockResolvedValue({ readiness });
+  it.each([
+    { status: "available", authenticated: true },
+    { status: "unreadable", authenticated: false },
+    { status: "timeout", authenticated: false },
+  ] as const)(
+    "publishes native Claude auth only when its CLI reports $status",
+    async ({ status, authenticated }) => {
+      probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const config = {};
 
       const runtimeAuth = await provider.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
-      });
+      } as never);
       const discoveryAuth = await anthropicProviderDiscovery.prepareSyntheticAuth?.({
         config,
         provider: "claude-cli",
-      });
+      } as never);
       for (const auth of [runtimeAuth, discoveryAuth]) {
-        expect(auth).toEqual({
-          apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
-          source: "Claude CLI native auth",
-          mode: "oauth",
-          nativeAuth: { runtime: "claude-cli", mode: "oauth", readiness },
-        });
+        expect(auth).toEqual(
+          authenticated
+            ? {
+                apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
+                source: "Claude CLI native auth",
+                mode: "oauth",
+              }
+            : undefined,
+        );
       }
-      expect(await provider.prepareSyntheticAuth?.({ provider: "claude-cli" })).toBeUndefined();
-      expect(nativeLogin).toHaveBeenCalledOnce();
+      expect(
+        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
+      ).toBeUndefined();
+      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
     },
   );
 
   it("does not copy native Claude auth during anthropic cli migration", async () => {
-    nativeLogin.mockReturnValue({ readiness: "configured" });
+    probeClaudeCliAuthStatusMock.mockReturnValue({ status: "available" });
 
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const cliAuth = provider.auth.find((entry) => entry.id === "cli");

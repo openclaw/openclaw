@@ -29,7 +29,6 @@ export type ModelAuthAvailabilityEvaluation = {
   /** A route/account or runtime-owned result must not fall back to provider-only registry auth. */
   availabilityAuthoritative?: true;
   unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
-  unavailableMessage?: string;
   /** Earliest known retry time, in milliseconds since the Unix epoch. */
   unavailableUntil?: number;
   routeResolution: ProviderModelRouteResolution | null;

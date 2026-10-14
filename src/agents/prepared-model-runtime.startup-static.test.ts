@@ -12,16 +12,10 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
-import type * as AgentAuthDiscovery from "./agent-auth-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import {
-  getPreparedModelFullCatalogAuth,
-  setPreparedModelFullCatalogAuth,
-} from "./prepared-model-runtime-auth.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -119,9 +113,7 @@ const mocks = vi.hoisted(() => {
     modelRegistry,
     metadataSnapshot,
     resolvePluginMetadataSnapshot: vi.fn(() => metadataSnapshot),
-    resolveAmbientCredentials: vi.fn<
-      typeof AgentAuthDiscovery.prepareAmbientAgentCredentialsForDiscovery
-    >(async () => ({})),
+    resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
     discoverAuthStorage: vi.fn((_agentDir?: string, _options?: unknown) => authStorage),
     discoverModels: vi.fn(() => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
@@ -147,7 +139,7 @@ const mocks = vi.hoisted(() => {
     >(() => null),
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
-    prepareStaticCatalog: vi.fn<typeof prepareImplicitProviderStaticCatalog>(async () => {
+    prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => {
       const providerConfig: ModelProviderConfig = {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses",
@@ -225,9 +217,9 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
 
 // mock-isolation: Startup fixtures provide auth and catalog snapshots without opening real stores.
 vi.mock("./agent-model-discovery.js", () => ({
-  discoverAuthStorageFacts: (agentDir: string, options?: DiscoverAuthStorageOptions) => {
+  discoverAuthStorageFacts: (agentDir: string, options?: unknown) => {
     const authStorage = mocks.discoverAuthStorage(agentDir, options);
-    const credentials = { ...options?.ambientCredentials, ...authStorage.getAll() };
+    const credentials = authStorage.getAll();
     return {
       authStorage,
       store: {
@@ -474,62 +466,6 @@ describe("prepared model runtime Gateway catalog mode", () => {
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     },
   );
-
-  it("captures configured native login outside the requested static catalog provider scope", async () => {
-    const { prepareAmbientAgentCredentialsForDiscovery } = await vi.importActual<
-      typeof AgentAuthDiscovery
-    >("./agent-auth-discovery.js");
-    mocks.resolveAmbientCredentials.mockImplementationOnce(
-      prepareAmbientAgentCredentialsForDiscovery,
-    );
-    const prepareNativeAuth = vi.fn(() => ({
-      apiKey: "synthetic-native-presence",
-      source: "Claude CLI login",
-      mode: "oauth" as const,
-      nativeAuth: {
-        runtime: "claude-cli",
-        mode: "oauth" as const,
-        readiness: "configured" as const,
-      },
-    }));
-    const unrelatedAuth = vi.fn();
-    mocks.prepareStaticCatalog.mockResolvedValueOnce({
-      providers: [
-        {
-          id: "claude-cli",
-          label: "Claude CLI",
-          auth: [],
-          prepareSyntheticAuth: prepareNativeAuth,
-        },
-        {
-          id: "unrelated-cli",
-          label: "Unrelated CLI",
-          auth: [],
-          prepareSyntheticAuth: unrelatedAuth,
-        },
-      ],
-      entries: [],
-    });
-    const catalog = await withScopedCatalogCache(() =>
-      prepareScopedReadOnlyModelCatalog(
-        {
-          config: { agents: { defaults: { model: "claude-cli/claude-sonnet-4-6" } } },
-          agentDir: "/tmp/prepared-scoped-native-auth",
-          env: {},
-          readOnly: true,
-        },
-        ["openai"],
-      ),
-    );
-    expect(getPreparedModelFullCatalogAuth(catalog)?.authModes["claude-cli"]).toEqual({
-      source: "native",
-      mode: "oauth",
-      readiness: "configured",
-    });
-    expect(prepareNativeAuth).toHaveBeenCalledOnce();
-    expect(unrelatedAuth).not.toHaveBeenCalled();
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-  });
 
   it("does not publish a static catalog generation superseded while its hook is running", async () => {
     const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };

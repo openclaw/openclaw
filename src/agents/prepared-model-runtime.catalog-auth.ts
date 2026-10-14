@@ -492,7 +492,7 @@ export function createNativeLoginRecheck(
   },
   eligibleProviders: readonly string[],
   publish: (auth: PreparedModelCatalogAuth) => void,
-): (options?: { force?: boolean }) => Promise<void> {
+): (options?: { force?: boolean }) => void | Promise<void> {
   const { owners, index } = owner.pluginGeneration.pluginMetadataSnapshot;
   const refs = new Set(listManifestSyntheticAuthProviderRefs(index).map(owner.normalizeProvider));
   const providerIds = eligibleProviders.filter(
@@ -552,7 +552,7 @@ export function createNativeLoginRecheck(
       return pending;
     }
     if (!providerIds.length || (!options?.force && now - checkedAt < NATIVE_LOGIN_RECHECK_MS)) {
-      return Promise.resolve();
+      return;
     }
     checkedAt = now;
     pending = recheck()

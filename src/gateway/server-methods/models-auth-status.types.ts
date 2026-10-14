@@ -31,13 +31,6 @@ export type ModelAuthStatusProvider = {
   displayName: string;
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
-  /** Local metadata observed by the native runtime owner, not a stored account. */
-  nativeAuth?: {
-    runtimeId: string;
-    mode: "api_key" | "oauth" | "token";
-    readiness: "configured" | "unknown" | "missing";
-    message?: string;
-  };
   profiles: ModelAuthStatusProfile[];
   /** Explicit stored/config priority. Omitted when selection is automatic. */
   profileOrder?: string[];

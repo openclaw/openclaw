@@ -227,38 +227,23 @@ export class InstalledAgentsController {
       const card = getCards().find((entry) => entry.id === agent.runtimeId);
       let status: { kind: "ok" | "muted" | "warn" | "danger"; labelKey: string } =
         INSTALLATION_STATUS[agent.installation];
-      let hint: string;
+      let hint = "";
       if (agent.installation === "missing") {
         hint = t("modelProviders.installedAgents.installHint", { name: agent.name });
       } else if (agent.installation === "unverified") {
         hint = t("modelProviders.installedAgents.unverifiedHint");
       } else if (!enabled) {
         hint = t("modelProviders.installedAgents.disabledHint");
-      } else if (card?.nativeAuth?.readiness === "missing") {
-        status = { kind: "danger", labelKey: "modelProviders.installedAgents.status.signIn" };
-        hint = card.nativeAuth.message ?? "";
       } else if (card?.catalogStatus === "auth-rejected") {
         status = { kind: "danger", labelKey: "modelProviders.installedAgents.status.signIn" };
-        hint =
-          card.nativeAuth?.message ??
-          t("modelProviders.installedAgents.signInHint", { name: agent.name });
+        hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       } else if (card?.catalogStatus === "unavailable") {
         status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
-        hint =
-          card.nativeAuth?.message ??
-          t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
-      } else if (card?.nativeAuth?.readiness === "unknown") {
-        status = { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" };
-        hint = card.nativeAuth.message ?? "";
+        hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
       } else if (card?.checkingModels) {
         status = { kind: "muted", labelKey: "modelProviders.installedAgents.status.discovering" };
-        hint = card.nativeAuth?.message ?? "";
       } else if (card && card.availableModelCount > 0) {
         status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
-        hint = card.nativeAuth?.message ?? "";
-      } else if (card?.nativeAuth?.readiness === "configured") {
-        status = { kind: "muted", labelKey: "modelProviders.status.configured" };
-        hint = card.nativeAuth.message ?? "";
       } else {
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       }

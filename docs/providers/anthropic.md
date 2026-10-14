@@ -162,23 +162,12 @@ OpenClaw release:
         through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
-        Gateway startup shares the native login metadata observation across agent
-        workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck that observation for their own generation. On-demand model
-        reads recheck it at most once a minute. Spawn admission rechecks a missing
-        login immediately, so signing in does not require a Gateway restart.
-
-        **Models** shows the native runtime's sign-in status separately from
-        Anthropic API keys and saved accounts. **Credentials configured** means
-        local login metadata is present, not that an inference request succeeded.
-        **Not verified** means the observation was inconclusive; it does not mean
-        Claude is logged out and does not block the native route. Only confirmed
-        missing metadata requires sign-in. Follow the recovery message shown in
-        Models: run `claude auth login` as the Gateway user, preserving both
-        `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`, including whether
-        they are unset. The message identifies the config directory that was
-        checked. OpenClaw does not read, copy, or refresh native
-        login tokens to produce this status.
+        Gateway startup shares the native login check across agent workspaces using
+        the same config and environment. Checks use `claude auth status --json`;
+        an explicit logged-out response blocks the native route, while a timeout
+        or unreadable response allows Claude to try the request. Captures expire
+        after one minute. If a selected native login is unavailable, spawn admission
+        rechecks it immediately, so signing in does not require a Gateway restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.

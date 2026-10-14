@@ -1,10 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -15,8 +14,6 @@ import {
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
-
-afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 function openAiOAuthProfile() {
   return {
@@ -70,51 +67,31 @@ describe("createModelAuthAvailabilityResolver", () => {
     );
   });
 
-  it.each(["configured", "unknown", "missing"] as const)(
-    "shares the native %s fact across direct and canonical Claude selections",
-    (readiness) => {
-      cliBackendsTesting.setDepsForTest({
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            pluginId: "anthropic",
-            config: { command: "claude" },
-          },
-        ],
-      });
-      const model = "claude-opus-5-5";
-      const resolver = createModelAuthAvailabilityResolver({
-        cfg: {
-          agents: {
-            defaults: {
-              models: { [`anthropic/${model}`]: { agentRuntime: { id: "claude-cli" } } },
-            },
-          },
+  it("keeps prepared native-runtime authentication scoped to its exact owner", () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "anthropic",
+          origin: "bundled",
+          providerAuthAliases: { "claude-cli": "anthropic" },
         },
-        authStore: authStore(),
-        env: {},
-        preparedRuntimeAuthModes: {
-          "claude-cli": {
-            source: "native",
-            mode: "oauth",
-            readiness,
-            message: "Run claude auth login.",
-          },
-        },
-      });
-      for (const provider of ["claude-cli", "anthropic"]) {
-        expect(resolver.evaluateRuntimeModelAuth(provider, { modelId: model })).toMatchObject({
-          availability: readiness !== "missing",
-          evidence: "runtime",
-          selectedAuthMode: "oauth",
-          runtimeAuth: { id: "claude-cli", source: "native" },
-          ...(readiness === "missing" ? { unavailableMessage: "Run claude auth login." } : {}),
-        });
-      }
-      expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
-    },
-  );
+      ],
+    });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      metadataSnapshot,
+      preparedRuntimeAuthModes: { "claude-cli": "api_key" },
+    });
+
+    expect(resolver.evaluateModelAuth("claude-cli")).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      selectedAuthMode: "api_key",
+    });
+    expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
+  });
 
   it("keeps configured local providers independent from native-auth probe completion", () => {
     const resolver = createModelAuthAvailabilityResolver({

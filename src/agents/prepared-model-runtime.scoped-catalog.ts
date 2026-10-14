@@ -1,6 +1,5 @@
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
@@ -8,7 +7,6 @@ import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-tim
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
-import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogSource,
@@ -57,20 +55,13 @@ export async function prepareScopedReadOnlyModelCatalog(
     catalogMode,
     catalogSource,
   );
-  const catalog = materializePreparedModelCatalog(
+  return materializePreparedModelCatalog(
     modelCatalog,
     agentFactsForInput.runtimeCapabilityModels,
     scopedInput.config.models?.mode === "replace"
       ? []
       : configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
   );
-  setPreparedModelFullCatalogAuth(catalog, {
-    authStore: agentFactsForInput.authStore,
-    credentials: agentFactsForInput.credentials,
-    authModes: resolveUsableAgentCredentialModes(agentFactsForInput.credentials),
-    providerAuthLabels: new Map(),
-  });
-  return catalog;
 }
 
 export async function prepareAgentCatalogSource(

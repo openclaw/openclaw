@@ -3,11 +3,6 @@ export type PreparedAgentCredentialMode =
   | "api_key"
   | "oauth"
   | "token"
-  | Readonly<{
-      source: "native";
-      mode: "api_key" | "oauth" | "token";
-      readiness?: "configured" | "unknown" | "missing";
-      message?: string;
-    }>;
+  | Readonly<{ source: "native"; mode: "api_key" | "oauth" | "token" }>;
 
 export type PreparedAgentCredentialModes = Readonly<Record<string, PreparedAgentCredentialMode>>;

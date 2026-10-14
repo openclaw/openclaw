@@ -1,13 +1,11 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   createApiKeyCredential,
   createOAuthRefreshCredential,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
@@ -125,7 +123,6 @@ const mocks = vi.hoisted(() => {
     }),
     loadModelCatalog: vi.fn().mockResolvedValue([]),
     modelCatalogRouteVariants: undefined as unknown[] | undefined,
-    authModes: {} as PreparedAgentCredentialModes,
     openAIModelRouteOverride: undefined as ((params: unknown) => unknown) | undefined,
   };
 });
@@ -270,15 +267,9 @@ vi.mock("../../plugins/payload-verification.js", () => ({
 }));
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalogSnapshot: async (params: unknown) => {
-    const entries = await mocks.loadModelCatalog(params);
-    const catalog = { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
-    setPreparedModelFullCatalogAuth(catalog, {
-      authStore: mocks.store,
-      authModes: mocks.authModes,
-      providerAuthLabels: new Map(),
-    });
-    return catalog;
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await mocks.loadModelCatalog(...args);
+    return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
   },
 }));
 vi.mock("../../agents/openai-model-routes.js", async (importOriginal) => {
@@ -348,7 +339,6 @@ afterEach(() => {
   Object.assign(mocks.store, structuredClone(defaultStore));
   mocks.runtimeStore.current = undefined;
   mocks.modelCatalogRouteVariants = undefined;
-  mocks.authModes = {};
   mocks.openAIModelRouteOverride = undefined;
 });
 
@@ -973,52 +963,6 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(1);
     expect(providers.map((provider) => provider.provider)).not.toContain("zai");
   });
-
-  it.each(["configured", "missing", "unknown"] as const)(
-    "reports prepared Claude native auth as %s without changing provider profiles",
-    async (readiness) => {
-      configureStatus({
-        primary: "claude-cli/claude-sonnet-4-6",
-        profiles: {
-          "anthropic:work": createApiKeyCredential("anthropic", "test-provider-key"),
-        },
-      });
-      const message = `Claude native login is ${readiness}. Checked /tmp/claude-status-config.`;
-      mocks.authModes = {
-        "claude-cli": { source: "native", mode: "oauth", readiness, message },
-      };
-      mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["claude-cli"]);
-
-      const { runtime, payload } = await jsonStatus({ check: true });
-      expect(payload.auth.runtimeAuthRoutes).toContainEqual({
-        provider: "claude-cli",
-        runtime: "claude-cli",
-        authProvider: "claude-cli",
-        status: readiness === "missing" ? "missing" : "usable",
-        effective:
-          readiness === "missing"
-            ? { kind: "missing", detail: "missing" }
-            : { kind: "synthetic", detail: "native login" },
-        nativeAuth: { runtimeId: "claude-cli", mode: "oauth", readiness, message },
-      });
-      expect(payload.auth.missingProvidersInUse).toEqual(
-        readiness === "missing" ? ["claude-cli"] : [],
-      );
-      const profiles = requireRecord(
-        requireProvider(payload.auth.providers, "anthropic").profiles,
-        "anthropic profiles",
-      );
-      expect(profiles.apiKey).toBe(1);
-      expect(runtime.exit).toHaveBeenCalledWith(readiness === "missing" ? 1 : 0);
-      expect(mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls).not.toContainEqual([
-        expect.objectContaining({ provider: "claude-cli" }),
-      ]);
-
-      const { text } = await textStatus();
-      expect(text).toContain(`native=${readiness}`);
-      expect(text).toContain(message);
-    },
-  );
 
   it("treats plugin-owned synthetic auth as usable for models in use", async () => {
     mocks.loadConfig.mockReturnValue(statusConfig("codex/gpt-5.5"));

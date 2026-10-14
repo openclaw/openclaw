@@ -17,7 +17,6 @@ export function canonicalModelAuthProviderId(provider: string): string {
 /** API-key-only providers have no scheduled expiry for the dashboard to monitor. */
 export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   return (
-    p.nativeAuth !== undefined ||
     p.status === "missing" ||
     (Array.isArray(p.profiles) &&
       p.profiles.some((prof) => prof.type === "oauth" || prof.type === "token"))
@@ -29,13 +28,10 @@ const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */
 export function listEffectiveModelAuthProviders(
   providers: readonly ModelAuthStatusProvider[],
-  groupBy?: (provider: string) => string,
 ): ModelAuthStatusProvider[] {
   const groups = new Map<string, ModelAuthStatusProvider[]>();
   for (const provider of providers) {
-    const id = groupBy
-      ? groupBy(provider.provider)
-      : (provider.nativeAuth?.runtimeId ?? canonicalModelAuthProviderId(provider.provider));
+    const id = canonicalModelAuthProviderId(provider.provider);
     const group = groups.get(id) ?? [];
     group.push(provider);
     groups.set(id, group);

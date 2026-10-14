@@ -5,12 +5,7 @@ export type ApiKeyCredential = {
   type: "api_key";
   key: string;
   /** Secret-free native presence carried only by in-memory discovery credentials. */
-  nativeAuth?: {
-    runtime: string;
-    mode: "api-key" | "oauth" | "token";
-    readiness?: "configured" | "unknown" | "missing";
-    message?: string;
-  };
+  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
 };
 
 export type OAuthCredential = {

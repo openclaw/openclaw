@@ -213,9 +213,21 @@ export function buildAnthropicAuthDoctorHint(params: {
 export async function runAnthropicCliMigration(
   ctx: Pick<ProviderAuthContext, "config" | "env">,
 ): Promise<ProviderAuthResult> {
-  const login = await claudeCliAuth.observeClaudeCliNativeLogin({ env: ctx.env ?? process.env });
-  if (login.readiness === "missing") {
-    throw new Error(login.message);
+  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
+  if (authStatus.status !== "available") {
+    const error =
+      authStatus.status === "missing"
+        ? [
+            "Claude CLI is not authenticated on this host.",
+            `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+          ]
+        : [
+            authStatus.status === "timeout"
+              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+              : "Could not verify the installed Claude CLI login.",
+            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+          ];
+    throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);
 }

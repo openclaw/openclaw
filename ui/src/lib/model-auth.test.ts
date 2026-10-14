@@ -3,12 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import { invalidateModelAuthStatusRequests } from "./model-auth-request-state.ts";
-import {
-  canonicalModelAuthProviderId,
-  listEffectiveModelAuthProviders,
-  loadModelAuthStatus,
-} from "./model-auth.ts";
-import { describeModelProviderAuth } from "./model-provider-auth-label.ts";
+import { listEffectiveModelAuthProviders, loadModelAuthStatus } from "./model-auth.ts";
 
 const status = (ts: number): ModelAuthStatusResult => ({ ts, providers: [] });
 
@@ -233,30 +228,5 @@ describe("listEffectiveModelAuthProviders", () => {
       },
     ]);
     expect(merged?.apiKey).toEqual({ source: "env", envVar: "GEMINI_API_KEY" });
-  });
-
-  it("keeps API auth usable when a shared chat heading also has a missing native login", () => {
-    const providers: ModelAuthStatusResult["providers"] = [
-      {
-        provider: "anthropic",
-        displayName: "Anthropic",
-        status: "static",
-        profiles: [],
-        apiKey: { source: "env", envVar: "ANTHROPIC_API_KEY" },
-      },
-      {
-        provider: "claude-cli",
-        displayName: "Claude",
-        status: "missing",
-        profiles: [],
-        nativeAuth: { runtimeId: "claude-cli", mode: "oauth", readiness: "missing" },
-      },
-    ];
-    expect(listEffectiveModelAuthProviders(providers)).toHaveLength(2);
-    const headings = listEffectiveModelAuthProviders(providers, canonicalModelAuthProviderId);
-    expect(headings).toHaveLength(1);
-    const [heading] = headings;
-    expect(heading?.provider).toBe("anthropic");
-    expect(describeModelProviderAuth(heading!)).toMatchObject({ kind: "api" });
   });
 });

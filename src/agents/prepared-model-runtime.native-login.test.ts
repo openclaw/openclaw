@@ -53,7 +53,7 @@ afterEach(() => {
 
 async function fixture(
   run: (state: {
-    recheck: (options?: { force?: boolean }) => Promise<void>;
+    recheck: (options?: { force?: boolean }) => void | Promise<void>;
     readAuth: () => PreparedModelCatalogAuth;
     publish: ReturnType<typeof vi.fn<(auth: PreparedModelCatalogAuth) => void>>;
     refreshAuth: ReturnType<typeof vi.fn>;
@@ -152,7 +152,7 @@ async function tick(recheck: () => void) {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-it("publishes native login changes and refreshes a missing login on admission without waiting for TTL", async () => {
+it("publishes native login recovery on forced admission recheck without waiting for the TTL", async () => {
   await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
     recheck();
     expect(native.probe).not.toHaveBeenCalled();
