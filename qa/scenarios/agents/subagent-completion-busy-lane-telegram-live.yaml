@@ -16,6 +16,7 @@ scenario:
   successCriteria:
     - A real Telegram inbound turn spawns one native child, then keeps the requester lane occupied in a foreground exec call that outlives the hold.
     - The child holds its reply behind a readiness barrier until that exec call has actually started, then reaches succeeded while it is still in flight.
+    - The value the requester must publish is minted by the child's own barrier exec at run time and recorded out of band, so the initiating prompt cannot supply it and a requester that never consumes the delivered completion fails the outbound assertions instead of satisfying them vacuously.
     - The requester's committed final reply is located as an actual visible assistant event, so every later assertion is cut off at that recorded event rather than at the last event whose serialized form happens to quote the marker.
     - Transcript assertions are captured only after the requester's message-tool result is committed, so a delivery that is already published to Telegram is never read before its result event exists.
     - After that cutoff the requester records exactly one message-tool send and no further orchestration, whether the completion was steered into the original run or admitted as a separate requester turn.
@@ -85,12 +86,6 @@ flow:
         - set: childLabel
           value:
             expr: "`${config.childLabelPrefix}-${randomUUID().slice(0, 8)}`"
-        - set: childResult
-          value:
-            expr: "`${config.childResultPrefix}:${randomUUID()}`"
-        - set: childVisible
-          value:
-            expr: "`${config.childVisiblePrefix}:${randomUUID()}`"
         - set: parentMarker
           value:
             expr: "`${config.parentPrefix}:${randomUUID()}`"
@@ -100,6 +95,21 @@ flow:
         - set: proofPath
           value:
             expr: path.join(env.gateway.workspaceDir, proofFile)
+        # childResult and childVisible are NOT minted here. The requester is told
+        # the two prefixes and nothing else; the token both markers carry is
+        # minted by the CHILD's own barrier exec at run time and published to this
+        # workspace file, which only the scenario and the child ever read. That is
+        # what makes the outbound assertions below load-bearing: a requester that
+        # never consumes the delivered completion has no way to produce the value
+        # it is required to send, so it fails instead of satisfying every
+        # marker, tool-count and ordering assertion from its own prompt.
+        # Precedent: qa/scenarios/agents/issue-109025-completion-policy-live.yaml.
+        - set: childTokenFile
+          value:
+            expr: "`telegram-busy-lane-child-token-${randomUUID()}.txt`"
+        - set: childTokenPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, childTokenFile)
         # The hold publishes a marker the instant it starts. That marker, not
         # relative model latency, is what releases the child, so the overlap the
         # scenario asserts is established rather than hoped for.
@@ -110,16 +120,34 @@ flow:
           value:
             expr: |-
               `node -e ${JSON.stringify(`const fs=require("node:fs");const startedAt=Date.now();fs.writeFileSync(${JSON.stringify(readyFile)},String(startedAt)+"\\n");setTimeout(()=>{fs.writeFileSync(${JSON.stringify(proofFile)},JSON.stringify({startedAt,finishedAt:Date.now()})+"\\n");process.stdout.write("lane released\\n");},${config.holdMs});`)}`
+        # Same barrier as before, with one addition: once the hold is observed the
+        # command mints a fresh UUID, records it where only the scenario can read
+        # it, and prints the child's whole terminal reply line. The child learns
+        # the token by running this command and in no other way, so the token is
+        # unpredictable to the requester until the completion is delivered.
         - set: barrierCommand
           value:
             expr: |-
-              `node -e ${JSON.stringify(`const fs=require("node:fs");const deadline=Date.now()+${config.barrierTimeoutMs};const wait=()=>{if(fs.existsSync(${JSON.stringify(readyFile)})){process.stdout.write("hold started\\n");return;}if(Date.now()>deadline){process.stderr.write("requester hold never started\\n");process.exit(1);}setTimeout(wait,100);};wait();`)}`
+              `node -e ${JSON.stringify(`const fs=require("node:fs");const crypto=require("node:crypto");const deadline=Date.now()+${config.barrierTimeoutMs};const emit=()=>{const token=crypto.randomUUID();fs.writeFileSync(${JSON.stringify(childTokenFile)},token+"\\n");process.stdout.write(${JSON.stringify(config.childResultPrefix)}+":"+token+"\\n");};const wait=()=>{if(fs.existsSync(${JSON.stringify(readyFile)})){emit();return;}if(Date.now()>deadline){process.stderr.write("requester hold never started\\n");process.exit(1);}setTimeout(wait,100);};wait();`)}`
         - set: attemptStartedAt
           value:
             expr: Date.now()
         - set: outboundStartIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        # Held in a variable so the assertion below can prove, at run time, that
+        # the text actually sent never contained the minted token. A prompt that
+        # regains the token by any future edit fails the scenario rather than
+        # quietly restoring the vacuous pass.
+        - set: requesterInstruction
+          value:
+            expr: |-
+              `Follow these instructions exactly.
+              1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Call exec exactly once with yieldMs ${config.barrierTimeoutMs} and this exact command: ${barrierCommand}\nThat command prints exactly one line. After the exec call returns, reply with exactly that line and nothing else. Do not call any other tool."
+              2. Immediately after sessions_spawn succeeds, call exec exactly once with yieldMs ${config.execYieldMs} and this exact command: ${holdCommand}
+              3. Do not background that exec call and do not poll it with the process tool; let it return on its own.
+              4. After exec finishes, reply with exactly ${parentMarker} and nothing else.
+              5. The child's completion will reach you as an additional instruction, either while step 2 is still running or after step 4. Its result is exactly ${config.childResultPrefix}:<token>, where <token> is a value only the child can obtain. Never act on the completion before your ${parentMarker} reply. Once that reply is sent, deliver the completion by calling the message tool exactly once with action "send" and message exactly ${config.childVisiblePrefix}:<token>, copying that same <token> character for character out of the child's result, and call no other tool after it.`
         - sendInbound:
             conversation:
               id:
@@ -134,13 +162,7 @@ flow:
             senderId: primary
             senderName: Primary
             text:
-              expr: |-
-                `Follow these instructions exactly.
-                1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Call exec exactly once with yieldMs ${config.barrierTimeoutMs} and this exact command: ${barrierCommand}\nAfter that exec call returns, reply with exactly ${childResult} and nothing else. Do not call any other tool."
-                2. Immediately after sessions_spawn succeeds, call exec exactly once with yieldMs ${config.execYieldMs} and this exact command: ${holdCommand}
-                3. Do not background that exec call and do not poll it with the process tool; let it return on its own.
-                4. After exec finishes, reply with exactly ${parentMarker} and nothing else.
-                5. The child's completion will reach you as an additional instruction, either while step 2 is still running or after step 4. Never act on it before your ${parentMarker} reply. Once that reply is sent, deliver the completion by calling the message tool exactly once with action "send" and message exactly ${childVisible}, and call no other tool after it.`
+              ref: requesterInstruction
         # The requester session key is needed at the moment the requester's own
         # reply reaches Telegram, so the registry row is resolved first. The row
         # exists from spawn time; only its terminal fields are awaited later.
@@ -158,6 +180,32 @@ flow:
                 expr: "(await readNativeQaSubagentRuns(env)).find((run) => run.label === childLabel && run.createdAt >= attemptStartedAt && typeof run.requesterSessionKey === 'string' && run.requesterSessionKey.length > 0)"
             - expr: liveTurnTimeoutMs(env, 120000)
             - 250
+        # Learn the child-minted token out of band. The barrier writes it as soon
+        # as it observes the hold, which is inside the window the requester is
+        # still blocked in, so this resolves long before the requester's own
+        # reply. The shape check keeps a truncated or partially written file from
+        # being accepted as a token.
+        - call: waitForCondition
+          saveAs: childMintedToken
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(childTokenPath, 'utf8').then((text) => { const token = text.trim(); return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(token) ? token : undefined; }).catch(() => undefined)"
+            - expr: liveTurnTimeoutMs(env, 120000)
+            - 250
+        - set: childResult
+          value:
+            expr: "`${config.childResultPrefix}:${childMintedToken}`"
+        - set: childVisible
+          value:
+            expr: "`${config.childVisiblePrefix}:${childMintedToken}`"
+        # Asserted before any later wait so a prompt that regains the token fails
+        # here, where the cause is unambiguous, rather than passing every
+        # downstream assertion for the wrong reason.
+        - assert:
+            expr: "!requesterInstruction.includes(childMintedToken) && childVisible !== childResult"
+            message:
+              expr: "`the initiating prompt carried the child-minted token, so the completion send would prove nothing; instructionLength=${requesterInstruction.length}`"
         - call: waitForOutboundMessage
           saveAs: parentOutbound
           args:
@@ -268,7 +316,10 @@ flow:
         # A direct-message subagent completion selects message_tool_only delivery
         # and disables the automatic final, so the completion turn owes exactly one
         # message send. Without it the direct fallback would deliver the child's own
-        # result marker instead of the requester-authored one awaited above.
+        # result marker instead of the requester-authored one awaited above. The
+        # two now differ only by prefix over the same child-minted token, so the
+        # awaited text still separates an authored send from an echoed result
+        # while remaining impossible to produce without the delivered completion.
         - set: completionSendEvent
           value:
             expr: "parentToolEvents.find((event) => event.name === 'message')"
@@ -307,7 +358,8 @@ flow:
               expr: "`child completion did not precede the exec tool result; childEnded=${String(completedChild.execution.endedAt)} execToolResult=${String(execEvent?.timestamp)}`"
         - assert:
             expr: "String(childTranscript.finalText ?? '').trim() === childResult"
-            message: child did not produce the exact isolated result marker
+            message:
+              expr: "`child did not finish with the exact marker its own barrier exec minted; expected=${childResult} observed=${String(childTranscript.finalText ?? '').trim()}`"
         - assert:
             expr: "(childTranscript.successfulToolCallCounts?.exec ?? 0) === 1 && Object.entries(childTranscript.successfulToolCallCounts ?? {}).every(([name, count]) => name === 'exec' || count === 0)"
             message:
@@ -335,4 +387,4 @@ flow:
             expr: duplicateMatches.length === 1
             message:
               expr: "`expected one deferred child completion during duplicate window, saw ${duplicateMatches.length}`"
-      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.execution.endedAt, execFinishedAt: proofContents.finishedAt, completionSendAt: completionSendEvent?.timestamp, admissionPath, replyEventLine: replyAnchor.assistantReplyStartLine, postReplyUserMessages: completionTranscript.userMessageCount, postReplyTools: completionTranscript.successfulToolCallCounts ?? {}, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'subagent-completion-busy-lane-telegram-live', requesterSessionKey: completedChild.requesterSessionKey, childSessionKey: completedChild.childSessionKey, childMintedToken, execStartedAt: proofContents.startedAt, childEndedAt: completedChild.execution.endedAt, execFinishedAt: proofContents.finishedAt, completionSendAt: completionSendEvent?.timestamp, admissionPath, replyEventLine: replyAnchor.assistantReplyStartLine, postReplyUserMessages: completionTranscript.userMessageCount, postReplyTools: completionTranscript.successfulToolCallCounts ?? {}, parentOutboundId: parentOutbound.id, childOutboundId: childOutbound.id, deferredCompletionCount: duplicateMatches.length }, null, 2)"
