@@ -276,7 +276,13 @@ function createStartOptions(
   };
 }
 
-const EPHEMERAL_AUTH_ARGS = ["-c", 'cli_auth_credentials_store="ephemeral"', "app-server"];
+const EPHEMERAL_AUTH_ARGS = [
+  "-c",
+  'cli_auth_credentials_store="ephemeral"',
+  "-c",
+  "thread_unload_delay_secs=0",
+  "app-server",
+];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {

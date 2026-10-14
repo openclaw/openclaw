@@ -2,7 +2,7 @@ import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
-import { normalizeCodexAppServerArgs } from "./launch-args.js";
+import { isCodexAppServerProxyLaunch, normalizeCodexAppServerArgs } from "./launch-args.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemeral"';
@@ -52,6 +52,21 @@ export function withEphemeralCodexAuthStore(params: {
     return startOptions;
   }
   const args = normalizeCodexAppServerArgs(startOptions.args, CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE);
+  return args === startOptions.args ? startOptions : { ...startOptions, args };
+}
+
+/** OpenClaw retains subscriptions for warm/child work; native post-release caching is redundant. */
+export function withManagedCodexThreadUnloading(
+  startOptions: CodexAppServerStartOptions,
+): CodexAppServerStartOptions {
+  if (
+    startOptions.transport !== "stdio" ||
+    startOptions.homeScope === "user" ||
+    isCodexAppServerProxyLaunch(startOptions.args)
+  ) {
+    return startOptions;
+  }
+  const args = normalizeCodexAppServerArgs(startOptions.args, "thread_unload_delay_secs=0");
   return args === startOptions.args ? startOptions : { ...startOptions, args };
 }
 

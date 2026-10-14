@@ -139,9 +139,16 @@ export async function resumeExistingCodexThread(
       resumeBinding.ringZeroClientInstanceId !== undefined ||
       resumeBinding.ringZeroConfigFingerprint !== undefined ||
       context.ringZeroActive;
+    const failedThreadUnloaded =
+      configuration.settledSystemError &&
+      !clientBoundThread &&
+      resumeBinding.connectionScope !== "supervision"
+        ? await configuration.waitForUnload()
+        : false;
     const sharedEntry = getCurrentSharedClientEntry(params.client);
     if (
       configuration.settledSystemError &&
+      !failedThreadUnloaded &&
       !clientBoundThread &&
       resumeBinding.connectionScope !== "supervision" &&
       // This attempt owns one lease. Other leases and pending startups can
