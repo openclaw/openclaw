@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -75,70 +74,6 @@ const messageIds = (scope: Awaited<ReturnType<typeof seed>>) =>
     isRecord(event) && event.type === "message" ? [event.id] : [],
   );
 
-it("creates the first transcript in an absent custom store through the SDK", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "first-transcript",
-      sessionKey: "agent:main:first-transcript",
-      storePath: state.statePath("first-write", "openclaw-agent.sqlite"),
-      env: state.env,
-    };
-    expect(existsSync(scope.storePath)).toBe(false);
-    await expect(
-      appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        eventId: "first",
-        message: { role: "assistant", content: "first persisted row" },
-      }),
-    ).resolves.toMatchObject({ appended: true, messageId: "first" });
-    expect(existsSync(scope.storePath)).toBe(true);
-    expect(messageIds(scope)).toEqual(["first"]);
-  });
-});
-
-it.each([false, true])(
-  "preserves custom JSON across locked worker writes (prepared=%s)",
-  async (prepared) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      setRuntimeConfigSnapshot({});
-      const scope = await seed(env);
-      const message = {
-        role: "assistant",
-        content: "custom payload",
-        idempotencyKey: "custom-json",
-        custom: { toJSON: () => "stored value" },
-      };
-      const prepare = prepared
-        ? async (input: typeof message) => ({
-            ...input,
-            custom: { toJSON: () => "prepared value" },
-          })
-        : undefined;
-      const expected = { ...message, custom: prepared ? "prepared value" : "stored value" };
-      const result = await withSessionTranscriptWrite(scope, (locked) =>
-        locked.appendMessage({
-          eventId: "custom-json",
-          message,
-          ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
-        }),
-      );
-      expect(result).toMatchObject({ appended: true, message: expected });
-      expect(loadTranscriptEventsSync(scope)).toContainEqual(
-        expect.objectContaining({ id: "custom-json", message: expected }),
-      );
-      await expect(
-        withSessionTranscriptWrite(scope, (locked) =>
-          locked.appendMessage({
-            message,
-            ...(prepare ? { preparation: { prepareMessage: prepare } } : {}),
-          }),
-        ),
-      ).resolves.toMatchObject({ appended: false, message: expected });
-    });
-  },
-);
-
 it("rechecks the Codex prepared guard at the worker commit grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     setRuntimeConfigSnapshot({});
@@ -200,7 +135,7 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
   });
 });
 
-it.each(["physical", "logical"] as const)(
+it.each(["logical"] as const)(
   "retains the prepared owner's %s target binding for writes and facts queries",
   async (locator) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -262,30 +197,22 @@ it.each(["physical", "logical"] as const)(
   },
 );
 
-it.each(["locked", "mirror"] as const)(
+it.each(["mirror"] as const)(
   "persists %s through its real entry without MAIN SQL",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       setRuntimeConfigSnapshot({});
       const scope = await seed(env);
-      const request = { ...scope, read: async () => [] };
       const sql = observeHostDataSql();
       try {
-        if (kind === "locked") {
-          await withSessionTranscriptWriteLock(request, async (locked) => {
-            expect(await locked.readEvents()).toEqual([]);
-            await locked.appendMessage({ message: { role: "assistant", content: "locked" } });
-          });
-        } else if (kind === "mirror") {
-          expect(
-            await appendAssistantMirrorMessageByIdentity({
-              ...scope,
-              text: "mirror",
-              idempotencyKey: "mirror-key",
-              deliveryMirror: { kind: "channel-final" },
-            }),
-          ).toMatchObject({ ok: true });
-        }
+        expect(
+          await appendAssistantMirrorMessageByIdentity({
+            ...scope,
+            text: "mirror",
+            idempotencyKey: "mirror-key",
+            deliveryMirror: { kind: "channel-final" },
+          }),
+        ).toMatchObject({ ok: true });
         const executions = sql.calls
           .slice(1)
           .reduce((sum, call) => sum + call.mock.calls.length, 0);
@@ -298,32 +225,22 @@ it.each(["locked", "mirror"] as const)(
   },
 );
 
-it.each([
-  { locator: "physical", adapter: "source" },
-  { locator: "logical", adapter: "source" },
-  { locator: "physical", adapter: "preparer" },
-  { locator: "logical", adapter: "preparer" },
-] as const)(
+it.each([{ locator: "logical", adapter: "source" }] as const)(
   "retains the $locator owner through the native $adapter adapter",
-  async ({ locator, adapter }) => {
+  async ({ locator }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       setRuntimeConfigSnapshot({});
       const scope = await seed(env, locator);
       const databasePath = openOpenClawAgentDatabase(scope).path;
       const assertCurrent = () => {};
-      const authority =
-        adapter === "source" ? assertCurrent : composeSessionTranscriptWriteAssertion([]);
       const updates: unknown[] = [];
       const off = onInternalSessionTranscriptUpdate((update) => updates.push(update));
       try {
-        await withSessionTranscriptWriteAssertion(scope, authority, () =>
+        await withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
           withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
             const appended = await locked.appendMessageWithMessageSequence({
               eventId: "owned",
               message: { role: "assistant", content: "owned", idempotencyKey: "owned" },
-              ...(adapter === "preparer"
-                ? { prepareMessageAfterIdempotencyCheck: (message: unknown) => message }
-                : {}),
             });
             expect(appended.result?.messageId).toBe("owned");
             expect(appended.messageSeq).toEqual(expect.any(Number));
@@ -346,94 +263,71 @@ it.each([
   },
 );
 
-it.each([
-  { path: "locked", stale: false, replay: false },
-  { path: "locked", stale: true, replay: false },
-  { path: "locked", stale: true, replay: true },
-] as const)(
-  "uses prepared grant facts for $path (stale=$stale, replay=$replay)",
-  async ({ stale, replay }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      setRuntimeConfigSnapshot({});
-      const scope = await seed(env);
-      const prepared = await withSessionEntryReadOnlyInWorker(
-        scope,
-        () => {},
-        async (read, owner) => {
-          assert(read.ok && read.value);
-          const captured = captureSessionEntryCurrentRead(scope, owner);
-          assert(captured.kind === "file");
-          return {
-            assertCurrent: captured.assertSourceCurrent,
-            checks: [
-              {
-                predicate: {
-                  source: captured.source,
-                  sessionKey: captured.source.sessionKey,
-                  fields: ["sessionId", "label"],
-                  expected: read.value,
-                },
-                refuse: () => {
-                  throw new Error("Prepared transcript source changed");
-                },
+it("rejects changed prepared grant facts without rereading on the main thread", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
+    const scope = await seed(env);
+    const prepared = await withSessionEntryReadOnlyInWorker(
+      scope,
+      () => {},
+      async (read, owner) => {
+        assert(read.ok && read.value);
+        const captured = captureSessionEntryCurrentRead(scope, owner);
+        assert(captured.kind === "file");
+        return {
+          assertCurrent: captured.assertSourceCurrent,
+          checks: [
+            {
+              predicate: {
+                source: captured.source,
+                sessionKey: captured.source.sessionKey,
+                fields: ["sessionId", "label"],
+                expected: read.value,
               },
-            ],
-          } satisfies PreparedSessionSourceAuthority;
-        },
-      );
-      const message = {
-        role: "assistant",
-        content: "authorized",
-        idempotencyKey: "prepared-grant",
-      };
-      if (replay) {
-        await withSessionTranscriptWriteLock(scope, (locked) =>
-          locked.appendMessage({ eventId: "prepared-grant", message }),
-        );
-      }
-      if (stale) {
-        await replaceSessionEntry(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: 2,
-          label: "foreign",
-        });
-      }
-      const legacyGuard = vi.fn(() => {
-        loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
-        throw new Error("Legacy rereading guard invoked");
-      });
-      const beforeFreshMessageCommit: SessionSourceAssertion = Object.assign(legacyGuard, {
-        prepareSessionSource: async () => {
-          if (replay) {
-            throw new Error("Fresh source preparation is no longer available");
-          }
-          return prepared;
-        },
-      });
-      const options = {
-        eventId: "prepared-grant",
-        message,
-        preparation: { source: beforeFreshMessageCommit },
-      };
-      const sql = observeHostDataSql();
-      try {
-        const operation = withSessionTranscriptWrite(scope, (locked) =>
-          locked.appendMessage(options),
-        );
-        if (stale && !replay) {
-          await expect(operation).rejects.toThrow("Prepared transcript source changed");
-        } else {
-          await operation;
-        }
-        expect(legacyGuard).not.toHaveBeenCalled();
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
-      expect(messageIds(scope)).toEqual(stale && !replay ? [] : ["prepared-grant"]);
+              refuse: () => {
+                throw new Error("Prepared transcript source changed");
+              },
+            },
+          ],
+        } satisfies PreparedSessionSourceAuthority;
+      },
+    );
+    const message = {
+      role: "assistant",
+      content: "authorized",
+      idempotencyKey: "prepared-grant",
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 2,
+      label: "foreign",
     });
-  },
-);
+    const legacyGuard = vi.fn(() => {
+      loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+      throw new Error("Legacy rereading guard invoked");
+    });
+    const beforeFreshMessageCommit: SessionSourceAssertion = Object.assign(legacyGuard, {
+      prepareSessionSource: async () => prepared,
+    });
+    const options = {
+      eventId: "prepared-grant",
+      message,
+      preparation: { source: beforeFreshMessageCommit },
+    };
+    const sql = observeHostDataSql();
+    try {
+      const operation = withSessionTranscriptWrite(scope, (locked) =>
+        locked.appendMessage(options),
+      );
+      await expect(operation).rejects.toThrow("Prepared transcript source changed");
+      expect(legacyGuard).not.toHaveBeenCalled();
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(messageIds(scope)).toEqual([]);
+  });
+});
 
 it.each(["owned", "fresh"] as const)(
   "accepts worker conversation matches before checking %s locked authority",

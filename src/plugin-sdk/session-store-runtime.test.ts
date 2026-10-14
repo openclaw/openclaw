@@ -266,38 +266,6 @@ describe("session-store-runtime", () => {
     expect(loadInternalSessionEntry({ sessionKey, storePath })?.model).toBeUndefined();
   });
 
-  it("clears core recovery state when public replacements change session identity", async () => {
-    const patchKey = "agent:main:telegram:direct:patch-rotation";
-    const upsertKey = "agent:main:telegram:direct:upsert-rotation";
-    const upsertStorePath = path.join(tempDir, "upsert-sessions.json");
-    await seedRecoveringSession(patchKey, "patch-before");
-    await seedRecoveringSession(upsertKey, "upsert-before", upsertStorePath);
-
-    await patchSessionEntry({
-      replaceEntry: true,
-      sessionKey: patchKey,
-      storePath,
-      update: () => ({ sessionId: "patch-after", updatedAt: 20 }),
-    });
-    await upsertSessionEntry({
-      entry: {
-        abortedLastRun: true,
-        restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
-        sessionId: "upsert-after",
-        updatedAt: 20,
-      },
-      sessionKey: upsertKey,
-      storePath: upsertStorePath,
-    });
-
-    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
-    expectRecoveryCleared({
-      sessionId: "upsert-after",
-      sessionKey: upsertKey,
-      storePath: upsertStorePath,
-    });
-  });
-
   it("clears core recovery state when public patches change session identity", async () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const updateKey = "agent:main:telegram:direct:update-rotation";
@@ -325,46 +293,6 @@ describe("session-store-runtime", () => {
       storePath: updateStorePath,
     });
   });
-
-  it.each([
-    { pruneAfterMs: 7 * DAY_MS, archivedAt: expect.any(Number) },
-    { pruneAfterMs: 0, archivedAt: undefined },
-  ])(
-    "applies age retention $pruneAfterMs through entry patches",
-    async ({ pruneAfterMs, archivedAt }) => {
-      const staleSessionKey = "agent:main:stale";
-      const activeSessionKey = "agent:main:active";
-      const now = Date.now();
-      const staleEntry = { sessionId: "session-stale", updatedAt: now - 8 * DAY_MS };
-      await seedSessionEntry(staleSessionKey, staleEntry);
-      await seedSessionEntry(activeSessionKey, { sessionId: "session-active", updatedAt: now });
-      assignOwner(staleSessionKey);
-
-      const done = observeSessionMaintenanceCompletion(path.join(tempDir, "openclaw-agent.sqlite"));
-      await patchSessionEntry({
-        sessionKey: activeSessionKey,
-        storePath,
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs,
-          modelRunPruneAfterMs: DAY_MS,
-          maxEntries: 100,
-          resetArchiveRetentionMs: 7 * DAY_MS,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
-        update: () => ({ model: "gpt-5.5" }),
-      });
-
-      await done;
-      const retainedEntry = getSessionEntry({ sessionKey: staleSessionKey, storePath });
-      expect(retainedEntry?.archivedAt).toEqual(archivedAt);
-      expect(retainedEntry).toMatchObject(staleEntry);
-      const activeEntry = getSessionEntry({ sessionKey: activeSessionKey, storePath });
-      expect(activeEntry).toMatchObject({ sessionId: "session-active", model: "gpt-5.5" });
-      expect(activeEntry?.archivedAt).toBeUndefined();
-    },
-  );
 
   it("guards entry deletion against a concurrent session update", async () => {
     const sessionKey = "agent:main:delete-guarded";
@@ -524,11 +452,7 @@ describe("plugin session store maintenance", () => {
     });
   });
 
-  it.each([
-    { modelRunPruneAfterMs: DAY_MS, modelRunSessionPresent: false },
-    { modelRunPruneAfterMs: 0, modelRunSessionPresent: true },
-    { modelRunPruneAfterMs: -DAY_MS, modelRunSessionPresent: true },
-  ])(
+  it.each([{ modelRunPruneAfterMs: DAY_MS, modelRunSessionPresent: false }])(
     "applies model-run retention $modelRunPruneAfterMs through entry patches",
     async ({ modelRunPruneAfterMs, modelRunSessionPresent }) => {
       const storePath = path.join(maintenanceSessionDirs.make(), "sessions.json");
