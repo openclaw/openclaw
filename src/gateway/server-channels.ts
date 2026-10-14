@@ -1126,18 +1126,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const runStopAttempt = async (): Promise<ChannelAccountStopOutcome> => {
           const lifetime = store.lifetimes.get(id);
           const abort = lifetime?.abort;
+          const explicitlyDisabled = isChannelAccountExplicitlyDisabled({
+            cfg,
+            channel: channelId,
+            accountId: id,
+          });
           const canHandoff =
             optsLocal.routeHandoff &&
             configuredAccountIds.includes(id) &&
-            !isChannelAccountExplicitlyDisabled({ cfg, channel: channelId, accountId: id }) &&
+            !explicitlyDisabled &&
             !manuallyStopped.has(rKey);
           if (!canHandoff) {
             releaseRouteHandoff(store, id);
           }
           const task = store.tasks.get(id);
-          // Idle accounts have no captured teardown; managed getters need cleanup admission.
+          // Disabled idle accounts need no credentials; admitted lifetimes retain their teardown.
           const fallbackStop =
-            !lifetime && plugin
+            !lifetime && !explicitlyDisabled && plugin
               ? runPluginCleanup(plugin, () => {
                   const gateway = plugin.gateway;
                   const stopAccount = gateway?.stopAccount;
