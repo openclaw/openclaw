@@ -77,8 +77,18 @@ it.runIf(process.platform === "win32")(
         artifactPaths: [retained],
       });
       expect(census.matchingPids).toContain(child.pid);
-      expect(census.unverifiedPids).toEqual([]);
-      expect(census.error).toBeUndefined();
+      // Hosted runners may host unreadable background processes; only this test's tree must be readable.
+      expect(census.unverifiedPids).not.toContain(child.pid);
+      expect(
+        [...readWindowsProcessCensus(15_000)].filter(
+          (entry) => entry.parentPid === process.pid && census.unverifiedPids.includes(entry.pid),
+        ),
+      ).toEqual([]);
+      expect(census.error).toBe(
+        census.unverifiedPids.length > 0
+          ? "Retry update repair as Administrator using the same Windows account."
+          : undefined,
+      );
       child.send("exit");
       expect(await closed, stderr).toEqual([0, null]);
       expect(
