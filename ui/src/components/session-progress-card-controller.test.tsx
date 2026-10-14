@@ -234,7 +234,10 @@ describe("SessionProgressCardController", () => {
       const subscribe = vi.spyOn(store, "subscribe");
       const watch = vi.spyOn(store, "watch");
       const host = new ControllerHost();
-      new SessionProgressCardController(host, { gateway: () => gateway, target: () => target });
+      const progress = new SessionProgressCardController(host, {
+        gateway: () => gateway,
+        target: () => target,
+      });
       onTestFinished(() => {
         host.disconnect();
         vi.restoreAllMocks();
@@ -246,6 +249,7 @@ describe("SessionProgressCardController", () => {
         if (target) {
           await store.load(target);
           await host.updateComplete;
+          expect(progress.loading).toBe(false);
         }
         expect(subscribe).toHaveBeenCalledTimes(connections);
         expect(watch).toHaveBeenCalledTimes(hasTarget ? connections : 0);
