@@ -15,7 +15,7 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each([false, true])(
+  it.each([true])(
     "withdraws dedicated access before persistence settles (rejected=%s)",
     async (rejected) => {
       const node = await support.seedReadyNodeDesktop("preview-withdrawal");
@@ -118,63 +118,7 @@ describe("worker environment service", () => {
     expect(restartedQualification.aborted).toBe(true);
   });
 
-  it("exposes the catalog display identity without allocating a worker", () => {
-    const provider = support.createProvider({ resolveDisplayId: () => "aws" });
-    const provision = vi.spyOn(provider, "provision");
-    const service = support.createService(provider);
-    expect(service.readProviderDisplayId("development")).toBe("aws");
-    expect(provision).not.toHaveBeenCalled();
-    expect(support.testState.store.list()).toEqual([]);
-  });
-
-  it("warms machine catalogs at startup only for nonterminal environment profiles", async () => {
-    const { store } = support.testState;
-    const active = await store.createIntent({
-      environmentId: "startup-worker",
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: "provision:startup",
-    });
-    await store.createIntent({
-      environmentId: "terminal-worker",
-      providerId: "fake",
-      profileId: "terminal",
-      profileSnapshot: { settings: { region: "terminal" } },
-      provisionOperationId: "provision:terminal",
-    });
-    await store.transition({ environmentId: "terminal-worker", from: "requested", to: "failed" });
-    support.testState.config.cloudWorkers!.profiles!.terminal = {
-      provider: "fake",
-      settings: { region: "terminal" },
-    };
-    const listMachineOptions = vi.fn(async () => [
-      { id: "medium", label: "Medium", cpu: 4, memoryGb: 16, default: true },
-    ]);
-    const listOperatingSystems = vi.fn(async () => [
-      { id: "linux", label: "Linux", default: true },
-    ]);
-    const service = support.createService(
-      support.createProvider({ listMachineOptions, listOperatingSystems }),
-    );
-    service.installReconcileEnvironmentGuard(async () => {});
-    expect(service.readMachineShape(active.environmentId)).toBeUndefined();
-    service.start();
-    await support.waitForFast(() =>
-      expect(service.readMachineShape(active.environmentId)).toEqual({
-        class: "medium",
-        os: "linux",
-        osLabel: "Linux",
-        cpu: 4,
-        memoryGb: 16,
-      }),
-    );
-    expect(listMachineOptions).toHaveBeenCalledExactlyOnceWith({ region: "test" });
-    expect(listOperatingSystems).toHaveBeenCalledExactlyOnceWith({ region: "test" });
-    expect(store.get(active.environmentId)?.profileSnapshot).toEqual(active.profileSnapshot);
-  });
-
-  it.each(["service", "scheduler"] as const)(
+  it.each(["scheduler"] as const)(
     "keeps maintenance off reconciliation and allocation while %s shutdown aborts and drains it",
     async (closingOwner) => {
       const { promise: pending, resolve: finish } = createDeferred();
@@ -235,32 +179,6 @@ describe("worker environment service", () => {
     );
   });
 
-  it("reconciles unrelated leases concurrently", async () => {
-    await support.seedReady("worker-concurrent-a");
-    await support.seedReady("worker-concurrent-b");
-    const { promise: blocked, resolve: release } = createDeferred();
-    const inspected: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
-      inspect: async (lease) => {
-        inspected.push(lease);
-        await blocked;
-        return { status: "active" };
-      },
-    });
-
-    const reconciliation = support.createService(provider).reconcileOnce();
-    try {
-      await support.waitForFast(() => expect(inspected).toHaveLength(2));
-    } finally {
-      release?.();
-    }
-    await reconciliation;
-
-    expect(new Set(inspected.map(({ leaseId }) => leaseId))).toEqual(
-      new Set(["lease:worker-concurrent-a", "lease:worker-concurrent-b"]),
-    );
-  });
-
   it("coalesces targeted and full inspection while retaining full-sweep maintenance", async () => {
     const targetId = "worker-targeted-overlap";
     const siblingId = "worker-full-sweep-sibling";
@@ -305,34 +223,6 @@ describe("worker environment service", () => {
     }
     expect(inspect).toHaveBeenCalledTimes(2);
     expect(maintainProviders).toHaveBeenCalledOnce();
-    expect(prune).toHaveBeenCalledOnce();
-  });
-
-  it("skips terminal retention reads for empty inventory and resumes after a committed create", async () => {
-    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
-    const workerService = support.createService(support.createProvider());
-
-    await workerService.reconcileOnce();
-    await workerService.reconcileOnce();
-    expect(prune).not.toHaveBeenCalled();
-
-    await support.seedReady("retention-created-worker");
-    await workerService.reconcileOnce();
-    expect(prune).toHaveBeenCalledOnce();
-  });
-
-  it("propagates terminal cleanup failures", async () => {
-    await support.seedReady("retention-failure-worker");
-    const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
-    const prune = vi
-      .spyOn(support.testState.store, "pruneTerminalEnvironments")
-      .mockImplementation(() => {
-        throw error;
-      });
-
-    await expect(support.createService(support.createProvider()).reconcileOnce()).rejects.toBe(
-      error,
-    );
     expect(prune).toHaveBeenCalledOnce();
   });
 

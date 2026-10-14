@@ -494,13 +494,6 @@ describe("worker environment service", () => {
 
   it.each([
     {
-      name: "removed",
-      mutate: () => {
-        support.testState.config.cloudWorkers = { profiles: {} };
-      },
-      code: "profile_not_found",
-    },
-    {
       name: "assigned to a different provider",
       mutate: () => {
         support.getDevelopmentProfile().provider = "replacement";

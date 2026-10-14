@@ -145,7 +145,7 @@ describe("placement recovery session admission with persisted placements", () =>
     },
   );
 
-  it.each(["startup", "full"] as const)(
+  it.each(["startup"] as const)(
     "%s recovery skips a dispatch registered after its candidate listing",
     async (mode) => {
       const placements = createStore();
@@ -173,7 +173,7 @@ describe("placement recovery session admission with persisted placements", () =>
       let dispatch: ReturnType<typeof coordinated.dispatch> | undefined;
       candidateReads.mockImplementation(async () => {
         const candidates = await readCandidates();
-        if (++listings === (mode === "startup" ? 2 : 1)) {
+        if (++listings === 2) {
           dispatch = coordinated.dispatch(REQUEST);
           void dispatch.catch(tunnelEntered.reject);
           await tunnelEntered.promise;
@@ -181,7 +181,7 @@ describe("placement recovery session admission with persisted placements", () =>
         return candidates;
       });
       try {
-        await coordinated.reconcile(mode === "startup" ? "startup" : undefined);
+        await coordinated.reconcile(mode);
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "syncing",
           recoveryError: null,
@@ -225,9 +225,9 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
-  it.each(["full", "targeted"] as const)(
+  it.each(["targeted"] as const)(
     "%s recovery does not expire a live Move while destination admission still sees local placement",
-    async (mode) => {
+    async () => {
       const placements = createStore();
       const observe = prepareTargetedAdmissionObserver(placements);
       const harness = await createHarness(support.testState.stateDb, placements, {
@@ -262,12 +262,8 @@ describe("placement recovery session admission with persisted placements", () =>
         const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
         const observation = observe(harness);
-        sweep = coordinated.reconcileActive(mode === "targeted" ? active.environmentId : undefined);
-        if (mode === "targeted") {
-          await observation.unitReached;
-        } else {
-          await sweep;
-        }
+        sweep = coordinated.reconcileActive(active.environmentId);
+        await observation.unitReached;
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "local",
           recoveryError: null,

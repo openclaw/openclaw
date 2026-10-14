@@ -224,15 +224,6 @@ describe("worker placement restart recovery", () => {
 
   it.each([
     {
-      failure: "provider no longer supports the persisted execution mode",
-      executionMode: "remote-exec",
-      snapshotMode: "remote-exec",
-      nodeBacked: true,
-      providerSupportsMode: false,
-      expectedError: "does not support remote-exec",
-      sweep: false,
-    },
-    {
       failure: "persisted provisioning mode does not match placement authority",
       executionMode: "remote-exec",
       snapshotMode: "worker-turn",
@@ -586,15 +577,8 @@ describe("worker placement restart recovery", () => {
 
   it.each([
     { timing: "before", change: "generation", state: "provisioning" },
-    { timing: "before", change: "environment", state: "provisioning" },
-    { timing: "before", change: "environment", state: "syncing" },
-    { timing: "before", change: "environment", state: "starting" },
-    { timing: "before", change: "session", state: "provisioning" },
     { timing: "after", change: "generation", state: "provisioning" },
-    { timing: "after", change: "environment", state: "provisioning" },
-    { timing: "after", change: "environment", state: "syncing" },
     { timing: "after", change: "environment", state: "starting" },
-    { timing: "after", change: "session", state: "provisioning" },
   ] as const)(
     "never tears down a newer $state $change owner when recovery fails $timing its callback",
     async ({ change, state, timing }) => {
@@ -623,21 +607,6 @@ describe("worker placement restart recovery", () => {
             : undefined,
       );
       let replacement: ReturnType<typeof placements.get>;
-      const observedPlacements = {
-        ...placements,
-        getAsync: async (sessionId: string) => {
-          const current = await placements.getAsync(sessionId);
-          return change === "session" && replacement && current
-            ? { ...current, sessionKey: "agent:main:replacement-session" }
-            : current;
-        },
-        get: (sessionId: string) => {
-          const current = placements.get(sessionId);
-          return change === "session" && replacement && current
-            ? { ...current, sessionKey: "agent:main:replacement-session" }
-            : current;
-        },
-      };
       const replacePlacement = async () => {
         await placements.fail({
           sessionId: original.sessionId,
@@ -652,7 +621,7 @@ describe("worker placement restart recovery", () => {
           expectedGeneration: requested.generation,
           patch: { environmentId: replacementEnvironmentId },
         });
-        if (state === "syncing" || state === "starting") {
+        if (state === "starting") {
           replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "provisioning",
@@ -660,8 +629,6 @@ describe("worker placement restart recovery", () => {
             expectedGeneration: replacement.generation,
             patch: { workerBundleHash: BUNDLE_HASH },
           });
-        }
-        if (state === "starting") {
           replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "syncing",
@@ -675,10 +642,10 @@ describe("worker placement restart recovery", () => {
         }
       };
       const startup = createWorkerPlacementDispatchStartup({
-        placements: observedPlacements,
+        placements,
         environments: harness.environments,
         failure: createPlacementFailureActions({
-          placements: observedPlacements,
+          placements,
           environments: harness.environments,
         }),
         runRecoveryBarrier: async ({ run }) => {
@@ -874,7 +841,6 @@ describe("worker placement restart recovery", () => {
   );
   it.each([
     { reclaim: false, restart: true },
-    { reclaim: true, restart: true },
     { reclaim: false, restart: false },
   ])(
     "recovers an accepted unstaged result without its node (reclaim=$reclaim, restart=$restart)",

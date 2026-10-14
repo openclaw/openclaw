@@ -496,7 +496,6 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("workspace:resume");
   });
-
   it("keeps the worker draining when the accepted local result changes", async () => {
     const harness = await createTestHarness({ localVerifyFails: true });
     await harness.service.dispatch(REQUEST);
@@ -791,7 +790,6 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
-
   it("tears down an attached starting placement after restart loses request authority", async () => {
     const harness = await createTestHarness();
     await harness.placements.seedStarting();
@@ -904,7 +902,6 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
-
   it("fences a live turn before tearing down a mismatched runtime owner", async () => {
     const harness = await createTestHarness();
     await harness.environments.attachSession({
@@ -1035,7 +1032,6 @@ describe("worker placement dispatch", () => {
         "cloud worker disappeared: Worker environment disappeared before teardown was requested",
     });
   });
-
   it("does not retry unrelated failed teardown during requested reconciliation", async () => {
     const harness = await createTestHarness({ failAt: "sync", destroyFails: true });
     await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");

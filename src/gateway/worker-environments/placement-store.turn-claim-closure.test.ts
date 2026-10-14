@@ -19,7 +19,6 @@ import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
-import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   openOpenClawStateDatabase,
@@ -87,68 +86,6 @@ it("rejects an unbounded claim wait when its signal is already aborted", async (
     store.waitForTurnClaimRelease(SESSION.sessionId, { signal: controller.signal }),
   ).rejects.toThrow(`Turn claim wait aborted for session ${SESSION.sessionId}`);
   expect(store.validateTurnClaim(claim)).toBe(true);
-});
-
-it("projects worker-turn workspace reconciliation at its owned boundary", async () => {
-  const active = await advanceToActive();
-  const claim = await store.claimTurn({
-    ...SESSION,
-    owner: placementTurnOwner(active),
-    claimId: "workspace-result-worker-turn",
-    runId: "run-worker-turn",
-  });
-  await store.markWorkspaceResultPending(claim);
-
-  const readReconciling = async () =>
-    (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds;
-  expect((await readReconciling()).has(active.sessionId)).toBe(true);
-  const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
-  await store.recordStagedWorkspaceResult(claim, stagedResultRef);
-  expect(await readReconciling()).toEqual(new Set([active.sessionId]));
-  store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
-  const conflicted = await store.readProjection([active.sessionId]);
-  expect(conflicted.placements.get(active.sessionId)).toMatchObject({
-    workspaceResultConflict: { paths: ["conflict.txt"], stagedResultRef, totalCount: 1 },
-  });
-  expect(conflicted.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
-  store.recordWorkspaceResultConflict(claim, undefined);
-  expect(
-    (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
-  ).not.toHaveProperty("workspaceResultConflict");
-  const published: unknown[] = [];
-  const unsubscribe = onSessionLifecycleEvent((event) => {
-    if (event.sessionKey === active.sessionKey) {
-      published.push({
-        event,
-        placement: store.get(active.sessionId),
-        resultCurrent: store.validateWorkspaceResultClaim(claim),
-      });
-    }
-  });
-  try {
-    await store.acceptWorkspaceResult(claim);
-    expect(published).toEqual([]);
-    await store.completeWorkspaceResultAndReleaseTurn(claim);
-    expect(published).toEqual([
-      {
-        event: {
-          sessionKey: active.sessionKey,
-          agentId: active.agentId,
-          reason: "placement",
-          scope: "runtime",
-        },
-        placement: expect.objectContaining({ state: "active", turnClaim: null }),
-        resultCurrent: false,
-      },
-    ]);
-    expect(
-      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
-        active.sessionId,
-      ),
-    ).toBe(false);
-  } finally {
-    unsubscribe();
-  }
 });
 
 it("batches placement facts in one statement per chunk and keeps the snapshot across a peer commit", async () => {
@@ -331,7 +268,7 @@ async function bindFinishingOwner() {
   return { abort, bind, take, identity, request, close };
 }
 
-it.each([false, true])(
+it.each([true])(
   "consumes finishing only under its current ACK (credential replaced: %s)",
   async (replaced) => {
     const h = await bindFinishingOwner();

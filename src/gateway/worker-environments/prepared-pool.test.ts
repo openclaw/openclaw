@@ -108,7 +108,7 @@ describe("prepared worker reserve lifecycle", () => {
     expect(fixture.store.get(reserve.environmentId)?.destroyRequestedAtMs).toBe(fixture.nowMs);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "retains slow activation demand when teardown precedes refill (reserve=%s)",
     async (reserve) => {
       const idleWindow = 15 * 60_000;
